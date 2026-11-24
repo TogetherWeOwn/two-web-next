@@ -1,0 +1,95 @@
+name: db-readiness-projection
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Install or remove the approved readiness projection
+        type: choice
+        options: [forward, undo]
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: web-migrate-production
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      checked_attempt: ${{ steps.scope.outputs.checked_attempt }}
+    steps:
+      - name: Check protected ref and pin scope
+        id: scope
+        shell: bash
+        env:
+          BROADER_SCOPE_SECRETS: ${{ secrets.PRODUCTION_DB_READINESS_APPROVED_SHA != '' ||
+            secrets.PRODUCTION_DB_READINESS_PLAN_SHA256 != '' || secrets.PRODUCTION_DB_READINESS_PLAN != '' ||
+            secrets.PRODUCTION_DB_READINESS_DATABASE_URL != '' ||
+            secrets.PRODUCTION_DB_READINESS_CF_ACCOUNT_ID != '' || secrets.PRODUCTION_DB_READINESS_CF_READ_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch || "$GITHUB_REF" != refs/heads/main ||
+                "$GITHUB_REF_PROTECTED" != true || "$BROADER_SCOPE_SECRETS" != false ]]; then
+            printf '%s\n' 'Readiness projection admission refused.' >&2
+            exit 1
+          fi
+          printf 'checked_attempt=%s\n' "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+
+  projection:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: production
+    permissions:
+      contents: read
+    # Hold the deploy/rollback lane from the traffic check through the inverse.
+    concurrency:
+      group: production-worker-mutation
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - name: Require approval pins for this run attempt
+        shell: bash
+        env:
+          CHECKED_ATTEMPT: ${{ needs.preflight.outputs.checked_attempt }}
+          APPROVED_SHA: ${{ secrets.PRODUCTION_DB_READINESS_APPROVED_SHA }}
+          PLAN_SHA256: ${{ secrets.PRODUCTION_DB_READINESS_PLAN_SHA256 }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$CHECKED_ATTEMPT" || "$CHECKED_ATTEMPT" != "$GITHUB_RUN_ATTEMPT" ||
+                ! "$APPROVED_SHA" =~ ^[a-f0-9]{40}$ || "$APPROVED_SHA" != "$GITHUB_SHA" ||
+                ! "$PLAN_SHA256" =~ ^[a-f0-9]{64}$ ]]; then
+            printf '%s\n' 'Readiness projection admission refused.' >&2
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci --ignore-scripts --omit=dev --no-audit --no-fund
+      - name: Run approved readiness projection operation
+        shell: bash
+        env:
+          OPERATION: ${{ inputs.operation }}
+          PRODUCTION_DB_READINESS_PLAN_SHA256: ${{ secrets.PRODUCTION_DB_READINESS_PLAN_SHA256 }}
+          PRODUCTION_DB_READINESS_PLAN: ${{ secrets.PRODUCTION_DB_READINESS_PLAN }}
+          PRODUCTION_DB_READINESS_DATABASE_URL: ${{ secrets.PRODUCTION_DB_READINESS_DATABASE_URL }}
+          PRODUCTION_DB_READINESS_CF_ACCOUNT_ID: ${{ inputs.operation == 'undo' && secrets.PRODUCTION_DB_READINESS_CF_ACCOUNT_ID || '' }}
+          PRODUCTION_DB_READINESS_CF_READ_TOKEN: ${{ inputs.operation == 'undo' && secrets.PRODUCTION_DB_READINESS_CF_READ_TOKEN || '' }}
+        run: |
+          set -euo pipefail
+          if { node ci/db-readiness-projection.mjs "$OPERATION"; } >/dev/null 2>&1; then
+            printf '%s\n' 'Approved readiness projection operation committed.'
+          else
+            printf '%s\n' 'Readiness projection operation did not confirm a commit.' >&2
+            exit 1
+          fi

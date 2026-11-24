@@ -760,11 +760,7 @@
       "auth": "public-draft-moderator",
       "kind": "endpoint",
       "scope": "api",
-      "target": {
-        "state": "unresolved",
-        "decisionSource": "suffix route precedence and parity validation",
-        "alternatives": ["priority-safe suffix dispatch preserving single- and multi-segment paths"]
-      },
+      "target": "web/src/routes/events/[key].ics/+server.ts",
       "slice": "API-4",
       "family": "feeds",
       "hono405": false,

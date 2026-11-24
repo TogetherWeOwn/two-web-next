@@ -13,11 +13,8 @@ import { hashToken, SESSION_TTL_SECONDS, type SessionStore, type Sql } from "./s
 import { databaseOptions, databaseUrl } from "./db/connection";
 import { isDatabaseUnavailable } from "./db/errors";
 import { upsertRosterUser } from "./db/roster";
-import {
-  issueSession as persistSession,
-  readSession as readStoredSession,
-  storeForEnv,
-} from "./http/session";
+import { issueSession as persistSession, storeForEnv } from "./http/session";
+import { readContextSession as readSession } from "./session-hono";
 import { pgQueueDepth } from "./jobs/postgres";
 import type { Env, Session } from "./env";
 import { operatorImageHosts } from "./config-warn";
@@ -302,34 +299,6 @@ async function issueSession(
     maxAge: SESSION_TTL_SECONDS,
   });
   await enableAuthStatus(c, store, await hashToken(token));
-}
-
-async function readSession(
-  c: Context<{ Bindings: Env }>,
-  rotateToken = true,
-): Promise<Session | null> {
-  const signed = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-  const stored = await readStoredSession(signed, c.env, () => storeFor(c), rotateToken);
-  if (!stored) return null;
-  const { store, row, renewal } = stored;
-  const session = {
-    id: row.userId,
-    username: row.username,
-    avatar: row.avatar,
-    member: row.member,
-    moderator: row.moderator,
-  };
-  if (!renewal) return session;
-  const { replacement, statusKey } = renewal;
-  await enableAuthStatus(c, store, await hashToken(replacement), statusKey);
-  await setSignedCookie(c, SESSION_COOKIE, replacement, c.env.SESSION_SECRET, {
-    path: "/",
-    secure: true,
-    httpOnly: true,
-    sameSite: "Lax",
-    maxAge: SESSION_TTL_SECONDS,
-  });
-  return session;
 }
 
 // One banner sentence per ordinary-login failure meaning (TOG-10355): denied

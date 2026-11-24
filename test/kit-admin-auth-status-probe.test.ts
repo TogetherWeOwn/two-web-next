@@ -254,17 +254,15 @@ describe("Kit admin tab-sync probe port (fails until the enablement slice lands 
       bodies,
       "Kit admin must reference the shared probe cookie (AUTH_STATUS_COOKIE / __Host-two_session_status); today the guard stays read-only",
     ).toMatch(/AUTH_STATUS_COOKIE|__Host-two_session_status/);
-    // Same signing authority: the session secret via the shared helper or the
-    // hono cookie primitive — a client-generated or unsigned value is a finding.
-    expect(
-      bodies,
-      "Kit probe cookie must be signed with the session secret (prepareAuthStatus / generateSignedCookie / serializeSigned + SESSION_SECRET)",
-    ).toMatch(/prepareAuthStatus|generateSignedCookie|serializeSigned/);
-    expect(bodies).toMatch(/SESSION_SECRET/);
-    // Same scope as src/auth-status.ts OPTIONS: host-only path, Secure,
-    // HttpOnly, Lax, bounded lifetime — never a Domain or a session-cookie write.
-    expect(bodies).toMatch(/Path=\/|path:\s*"\/"/);
-    expect(bodies).toMatch(/[Ss]ameSite.*[Ll]ax|sameSite:\s*"lax"/);
+    // Pin the call site and inspect the shared writer for scope. Reading the
+    // writer alone would not prove the probe uses it or the session secret.
+    expect(bodies).toMatch(
+      /signedCookieHeader\(\s*AUTH_STATUS_COOKIE,\s*key,\s*env\.SESSION_SECRET,\s*SESSION_TTL_SECONDS,?\s*\)/,
+    );
+    const writer = read("src/http/signed-cookie.ts");
+    expect(bodies).toMatch(/from "\.\/http\/signed-cookie"/);
+    expect(writer).toContain("; Path=/; HttpOnly; Secure;");
+    expect(writer).toContain("; SameSite=Lax");
     expect(bodies).toMatch(/Max-Age|SESSION_TTL_SECONDS|maxAge/);
   });
 

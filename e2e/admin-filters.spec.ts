@@ -190,11 +190,12 @@ test("moderator publishes, filters and cancels an event; guests see the notice",
     ).toBeVisible();
 
     const table = page.getByTestId("events-table");
+    const statusFilter = page.getByRole("combobox", { name: "Status", exact: true });
     const rowFor = (title: string) => table.locator("tbody tr", { hasText: title });
 
     // 4. Status filter: drafts only.
     await page.goto("/admin/events");
-    await page.getByLabel("Status", { exact: true }).selectOption("draft");
+    await statusFilter.selectOption("draft");
     await page.getByRole("button", { name: "Filter", exact: true }).click();
     await expect(page).toHaveURL(/status=draft/);
     await expect(table).toBeVisible();
@@ -203,7 +204,7 @@ test("moderator publishes, filters and cancels an event; guests see the notice",
 
     // 5. Status filter: published only.
     await page.goto("/admin/events");
-    await page.getByLabel("Status", { exact: true }).selectOption("published");
+    await statusFilter.selectOption("published");
     await page.getByRole("button", { name: "Filter", exact: true }).click();
     await expect(page).toHaveURL(/status=published/);
     await expect(rowFor(pausedTitle)).toHaveCount(1);

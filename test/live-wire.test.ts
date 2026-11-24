@@ -34,12 +34,12 @@ const baseline = {
 const update = { topic: "voice", op: "upsert", id: guest.userId, value: occupant };
 const removeRole = (id: string) => ({ topic: "roles", op: "remove", id });
 const envelope = { v: 1, guild_id: guildId, seq: 2, occurred_at: event.startsAt, ops: [update] };
-const snapshotEnvelope = {
+const snapshotEnvelope = () => ({
   v: 1,
   guild_id: guildId,
   seq: Number.MAX_SAFE_INTEGER,
-  observed_at: "2026-11-21T02:00:00.123456789Z",
-};
+  observed_at: new Date().toISOString().replace("Z", "456789Z"),
+});
 const decode = (value: unknown, id = guildId) =>
   decodeLiveDelta(new Uint8Array(new TextEncoder().encode(JSON.stringify(value))).buffer, id);
 const patch = (...ops: unknown[]) => decode({ ...envelope, ops: [update, ...ops] });
@@ -102,7 +102,7 @@ describe("live wire allowlist", () => {
 
 it("recovers complete state on a gap through one exact signed snapshot pull", async () => {
   const snapshot = {
-    ...snapshotEnvelope,
+    ...snapshotEnvelope(),
     seq: 9,
     topics: { ...baseline, channels: [{ ...room, name: "New HQ" }] },
   };
@@ -117,7 +117,11 @@ it("recovers complete state on a gap through one exact signed snapshot pull", as
   const recovery = sequence.ingest(8, { ...decode(envelope)!, seq: 8 });
   expect(sequence.current).toBeNull();
   expect(await recovery).toBe("resynced");
-  expect(sequence.current).toEqual({ seq: snapshot.seq, state: snapshot.topics });
+  expect(sequence.current).toEqual({
+    seq: snapshot.seq,
+    state: snapshot.topics,
+    validUntil: Date.parse(snapshot.observed_at) + 30_000,
+  });
   expect(await sequence.ingest(9, decode({ ...envelope, seq: 9 })!)).toBe("duplicate");
   expect(fetcher).toHaveBeenCalledOnce();
   const [url, init] = fetcher.mock.calls[0]!;
@@ -159,7 +163,7 @@ describe("live batch reduction", () => {
     const value = { ...event, description: "é".repeat(67) + (extra ? "é" : "x") };
     const delta = patch({ topic: "events", op: "upsert", id: event.id, value });
     const candidate = { ...state, events: [value] };
-    const snapshot = { ...snapshotEnvelope, topics: candidate };
+    const snapshot = { ...snapshotEnvelope(), topics: candidate };
     expect(Buffer.byteLength(JSON.stringify(snapshot))).toBe(1024 * 1024 + extra);
     expect(reduceLiveState(state, delta!) !== null).toBe(extra === 0);
     expect(snapshotTopics(candidate, guildId) !== null).toBe(extra === 0);

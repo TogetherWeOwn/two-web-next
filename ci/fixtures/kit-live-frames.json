@@ -1,0 +1,9 @@
+{
+  "initial": { "v": 1, "type": "snapshot", "topic": "voice", "seq": 1, "value": { "count": null } },
+  "five": { "v": 1, "type": "patch", "topic": "voice", "seq": 2, "value": { "count": 5 } },
+  "suppressed": { "v": 1, "type": "patch", "topic": "voice", "seq": 3, "value": { "count": null } },
+  "withdrawal": { "v": 1, "type": "unavailable", "topic": "voice" },
+  "covering": { "v": 1, "type": "snapshot", "topic": "voice", "seq": 4, "value": { "count": 5 } },
+  "warm": { "v": 1, "type": "snapshot", "topic": "voice", "seq": 7, "value": { "count": 5 } },
+  "cold": { "v": 1, "type": "snapshot", "topic": "voice", "seq": 8, "value": { "count": 6 } }
+}

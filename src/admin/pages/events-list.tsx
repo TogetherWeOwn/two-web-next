@@ -26,14 +26,15 @@ const EventSortHeader: FC<{ label: string; sort: EventSort; query: EventListQuer
   return (
     <th
       scope="col"
-      aria-sort={active ? (query.order === "asc" ? "ascending" : "descending") : "none"}
+      aria-label={label}
+      aria-sort={active ? (query.order === "asc" ? "ascending" : "descending") : undefined}
     >
       <a
         href={eventListUrl(query, { sort, order, page: 1 })}
         aria-label={sortHeaderAriaLabel(label, order)}
       >
         {label}
-        {active ? (query.order === "asc" ? " ↑" : " ↓") : ""}
+        {active ? <span aria-hidden="true">{query.order === "asc" ? " ↑" : " ↓"}</span> : null}
       </a>
     </th>
   );

@@ -12,6 +12,7 @@ import { events } from "../../src/db/admin-schema";
 import type { Db } from "../../src/db/index";
 import type { Env } from "../../src/env";
 import { resolveKitEventDetail, type KitEventDetailStore } from "../../src/events/kit-detail";
+import type { EventLink } from "../../src/events/reads";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../../src/sessions";
 import app from "../app";
 
@@ -80,7 +81,7 @@ function kitRenderers() {
       const { compile } = webRequire("svelte/compiler") as {
         compile(
           source: string,
-          options: { generate: string; dev: boolean; filename: string },
+          options: { generate: string; dev: boolean; filename: string; css: "injected" },
         ): {
           js: { code: string };
         };
@@ -117,6 +118,7 @@ export function render${name}(model) { const {head,body}=render(${name},{props:{
                   generate: "server",
                   dev: false,
                   filename: args.path,
+                  css: "injected",
                 }).js.code,
                 loader: "js",
                 resolveDir: dirname(args.path),
@@ -141,6 +143,7 @@ export async function nativeShareFixture(
     title?: string;
     missing?: boolean;
     search?: string;
+    kitRelated?: EventLink[];
   } = {},
 ): Promise<{ html: string; status: number }> {
   const {
@@ -149,6 +152,7 @@ export async function nativeShareFixture(
     title = SHARE_TITLE,
     missing = false,
     search = SHARE_QUERY,
+    kitRelated = [],
   } = options;
   const row = eventRow(status, title);
   const member = viewer !== "guest";
@@ -227,7 +231,7 @@ export async function nativeShareFixture(
     dbForFn: async () => ({}) as Db,
     getEventFn: async () => (missing ? null : { ...row, goingCount: 1, goingOccupancy: 1 }),
     neighborsFn: async () => ({ previous: null, next: null }),
-    relatedFn: async () => [],
+    relatedFn: async () => kitRelated,
     attendeesFn: async () => [{ id: PRIVATE_ID, name: PRIVATE_NAME }],
     viewerRsvpFn: async () => ({ status: "going", syncedToDiscordAt: null }),
     waitlistFn: async () => null,

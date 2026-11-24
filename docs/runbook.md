@@ -672,6 +672,62 @@ credential/permission errors, **stop; never try another credential**. Driver
 errors are deliberately redacted; the authorized database operator investigates
 using controlled provider-side evidence. Do not cancel in-flight DDL casually.
 
+### Read back the configured production database identity
+
+[db-production-identity.yml](../.github/workflows/db-production-identity.yml)
+checks the database and login behind `PRODUCTION_DATABASE_URL` on protected
+`main`, in one read-only transaction on the pinned PlanetScale target with
+verified TLS. The ledger, grants and readiness require separate evidence.
+
+Before a live readback, verify the production Environment's main-only branch
+rule, independent approval for the exact SHA and identity, and exclusive
+credential custody. Hold the readback when any control is missing.
+Set `PRODUCTION_DB_IDENTITY_SHA256` and `PRODUCTION_DB_IDENTITY_APPROVED_SHA`
+only as production Environment secrets. Use the fingerprint format above
+and the lowercase 40-character dispatch SHA. Keep the credential and pins
+stable during the run and clear the approval SHA when it ends or is abandoned.
+A refusal requires custodian investigation before another approved attempt.
+
+### Repair production migrator permissions at the 1033 prefix
+
+Use the [executor membership workflow](../.github/workflows/db-repair-executor.yml)
+with a separate provisioner that holds direct `ADMIN` on the migrator role.
+It grants only `SET` and `INHERIT` to the approved `drizzle` schema owner and
+revokes only that provisioner's edge. Membership affects the shared role catalog.
+
+- `PRODUCTION_DB_EXECUTOR_APPROVED_SHA` pins the reviewed commit on protected `main`.
+- `PRODUCTION_DB_EXECUTOR_DATABASE_URL` supplies the provisioner's direct credential.
+- `PRODUCTION_DB_EXECUTOR_PLAN` holds the provisioner `identity` fingerprint,
+  the schema owner's `executor` name and the approved `operation`.
+- `PRODUCTION_DB_EXECUTOR_PLAN_SHA256` pins the exact plan bytes.
+
+Rehearse provision, forward, undo and revoke together on the isolated restore.
+Derive each target's repair pins after provisioning under its approved executor.
+The snapshot hashes the membership row OID. Recreating the edge changes the
+digest, so retain the same edge through the recovery window.
+Keep the repair credential separate. If a membership run is uncertain, use its
+same approved operation to confirm the state. An unexpected edge refuses without
+writes. Approve and dispatch `revoke` after recovery is no longer needed.
+
+Rehearse both directions of the [permissions repair](../.github/workflows/db-permissions-repair.yml) under the production release gate with catalog `MAINTAIN`.
+Use the approved executor login for every snapshot. Run `ci/db-permissions-repair-state.sql` read-only with `search_path = pg_catalog`. Use production Environment secrets.
+
+- `PRODUCTION_DB_REPAIR_APPROVED_SHA` pins the reviewed commit on protected `main`.
+- `PRODUCTION_DB_REPAIR_DATABASE_URL` supplies the direct scoped credential.
+- `PRODUCTION_DB_REPAIR_PLAN` holds the `before` and `after` digests, `identity` fingerprint and `owners` in inventory order.
+- `PRODUCTION_DB_REPAIR_PLAN_SHA256` pins the exact plan bytes.
+
+Run `readback` after an uncertain write. If it cannot classify the state, stop writes and compare a read-only catalog snapshot against both pins before approving recovery.
+Keep the executor authority and pins through the 30-minute watch and recovery window, then verify their removal.
+Dispatch `forward` and `provision` at the approved protected `main` tip. If
+`main` advances during recovery, keep the same approval SHA for `undo`,
+`readback`, and `revoke`. Those operations use the approved ancestor only
+when its workflow and revision selector match the dispatch revision.
+Before rolling out changes to either file, close any open recovery window.
+Start new repairs from an approved revision that includes the selector.
+
+### Migration rollback and recovery
+
 **Rollback:** a Worker rollback does not undo schema/data. SQL failure rolls back
 the pending transaction, including ledger initialization on a fresh DB. Existing
 history stays intact. On connection loss, do not infer commit success. For

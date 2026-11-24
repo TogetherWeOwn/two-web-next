@@ -147,7 +147,8 @@
         "src/admin/guard.ts",
         "src/index.tsx",
         "src/kit-session.ts",
-        "src/profiles/routes-gate.ts"
+        "src/profiles/routes-gate.ts",
+        "src/session-hono.ts"
       ],
       "vectors": [
         {

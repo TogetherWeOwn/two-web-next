@@ -4,13 +4,45 @@ import { hashToken, isValidSessionToken, type SessionStore } from "../sessions";
 
 const MAX_COOKIE_LENGTH = 8192;
 const SESSION_PAIR_PREFIX = `${SESSION_COOKIE}=`;
+const MAX_ADMISSION_REFUSALS = 1024;
+const ADMISSION_REFUSAL_MS = 60_000;
 
 type SocketSession =
   | { kind: "guest" }
   | { kind: "session"; ref: string; validUntil: number }
   | { kind: "refused"; status: 401 | 503 };
 
-/** Authoritative exact reread for admission and commands. validUntil is a
+/** Reuse definitive store refusals between upgrades for the same verified ref.
+ * Keep this out of established socket authorization. Each live or indeterminate
+ * read and each new bearer still goes through the authority. */
+export function cacheSocketAdmissionRefusals(
+  getLive: SessionStore["getLive"],
+  now: () => number = Date.now,
+): SessionStore["getLive"] {
+  const refusals = new Map<string, number>();
+  return async (ref) => {
+    const time = now();
+    const refusedAt = refusals.get(ref);
+    if (refusedAt !== undefined) {
+      if (refusedAt <= time && time - refusedAt < ADMISSION_REFUSAL_MS) return null;
+      refusals.delete(ref);
+    }
+
+    const live = await getLive(ref);
+    // Cache only a completed negative lookup. Worker I/O stays in the request
+    // that started it, even when concurrent upgrades miss the same entry.
+    if (live === null && !refusals.has(ref)) {
+      if (refusals.size === MAX_ADMISSION_REFUSALS) {
+        const oldest = refusals.keys().next().value;
+        if (oldest !== undefined) refusals.delete(oldest);
+      }
+      refusals.set(ref, time);
+    }
+    return live;
+  };
+}
+
+/** Bound the lifetime from an exact session lookup. validUntil is a
  * conservative Worker-local epoch deadline for expiry alarms, not a DB stamp
  * or a substitute for a fresh row read. Throws if the read is indeterminate. */
 export async function readTimedSocketSession(
