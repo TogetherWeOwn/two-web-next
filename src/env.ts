@@ -106,9 +106,10 @@ export type Env = AgentEventsEnv & {
   KIT_ROUTE_EVENTS?: string;
   KIT_ROUTE_HOME?: string;
   KIT_ROUTE_JOIN?: string;
-  // Exact Ember document rollout on the production apex or isolated cutover Worker.
   KIT_ROUTE_EMBER_PAGES?: string;
   DISCORD_LIVE_SOCKET_ENABLED?: string;
+  // Browser auth endpoints. Only the literal string "true" opts in.
+  KIT_ROUTE_AUTH?: string;
   // ICS and RSS reads. Only the literal string "true" opts in.
   KIT_ROUTE_FEEDS?: string;
   // Robots and sitemap reads. Only the literal string "true" opts in.

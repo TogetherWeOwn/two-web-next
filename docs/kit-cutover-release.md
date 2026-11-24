@@ -1,4 +1,4 @@
-# Kit cutover and Hono undo
+# All-off Kit cutover and Hono undo
 
 The [XFS qualification workflow](../.github/workflows/xfs-qualification.yml)
 tests the Kit build with every route family off. It preserves the exact facade,
@@ -20,13 +20,7 @@ It runs public smoke and exact-version undo on both ledger states, then
 removes the run-owned Worker, database, and expiring login.
 To retry, select **Re-run all jobs** so staging uses a packet from that attempt.
 
-Set `qualify_cutover: true` and `cutover_profile: ember` to qualify the Ember profile on both ledgers.
-
 ## Protected release and recovery
 
 Follow the [separate release gate](../CONTRIBUTING.md#production-release-gate) and pause automatic promotion. Prepare Hono with `deploy-production` and `cutover_mode: hono`, then record its serving UUID.
-Select `ember` for the Ember-qualified proof or `kit` for the all-off proof.
-Use the serving Hono UUID as `cutover_undo_version` and the same `sha` and
-`cutover_pin`. Ember adds renderer assertions to rollout and final smoke.
-Undo with `rollback-production`, specifying Hono as `version_id` and Kit as
-`expected_current_version_id`. Ordinary promotion requires the full target ledger.
+Select `kit` with that UUID as `cutover_undo_version` and the same `sha` and `cutover_pin`. Undo with `rollback-production`, specifying Hono as `version_id` and Kit as `expected_current_version_id`. Ordinary promotion requires the full target ledger.

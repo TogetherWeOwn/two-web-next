@@ -42,7 +42,7 @@ import {
   rememberLoginNext,
 } from "../return-journey";
 import { parseModeratorRoleIds, recomputeModerator } from "../roles";
-import { hashToken, type SessionStore } from "../sessions";
+import { type DbSessionRow, hashToken, type SessionStore } from "../sessions";
 import {
   AUTH_THROTTLE_PER_MINUTE,
   WRITE_THROTTLE_PER_MINUTE,
@@ -76,20 +76,12 @@ const redirectUri = (env: Env) => `${env.APP_URL}/auth/discord/callback`;
 
 export type AuthHooks = {
   storeFor: (c: Ctx) => Promise<SessionStore>;
-  issueSession: (
-    c: Ctx,
-    store: SessionStore,
-    row: {
-      userId: string;
-      username: string;
-      avatar: string | null;
-      member: boolean;
-      moderator: boolean;
-    },
-  ) => Promise<void>;
+  issueSession: (c: Ctx, store: SessionStore, row: DbSessionRow) => Promise<void>;
 };
 
-export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHooks) {
+// Both HTTP entry points register these handlers, including the one Discord
+// callback that consumes the auth journey before exchange or session issuance.
+export function registerBrowserAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHooks) {
   // Session-adjacent reads share the one public-read budget with every other
   // read: the guard runs before any session, cookie or store work, in the same
   // in-handler form as the event pages. Admitted responses are unchanged; a
@@ -98,11 +90,6 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     const limited = await publicReadGuard(c);
     if (limited) return limited;
     return authStatus(c, () => hooks.storeFor(c));
-  });
-  app.get("/auth/recover", async (c) => {
-    const limited = await publicReadGuard(c);
-    if (limited) return limited;
-    return recoveryLanding(c);
   });
 
   // Legacy login links: retain only the existing guarded-next value, never OAuth input.
@@ -352,6 +339,16 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     throttle("logout", WRITE_THROTTLE_PER_MINUTE),
     (c) => signOutEverywhere(c, () => hooks.storeFor(c)),
   );
+}
+
+export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHooks) {
+  registerBrowserAuthRoutes(app, hooks);
+
+  app.get("/auth/recover", async (c) => {
+    const limited = await publicReadGuard(c);
+    if (limited) return limited;
+    return recoveryLanding(c);
+  });
 
   // Staging-only QA seam. 404 everywhere that is not the staging host with
   // QA_AUTH_TOKEN set. Unknown identity and bad token are byte-identical 404s.

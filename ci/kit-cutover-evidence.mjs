@@ -14,6 +14,7 @@ export const LEDGER_STATES = ["1033", "1037"];
 export const PROFILES = ["hono", "kit"];
 export const EMBER_CUTOVER_VARS = Object.freeze({
   KIT_ROUTE_EMBER_PAGES: "true",
+  KIT_ROUTE_AUTH: "false",
   KIT_ROUTE_FEEDS: "false",
   KIT_ROUTE_SEO: "false",
   KIT_ROUTE_SECURITY_TXT: "false",

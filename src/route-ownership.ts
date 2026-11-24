@@ -1130,11 +1130,12 @@ async function dispatchFromManifest(
   // Use the tested Request-to-decision path for both the method and URL.
   const route = decideRoute(event.request, manifest, event.url);
   if (route) return dispatchKitRequest(event, deps, route);
-  const apiRoute = familyRouteFor(event, manifest, deps.apiFamilies);
-  if (!apiRoute) return deps.honoFetch(event.request);
+  const selection = familyRouteFor(event, manifest, deps.apiFamilies);
+  if (!selection) return deps.honoFetch(event.request);
+  const { route: apiRoute, family } = selection;
   const started = performance.now();
   setReleaseMetadata(deps.versionMetadata);
-  const response = await dispatchKitRequest(event, deps, apiRoute, true);
+  const response = await dispatchKitRequest(event, deps, apiRoute, family);
   const requestId = kitRequestId(event.locals);
   if (requestId)
     writeHttpRequestLog(event.request, requestId, apiRoute.path, response.status, started);
@@ -1157,7 +1158,7 @@ async function dispatchKitRequest(
   event: HookEventLike,
   deps: HookDispatchDeps,
   route: OwnedRoute,
-  api = false,
+  api?: KitApiFamily,
 ): Promise<Response> {
   if (route.path === "/auth/recover") {
     // The no-JS recovery page has no Kit data representation. Never mint
@@ -1188,6 +1189,10 @@ async function dispatchKitRequest(
   // absent), with only the documented machine exemptions. Refused before the
   // session bridge and before resolve, body unread, hardened like Hono.
   if (!isSameOriginAllowed(event.request, deps.appUrl, event.url)) {
+    if (api?.crossOriginRefusal) {
+      const refused = await api.crossOriginRefusal(event.request, requestId);
+      return finishKitResponse(refused, event, deps, requestId);
+    }
     const refused = sameOriginRefusal(event, deps.appUrl, deps.featuredImageHosts);
     refused.headers.set("x-request-id", requestId);
     return refused;
@@ -1464,6 +1469,7 @@ async function dispatchKitRequest(
 interface KitApiFamily {
   flag: string | undefined;
   routes: readonly KitApiRoute[];
+  crossOriginRefusal?: (request: Request, requestId: string) => Response | Promise<Response>;
 }
 
 interface KitApiRoute extends OwnedRoute {
@@ -1477,7 +1483,7 @@ function familyRouteFor(
   event: HookEventLike,
   manifest: OwnedRoute[],
   families: readonly KitApiFamily[] | undefined,
-): OwnedRoute | undefined {
+): { route: KitApiRoute; family: KitApiFamily } | undefined {
   const id = event.route?.id;
   if (!id || event.isDataRequest || !families?.some(({ flag }) => flag === "true"))
     return undefined;
@@ -1488,7 +1494,7 @@ function familyRouteFor(
     return undefined;
 
   const method = event.request.method === "HEAD" ? "GET" : event.request.method;
-  let selected: KitApiRoute | undefined;
+  let selected: { route: KitApiRoute; family: KitApiFamily } | undefined;
   for (const family of families) {
     if (family.flag !== "true") continue;
     for (const route of family.routes) {
@@ -1510,7 +1516,7 @@ function familyRouteFor(
       )
         continue;
       if (selected) return undefined;
-      selected = route;
+      selected = { route, family };
     }
   }
   if (!selected) return undefined;
@@ -1519,9 +1525,12 @@ function familyRouteFor(
   const overlaps = (entry: OwnedRoute) =>
     entry.method.toUpperCase() === method && matchPattern(entry.path, decoded);
   if (manifest.some(overlaps) || ROUTE_MANIFEST.some(overlaps)) return undefined;
-  if (selected.dynamic) return selected.enabled && !selected.documentGetOnly ? selected : undefined;
-  return enabledRouteFor({ method: event.request.method, path: pathname }, [selected], {
+  const { route } = selected;
+  if (route.dynamic) return route.enabled && !route.documentGetOnly ? selected : undefined;
+  return enabledRouteFor({ method: event.request.method, path: pathname }, [route], {
     originalUrl: event.request.url,
-    reservedReleases: [selected],
-  });
+    reservedReleases: [route],
+  })
+    ? selected
+    : undefined;
 }

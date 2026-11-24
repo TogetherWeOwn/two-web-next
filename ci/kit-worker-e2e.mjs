@@ -918,6 +918,22 @@ export default {
     },
   });
 
+  const authEntry = join(scratch, "kit-auth.mjs");
+  const authFixture = fileURLToPath(new URL("./fixtures/kit-auth-worker.mjs", import.meta.url));
+  await writeFile(
+    authEntry,
+    `import inner from ${JSON.stringify(worker)};
+import { authFixtureWorker } from ${JSON.stringify(authFixture)};
+export default authFixtureWorker(inner);\n`,
+  );
+  const authSecret = FIXTURE_SECRETS.SESSION_SECRET;
+  const auth = await startWorker("kit-auth", authEntry, assets, authSecret, {
+    DATABASE_URL: undefined,
+  });
+  await listen(auth.child, auth.origin, () => auth.log);
+  const { assertAuthParity } = await import("./fixtures/kit-auth-parity.mjs");
+  await assertAuthParity(auth.origin, authSecret, !args.length || publicVoiceBrowser);
+
   if (args.length) {
     const probePath = "/__fixture/machine-parity";
     const fixture = fileURLToPath(new URL("./fixtures/kit-machine-parity.mjs", import.meta.url));
