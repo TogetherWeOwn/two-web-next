@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { parse } from "yaml";
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
@@ -21,6 +23,7 @@ test("repair dispatch isolates the credential and pins protected main and the sa
   assert.deepEqual(job.steps[1].with, {
     ref: "${{ github.sha }}",
     "persist-credentials": false,
+    "fetch-depth": 0,
   });
   const scope = workflow.jobs.preflight.steps[0];
   const gate = job.steps[0];
@@ -53,7 +56,7 @@ test("repair dispatch isolates the credential and pins protected main and the sa
   assert.equal(shell(gate.run, pins).status, 0);
   for (const override of [
     { CHECKED_ATTEMPT: "1" },
-    { APPROVED_SHA: "c".repeat(40) },
+    { APPROVED_SHA: "not-a-sha" },
     { PLAN_SHA256: "" },
   ]) {
     assert.equal(shell(gate.run, { ...pins, ...override }).status, 1);
@@ -83,6 +86,76 @@ test("repair dispatch isolates the credential and pins protected main and the sa
   }
 });
 
+test("database repair recovery pins an unchanged dispatcher and a main ancestor", (t) => {
+  const cwd = mkdtempSync(join(tmpdir(), "db-repair-revision-"));
+  t.after(() => rmSync(cwd, { recursive: true }));
+  const git = (...args) =>
+    execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const write = (path, contents) => {
+    mkdirSync(join(cwd, dirname(path)), { recursive: true });
+    writeFileSync(join(cwd, path), contents);
+  };
+  const repair = ".github/workflows/db-permissions-repair.yml";
+  const executor = ".github/workflows/db-repair-executor.yml";
+  const selector = ".github/scripts/select-db-repair-revision.sh";
+  git("init", "-q");
+  git("config", "user.name", "Fixture");
+  git("config", "user.email", "fixture@example.invalid");
+  git("commit", "-qm", "before recovery rollout", "--allow-empty");
+  const beforeRollout = git("rev-parse", "HEAD");
+  for (const path of [repair, executor, selector]) write(path, read(`../${path}`));
+  git("add", ".");
+  git("commit", "-qm", "approved source");
+  const approved = git("rev-parse", "HEAD");
+  git("commit", "-qm", "main advanced", "--allow-empty");
+  const tip = git("rev-parse", "HEAD");
+  git("checkout", "--detach", approved);
+  git("commit", "-qm", "unmerged source", "--allow-empty");
+  const unrelated = git("rev-parse", "HEAD");
+
+  const select = (path, operation, dispatch, pin, workflowSha = dispatch) => {
+    git("checkout", "--detach", dispatch);
+    const yaml = parse(readFileSync(join(cwd, path), "utf8"));
+    const step = Object.values(yaml.jobs)
+      .flatMap((job) => job.steps)
+      .find(({ name }) => name === "Select the approved database repair revision");
+    const result = spawnSync("/bin/bash", ["-c", step.run], {
+      cwd,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPERATION: operation,
+        APPROVED_SHA: pin,
+        GITHUB_SHA: dispatch,
+        GITHUB_WORKFLOW_SHA: workflowSha,
+      },
+    });
+    return [result.status, git("rev-parse", "HEAD")];
+  };
+  assert.deepEqual(select(repair, "forward", tip, tip), [0, tip]);
+  assert.deepEqual(select(executor, "provision", tip, tip), [0, tip]);
+  for (const [path, operation] of [
+    [repair, "undo"],
+    [repair, "readback"],
+    [executor, "revoke"],
+  ]) {
+    assert.deepEqual(select(path, operation, tip, approved), [0, approved]);
+    assert.deepEqual(select(path, operation, tip, unrelated), [1, tip]);
+    assert.deepEqual(select(path, operation, tip, approved, unrelated), [1, tip]);
+    assert.deepEqual(select(path, operation, tip, beforeRollout), [1, tip]);
+  }
+  assert.deepEqual(select(repair, "forward", tip, approved), [1, tip]);
+  assert.deepEqual(select(executor, "provision", tip, approved), [1, tip]);
+  write(repair, `${read(`../${repair}`)}\n# changed dispatcher\n`);
+  git("commit", "-qam", "changed dispatcher");
+  const changed = git("rev-parse", "HEAD");
+  assert.deepEqual(select(repair, "undo", changed, approved), [1, changed]);
+  write(selector, `${read(`../${selector}`)}\n# changed selector\n`);
+  git("commit", "-qam", "changed selector");
+  const changedSelector = git("rev-parse", "HEAD");
+  assert.deepEqual(select(executor, "revoke", changedSelector, approved), [1, changedSelector]);
+});
+
 test("executor dispatch scopes its credential and suppresses subprocess output", () => {
   const workflow = parse(read("../.github/workflows/db-repair-executor.yml"));
   const { preflight, authority } = workflow.jobs;
@@ -94,6 +167,11 @@ test("executor dispatch scopes its credential and suppresses subprocess output",
   assert.deepEqual(workflow.concurrency, {
     group: "web-migrate-production",
     "cancel-in-progress": false,
+  });
+  assert.deepEqual(authority.steps[1].with, {
+    ref: "${{ github.sha }}",
+    "persist-credentials": false,
+    "fetch-depth": 0,
   });
   const gate = authority.steps[0];
   const sha = "a".repeat(40);
