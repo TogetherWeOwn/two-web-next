@@ -80,14 +80,20 @@ async function visit(worker, path, status, { method = "GET", headers, body, owne
 
 export async function assertStagedAdminServing({ origin, owner, secrets, enabled }) {
   const worker = { name: "isolated admin cutover", origin };
+  const actor = 900000000000000000n + BigInt(`0x${randomBytes(7).toString("hex")}`);
+  const moderator = await session(owner, String(actor), true, secrets.SESSION_SECRET);
+  const dashboard = await visit(worker, "/admin", 200, {
+    headers: { ...html, cookie: moderator },
+    owned: enabled,
+  });
+  assert.ok(/<h1\b[^>]*>Moderation<\/h1>/.test(dashboard.text), "moderator dashboard heading");
+  assert.ok(dashboard.text.includes('href="/admin/events"'), "moderator dashboard Events link");
   if (!enabled) {
     await visit(worker, editor, 302, { owned: false });
     await visit(worker, operator, 404, { owned: false });
     return;
   }
 
-  const actor = 900000000000000000n + BigInt(`0x${randomBytes(7).toString("hex")}`);
-  const moderator = await session(owner, String(actor), true, secrets.SESSION_SECRET);
   const member = await session(owner, String(actor + 1n), false, secrets.SESSION_SECRET);
   const bearer = { authorization: `Bearer ${secrets.OPS_CONTROL_TOKEN}` };
   const reads = [
@@ -110,7 +116,9 @@ export async function assertStagedAdminServing({ origin, owner, secrets, enabled
     await visit(worker, path, 302, { owned: false, headers: bearer });
   }
   await visit(worker, editor, 403, { headers: { cookie: member } });
-  const edit = await visit(worker, editor, 200, { headers: { cookie: moderator, ...html } });
+  const edit = await visit(worker, editor, 200, {
+    headers: { ...html, cookie: renewedModerator(dashboard.headers) },
+  });
   assert.match(edit.text, /<form[^>]+method="post"[^>]+action="\/admin\/events"/);
   const renewed = renewedModerator(edit.headers);
   await visit(worker, "/admin/events", 422, {
