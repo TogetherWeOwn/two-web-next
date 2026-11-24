@@ -82,7 +82,7 @@ export async function assertReadinessTraffic(
   const { success, result } = await readJson(`${api}/deployments`, auth, fetchImpl, 1024 * 1024);
   assert.ok(
     success === true && liveVersion(result?.deployments) === version,
-    "Approved Worker must serve all Web traffic",
+    "Approved fallback must serve all Web traffic",
   );
   if (artifact) {
     const metadata = await readJson(`${api}/versions/${version}`, auth, fetchImpl, 1024 * 1024);

@@ -193,8 +193,8 @@ function parsePlan(raw, hash) {
   const plan = JSON.parse(raw);
   assert.deepEqual(Object.keys(plan).sort(), [
     "add",
-    "artifact",
     "after",
+    "artifact",
     "before",
     "identity",
     "membership",

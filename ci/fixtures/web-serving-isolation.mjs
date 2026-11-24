@@ -146,7 +146,7 @@ export async function rehearseServingIsolation({
   assert.equal(await run("readback"), "before");
   await assert.rejects(
     run("forward", { liveVersion: randomUUID() }),
-    /Approved Worker must serve all/,
+    /Approved fallback must serve all/,
   );
   await assert.rejects(run("forward", { qualified: false }), /does not identify the staged Hono/);
   await assert.rejects(run("forward", { raw: "{" }), SyntaxError);
