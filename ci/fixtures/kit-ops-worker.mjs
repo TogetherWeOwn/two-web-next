@@ -161,9 +161,21 @@ async function verifyOps(inner, env, ctx) {
   };
 
   try {
-    const healthy = { bindings: { QUEUE_DEPTH_STORE: healthSql() } };
+    const queueDepth = {
+      pending: 3,
+      delayed: 1,
+      reserved: 0,
+      total: 4,
+      failed: 2,
+      oldest_pending_age_seconds: 42,
+      oldest_ready_wait_age_seconds: 12.5,
+    };
+    const healthy = { bindings: { QUEUE_DEPTH_STORE: healthSql({ queue: [queueDepth] }) } };
     const health = JSON.parse(await pair("/up", "GET", 200, true, healthy));
     assert.equal(health.pending_migrations, 0);
+    assert.equal(health.queue.status, "healthy");
+    for (const [field, value] of Object.entries(queueDepth))
+      assert.equal(health.queue[field], value, field);
     await pair("/up", "HEAD", 200, true, healthy);
     await pair("/up", "GET", 503, true);
     await pair("/version?fixture=1", "GET", 200, true);
@@ -185,6 +197,17 @@ async function verifyOps(inner, env, ctx) {
     }
     await pair("/admin/ops-overrides", "POST", 405, false);
 
+    let pulls = 0;
+    const unread = () =>
+      new ReadableStream(
+        {
+          pull(controller) {
+            pulls++;
+            controller.close();
+          },
+        },
+        { highWaterMark: 0 },
+      );
     const cspCase = (label, body, rate, headers = {}) =>
       pair(csp, "POST", 204, true, {
         label,
@@ -203,7 +226,8 @@ async function verifyOps(inner, env, ctx) {
     await cspCase("disabled sampling", () => report, "0");
     assert.equal(counts.violations, 2);
     await cspCase("malformed", () => "{", "1");
-    await cspCase("declared oversize", () => "x".repeat(8193), "0", { "content-length": "8193" });
+    await cspCase("declared oversize", unread, "0", { "content-length": "8193" });
+    assert.equal(pulls, 0, "declared oversize reports leave the upload unread");
     let cancelled = 0;
     const stream = (chunk, close) =>
       new ReadableStream({
@@ -220,17 +244,6 @@ async function verifyOps(inner, env, ctx) {
     assert.equal(cancelled, 2, "each owner cancels the stalled body");
 
     const qa = { "x-two-qa-auth": token, "x-two-alert-probe": probeId };
-    let pulls = 0;
-    const unread = () =>
-      new ReadableStream(
-        {
-          pull(controller) {
-            pulls++;
-            controller.close();
-          },
-        },
-        { highWaterMark: 0 },
-      );
     const over = () => stream("x".repeat(4097), true);
     const probe = (status, options = {}) => pair(alert, "POST", status, true, options);
     const absent = await probe(404, { label: "absent token", body: unread });

@@ -275,6 +275,26 @@
       "reason": "Native POST revokes member sessions and clears session cookies. The installed Worker auth fixture covers this endpoint without a Kit data response."
     },
     {
+      "route": "GET /up",
+      "binding": "web/src/routes/up/+server.ts",
+      "reason": "Operational JSON readiness with aggregate counts and migration timestamps. The installed Worker ops fixture checks healthy and unavailable responses without a Kit data payload."
+    },
+    {
+      "route": "GET /version",
+      "binding": "web/src/routes/version/+server.ts",
+      "reason": "Operational JSON with only revision identity and upload time. The installed Worker ops fixture checks wire parity without a Kit data payload."
+    },
+    {
+      "route": "POST /csp-reports",
+      "binding": "web/src/routes/csp-reports/+server.ts",
+      "reason": "POST-only CSP sink. The installed Worker ops fixture checks the empty response and bounded report handling."
+    },
+    {
+      "route": "POST /__probe/alert",
+      "binding": "web/src/routes/__probe/alert/+server.ts",
+      "reason": "POST-only staging QA probe. The installed Worker ops fixture checks gate refusals and intercepted effects."
+    },
+    {
       "route": "*",
       "binding": "web/src/routes/[...path]/+server.ts",
       "reason": "Strangler catch-all: unrouted paths go to the Hono app unchanged (Hono surface)."
