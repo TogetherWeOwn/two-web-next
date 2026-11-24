@@ -309,20 +309,16 @@ if (query.order === 'desc') rows.reverse();
           await page.setViewportSize({ width, height });
           const after = await page.screenshot({ fullPage: true });
           // Restore the previous header markup as a visual control on the same SSR page.
-          const html = await thead.evaluate((element) => {
-            const original = element.innerHTML;
+          await thead.evaluate((element) => {
             for (const th of element.querySelectorAll("th[aria-label]")) {
               th.removeAttribute("aria-label");
               if (!th.hasAttribute("aria-sort")) th.setAttribute("aria-sort", "none");
               const arrow = th.querySelector('span[aria-hidden="true"]');
               if (arrow) arrow.replaceWith(arrow.textContent);
             }
-            return original;
           });
           const before = await page.screenshot({ fullPage: true });
-          await thead.evaluate((element, original) => {
-            element.innerHTML = original;
-          }, html);
+          await page.reload();
           await writeFile(join(directory, `${state}-${width}-before.png`), before);
           await writeFile(join(directory, `${state}-${width}-after.png`), after);
           assert.ok(before.equals(after), `${state} at ${width}px renders identically`);
