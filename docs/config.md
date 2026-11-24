@@ -95,6 +95,9 @@ an actual code fallback or a checked-in Wrangler value, not a recommended value.
 | `BOT_DATABASE_URL` | Optional connection string; treat credential-bearing URLs as secrets | dev: test database carrying `web_v1`; staging/prod: optional explicit override, normally use `BOT_DB` | None in runtime | Counts and profile-stats selection is explicit URL then `BOT_DB`. No bot source means hidden counts and hidden stats block. Never point tests or local runs at a production or staging bot database. |
 | `DISCORD_MODERATOR_ROLE_IDS` | Optional public var (comma-separated snowflakes) | dev/staging/prod | Main and Kit staging Wrangler top level (staging guild `1545644954272137297`): staging Owner+Moderator pair `1546211363578191873,1545648550329851946`; env.production (guild `326474832151838730`): production pair `1546777855801954408,1546777856984481792`; local/unset: blank, no moderators | Only trimmed 10–25 digit role IDs survive parsing. Blank/invalid allowlist or lookup failure gives `moderator=false`; sign-in continues. Deployment preflight requires exactly the guild-bound Owner+Moderator pair from the same source config published by Wrangler: each environment's pair must belong to the guild it queries, so a production pair in the staging config (or vice versa) fails. Role IDs are guild-scoped and the two pairs are unrelated — never copy one guild's IDs into the other. This is source policy, not live binding/isolation evidence. |
 | `QA_AUTH_TOKEN` | Optional secret | staging only; leave unset in dev/prod | Unset; QA route disabled | QA route requires exact `APP_URL=https://next.togetherweown.com` plus a configured token of 32-512 characters with no surrounding whitespace; a value outside that window leaves the route disabled. Generate the value randomly (32+ bytes from a CSPRNG, hex/base64-encoded). Missing/bad token or unknown identity returns 404, and failed guesses drain a per-client attempt budget (see [throttling](throttling.md)). Only gated logins spend the shared `qa-login` throttle. |
+| `STAGING_VOICE_MOVE_ENABLED` | Optional runtime flag | staging only | Unset; probe disabled | Only exact `true` on the staging Web origin admits the self-move probe. See [staging voice self-move](#staging-voice-self-move). |
+| `STAGING_VOICE_MOVE_MEMBER_ID` | Optional runtime fixture principal | staging only | Unset | One dedicated Discord account's canonical snowflake. QA sign-in fixture IDs are refused. |
+| `STAGING_VOICE_MOVE_CHANNEL_IDS` | Optional runtime fixture destinations | staging only | Unset | Exactly two distinct canonical channel snowflakes separated by a comma, without spaces. |
 | `OPS_CONTROL_TOKEN` | Optional runtime-only control bearer secret | dev: fixtures only; staging/prod: separately authorized existing bot control token | Unset; panel dark | `GET /admin/ops-overrides` requires the exact bearer (32–512 characters, no surrounding whitespace); session roles do not admit it. Unset/invalid configuration returns 404; bad bearer returns 401, and a client's rejected guesses are attempt-capped (then 429 with `Retry-After`). Only the configured HTTPS bot origin receives this bearer for a read-only `/ops/config` GET. No config file provisions it; PUT remains API-only and security-gated. See [operator panel](operator-overrides.md). |
 | `QUEUE_RECONCILE_PREVIEW_ENABLED` | Optional operational flag var | staging only; leave unset elsewhere | Unset; disabled | Only exact `true`, exact staging `APP_URL`, and a valid non-QA operator ID admit the read-only preview namespace; otherwise DB-free 404. No Worker config sets this flag. Activation requires independent security review and separate authorization. |
 | `QUEUE_RECONCILE_OPERATOR_ID` | Optional operational principal var (Discord snowflake) | staging only; no grant provisioned | Unset; nobody admitted | Exactly one 10–25 digit non-QA identity, plus the live session moderator bit, is required. Invalid/missing configuration disables previews; any other actor gets 403. QA tokens do not grant operational authority. |
@@ -145,6 +148,28 @@ While the production archive and static page opt-ins are active, their responses
 flag rollback. A Hono response cached before opt-in can still be served until
 its existing freshness lifetime ends. With the opt-ins off, Hono retains its
 normal cache policy.
+
+### Staging voice self-move
+
+`POST /__probe/voice-move` accepts an explicit staging `Origin` and a JSON
+object with only `channel_id`. The dedicated account signs in through Discord
+and must present its current Web member session. Web uses that session's ID
+as the signed `discord_id` and sends one keyless request to the staging Bot
+Worker. `BOT_ENDPOINT_URL` must be the exact staging Worker origin (an
+optional final slash is accepted). The existing `BOT_KEY_ID` and
+`BOT_SHARED_SECRET` must match the staging receiver. Web returns the validated
+Bot envelope and correlation ID. A `moved` receipt includes the source only
+when it is the other fixture channel. An unconfirmed attempt receives 502
+and Web does not retry it.
+
+No checked-in Worker config enables the probe. A separate live qualification
+needs the dedicated Discord account, two dedicated staging voice channels,
+verified occupancy and Connect permissions for the planned cases, and an
+exclusive staging window that does not overlap other Bot or Web work. Use
+the Bot's [lease-scoped self-move opt-in](https://github.com/TogetherWeOwn/two-bot-next/pull/2427)
+for that window. At teardown, clear the Web flag and fixture settings,
+verify that Web refuses the route, and verify the Bot's restored OFF state
+on lease release or expiry.
 
 ### `SESSION_SECRET` strength and rotation
 

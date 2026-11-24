@@ -3,7 +3,13 @@ import type { BotFailure } from "../jobs/types";
 import { retryableFallback } from "./client-retry";
 
 export type ParsedEnvelope =
-  | { ok: true; result: Record<string, unknown>; requestId: string; replayed: boolean }
+  | {
+      ok: true;
+      status: number;
+      result: Record<string, unknown>;
+      requestId: string;
+      replayed: boolean;
+    }
   | { ok: false; failure: BotFailure };
 
 export function parseEnvelope(status: number, replayed: boolean, json: unknown): ParsedEnvelope {
@@ -14,7 +20,13 @@ export function parseEnvelope(status: number, replayed: boolean, json: unknown):
   if (body.ok === true) {
     if (typeof body.result !== "object" || body.result === null)
       throw new BotTransportError("bot success has no result object");
-    return { ok: true, result: body.result as Record<string, unknown>, requestId, replayed };
+    return {
+      ok: true,
+      status,
+      result: body.result as Record<string, unknown>,
+      requestId,
+      replayed,
+    };
   }
   const error =
     typeof body.error === "object" && body.error !== null

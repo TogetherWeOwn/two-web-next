@@ -150,6 +150,8 @@ describe("every registered write route is body-limited", () => {
         // Enables the QA seam for this in-process boundary fixture only.
         APP_URL: "https://next.togetherweown.com",
         QA_AUTH_TOKEN: "test-only-qa-token-with-32-plus-chars",
+        // Open only the outer staging gate so this fixture exercises the cap.
+        STAGING_VOICE_MOVE_ENABLED: "true",
         SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
         SESSION_STORE: store,
         // The staging-operator boundary opens only for its dedicated

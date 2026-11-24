@@ -90,6 +90,9 @@ including field names, escaping, multipart boundaries and metadata:
 | `featured` | 262,144 | Admin featured create/update (cap-first) | The four bounded title/URL/image/alt strings are 255 code units each and featured `body` is 1,000 Unicode code points after trim (`src/admin/validation-featured-form.ts`, `parseFeaturedForm`); over-max bodies 422 with a field-level error. 256 KiB is the unchanged total editorial-body transport allowance, not a claim of legacy equivalence; large submissions still receive 413 before validation instead of consuming unbounded memory. The create and update posts decide the cap before the admin-write throttle (zero spend on 413). |
 | `action` | 4,096 | Logout (cap-first), QA login (cap-first), staging alert probe (cap before throttle: over-cap probes 413 with no throttle spend), publish/cancel, RSVP pause/reopen (public and admin), queue redispatch, featured unpublish/delete (cap-first), RSVP PUT/DELETE | Actions do not consume bodies; RSVP only needs an enum, optional caller ID and honeypot. 4 KiB leaves form/JSON overhead while preventing bodyless endpoints from accepting arbitrary uploads. DELETE RSVP does read its honeypot body. Logout, QA login, featured unpublish/delete, the staging alert probe, the four public `POST /events/:key/` actions, the four admin lifecycle actions and queue redispatch decide the cap before their throttle; the remaining throttled action routes keep the throttle-before-buffering order. |
 
+`POST /__probe/voice-move` applies the `action` cap after the staging flag and
+origin gate, before the throttle and JSON parsing. The body carries one channel ID.
+
 Validation still determines which inputs are legitimate. Trimming, game
 normalization, unknown fields and some unrestricted ancillary fields mean there
 is no finite mathematical maximum for every input previously accepted. These

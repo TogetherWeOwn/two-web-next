@@ -305,6 +305,7 @@ describe("throttle bucket inventory", () => {
       ["logout", [{ file: "src/auth/routes.ts", count: 2 }]],
       ["qa-login", [{ file: "src/auth/routes.ts", count: 1 }]],
       ["alert-probe", [{ file: "src/alert-probe.ts", count: 1 }]],
+      ["staging-voice-move", [{ file: "src/staging-voice-move.ts", count: 1 }]],
     ]);
     expect([...found.keys()].sort()).toEqual([...expected.keys()].sort());
     for (const [bucket, sites] of expected) {

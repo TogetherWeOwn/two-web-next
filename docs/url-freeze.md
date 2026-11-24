@@ -273,6 +273,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `PATCH /events/:key` | moderator | events: JSON update |
 | `PATCH /members/:user` | member-owner | profiles: self-only edit |
 | `POST /__probe/alert` | staging-token | alerts: QA-only request + poison-job drill; expected 500, no production seam |
+| `POST /__probe/voice-move` | staging-member | [Default-off signed voice self-move fixture](config.md#staging-voice-self-move) |
 | `POST /admin/events` | moderator | admin: draft create |
 | `POST /admin/events/:key` | moderator | admin: update |
 | `POST /admin/events/:key/cancel` | moderator | admin: cancel |
