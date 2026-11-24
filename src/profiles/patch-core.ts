@@ -31,14 +31,16 @@ type Deps = {
 };
 
 type Outcome =
-  | { kind: "guest" | "forbidden" | "unavailable" | "nonOwner" | "notFound" | "badRequest" }
+  | { kind: "guest" | "forbidden" | "unavailable" | "nonOwner" | "notFound" }
+  | { kind: "badRequest"; reason: "invalidJson" | "nonObjectJson" }
   | { kind: "limited"; retryAfter: number }
   | { kind: "invalid"; fields: Record<string, string> }
   | { kind: "saved"; body: { saved: true; message: string } };
 
 /** Dormant JSON PATCH core. The future HTTP caller owns origin, body caps,
- * content negotiation and error reporting. Do not use a member-read audit
- * boundary here: the existing access log covers GET/HEAD, not PATCH. */
+ * content negotiation and sanitized diagnostics. The bad-request reason
+ * distinguishes parser failure from a parsed non-object. Member-read audit
+ * belongs to the GET/HEAD boundary. */
 export async function patchProfileJson(
   subjectId: string,
   readJson: () => Promise<unknown>,
@@ -60,10 +62,10 @@ export async function patchProfileJson(
   try {
     body = await readJson();
   } catch {
-    return { kind: "badRequest" };
+    return { kind: "badRequest", reason: "invalidJson" };
   }
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    return { kind: "badRequest" };
+    return { kind: "badRequest", reason: "nonObjectJson" };
   }
   const input = body as Record<string, unknown>;
   if (!Object.keys(input).every((key) => writable.has(key))) {

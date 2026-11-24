@@ -2,7 +2,12 @@ import { serializeSigned } from "hono/utils/cookie";
 import { describe, expect, it, vi } from "vitest";
 import type { AccessSink } from "../src/access-log";
 import type { Env } from "../src/env";
-import { PROFILE_COPY, PROFILE_HONEY_FIELD } from "../src/islands/contracts-member-profile";
+import {
+  PROFILE_COPY,
+  PROFILE_HONEY_FIELD,
+  PROFILE_MIN_FILL_MS,
+  type ProfileWriteBody,
+} from "../src/islands/contracts-member-profile";
 import { patchProfileJson } from "../src/profiles/patch-core";
 import { profilesApp } from "../src/profiles/routes";
 import { createMemoryProfileStore } from "../src/profiles/store";
@@ -16,6 +21,17 @@ const ENV = {
   APP_URL: "https://fixture.example.test",
   SESSION_SECRET: "synthetic-session-signing-material",
 } as Env;
+
+function editorBody(formOpenedAt: number): ProfileWriteBody {
+  return {
+    bio: " Do some good. ",
+    games_text: "Chess\nChess",
+    timezone: "",
+    leaderboard_opt_out: true,
+    website: "",
+    formOpenedAt,
+  };
+}
 
 type Role = "owner" | "non-owner" | "moderator" | "guest" | "non-member";
 
@@ -42,7 +58,7 @@ function fixture(role: Role, limited = false) {
   };
 
   // Wire the audit spy to the real Hono read boundary, not to the dormant core.
-  async function hono(method: string, body = VALID) {
+  async function hono(method: string, body: unknown = VALID) {
     const sessionStore = createMemorySessionStore();
     const headers = new Headers({ accept: "application/json", "content-type": "application/json" });
     if (role !== "guest") {
@@ -62,7 +78,13 @@ function fixture(role: Role, limited = false) {
       });
       headers.set("cookie", signed.split(";")[0]!);
     }
-    return profilesApp({ sessionStore, store, accessLog, throttle }).request(
+    return profilesApp({
+      sessionStore,
+      store,
+      stats: async () => null,
+      accessLog,
+      throttle,
+    }).request(
       `/members/${OWNER}`,
       { method, headers, body: method === "PATCH" ? JSON.stringify(body) : undefined },
       ENV,
@@ -73,15 +95,22 @@ function fixture(role: Role, limited = false) {
 
 describe("dormant profile JSON PATCH core", () => {
   it("saves only the owner, with Hono's JSON success body and no member-read audit", async () => {
+    const body = editorBody(Date.now() - PROFILE_MIN_FILL_MS);
     for (const implementation of ["core", "hono"]) {
       const f = fixture("owner");
       if (implementation === "core") {
+        f.readJson.mockResolvedValueOnce(body);
         expect(await patchProfileJson(OWNER, f.readJson, f.deps)).toEqual({
           kind: "saved",
           body: SAVED,
         });
+        expect(f.deps.admitMember).toHaveBeenCalledBefore(f.deps.throttle);
+        expect(f.deps.throttle).toHaveBeenCalledBefore(f.deps.storeFor);
+        expect(f.deps.storeFor).toHaveBeenCalledBefore(f.find);
+        expect(f.find).toHaveBeenCalledBefore(f.readJson);
+        expect(f.readJson).toHaveBeenCalledBefore(f.save);
       } else {
-        const response = await f.hono("PATCH");
+        const response = await f.hono("PATCH", body);
         expect(response.status).toBe(200);
         expect(await response.json()).toEqual(SAVED);
       }
@@ -97,12 +126,34 @@ describe("dormant profile JSON PATCH core", () => {
     }
   });
 
+  it("returns the same Hono success body without writing when the editor opens too recently", async () => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      const body = editorBody(now - PROFILE_MIN_FILL_MS + 1);
+      const f = fixture("owner");
+      f.readJson.mockResolvedValueOnce(body);
+      expect(await patchProfileJson(OWNER, f.readJson, f.deps)).toEqual({
+        kind: "saved",
+        body: SAVED,
+      });
+      const response = await f.hono("PATCH", body);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual(SAVED);
+      expect(f.save).not.toHaveBeenCalled();
+      expect(f.accessLog).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it.each([
     ["guest", false, "guest", 401],
     ["non-member", false, "forbidden", 403],
     ["non-owner", false, "nonOwner", 403],
     ["moderator", false, "nonOwner", 403],
     ["non-owner", true, "limited", 429],
+    ["owner", true, "limited", 429],
   ] as const)(
     "%s (limited=%s) is refused without touching body, store or audit",
     async (role, limited, kind, status) => {
@@ -131,7 +182,9 @@ describe("dormant profile JSON PATCH core", () => {
 
   it.each(["GET", "HEAD"])("the Hono audit fixture records a cross-member %s", async (method) => {
     const f = fixture("non-owner");
-    expect((await f.hono(method)).status).toBe(200);
+    const response = await f.hono(method);
+    expect(response.status).toBe(200);
+    if (method === "HEAD") expect(await response.text()).toBe("");
     expect(f.accessLog).toHaveBeenCalledExactlyOnceWith({
       viewerDiscordId: OTHER,
       viewerUserId: OTHER,
@@ -140,6 +193,9 @@ describe("dormant profile JSON PATCH core", () => {
       subjectUserIds: [OWNER],
       route: "profiles.show",
     });
+    const self = fixture("owner");
+    expect((await self.hono(method)).status).toBe(200);
+    expect(self.accessLog).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -147,9 +203,6 @@ describe("dormant profile JSON PATCH core", () => {
     [{ ...VALID, user_id: OTHER }, "invalid"],
     [{ [PROFILE_HONEY_FIELD]: "filled" }, "invalid"],
     [{ ...VALID, [PROFILE_HONEY_FIELD]: "filled" }, "saved"],
-    [null, "badRequest"],
-    [[], "badRequest"],
-    [42, "badRequest"],
   ])("rejects an invalid body or swallows a trapped write: %j → %s", async (body, kind) => {
     const f = fixture("owner");
     f.readJson.mockResolvedValue(body);
@@ -159,10 +212,26 @@ describe("dormant profile JSON PATCH core", () => {
     expect(f.save).not.toHaveBeenCalled();
   });
 
-  it("reports malformed JSON without saving", async () => {
+  it.each([[null], [[]], [42]])(
+    "reports a parsed non-object body (%j) without saving",
+    async (body) => {
+      const f = fixture("owner");
+      f.readJson.mockResolvedValueOnce(body);
+      expect(await patchProfileJson(OWNER, f.readJson, f.deps)).toEqual({
+        kind: "badRequest",
+        reason: "nonObjectJson",
+      });
+      expect(f.save).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reports a JSON parser failure without returning the exception or saving", async () => {
     const f = fixture("owner");
     f.readJson.mockRejectedValue(new SyntaxError());
-    expect(await patchProfileJson(OWNER, f.readJson, f.deps)).toEqual({ kind: "badRequest" });
+    expect(await patchProfileJson(OWNER, f.readJson, f.deps)).toEqual({
+      kind: "badRequest",
+      reason: "invalidJson",
+    });
     expect(f.save).not.toHaveBeenCalled();
   });
 
@@ -172,6 +241,15 @@ describe("dormant profile JSON PATCH core", () => {
     f.save.mockRejectedValueOnce(failure);
     await expect(patchProfileJson(OWNER, f.readJson, f.deps)).rejects.toBe(failure);
     expect(f.save).toHaveBeenCalledOnce();
+  });
+
+  it("stops before the throttle when admission is unavailable", async () => {
+    const f = fixture("owner");
+    f.deps.admitMember.mockResolvedValueOnce({ kind: "unavailable" });
+    expect(await patchProfileJson(OWNER, f.readJson, f.deps)).toEqual({ kind: "unavailable" });
+    expect(f.deps.throttle).not.toHaveBeenCalled();
+    expect(f.deps.storeFor).not.toHaveBeenCalled();
+    expect(f.readJson).not.toHaveBeenCalled();
   });
 
   it("does not parse a body when the admitted owner's store or row is missing", async () => {
