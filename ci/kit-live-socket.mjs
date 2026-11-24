@@ -24,7 +24,7 @@ function upgrade(url, headers) {
   });
 }
 
-function refusal(url, headers) {
+export function refusal(url, headers) {
   return new Promise((resolve, reject) => {
     const req = upgrade(url, headers);
     req.on("response", (response) => {
@@ -135,6 +135,7 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
   assert.equal((await fetch(url, { headers, ...deadline() })).status, 426);
 
   const { ref, cookie } = await fixtureSession(secret);
+  const revokedSession = await fixtureSession(secret);
   const laterSession = await fixtureSession(secret);
   const sql = postgres(databaseUrl, { max: 1 });
   const sockets = [];
@@ -165,7 +166,9 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
     }
 
     await sql`insert into web_sessions (token_hash, user_id, username, member, expires_at)
-      values (${ref}, '900000000000001377', 'Live socket fixture', true, now() + interval '10 minutes')`;
+      values (${ref}, '900000000000001377', 'Live socket fixture', true, now() + interval '10 minutes'),
+        (${revokedSession.ref}, '900000000000001377', 'Live socket fixture', true,
+          now() + interval '10 minutes')`;
     const expiring = await open({ ...headers, Cookie: cookie });
     await sql`update web_sessions set expires_at = clock_timestamp() + interval '3 seconds' where token_hash = ${ref}`;
     const closing = once(expiring, "close", deadline());
@@ -174,16 +177,17 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
     assert.equal(close.code, 1008);
 
     await sql`update web_sessions set expires_at = clock_timestamp() + interval '10 minutes' where token_hash = ${ref}`;
-    const signedIn = await open({ ...headers, Cookie: cookie });
-    await sql`update web_sessions set revoked_at = clock_timestamp() where token_hash = ${ref}`;
+    const revokedHeaders = { ...headers, Cookie: revokedSession.cookie };
+    const signedIn = await open(revokedHeaders);
+    await sql`update web_sessions set revoked_at = clock_timestamp()
+      where token_hash = ${revokedSession.ref}`;
     let deliveries = 0;
     signedIn.addEventListener("message", () => deliveries++);
     assert.equal((await send(signedIn, subscribe, "close"))[0].code, 1008);
     assert.equal(deliveries, 0);
-    assert.equal(await refusal(url, { ...headers, Cookie: cookie }), 401);
+    assert.equal(await refusal(url, revokedHeaders), 401);
     console.log("PASS Kit live socket upgrade, guest resync, frame limits, expiry, and revocation");
 
-    await sql`update web_sessions set revoked_at = null where token_hash = ${ref}`;
     const lapsing = await open({ ...headers, Cookie: cookie });
     await sql`update web_sessions set expires_at = clock_timestamp() where token_hash = ${ref}`;
     lapsing.addEventListener("message", () => deliveries++);
@@ -208,6 +212,7 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
       "later lease must stay open after the first alarm",
     );
     await awaitServerClose(later, new Date(laterLease.expires_at).getTime(), "later idle lease");
+    assert.equal(await refusal(url, { ...headers, Cookie: cookie }), 401);
     console.log(
       "PASS expired session refusal and staggered idle leases with wire-level 1008 Close frames",
     );
@@ -215,7 +220,8 @@ export async function verifyKitLiveSocket(origin, appOrigin, databaseUrl, secret
     for (const socket of sockets) socket.close();
     for (const peer of idlePeers) peer.socket.destroy();
     try {
-      await sql`delete from web_sessions where token_hash in (${ref}, ${laterSession.ref})`;
+      await sql`delete from web_sessions
+        where token_hash in (${ref}, ${revokedSession.ref}, ${laterSession.ref})`;
     } finally {
       await sql.end({ timeout: 1 });
     }

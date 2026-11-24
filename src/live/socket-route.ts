@@ -1,9 +1,9 @@
 import { databaseOptions, databaseUrl, withPerRequestStatementBound } from "../db/connection";
 import type { Env } from "../env";
 import { isTrustedHost } from "../http/trust-hosts";
-import { createPostgresSessionStore, type Sql } from "../sessions";
+import { createPostgresSessionStore, type SessionStore, type Sql } from "../sessions";
 import { handleLiveIngress, type LiveIngressEnv, liveIngressConfig } from "./ingress";
-import { resolveLiveSocketSession } from "./socket-session";
+import { cacheSocketAdmissionRefusals, resolveLiveSocketSession } from "./socket-session";
 
 export const LIVE_SOCKET_PATH = "/api/discord-live/v1";
 export const HUB_SOCKET_URL = "https://live-hub.invalid/socket";
@@ -14,6 +14,8 @@ export type LiveSocketEnv = LiveIngressEnv &
     DISCORD_LIVE_SOCKET_ENABLED?: string;
     DISCORD_LIVE_PUBLIC_VOICE_ROOM_IDS?: string;
   };
+
+const admissionReaders = new WeakMap<LiveSocketEnv, SessionStore["getLive"]>();
 
 export async function readLiveSocketSession(env: LiveSocketEnv, ref: string) {
   const url = databaseUrl(env);
@@ -38,6 +40,15 @@ function refuse(status: number, headers?: Record<string, string>): Response {
   return new Response(null, { status, headers: { "Cache-Control": "no-store", ...headers } });
 }
 
+function readAdmissionSession(env: LiveSocketEnv, ref: string) {
+  let read = admissionReaders.get(env);
+  if (!read) {
+    read = cacheSocketAdmissionRefusals((key) => readLiveSocketSession(env, key));
+    admissionReaders.set(env, read);
+  }
+  return read(ref);
+}
+
 export async function handleLiveRequest(
   request: Request,
   env: LiveSocketEnv,
@@ -59,7 +70,7 @@ export async function handleLiveRequest(
   const session = await resolveLiveSocketSession(
     request.headers.get("cookie") ?? "",
     env.SESSION_SECRET,
-    (ref) => readLiveSocketSession(env, ref),
+    (ref) => readAdmissionSession(env, ref),
   );
   if (session.kind === "refused") return refuse(session.status);
 

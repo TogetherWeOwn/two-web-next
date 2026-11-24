@@ -3,7 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { chromium, expect } from "@playwright/test";
 import postgres from "postgres";
-import { fixtureSession } from "../kit-live-socket.mjs";
+import { fixtureSession, refusal } from "../kit-live-socket.mjs";
 import { SESSION_COOKIE } from "../parity/fixture.mjs";
 import { ingest, liveFixtureSnapshot } from "./kit-live-fanout.mjs";
 import frames from "./kit-live-frames.json" with { type: "json" };
@@ -39,10 +39,11 @@ async function capture(page, state) {
 function observe(page) {
   const sockets = [];
   page.on("websocket", (socket) => {
-    const trace = { url: socket.url(), sent: [], received: [], closed: false };
+    const trace = { url: socket.url(), sent: [], received: [], errors: [], closed: false };
     sockets.push(trace);
     socket.on("framesent", ({ payload }) => trace.sent.push(JSON.parse(payload)));
     socket.on("framereceived", ({ payload }) => trace.received.push(JSON.parse(payload)));
+    socket.on("socketerror", (error) => trace.errors.push(error));
     socket.on("close", () => {
       trace.closed = true;
     });
@@ -58,6 +59,61 @@ async function openHome(page, origin) {
   return response.text();
 }
 
+async function setSession(page, origin, cookie) {
+  await page.context().addCookies([
+    {
+      name: SESSION_COOKIE,
+      value: cookie.slice(SESSION_COOKIE.length + 1),
+      domain: new URL(origin).hostname,
+      path: "/",
+      secure: true,
+      httpOnly: true,
+    },
+  ]);
+}
+
+async function pauseRetryClock(page) {
+  const time = new Date();
+  await page.clock.install({ time });
+  await page.clock.pauseAt(time.getTime() + 60_000);
+}
+
+async function verifyRefusedRetries(sql, sockets, first, checkUncached, count, reason) {
+  async function assertRefusal(index) {
+    await expect.poll(() => sockets[index]?.closed, { timeout: 12_000 }).toBe(true);
+    const trace = sockets[index];
+    assert.match(
+      trace.errors.join("\n"),
+      /\b401\b|^HTTP Authentication failed\b/m,
+      `${reason} cookie upgrade ${index}`,
+    );
+    assert.deepEqual(trace.sent, []);
+    assert.deepEqual(trace.received, []);
+  }
+
+  const { clock } = count.page();
+  const nextDelay = first === 0 ? 1000 : 2000;
+  async function retryUnderLock() {
+    for (const [index, delay] of [nextDelay, nextDelay * 2].entries()) {
+      await clock.runFor(delay);
+      await assertRefusal(first + index + 1);
+    }
+  }
+
+  await assertRefusal(first);
+  // With the disposable session table locked, a fresh read times out with
+  // 503. The same browser bearer must still receive 401 on each retry.
+  await sql.begin(async (tx) => {
+    await tx`set local lock_timeout = '2s'`;
+    await tx`set local idle_in_transaction_session_timeout = '20s'`;
+    await tx`lock table web_sessions in access exclusive mode`;
+    assert.equal(sockets.length, first + 1, `${reason} fixture must lock before the next retry`);
+    await Promise.all([retryUnderLock(), checkUncached()]);
+  });
+  await expect(count).toHaveText(unavailable);
+  return nextDelay * 4;
+}
+
 export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, secret) {
   const source = async (seq, count) => {
     const response = await fetch(`${liveOrigin}/__fixture/live-source`, {
@@ -70,7 +126,22 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
   };
   const browser = await chromium.launch();
   const sql = postgres(databaseUrl, { max: 1 });
+  async function mintSession(lifetime) {
+    const { ref, cookie } = await fixtureSession(secret);
+    await sql`insert into web_sessions (token_hash, user_id, username, member, expires_at)
+      values (${ref}, ${memberId}, 'Synthetic homepage member', true,
+        clock_timestamp() + ${lifetime}::interval)`;
+    return cookie;
+  }
   try {
+    const probe = await fixtureSession(secret);
+    const checkUncached = async () => {
+      const status = await refusal(liveOrigin + socketPath, {
+        Origin: liveOrigin,
+        Cookie: probe.cookie,
+      });
+      assert.equal(status, 503, "a different bearer needs the blocked session read");
+    };
     const guest = await browser.newPage();
     const offSockets = observe(guest);
     const offHtml = await openHome(guest, offOrigin);
@@ -101,20 +172,10 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
     assert.deepEqual(sockets[0].received.at(-1), frames.five);
     await capture(page, "live");
 
-    const { ref, cookie } = await fixtureSession(secret);
-    await sql`insert into web_sessions (token_hash, user_id, username, member, expires_at)
-      values (${ref}, ${memberId}, 'Synthetic homepage member', true, now() + interval '10 minutes')`;
     const member = await browser.newPage();
     const memberSockets = observe(member);
-    await member.context().addCookies([
-      {
-        name: SESSION_COOKIE,
-        value: cookie.slice(SESSION_COOKIE.length + 1),
-        domain: new URL(liveOrigin).hostname,
-        path: "/",
-        secure: true,
-      },
-    ]);
+    await pauseRetryClock(member);
+    await setSession(member, liveOrigin, await mintSession("10 minutes"));
     await source(101, 5);
     const memberHtml = await openHome(member, liveOrigin);
     await expect(member.locator("#discord-heading")).toBeVisible();
@@ -132,12 +193,18 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
     await expect(count).toHaveText(voice(6));
     await expect(memberCount).toHaveText(unavailable);
     assert.deepEqual(memberSockets[0].received.at(-1), publicBaseline);
-    // The presented revoked cookie must also fail a new upgrade before any command.
-    await expect.poll(() => memberSockets[1]?.closed).toBe(true);
-    assert.deepEqual(memberSockets[1].sent, []);
-    assert.deepEqual(memberSockets[1].received, []);
-    await member.context().clearCookies();
-    await expect(memberCount).toHaveText(voice(6), { timeout: 12_000 });
+    await member.clock.runFor(1000);
+    const memberRetry = await verifyRefusedRetries(
+      sql,
+      memberSockets,
+      1,
+      checkUncached,
+      memberCount,
+      "revoked",
+    );
+    await setSession(member, liveOrigin, await mintSession("10 minutes"));
+    await member.clock.runFor(memberRetry);
+    await expect(memberCount).toHaveText(voice(6), { timeout: 20_000 });
     assert.deepEqual(memberSockets.at(-1).received.at(-1), {
       ...publicBaseline,
       value: { count: 6 },
@@ -173,10 +240,31 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
     assert.deepEqual(sockets[1].sent, [subscribe]);
     assert.deepEqual(sockets[1].received.at(-1), publicBaseline);
 
+    const expired = await browser.newPage();
+    const expiredSockets = observe(expired);
+    await pauseRetryClock(expired);
+    await setSession(expired, liveOrigin, await mintSession("-1 minute"));
+    await openHome(expired, liveOrigin);
+    const expiredCount = expired.locator("#home-public-voice");
+    const expiredRetry = await verifyRefusedRetries(
+      sql,
+      expiredSockets,
+      0,
+      checkUncached,
+      expiredCount,
+      "expired",
+    );
+    await expired.context().clearCookies();
+    await expired.clock.runFor(expiredRetry);
+    await expect(expiredCount).toHaveText(voice(5), { timeout: 20_000 });
+    assert.deepEqual(expiredSockets.at(-1).received.at(-1), publicBaseline);
+
     const socketUrl = new URL(socketPath, liveOrigin.replace(/^http:/, "ws:")).href;
-    assert.ok([...sockets, ...memberSockets].every(({ url }) => url === socketUrl));
+    assert.ok(
+      [...sockets, ...memberSockets, ...expiredSockets].every(({ url }) => url === socketUrl),
+    );
     console.log(
-      "PASS installed Kit home: default off, public-only updates, revoked admission, reconnect, gap withdrawal/resync and page lifecycle",
+      "PASS installed Kit home: default off, public-only updates, bounded revoked and expired admission reads, reconnect, gap withdrawal/resync and page lifecycle",
     );
   } finally {
     await browser.close();
