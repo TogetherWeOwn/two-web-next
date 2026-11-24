@@ -265,6 +265,21 @@
       "reason": "Session liveness protocol returns one boolean. The installed Worker auth fixture covers this endpoint without a Kit data response."
     },
     {
+      "route": "GET /join/discord",
+      "binding": "web/src/routes/join/discord/+server.ts",
+      "reason": "Join authorization redirect issues signed journey cookies. The installed Worker auth fixture covers it without a Kit data response."
+    },
+    {
+      "route": "GET /join/callback",
+      "binding": "web/src/routes/join/callback/+server.ts",
+      "reason": "Join callback issues session cookies or a transient recovery document. The installed Worker auth fixture covers it without a Kit data response."
+    },
+    {
+      "route": "POST /auth/qa/:identity",
+      "binding": "web/src/routes/auth/qa/[identity]/+server.ts",
+      "reason": "Staging-only synthetic sign-in issues session cookies. The installed Worker auth fixture covers it without a Kit data response."
+    },
+    {
       "route": "POST /logout",
       "binding": "web/src/routes/logout/+server.ts",
       "reason": "Native POST redirects and clears session cookies. The installed Worker auth fixture covers this endpoint without a Kit data response."

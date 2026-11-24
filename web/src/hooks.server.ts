@@ -22,7 +22,7 @@ import { KIT_STATIC_FEED_ROUTES } from "../../src/events/kit-static-feed-routes"
 import { dispatchEventsRequest } from "../../src/kit-events";
 import { dispatchHotzonesRequest } from "../../src/kit-hotzones";
 import { dispatchPastArchiveRequest } from "../../src/kit-past-events";
-import { authOriginRefusal, KIT_AUTH_ROUTES } from "#lib/server/auth.ts";
+import { authOriginRefusal, kitAuthRoutes } from "#lib/server/auth.ts";
 import { honoFetch, honoRecoveryFetch } from "#lib/server/hono.ts";
 
 // Pure env binding: trust, ownership, decoration, the read-only session
@@ -61,7 +61,7 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
     apiFamilies: [
       {
         flag: env.KIT_ROUTE_AUTH,
-        routes: KIT_AUTH_ROUTES,
+        routes: kitAuthRoutes(env.APP_URL),
         crossOriginRefusal: authOriginRefusal,
       },
       { flag: env.KIT_ROUTE_FEEDS, routes: [...KIT_STATIC_FEED_ROUTES, KIT_EVENT_CALENDAR_ROUTE] },

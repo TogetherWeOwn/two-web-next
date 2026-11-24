@@ -15,7 +15,7 @@ import type { PageServerLoad } from "./$types";
 // Same reads and cache policy as the Hono handler (src/index.tsx joinPage
 // render with src/join/route-page.ts inputs): database-free leaf, safe next,
 // one-use join-result flash, background widget-health refresh, invite
-// fallback. /join/discord and /join/callback stay Hono-owned.
+// fallback. The auth family owns the separate OAuth endpoint rollout.
 export const csr = false;
 
 export const load: PageServerLoad = async ({ url, request, cookies, setHeaders }) => {

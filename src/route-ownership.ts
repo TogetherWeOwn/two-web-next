@@ -72,9 +72,8 @@ export interface RouteDecision {
 // disabled path; the preview Worker moves a Kit-owned path back to Hono by
 // design — that is the rollback. Add one entry per migrated route, enabled
 // only when its Kit handler is ready to own the exact method/path. Only GET
-// is listed per page (HEAD follows its GET entry); /join/discord and
-// /join/callback stay
-// Hono-owned, so the funnel keeps one OAuth authority.
+// is listed per page (HEAD follows its GET entry). The Join OAuth endpoints
+// have independent ownership through the default-off auth family.
 // Exported so the preview parity script derives its expected renderer from the
 // shipped manifest instead of hard-coding "kit": flipping enabled flips the
 // gate for the right reason.
