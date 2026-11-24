@@ -2,8 +2,8 @@
 // hook uses while Hono retains OAuth/session authority.
 //
 // Read-only by construction. It verifies the signed __Host session cookie with
-// the shared Hono-compatible codec, hashes the
-// bearer, and makes exactly one store.get per request — one decision per
+// the shared Hono-compatible codec, hashes the bearer, and makes one
+// store.get per verified bearer — one decision per
 // request, shared with Kit loads through locals (createRequestSessionCache
 // shares one decision across concurrent readers of the same Request where
 // several readers are wired). The bridge never rotates, revokes, or issues
@@ -118,9 +118,9 @@ async function verifiedCookies(
     if (!KIT_COOKIE_NAMES.has(name) || encoded.has(name)) continue;
     const raw = pair.slice(separator + 1).replace(/^[ \t]+|[ \t]+$/g, "");
     const value = raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw;
-    // Match Hono's wire-value grammar and first syntactically valid pair
-    // precedence before verifying; never fall through after a bad MAC.
-    if (/^[ !#-:<-[\]-~]*$/.test(value)) encoded.set(name, value);
+    // Hono permits printable ASCII except quote, semicolon, and backslash.
+    // A syntactically valid pair claims the name even when its MAC fails.
+    if (/^[\x20-\x21\x23-\x3a\x3c-\x5b\x5d-\x7e]*$/.test(value)) encoded.set(name, value);
   }
   try {
     return Object.fromEntries(

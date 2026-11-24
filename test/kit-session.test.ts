@@ -151,16 +151,23 @@ describe("resolveRequestSession (one request, one session decision)", () => {
   it("uses Hono's pair selection for quoted values and duplicate session cookies", async () => {
     const store = createMemorySessionStore();
     const { token } = await seedSession(store);
+    const get = vi.spyOn(store, "get");
     const good = await pair(SESSION_COOKIE, token);
     const wire = good.slice(SESSION_COOKIE.length + 1);
-    const quoted = `${SESSION_COOKIE} = "${wire}"`;
+    const quoted = `${SESSION_COOKIE}\t=\t"${wire}"`;
     const invalid = `${SESSION_COOKIE}=unsigned`;
-    const malformed = `${SESSION_COOKIE}=un"quoted`;
+    const wrongMac = await pair(SESSION_COOKIE, token, WRONG_SECRET);
+    const malformedQuote = `${SESSION_COOKIE}=un"quoted`;
+    const malformedBackslash = `${SESSION_COOKIE}=has\\backslash`;
     for (const [pairs, status] of [
       [[quoted, invalid], "authenticated"],
       [[invalid, good], "guest"],
-      [[malformed, good], "authenticated"],
+      [[wrongMac, good], "guest"],
+      [[`${SESSION_COOKIE}=%FF`, good], "guest"],
+      [[malformedQuote, good], "authenticated"],
+      [[malformedBackslash, good], "authenticated"],
     ] as const) {
+      get.mockClear();
       const request = requestWith([...pairs]);
       const hono = await parseSigned(request.headers.get("cookie") ?? "", SECRET);
       expect(hono[SESSION_COOKIE] === token).toBe(status === "authenticated");
@@ -170,6 +177,7 @@ describe("resolveRequestSession (one request, one session decision)", () => {
         roleRecheck: null,
       });
       expect(decision.status).toBe(status);
+      expect(get).toHaveBeenCalledTimes(status === "authenticated" ? 1 : 0);
     }
   });
 
@@ -248,7 +256,7 @@ describe("resolveRequestSession (one request, one session decision)", () => {
       moderator: false,
       expiresAt: new Date(now + 1000),
     });
-    now += 2000;
+    now += 1000;
     expect(
       await resolveRequestSession(requestWith([await pair(SESSION_COOKIE, token)]), {
         sessionSecret: SECRET,
@@ -377,6 +385,20 @@ describe("one decision per request (memoized, strand-free)", () => {
 });
 
 describe("readReturnJourney (Kit-visible return state, read-only)", () => {
+  it("decodes a quoted Hono journey cookie once and honors first-pair precedence", async () => {
+    const value = "/events?filter=caf%C3%A9";
+    const good = await pair(LOGIN_NEXT_COOKIE, value);
+    const quoted = `${LOGIN_NEXT_COOKIE}="${good.slice(LOGIN_NEXT_COOKIE.length + 1)}"`;
+    const invalid = `${LOGIN_NEXT_COOKIE}=unsigned`;
+    const intended = await pair(LOGIN_INTENDED_COOKIE, "/profile");
+    expect(
+      (await readReturnJourney(requestWith([quoted, invalid, intended]), SECRET)).returnTo,
+    ).toBe(value);
+    expect(
+      (await readReturnJourney(requestWith([invalid, quoted, intended]), SECRET)).returnTo,
+    ).toBe("/profile");
+  });
+
   it("an explicit next beats the recorded intended page", async () => {
     const journey = await readReturnJourney(
       requestWith([
