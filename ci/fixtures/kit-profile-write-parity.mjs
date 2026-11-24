@@ -75,6 +75,16 @@ async function nativeForm(origin, cookie) {
       await page.getByTestId("profile-save").click();
       return pending;
     };
+    const rejectDraft = async () => {
+      await bio.fill(draft);
+      await timezone.fill("Not/AZone");
+      await hide.check();
+      const invalid = await submit();
+      assert.equal(invalid.status(), 422);
+      assert.equal(invalid.headers()["x-two-renderer"], "kit");
+      assert.equal(invalid.headers()["cache-control"], "private, no-store");
+      assert.equal(invalid.headers().vary, undefined);
+    };
     const capture = async (state) => {
       for (const viewport of viewports) {
         await page.setViewportSize(viewport);
@@ -97,14 +107,7 @@ async function nativeForm(origin, cookie) {
     assert.equal(await form.locator('[name="_method"]').inputValue(), "PATCH");
     assert.equal(await bio.inputValue(), base);
     await capture("before");
-    await bio.fill(draft);
-    await timezone.fill("Not/AZone");
-    await hide.check();
-    const invalid = await submit();
-    assert.equal(invalid.status(), 422);
-    assert.equal(invalid.headers()["x-two-renderer"], "kit");
-    assert.equal(invalid.headers()["cache-control"], "private, no-store");
-    assert.equal(invalid.headers().vary, undefined);
+    await rejectDraft();
     const summary = page.getByTestId("profile-error");
     const errorLink = summary.getByRole("link", { name: /valid IANA timezone/ });
     assert.equal(await errorLink.getAttribute("href"), "#profile-timezone");
@@ -127,9 +130,13 @@ async function nativeForm(origin, cookie) {
     assert.equal(await timezone.inputValue(), "UTC");
     assert.equal(await hide.isChecked(), false);
     assert.equal(await summary.count(), 0);
+
+    // Retry directly from a rejected document, with its retained checkbox.
+    await rejectDraft();
+    assert.equal(await bio.inputValue(), draft);
+    assert.equal(await hide.isChecked(), true);
     await bio.fill(updated);
     await timezone.fill("Europe/London");
-    await hide.check();
     await page.locator("#profile-games-text").fill("Chess\nGo\nChess");
     // Submit the real page only after its unchanged minimum-fill timer.
     const opened = Number(await form.locator('[name="formOpenedAt"]').inputValue());
