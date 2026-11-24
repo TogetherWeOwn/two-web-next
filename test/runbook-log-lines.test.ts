@@ -722,6 +722,8 @@ describe("kit session-bridge and auth-status probe runbook row cites", () => {
     viewerOf: () => span(ROUTE_OWNERSHIP, /^function viewerOf\(/, "}"),
     bridge: () => span(ROUTE_OWNERSHIP, /^ {2}const bridgeSession = async/, "  };"),
     probe: () => span(ROUTE_OWNERSHIP, /^ {4}deps\.authStatusCookieFor &&$/, "  }", 1),
+    homeRotationPredicate: () =>
+      span(ROUTE_OWNERSHIP, /^ {2}const renewHome =$/, '    locals?.status === "authenticated";'),
     rotationPredicate: () =>
       span(ROUTE_OWNERSHIP, /^function releasedEventDetailRenewsSession\(/, "}"),
     rotationAppend: () => span(ROUTE_OWNERSHIP, /^ {2}if \(documentRotationFor\)/, "  }"),
@@ -776,6 +778,7 @@ describe("kit session-bridge and auth-status probe runbook row cites", () => {
     expectContainsWarn(ownership.probe(), ROUTE_OWNERSHIP, PROBE);
 
     const rotation = rowFor(ROTATION);
+    expectCited(rotation, ownership.homeRotationPredicate());
     expectCited(rotation, ownership.rotationPredicate());
     expectCited(rotation, ownership.rotationAppend());
     expectCited(rotation, session.rotation());
@@ -792,7 +795,12 @@ describe("kit session-bridge and auth-status probe runbook row cites", () => {
     const allowed: Record<string, string[]> = {
       [BRIDGE]: [ownership.bridge(), ownership.viewerOf(), session.bridge()],
       [PROBE]: [ownership.probe(), session.signer()],
-      [ROTATION]: [ownership.rotationPredicate(), ownership.rotationAppend(), session.rotation()],
+      [ROTATION]: [
+        ownership.homeRotationPredicate(),
+        ownership.rotationPredicate(),
+        ownership.rotationAppend(),
+        session.rotation(),
+      ],
       [ADMIN]: [ownership.adminPredicate(), ownership.adminAppend(), session.adminRenewal()],
     };
     for (const [message, spans] of Object.entries(allowed)) {
