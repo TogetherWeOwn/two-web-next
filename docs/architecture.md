@@ -339,6 +339,7 @@ exactly once.
 | `src/kit-members.ts` | profiles |
 | `src/kit-past-events.ts` | events |
 | `src/kit-restored-write.ts` | entry |
+| `src/kit-security-txt-fetch.ts` | entry |
 | `src/kit-seo-fetch.ts` | entry |
 | `src/kit-session.ts` | auth |
 | `src/kit-staging-static.ts` | entry |
