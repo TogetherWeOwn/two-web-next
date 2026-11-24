@@ -23,6 +23,7 @@ import {
   initialRouteBudget,
   INITIAL_CLIENT_BUDGET,
   INITIAL_ROUTE_DECISION,
+  RECONCILIATION_ROUTE_DECISION,
 } from "./client-ratchet-approval.mjs";
 import {
   assertLowerOnly,
@@ -521,7 +522,7 @@ for (const smallCss of [false, true])
     const root = decisionRoot(t);
     cpSync(join(repo, "ci"), join(root, "ci"), {
       recursive: true,
-      filter: (source) => !/\/auto-client-ratchet-[a-f0-9]{12}\.md$/.test(source),
+      filter: beforeReconciliationAdmission,
     });
     cpSync(join(repo, "package.json"), join(root, "package.json"));
     symlinkSync(join(repo, "node_modules"), join(root, "node_modules"));
@@ -564,7 +565,7 @@ test("successive asymmetric generated CSS ratchets pass the unchanged shipping g
   const root = decisionRoot(t);
   cpSync(join(repo, "ci"), join(root, "ci"), {
     recursive: true,
-    filter: (source) => !/\/auto-client-ratchet-[a-f0-9]{12}\.md$/.test(source),
+    filter: beforeReconciliationAdmission,
   });
   cpSync(join(repo, "package.json"), join(root, "package.json"));
   symlinkSync(join(repo, "node_modules"), join(root, "node_modules"));
@@ -628,6 +629,13 @@ test("successive asymmetric generated CSS ratchets pass the unchanged shipping g
   }
 });
 
+function beforeReconciliationAdmission(source) {
+  return (
+    !source.endsWith(`/${RECONCILIATION_ROUTE_DECISION}`) &&
+    !/\/auto-client-ratchet-[a-f0-9]{12}\.md$/.test(source)
+  );
+}
+
 test("initial measured route admission remains pinned independently of the live budget", () => {
   const repo = fileURLToPath(new URL("../", import.meta.url));
   const initial = initialRouteBudget(repo);
@@ -641,6 +649,53 @@ test("initial measured route admission remains pinned independently of the live 
     JSON.parse(readFileSync(join(repo, ROUTE_BUDGET), "utf8")),
     approvedRouteBudget(repo),
   );
+});
+
+test("reviewed reconciliation admission extends history before and after lower-only decisions", (t) => {
+  const root = decisionRoot(t);
+  const name = `ci/budgets/decisions/kit-perf/${RECONCILIATION_ROUTE_DECISION}`;
+  const admission = JSON.parse(readFileSync(new URL(`../${name}`, import.meta.url), "utf8"));
+  assert.equal(
+    createHash("sha256").update(JSON.stringify(admission)).digest("hex"),
+    "12cee7a90321574d34d27182e1e9277022091f1a8d60e4a14c09593105b8f04a",
+  );
+  const earlier = shippingFixture();
+  for (const kind of ["js", "css"])
+    for (const [metric, ceiling] of [
+      ["rawBytes", "maxRawBytes"],
+      ["gzipBytes", "maxGzipBytes"],
+    ])
+      earlier.report.measurement.aggregate[kind][metric] = INITIAL_CLIENT_BUDGET[kind][ceiling];
+  earlier.report.sha = next;
+  const prior = propose(earlier.report, earlier.files).files;
+  saveDecision(root, earlier);
+  assert.notDeepEqual(prior[ROUTE_BUDGET], initialRouteBudget(root));
+
+  const path = join(root, name);
+  writeFileSync(path, JSON.stringify(admission));
+  const admitted = structuredClone(prior);
+  Object.assign(admitted[ROUTE_BUDGET].routes, admission.routes);
+  assert.deepEqual(approvedRouteBudget(root), admitted[ROUTE_BUDGET]);
+  assert.deepEqual(approvedClientBudget(root), INITIAL_CLIENT_BUDGET);
+
+  const later = structuredClone(earlier);
+  later.report.sha = sha;
+  later.files = admitted;
+  for (const id of Object.keys(admission.routes)) {
+    later.report.measurement.routes[id] = later.report.measurement.routes["/admin"];
+  }
+  const final = propose(later.report, later.files).files;
+  saveDecision(root, later);
+  assert.notDeepEqual(final[ROUTE_BUDGET], admitted[ROUTE_BUDGET]);
+  assert.deepEqual(approvedRouteBudget(root), final[ROUTE_BUDGET]);
+
+  admission.routes["/admin"] = prior[ROUTE_BUDGET].routes["/admin"];
+  writeFileSync(path, JSON.stringify(admission));
+  assert.throws(() => approvedRouteBudget(root), /route already approved/);
+  delete admission.routes["/admin"];
+  admission.routes["/admin/reconciliation"].css.maxGzipBytes += 1;
+  writeFileSync(path, JSON.stringify(admission));
+  assert.throws(() => approvedRouteBudget(root), /route ceiling exceeds aggregate/);
 });
 
 test("decision oracle replays successive lowerings and refuses a re-raise or missing evidence", (t) => {

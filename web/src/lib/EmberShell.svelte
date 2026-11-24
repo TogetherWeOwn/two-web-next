@@ -2,6 +2,7 @@
 import type { Snippet } from "svelte";
 import EmberFooter from "#lib/EmberFooter.svelte";
 import SiteHeader from "#lib/SiteHeader.svelte";
+import headerCss from "./ember-header.css?url&no-inline";
 
 let {
   activeNav,
@@ -25,16 +26,16 @@ let {
 } = $props();
 </script>
 
-<!-- SiteHeader owns the skip link; the consuming Kit layout loads app.css and site-header.css. -->
+<svelte:head><link rel="stylesheet" href={headerCss} /></svelte:head>
 <div class="base-theme">
-  <SiteHeader {activeNav} {member} {loginReturnTo} {accountChrome} {authenticated} {hideAccount} {menuFallbackOnly} />
+  <SiteHeader ember {activeNav} {member} {loginReturnTo} {accountChrome} {authenticated} {hideAccount} {menuFallbackOnly} />
   <main id="main" tabindex="-1">{@render children()}</main>
   <EmberFooter />
 </div>
 
 <style>
   .base-theme main {
-    max-width: calc(var(--two-layout-container) + 2 * var(--two-layout-gutter-wide));
+    max-width: var(--two-layout-container);
     padding-inline: var(--two-layout-gutter-wide);
   }
 

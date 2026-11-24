@@ -1,7 +1,13 @@
 <script lang="ts">
 import "./home-presentation.css";
+import "./home-ember.css";
+import Button from "#lib/Button.svelte";
+import EmberFooter from "#lib/EmberFooter.svelte";
 import JsonLd from "#lib/JsonLd.svelte";
-import Shell from "#lib/Shell.svelte";
+import LiveSentence from "#lib/LiveSentence.svelte";
+import SiteMetadata from "#lib/SiteMetadata.svelte";
+import VoicePanel from "#lib/VoicePanel.svelte";
+import type { VoiceView } from "#lib/voice-view.ts";
 import { seatAvailability } from "../../../src/events/pages-calendar-row";
 import type { HomeUpcomingRow } from "../../../src/events/reads";
 import { groupTeaserEvents } from "../../../src/events/teaser-groups";
@@ -17,14 +23,12 @@ import {
 import { canonicalUrl } from "../../../src/seo";
 import { siteJsonLd } from "../../../src/seo-json-ld";
 import type { PageProps } from "./$types";
+import HomeGuestIntro from "./HomeGuestIntro.svelte";
 import "./home-join-band.css";
 
-// Markup contract of Home (src/screens/home.tsx): session-aware header,
-// notice slot, hero, counts, featured, community panels, ladder, events and
-// site JSON-LD are shared, so the existing homepage tests still apply. Panel
-// data comes from the shared readers via +page.server.ts — never recomputed
-// here — and copy comes from src/home-copy, never a pasted sentence.
-let { data }: PageProps = $props();
+// Kit passes only its usual page props. The offline render fixture passes
+// an audience projection separately; the shipped load never produces one.
+let { data, voice }: PageProps & { voice?: VoiceView } = $props();
 const {
   session,
   sessionUnavailable,
@@ -49,8 +53,21 @@ const siteGraph = $derived(siteJsonLd(appUrl));
 // Same shared buckets as the Hono screen: group the capped rows at render.
 // The explicit row type recovers what $derived destructuring widens (see
 // noticeText above): without it the groups widen to the helper's input.
-const renderTime = new Date();
+const renderTime = $derived(new Date(data.nowMs));
 const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents, renderTime));
+const weekEvents = $derived(
+  upcomingEvents.filter(
+    (event: HomeUpcomingRow) =>
+      event.startsAt >= renderTime &&
+      groupedEvents.some((group) => group.key !== "later" && group.events.includes(event)),
+  ),
+);
+const showMemberDetails = $derived(session?.member && !sessionUnavailable);
+function ownRsvp(event: HomeUpcomingRow) {
+  if (!showMemberDetails || event.source !== "canonical") return null;
+  const status = data.memberRsvps?.find((rsvp) => rsvp.eventKey === event.eventKey)?.status;
+  return status === "going" || status === "waitlisted" ? status : null;
+}
 const nextOwnEvent = $derived(
   session?.member
     ? (upcomingEvents as HomeUpcomingRow[])
@@ -63,36 +80,55 @@ const nextOwnEvent = $derived(
         .sort((a, b) => a.event.startsAt.getTime() - b.event.startsAt.getTime())[0]
     : undefined,
 );
+const heroRsvp = $derived(!sessionUnavailable && !eventsUnavailable ? nextOwnEvent : undefined);
+const nextPublicEvent = $derived(
+  upcomingEvents.find((event: HomeUpcomingRow) => event.startsAt > renderTime),
+);
+const heroEvent = $derived(eventsUnavailable ? undefined : (heroRsvp?.event ?? nextPublicEvent));
+const voiceAudience = $derived(session?.member ? "member" : "guest");
+const homeVoice = $derived(
+  !sessionUnavailable && voice?.snapshot && voice.audience === voiceAudience ? voice : undefined,
+);
+const nextVoiceEvent = $derived.by(() => {
+  if (eventsUnavailable) return undefined;
+  if (!nextPublicEvent) return null;
+  const { title, startsAt, timezone } = nextPublicEvent;
+  return {
+    title,
+    timeLabel: `${cardTimeLabel(startsAt, timezone)} (${isValidZone(timezone) ? timezone : "UTC"})`,
+  };
+});
 </script>
 
-{#snippet guestChrome()}
-  <div>
-    <span class="account-caption">Welcome, guest</span>
-    <a class="btn" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
-  </div>
+{#snippet primaryLinks()}
+  <nav aria-label="Primary">
+    <a href="/events">Events</a>
+    {#if session?.member}<a href="/leaderboards/members">Leaderboard</a>{/if}
+    <a href="/about">About</a>
+  </nav>
 {/snippet}
 
-{#snippet memberChrome()}
-  <form method="post" action="/logout">
-    <span class="account-caption">Signed in</span>
-    <span class="who">{session?.username}</span>
-    <button type="submit" class="link">Sign out</button>
-  </form>
+{#snippet teaserTime(event: HomeUpcomingRow)}
+  <time datetime={event.startsAt.toISOString()}>{cardTimeLabel(event.startsAt, event.timezone)} ({isValidZone(event.timezone) ? event.timezone : "UTC"})</time>
 {/snippet}
 
-<Shell
-  restoredWrite={data.restoredWrite}
-  title="The lobby is open"
-  exactTitle="Together We Own — the lobby is open"
-  {canonical}
-  description="We spent most of our life private. Now you can just turn up."
-  theme="home"
-  activeNav="home"
-  menuFallbackOnly={notice?.startsWith("signin_")}
-  member={session?.member ?? false}
-  authenticated={session != null}
-  accountChrome={session ? memberChrome : guestChrome}
->
+{#snippet schedulePanel()}
+  <aside class="ember-home-panel" aria-labelledby="home-panel-heading">
+    <h2 id="home-panel-heading">{heroRsvp ? "Your RSVP" : "On the schedule"}</h2>
+    {#if heroEvent}
+      <p><strong>{heroEvent.title}</strong></p>
+      <p><time datetime={heroEvent.startsAt.toISOString()}>{cardTimeLabel(heroEvent.startsAt, heroEvent.timezone)} ({isValidZone(heroEvent.timezone) ? heroEvent.timezone : "UTC"})</time></p>
+      {#if heroRsvp}<p>{goingAnnouncementText(heroRsvp.status)}</p>{/if}
+      {#if heroEvent.source === "discord"}<a href={inviteUrl}>Open Discord</a>
+      {:else}<a href={`/e/${encodeURIComponent(heroEvent.eventKey)}`}>View event details</a>{/if}
+    {:else}
+      <p><strong>{eventsUnavailable ? "Schedule unavailable" : "No upcoming game nights"}</strong></p>
+      <a href="/discord">Find us on Discord</a>
+    {/if}
+  </aside>
+{/snippet}
+
+{#snippet homeContent()}
   {#if joinResult}
     <p class="notice" role="status" data-testid="join-result">
       {#if joinResult === "added"}
@@ -111,38 +147,60 @@ const nextOwnEvent = $derived(
     {/if}
   {/if}
   <section class="hero kit-home" aria-labelledby="home-heading">
-    <p class="strap">A close-knit gaming clan / mostly evenings / 18+</p>
-    <h1 id="home-heading">The lobby is open.</h1>
-    <div class="hero-action">
-      {#if sessionUnavailable}
-        <a class="btn" href="/discord" data-testid="discord-join">Join with an invite link</a>
-      {:else if session?.member}
-        <a class="btn" href={inviteUrl}>Open Discord</a>
+    <div>
+      <p class="strap">A close-knit gaming clan / mostly evenings / 18+</p>
+      {#if homeVoice}
+        <LiveSentence view={homeVoice} nextEvent={nextVoiceEvent} headingId="home-heading" showActions={false} />
       {:else}
-        <a class="btn" href="/auth/discord" data-testid="join">Join with Discord</a>
+        <h1 id="home-heading">
+          {#if !eventsUnavailable && nextPublicEvent}
+            Next game night: <em>{nextPublicEvent.title}</em>. <span>Come play with us.</span>
+          {:else}
+            The lobby is <em>open</em>.
+          {/if}
+        </h1>
       {/if}
-      <p class="lead">We spent most of our life private. Now you can just turn up.</p>
-    </div>
-    {#if !session && !sessionUnavailable && eventsUnavailable}
-      <p>
-        <a href="/discord" data-testid="discord-join">Join with an invite link instead</a>
-      </p>
-    {/if}
-    {#if notice === "join_failed"}
-      <p>
-        <a href={inviteUrl}>Join with an invite link instead</a>
-      </p>
-    {/if}
-    {#if countsSnapshot}
-      <p class="counts" data-testid="member-count" data-stale={countsSnapshot.stale}>
-        <strong>{countsSnapshot.memberCount}</strong> members{#if countsSnapshot.onlineCount != null}
-          {" · "}<strong>{countsSnapshot.onlineCount}</strong> online{/if}
-        {#if countsSnapshot.stale}
-          {" · Last seen "}<time datetime={countsSnapshot.observedAt}>{countsSnapshot.observedAt.replace("T", " ").replace("Z", " UTC")}</time>
+      <div class="hero-action">
+        {#if sessionUnavailable}
+          <a class="btn" href="/discord" data-testid="discord-join">Join with an invite link</a>
+          <p class="lead">Sign-in is unavailable right now. The invite still works.</p>
+        {:else if session?.member}
+          <a id="discord-heading" class="btn" href={inviteUrl}>Open Discord</a>
+          <p class="lead">Catch up with the clan in Discord.</p>
+        {:else}
+          <a class="btn" href="/auth/discord" data-testid="join">Join with Discord</a>
+          <p class="lead">{session ? "You're signed in. Join the server to play with us." : "We spent most of our life private. Now you can just turn up."}</p>
         {/if}
-      </p>
+      </div>
+      {#if !session && !sessionUnavailable && eventsUnavailable}
+        <p><a href="/discord" data-testid="discord-join">Join with an invite link instead</a></p>
+      {/if}
+      {#if notice === "join_failed"}
+        <p><a href={inviteUrl}>Join with an invite link instead</a></p>
+      {/if}
+      {#if countsSnapshot}
+        <p class="counts" data-testid="member-count" data-stale={countsSnapshot.stale}>
+          <strong>{countsSnapshot.memberCount}</strong> members{#if countsSnapshot.onlineCount != null}
+            {" · "}<strong>{countsSnapshot.onlineCount}</strong> online{/if}
+          {#if countsSnapshot.stale}
+            {" · Last seen "}<time datetime={countsSnapshot.observedAt}>{countsSnapshot.observedAt.replace("T", " ").replace("Z", " UTC")}</time>
+          {/if}
+        </p>
+      {/if}
+    </div>
+    {#if homeVoice}
+      <div class="home-voice-panels">
+        <VoicePanel view={homeVoice} />
+        {@render schedulePanel()}
+      </div>
+    {:else}
+      {@render schedulePanel()}
     {/if}
   </section>
+  {@render homeBelowHero()}
+{/snippet}
+
+{#snippet homeFeatured()}
   {#if featured.length > 0}
     <section aria-labelledby="featured-heading" data-testid="featured-content">
       <h2 id="featured-heading">From the community team</h2>
@@ -169,43 +227,9 @@ const nextOwnEvent = $derived(
       </div>
     </section>
   {/if}
-  <section class="highlights" aria-labelledby="community-heading">
-    <div class="band-head">
-      <h2 id="community-heading">No application. <span>No interview.</span></h2>
-      <p>Not a crowd. A place that knows your name.</p>
-    </div>
-    <ul class="hl" role="list" data-testid="home-highlights">
-      <li>
-        <p class="hl-cadence">Est. 1998 · 18+</p>
-        <h3>Grown-ups, mostly evenings</h3>
-        <p>We've played together since 1998: forum years, then voice years. It's an adult clan, and we're mostly on in the evenings.</p>
-      </li>
-      <li>
-        <p class="hl-cadence">Voice-first</p>
-        <h3>Turn up, say hello</h3>
-        <p>The community lives in voice. Small enough that people notice when you come back.</p>
-      </li>
-      <li>
-        <p class="hl-cadence">Everyone starts as a Prospect</p>
-        <h3>Trust and time, not grind</h3>
-        <p>Show up a few times, play, and you become a Member. No tryout and no skill bar.</p>
-      </li>
-      <li>
-        <p class="hl-cadence">5 XP per voice minute</p>
-        <h3>Ranks from playing</h3>
-        <p>Messages and voice time earn XP. At set levels the bot gives you a role reward, and it never takes one away.</p>
-      </li>
-    </ul>
-    <section class="discord-preview" aria-labelledby="discord-heading">
-      <h3 id="discord-heading">In the Discord</h3>
-      <p>Visit the join page for the server preview and ways to join.</p>
-      <p>
-        <a href="/join#join-heading" data-testid="home-widget-link">View the Discord lobby</a>
-        {" · "}
-        <a href="/discord" data-testid="home-discord-invite">Open Discord</a>
-      </p>
-    </section>
-  </section>
+{/snippet}
+
+{#snippet homeLadder()}
   <section aria-label="Community ladder" class="community-ladder">
     <h2>Prospect → Member → Soldier → Veteran → Legend</h2>
     <p>Ranks stack — a Veteran still holds everything below.</p>
@@ -218,60 +242,91 @@ const nextOwnEvent = $derived(
       {/each}
     </dl>
   </section>
-  <section class="event-band" aria-labelledby="home-events-heading">
-    <p class="strap">Next up</p>
-    <h2 id="home-events-heading">What’s on. <span>Come along.</span></h2>
-    {#if upcomingEvents.length > 0}
-      <ul class="facts home-events" data-testid="home-events-list">
-        <!-- csr=false: omit this server-rendered list from the unused client asset.
-             Direct server compilation without Vite's env also renders it. -->
-        {#if import.meta.env?.SSR !== false}{#each groupedEvents as group (group.key)}
-          <li class="home-events-group" data-testid={"home-events-group-" + group.key}>
-            <h3 class="strap">{group.label}</h3>
-          </li>
-          {#each group.events as event (event.source === "discord" ? `discord-${event.discordId}` : `canonical-${event.eventKey}`)}
-            <li class="card" data-source={event.source}>
-              <a
-                class="home-event-link"
-                href={event.source === "discord" ? inviteUrl : `/e/${encodeURIComponent(event.eventKey)}`}
-                data-testid={event.source === "discord" ? "home-event-discord" : undefined}
-              >
-                <p>
-                  <time datetime={event.startsAt.toISOString()}>
-                    {cardTimeLabel(event.startsAt, event.timezone)} ({isValidZone(event.timezone)
-                      ? event.timezone
-                      : "UTC"})
-                  </time>
-                </p>
-                <div class="event-meta">
-                <h3>{event.title}</h3>
-                {#if event.source === "canonical" && event.game?.trim()}<p>{event.game.trim()}</p>{/if}
-                {#if session?.member && event.source === "canonical" && event.organizer_name?.trim()}
-                  <p class="home-event-host" data-testid="event-card-host">Hosted by {event.organizer_name.trim()}</p>
-                {/if}
-                {#if event.location}<p>{event.location}</p>{/if}
-                {#if event.source === "discord"}
-                  <p>RSVP in Discord · <span data-testid="event-schedule-availability">Discord-managed</span></p>
-                {:else}
-                  {@const availability = event.endsAt && event.endsAt.getTime() <= renderTime.getTime()
-                    ? { state: "past", text: "Ended" }
-                    : seatAvailability(event)}
-                  <p>
-                    {goingCountText(event.goingCount, event.capacity)}{" · "}
-                    <span data-testid={availability.state === "full" ? SPOTS_LEFT_TESTID : "event-schedule-availability"}>{availability.text}</span>
-                  </p>
-                  {#if session?.member}
-                    {@const answer = data.memberRsvps?.find((rsvp) => rsvp.eventKey === event.eventKey)}
-                    {#if answer?.status === "going" || answer?.status === "waitlisted"}
-                      <p data-testid="home-event-own-rsvp">{goingAnnouncementText(answer.status)}</p>
-                    {/if}
-                  {/if}
-                {/if}
-                </div>
-              </a>
+{/snippet}
+
+{#snippet homeBelowHero()}
+  {#if !session?.member}<HomeGuestIntro />{/if}
+  <section class="week-band" aria-labelledby="home-week-heading">
+    <div class="band-head">
+      <h2 id="home-week-heading">{showMemberDetails ? "Your week," : "This week,"} <span>when we play.</span></h2>
+      <p>
+        Times are shown in each event’s time zone.
+        {#if showMemberDetails}Your RSVPs are marked in the agenda.{/if}
+      </p>
+    </div>
+    <div class="week-panel">
+      {#if eventsUnavailable}
+        <p>We couldn’t load this week’s schedule.</p>
+      {:else if weekEvents.length > 0}
+        <ul class="week-agenda" role="list">
+          {#each weekEvents as event (event.source === "discord" ? `discord-${event.discordId}` : `canonical-${event.eventKey}`)}
+            {@const status = ownRsvp(event)}
+            <li>
+              {@render teaserTime(event)}
+              <div>
+                <strong>{event.title}</strong>
+                {#if status}<span class="schedule-rsvp">{goingAnnouncementText(status)}</span>{/if}
+              </div>
             </li>
           {/each}
-        {/each}{/if}
+        </ul>
+      {:else}
+        <p>No new starts in this preview. <a href="/events">See all events</a></p>
+      {/if}
+    </div>
+  </section>
+  <section class="event-band" aria-labelledby="home-events-heading">
+    <div class="band-head">
+      <h2 id="home-events-heading">What’s on. <span>{showMemberDetails ? "Plan your next game." : "Come along."}</span></h2>
+      <p>Browse upcoming game nights. Open an event for the details or head to Discord for events hosted there.</p>
+    </div>
+    {#if !eventsUnavailable && upcomingEvents.length > 0}
+      <ul class="facts home-events" role="list" data-testid="home-events-list">
+        <!-- Exclude the server-rendered list from the unused client asset. -->
+        {#if import.meta.env?.SSR !== false}
+          {#each groupedEvents as group (group.key)}
+            <li class="home-events-group" data-testid={"home-events-group-" + group.key}>
+              <h3 class="strap">{group.label}</h3>
+              <ul class="schedule-rows" role="list">
+                {#each group.events as event (event.source === "discord" ? `discord-${event.discordId}` : `canonical-${event.eventKey}`)}
+                  {@const status = ownRsvp(event)}
+                  <li class="card" data-source={event.source}>
+                    <a
+                      class="home-event-link"
+                      href={event.source === "discord" ? inviteUrl : `/e/${encodeURIComponent(event.eventKey)}`}
+                      data-testid={event.source === "discord" ? "home-event-discord" : undefined}
+                    >
+                      {@render teaserTime(event)}
+                      <div class="event-meta">
+                        <h4>{event.title}</h4>
+                        {#if event.source === "canonical" && event.game?.trim()}<p>{event.game.trim()}</p>{/if}
+                        {#if showMemberDetails && event.source === "canonical" && event.organizer_name?.trim()}
+                          <p class="home-event-host" data-testid="event-card-host">Hosted by {event.organizer_name.trim()}</p>
+                        {/if}
+                        {#if event.location}<p>{event.location}</p>{/if}
+                        {#if status}
+                          <p data-testid="home-event-own-rsvp"><span class="schedule-rsvp">{goingAnnouncementText(status)}</span></p>
+                        {/if}
+                      </div>
+                      {#if event.source === "discord"}
+                        <p>RSVP in Discord · <span data-testid="event-schedule-availability">Discord-managed</span></p>
+                      {:else}
+                        {@const availability = event.endsAt && event.endsAt.getTime() <= renderTime.getTime()
+                          ? { state: "past", text: "Ended" }
+                          : seatAvailability(event)}
+                        <p>
+                          {goingCountText(event.goingCount, event.capacity)}{" · "}
+                          <span data-testid={availability.state === "full" ? SPOTS_LEFT_TESTID : "event-schedule-availability"}>{availability.text}</span>
+                        </p>
+                      {/if}
+                      <span class="schedule-action">{event.source === "discord" ? "Open Discord" : "Details"}</span>
+                    </a>
+                  </li>
+                {/each}
+              </ul>
+            </li>
+          {/each}
+        {/if}
       </ul>
       <p>
         <a href="/events">See all events <span aria-hidden="true">→</span></a>
@@ -313,20 +368,38 @@ const nextOwnEvent = $derived(
       </p>
     {/if}
   </section>
-  {#if nextOwnEvent}
-    <section aria-labelledby="home-standing-heading" data-testid="home-standing">
-      <h2 id="home-standing-heading">Where you stand.</h2>
-      <div class="card">
-        <p>Next</p>
-        <p><a href={`/e/${encodeURIComponent(nextOwnEvent.event.eventKey)}`}>{nextOwnEvent.event.title}</a></p>
-        <p>
-          <time datetime={nextOwnEvent.event.startsAt.toISOString()}>{cardTimeLabel(nextOwnEvent.event.startsAt, nextOwnEvent.event.timezone)} ({isValidZone(nextOwnEvent.event.timezone) ? nextOwnEvent.event.timezone : "UTC"})</time>
-          {" · "}{goingAnnouncementText(nextOwnEvent.status)}
-        </p>
+  {@render homeFeatured()}
+  {#if showMemberDetails}
+    <section id="community-heading" class="standing-band" aria-labelledby="home-standing-heading" data-testid="home-standing">
+      <div class="standing-card">
+        <h2 id="home-standing-heading">Where you stand.</h2>
+        <dl>
+          <div>
+            <dt>Next RSVP</dt>
+            <dd>
+              {#if eventsUnavailable}
+                <p>We couldn’t load your next RSVP.</p>
+                <a href="/discord">Check Discord for game nights</a>
+              {:else if heroRsvp}
+                <a href={`/e/${encodeURIComponent(heroRsvp.event.eventKey)}`}>{heroRsvp.event.title}</a>
+                <p>{@render teaserTime(heroRsvp.event)}</p>
+                <p><span class="schedule-rsvp">{goingAnnouncementText(heroRsvp.status)}</span></p>
+              {:else}
+                <p>No upcoming RSVP in this preview.</p>
+                <a href="/events">Browse all events</a>
+              {/if}
+            </dd>
+          </div>
+          <div>
+            <dt>Leaderboard</dt>
+            <dd><a href="/leaderboards/members?scope=relative">See where you place</a></dd>
+          </div>
+        </dl>
       </div>
     </section>
   {/if}
   {#if !session?.member}
+    {@render homeLadder()}
     <section class="join-band" aria-labelledby="join-band-heading" data-testid="join-band">
       <div>
         <h2 id="join-band-heading">Pull up a <em>chair.</em></h2>
@@ -346,4 +419,42 @@ const nextOwnEvent = $derived(
     </section>
   {/if}
   <JsonLd testid="site-jsonld" json={siteGraph} />
-</Shell>
+{/snippet}
+<SiteMetadata
+  title="The lobby is open"
+  exactTitle="Together We Own — the lobby is open"
+  {canonical}
+  description="We spent most of our life private. Now you can just turn up."
+  theme="home"
+/>
+<div class="base-theme homepage-theme ember-home" data-theme="home">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="ember-home-top" data-kit-site-header>
+    <div class="ember-home-row">
+      <a class="brand" href="/" aria-current="page"><img src="/logo.svg" width="140" height="39" alt="Together We Own" /></a>
+      <div class="ember-home-desktop">{@render primaryLinks()}</div>
+      <nav class="ember-home-account" aria-label="Account">
+        {#if session}
+          <form method="post" action="/logout">
+            <span class="sr-only">Signed in</span>
+            <span class="who">{session.username}</span>
+            <Button size="sm" type="submit">Sign out</Button>
+          </form>
+        {:else}
+          <span class="sr-only">Welcome, guest</span>
+          <a href="/auth/discord" aria-label="Sign in with Discord" data-testid="signin">Sign in</a>
+          <Button size="sm" variant="primary" href={sessionUnavailable ? "/discord" : "/join"}>Join</Button>
+        {/if}
+      </nav>
+      <details class="ember-home-menu">
+        <summary>Menu</summary>
+        {@render primaryLinks()}
+      </details>
+    </div>
+  </header>
+  <main class="ember-home-main" id="main" tabindex="-1">
+    {#if data.restoredWrite}<div role="status" tabindex="-1" data-testid="auth-error">You signed in again. Your earlier changes were not saved. Review and submit them again.</div>{/if}
+    {@render homeContent()}
+  </main>
+  <EmberFooter />
+</div>

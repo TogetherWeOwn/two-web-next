@@ -3,8 +3,9 @@
 // Builder owns registration in browser CI and before/after visual/a11y evidence.
 // Test Author owns this file: implement the behavior, never edit these assertions.
 import { readFileSync } from "node:fs";
-import { extname, resolve } from "node:path";
+import { basename, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { build } from "esbuild";
 import { chromium, type Browser, type BrowserContext, type Page, type Route } from "playwright";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { __resetAnonEventCacheForTests } from "../src/events/anon-cache";
@@ -16,6 +17,9 @@ import {
   GAME_TWINS,
   gameRecoveryFixture,
   type GameTwin,
+  kitCalendarCss,
+  kitCalendarStyles,
+  retainKitCalendarStyles,
 } from "../test/helpers/calendar-game-recovery";
 
 const publicDir = fileURLToPath(new URL("../public/", import.meta.url)).replace(/\/+$/, "");
@@ -111,7 +115,8 @@ async function open(
           } as Record<string, string>
         )[extname(path)] ?? "application/octet-stream";
       publicFulfilled.push(url.pathname);
-      return route.fulfill({ body: readFileSync(path), contentType });
+      const style = twin === "Kit" ? kitCalendarStyles.get(url.pathname) : undefined;
+      return route.fulfill({ body: style ?? readFileSync(path), contentType });
     } catch {
       publicAborted.push(url.pathname);
       return route.abort();
@@ -279,6 +284,39 @@ async function open(
     documents,
   };
 }
+
+it("serves the CSS emitted by the Calendar fixture bundler", async () => {
+  const { outputFiles } = await build({
+    stdin: {
+      contents: 'export { default as stylesheet } from "./calendar-bundle-probe.css";',
+      resolveDir: fileURLToPath(new URL("../test/fixtures/", import.meta.url)),
+    },
+    bundle: true,
+    format: "esm",
+    write: false,
+    outdir: ".",
+    plugins: [kitCalendarCss],
+  });
+  const css = outputFiles.find((file) => file.path.endsWith(".css"));
+  if (!css) throw new Error("The fixture bundler did not emit a stylesheet");
+  const path = `/${basename(css.path)}`;
+  retainKitCalendarStyles(outputFiles);
+  try {
+    const { page } = await open("Kit", "shipped");
+    const asset = await page.evaluate(async (path) => {
+      const response = await fetch(path);
+      return {
+        status: response.status,
+        type: response.headers.get("content-type"),
+        body: await response.text(),
+      };
+    }, path);
+    expect(asset).toEqual({ status: 200, type: "text/css", body: css.text });
+    expect(asset.body).toContain("--two-size-header-compact: 60px");
+  } finally {
+    kitCalendarStyles.delete(path);
+  }
+});
 
 for (const twin of GAME_TWINS) {
   describe(`${twin} asset proof negative controls`, () => {

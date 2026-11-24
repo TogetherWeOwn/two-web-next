@@ -3,7 +3,7 @@ import {
   RECOVERY_MANIFEST,
   RECOVERY_MEMBER_LIMITS,
   recordRecoveryPath,
-  validRecoveryMemberPath,
+  validRecoveryZipPath,
 } from "./pure-hono-recovery-members.mjs";
 
 // Inert, in-memory reader for an untrusted artifact ZIP. It never writes to the
@@ -36,9 +36,7 @@ export function extractRouteEvidenceZip(archive, limits = ROUTE_EVIDENCE_ZIP_LIM
 const RECOVERY_ZIP_LIMITS = Object.freeze({
   ...RECOVERY_MEMBER_LIMITS,
   maxEntryBytes: RECOVERY_MEMBER_LIMITS.maxTotalBytes,
-  maxRatio: 100,
 });
-const DOS_DEVICE = /^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i;
 
 // The validator's decode adapter. Never extract files or interpret their contents.
 export function decodePureHonoRecoveryZip(archive) {
@@ -110,9 +108,7 @@ function parse(buf, limits, recovery = false) {
       need(flags === 0 || flags === 0x0800); // no descriptors or other optional features
       need(version === 20 || (method === 0 && version === 10));
       need(extraLen === 0 && commentLen === 0 && internalAttrs === 0);
-      need(validRecoveryMemberPath(name));
-      const parts = name.split("/");
-      need(parts.length <= 32 && !parts.some((part) => DOS_DEVICE.test(part)));
+      need(validRecoveryZipPath(name));
       need(recordRecoveryPath(recoveryPaths, name));
       if (name === RECOVERY_MANIFEST) need(usize <= RECOVERY_MEMBER_LIMITS.maxManifestBytes);
     } else {

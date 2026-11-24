@@ -6,6 +6,7 @@
 // route-inventory: GET /sitemap_index.xml
 import { describe, expect, it } from "vitest";
 import app, { FALLBACK_INVITE } from "./app";
+import { requestApp } from "./helpers/fetch-app";
 import { readCounts } from "../src/counts";
 import type { Env } from "../src/env";
 import {
@@ -28,7 +29,7 @@ const env: Env = {
 
 describe("funnel leaves (DB-free floor)", () => {
   it("/discord 302s to the configured invite with no-store and sets no cookies", async () => {
-    const res = await app.request("/discord", {}, env);
+    const res = await requestApp("/discord", {}, env);
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe("https://discord.gg/configured");
     expect(res.headers.get("cache-control")).toBe("no-store, private");
@@ -37,7 +38,7 @@ describe("funnel leaves (DB-free floor)", () => {
 
   it("/discord falls back to the hardcoded invite when config is unusable", async () => {
     const bad = { ...env, DISCORD_INVITE_URL: "https://evil.test/steal" };
-    const res = await app.request("/discord", {}, bad);
+    const res = await requestApp("/discord", {}, bad);
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe(FALLBACK_INVITE);
     expect(FALLBACK_INVITE).toBe("https://discord.gg/4GwEDNRTtx");
@@ -45,13 +46,13 @@ describe("funnel leaves (DB-free floor)", () => {
 
   it("/discord falls back on non-https invite URLs", async () => {
     const bad = { ...env, DISCORD_INVITE_URL: "http://discord.gg/configured" };
-    const res = await app.request("/discord", {}, bad);
+    const res = await requestApp("/discord", {}, bad);
     expect(res.headers.get("location")).toBe(FALLBACK_INVITE);
   });
 
   it("/discord rejects lookalike hosts (suffix match is not Discord)", async () => {
     const bad = { ...env, DISCORD_INVITE_URL: "https://discord.gg.example.com/x" };
-    const res = await app.request("/discord", {}, bad);
+    const res = await requestApp("/discord", {}, bad);
     expect(res.headers.get("location")).toBe(FALLBACK_INVITE);
   });
 
@@ -125,7 +126,7 @@ describe("sitemap + robots (per-env host)", () => {
   });
 
   it("/sitemap_index.xml lists the static leaves, no past archive, valid XML", async () => {
-    const res = await app.request("/sitemap_index.xml", {}, env);
+    const res = await requestApp("/sitemap_index.xml", {}, env);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("application/xml");
     const xml = await res.text();
@@ -157,7 +158,7 @@ describe("sitemap + robots (per-env host)", () => {
   });
 
   it("/robots.txt advertises this environment's own sitemap host", async () => {
-    const res = await app.request("/robots.txt", {}, env);
+    const res = await requestApp("/robots.txt", {}, env);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/plain");
     expect(await res.text()).toBe(
@@ -167,7 +168,7 @@ describe("sitemap + robots (per-env host)", () => {
 
   it("staging advertises the staging host, never the apex (TOG-7071)", async () => {
     const staging = { ...env, APP_URL: "https://staging.example.test" };
-    const robots = await (await app.request("/robots.txt", {}, staging)).text();
+    const robots = await (await requestApp("/robots.txt", {}, staging)).text();
     expect(robots).toContain("Sitemap: https://staging.example.test/sitemap_index.xml");
     expect(robots).not.toContain("next.example.test");
     expect(buildRobots(staging.APP_URL)).toContain("staging.example.test");
@@ -222,7 +223,7 @@ describe("URL freeze (W4 slice)", () => {
   });
 
   it("/discord redirects", async () => {
-    expect((await app.request("/discord", {}, env)).status).toBe(302);
+    expect((await requestApp("/discord", {}, env)).status).toBe(302);
   });
 });
 

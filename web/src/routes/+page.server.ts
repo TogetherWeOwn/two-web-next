@@ -50,6 +50,7 @@ export const load: PageServerLoad = async ({ url, request, locals, cookies, setH
     setHeaders,
   });
   return {
+    nowMs: Date.now(),
     session,
     sessionUnavailable,
     notice,

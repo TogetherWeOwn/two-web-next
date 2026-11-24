@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { URL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 
 const role = (name: string) =>
   readFileSync(new URL(`../.claude/agents/${name}.md`, import.meta.url), "utf8");
@@ -15,18 +16,27 @@ const metadata = (source: string, key: string) => {
 
 describe("repository delegation contract", () => {
   it.each(["\n", "\r\n"])("reads metadata with %j line endings", (newline) => {
-    const source = ["---", "model: gpt-6.1-sol", "tools: Read, Grep", "---", "Body"].join(newline);
-    expect(metadata(source, "model")).toBe("gpt-6.1-sol");
+    const source = ["---", "name: scout", "tools: Read, Grep", "---", "Body"].join(newline);
+    expect(metadata(source, "name")).toBe("scout");
     expect(metadata(source, "tools")).toBe("Read, Grep");
   });
 
-  it("retains the configured model routes and tool lists", () => {
-    const builder = role("builder");
-    const reviewer = role("cross-reviewer");
-    expect(metadata(builder, "model")).toBe("claude/claude-sonnet-5-5");
-    expect(metadata(builder, "tools")).toBe("Read, Grep, Glob, Bash, Edit, Write");
-    expect(metadata(reviewer, "model")).toBe("gpt-6.1-sol");
-    expect(metadata(reviewer, "tools")).toBe("Read, Grep, Glob, Bash");
+  it.each([
+    ["Explore", "Read, Grep, Glob, Bash"],
+    ["builder", "Read, Grep, Glob, Bash, Edit, Write"],
+    ["cross-reviewer", "Read, Grep, Glob, Bash"],
+    ["scout", "Read, Grep, Glob, Bash"],
+  ])("leaves %s model selection to T3 Code and retains its tools", (name, tools) => {
+    const source = role(name);
+    const frontmatter = source.replace(/\r\n/g, "\n").split("---\n")[1];
+    expect(frontmatter).toBeDefined();
+    expect(parse(frontmatter ?? "")).not.toHaveProperty("model");
+    expect(metadata(source, "tools")).toBe(tools);
+  });
+
+  it("uses the shared agent instructions as the sole Claude Code import", () => {
+    const source = readFileSync(new URL("../CLAUDE.md", import.meta.url), "utf8");
+    expect(source.replace(/\r\n/g, "\n")).toBe("@AGENTS.md\n");
   });
 
   it("requires independent concurrent assessment and evidence without test execution", () => {
@@ -42,6 +52,7 @@ describe("repository delegation contract", () => {
       "concrete input/state/sequence and wrong outcome",
       "evidence establishing it",
       "not a security boundary",
+      "different model family from the author's through the T3 Code delegated reviewer target",
     ]) {
       expect(reviewer).toContain(requirement);
     }
@@ -60,10 +71,10 @@ describe("repository delegation contract", () => {
       "within verified native, provider, tool, host and approved-budget capacity",
       "assigned native task-owned isolated workspace",
       "Architecture, primary review and specialist decisions remain with qualified authorized workers",
-      "Do not perform design work or exercise Security or Release Manager authority",
+      "Do not perform design work or exercise security or release approval authority",
       "Full suites and CI gates run only on GitHub Actions for the exact head",
-      "Never commit, push, open PRs or change Paperclip issues",
-      "caller does that and remains the accountable integrator",
+      "Never commit, push, open PRs or change tracker issues",
+      "The caller does that and remains the accountable integrator",
     ]) {
       expect(builder).toContain(requirement);
     }

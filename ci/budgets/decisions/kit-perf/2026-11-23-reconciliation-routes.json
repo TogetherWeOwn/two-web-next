@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "scope": "kit-immutable-route-closure-v1",
+  "routes": {
+    "/admin/reconciliation": {
+      "js": {
+        "maxRawBytes": 153088,
+        "maxGzipBytes": 60672,
+        "maxFiles": 24
+      },
+      "css": {
+        "maxRawBytes": 3584,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/admin/reconciliation/[key]": {
+      "js": {
+        "maxRawBytes": 154624,
+        "maxGzipBytes": 61184,
+        "maxFiles": 24
+      },
+      "css": {
+        "maxRawBytes": 3584,
+        "maxGzipBytes": 1280,
+        "maxFiles": 3
+      }
+    }
+  }
+}

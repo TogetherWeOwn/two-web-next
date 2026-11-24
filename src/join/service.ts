@@ -26,6 +26,7 @@
 // outcome, source, request_id and discord_id. The OAuth/token-exchange response
 // bodies and exception messages can quote the live token, so none of them is
 // ever a recordAttempt parameter and none is ever logged.
+import { exceedsUtf8ByteLimit } from "../http/length-limit";
 import { addGuildMemberDetailed, type JoinResult } from "../discord";
 import { checkWebThrottle, type ThrottleVerdict } from "../http/throttle";
 import { safeRequestId } from "../request-log";
@@ -96,7 +97,7 @@ export const MAX_RETURN_DESTINATION_BYTES = 512;
 export function safeNext(raw: unknown): string | null {
   // eslint-disable-next-line no-control-regex
   if (typeof raw !== "string" || raw === "" || /[\s\x00-\x1f\x7f]/.test(raw)) return null;
-  if (new TextEncoder().encode(raw).byteLength > MAX_RETURN_DESTINATION_BYTES) return null;
+  if (exceedsUtf8ByteLimit(raw, MAX_RETURN_DESTINATION_BYTES)) return null;
   if (!raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\")) return null;
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw)) return null;
   try {

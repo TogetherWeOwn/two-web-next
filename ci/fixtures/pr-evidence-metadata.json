@@ -1,0 +1,141 @@
+{
+  "pull": {
+    "number": 42,
+    "state": "open",
+    "draft": false,
+    "created_at": "2026-10-30T00:00:00Z",
+    "closed_at": null,
+    "base": { "repo": { "id": 1, "full_name": "TogetherWeOwn/two-web-next" }, "ref": "main" },
+    "body": "[Exact-head Actions evidence](#issuecomment-123)\n\n## Attestation\n\nrisk_tier: T1\n",
+    "head": {
+      "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "topic",
+      "label": "contributor:topic",
+      "repo": { "id": 2 }
+    }
+  },
+  "run": {
+    "id": 101,
+    "run_number": 101,
+    "run_attempt": 1,
+    "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "head_branch": "topic",
+    "head_repository": { "id": 2 },
+    "path": ".github/workflows/ci.yml",
+    "event": "pull_request",
+    "created_at": "2026-11-01T00:00:00Z",
+    "status": "completed",
+    "conclusion": "success"
+  },
+  "job": {
+    "id": 900,
+    "name": "ci-ok",
+    "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "run_id": 101,
+    "run_attempt": 1,
+    "status": "completed",
+    "conclusion": "success"
+  },
+  "run_cases": [
+    {
+      "run": { "status": "in_progress", "run_attempt": 2 },
+      "jobs": false,
+      "row": "\\[pending\\].*attempts/2\\) \\| missing \\| pending \\|$"
+    },
+    {
+      "run": { "pull_requests": [] },
+      "jobs": false,
+      "row": "\\[unbound\\].*\\| missing \\| unbound \\|$"
+    },
+    {
+      "run": {
+        "pull_requests": [
+          { "number": 42, "base": { "ref": "main", "repo": { "id": 1 } } },
+          { "number": 43, "base": { "ref": "feature", "repo": { "id": 1 } } }
+        ]
+      },
+      "jobs": true,
+      "row": "\\[ambiguous\\].*\\| missing \\| ambiguous \\|$"
+    },
+    {
+      "run": { "conclusion": "failure" },
+      "jobs": true,
+      "row": "\\[failure\\].*\\| \\[failure\\].*\\| failure \\|$"
+    },
+    {
+      "run": { "run_attempt": 2 },
+      "jobs": false,
+      "row": "attempts/2\\) \\| missing \\| missing \\|$"
+    },
+    {
+      "run": { "conclusion": "skipped" },
+      "jobs": true,
+      "row": "\\| \\[skipped\\].*\\| skipped \\|$"
+    }
+  ],
+  "readiness_cases": [
+    { "ready": "2026-11-02T00:00:00Z", "witness": null, "evidence": "superseded" },
+    { "ready": "2026-11-01T00:00:00Z", "witness": null, "evidence": "unproven" },
+    { "ready": "2026-11-01T00:00:00Z", "witness": "skipped", "evidence": "unproven" },
+    { "ready": "2026-11-01T00:00:00Z", "witness": "success", "evidence": "success" }
+  ],
+  "history_cases": [
+    {
+      "name": "retarget after the run",
+      "timeline": [{ "event": "base_ref_changed", "created_at": "2026-11-02T00:00:00Z" }],
+      "evidence": "superseded"
+    },
+    {
+      "name": "automatic retarget after the run",
+      "timeline": [
+        { "event": "automatic_base_change_succeeded", "created_at": "2026-11-02T00:00:00Z" }
+      ],
+      "evidence": "superseded"
+    },
+    {
+      "name": "failed automatic retarget in the same second",
+      "timeline": [
+        { "event": "automatic_base_change_failed", "created_at": "2026-11-01T00:00:00Z" }
+      ],
+      "evidence": "unproven"
+    },
+    {
+      "name": "retarget in the same second",
+      "timeline": [{ "event": "base_ref_changed", "created_at": "2026-11-01T00:00:00Z" }],
+      "evidence": "unproven"
+    },
+    {
+      "name": "run started after a retarget",
+      "timeline": [{ "event": "base_ref_changed", "created_at": "2026-10-31T00:00:00Z" }],
+      "evidence": "success"
+    },
+    {
+      "name": "closed sibling was open when the run started",
+      "siblings": [
+        {
+          "number": 43,
+          "state": "closed",
+          "head": { "ref": "topic", "repo": { "id": 2 } },
+          "base": { "ref": "feature", "repo": { "id": 1 } },
+          "created_at": "2026-10-31T00:00:00Z",
+          "closed_at": "2026-11-02T00:00:00Z"
+        }
+      ],
+      "evidence": "ambiguous"
+    },
+    {
+      "name": "sibling already closed when the run started",
+      "siblings": [
+        {
+          "number": 43,
+          "state": "closed",
+          "head": { "ref": "topic", "repo": { "id": 2 } },
+          "base": { "ref": "feature", "repo": { "id": 1 } },
+          "created_at": "2026-10-30T00:00:00Z",
+          "closed_at": "2026-10-31T00:00:00Z"
+        }
+      ],
+      "evidence": "success"
+    }
+  ]
+}

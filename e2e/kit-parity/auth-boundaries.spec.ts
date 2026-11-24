@@ -80,16 +80,27 @@ for (const target of targets) {
     const context = await isolatedPage(browser, target);
     try {
       const page = await context.newPage();
-      const oauthResponse = page.waitForResponse(
-        (response) => new URL(response.url()).pathname === "/join/discord",
-      );
       const returnTo = "/join?source=home";
       const landing = await page.goto(`/join?next=${encodeURIComponent(returnTo)}`);
       expect(landing?.status()).toBe(200);
       expect(landing?.headers()["x-two-renderer"] ?? null).toBe(
         target.name === "kit" ? "kit" : null,
       );
-      await expect(page.getByText("Welcome, guest")).toBeVisible();
+      if (target.name === "kit") {
+        const header = page.getByRole("banner");
+        const signIn = header.getByRole("link", { name: "Sign in with Discord", exact: true });
+        const join = header.locator('a[href="/join"]');
+        await expect(signIn).toBeVisible();
+        await expect(signIn).toHaveAttribute("href", "/auth/discord");
+        await expect(join).toHaveCount(0);
+        await page.setViewportSize({ width: 390, height: 844 });
+        await header.getByRole("link", { name: "Menu", exact: true }).click();
+        await expect(signIn).toBeVisible();
+        await expect(join).toHaveCount(0);
+        await header.getByRole("link", { name: "Close menu" }).click();
+      } else {
+        await expect(page.getByText("Welcome, guest")).toBeVisible();
+      }
       await expect(page.getByText("Sign out")).toHaveCount(0);
 
       const cta = page.getByTestId("join-oneclick");
@@ -99,8 +110,10 @@ for (const target of targets) {
         `/join/discord?next=${encodeURIComponent(returnTo)}`,
       );
       await captureJoin(page, `${target.name}-guest`);
-      await cta.click();
-      const oauth = await oauthResponse;
+      const [oauth] = await Promise.all([
+        page.waitForResponse((response) => new URL(response.url()).pathname === "/join/discord"),
+        cta.click(),
+      ]);
       expect(oauth.status()).toBe(302);
       expect(oauth.headers()["x-two-renderer"] ?? null).toBeNull();
       const location = oauth.headers()["location"];

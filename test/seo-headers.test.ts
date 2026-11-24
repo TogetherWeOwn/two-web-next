@@ -4,7 +4,7 @@ import rawApp from "../src/index";
 import app from "./app";
 import { robotsTagFor, SECURITY_HEADERS } from "../src/headers";
 import { robotsTagFor as robotsDecision } from "../src/http/robots";
-import { fetchApp } from "./helpers/fetch-app";
+import { fetchApp, requestApp } from "./helpers/fetch-app";
 import { profilesApp } from "../src/profiles/routes";
 import { createMemoryProfileStore } from "../src/profiles/store";
 import type { Env } from "../src/env";
@@ -62,7 +62,7 @@ async function cookieFor(
 
 describe("sitemap + robots (per-env host)", () => {
   it("lists the static leaves as XML, never gated or machine URLs", async () => {
-    const res = await app.request("/sitemap_index.xml", {}, env);
+    const res = await requestApp("/sitemap_index.xml", {}, env);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("application/xml; charset=UTF-8");
     const xml = await res.text();
@@ -89,7 +89,7 @@ describe("sitemap + robots (per-env host)", () => {
   });
 
   it("/robots.txt advertises this environment's own sitemap host as plain text", async () => {
-    const res = await app.request("/robots.txt", {}, env);
+    const res = await requestApp("/robots.txt", {}, env);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("text/plain; charset=UTF-8");
     expect(await res.text()).toBe(
@@ -99,7 +99,7 @@ describe("sitemap + robots (per-env host)", () => {
 
   it("staging advertises the staging host, never the apex (TOG-7071)", async () => {
     const staging = { ...env, APP_URL: "https://staging.example.test" };
-    const robots = await (await app.request("/robots.txt", {}, staging)).text();
+    const robots = await (await requestApp("/robots.txt", {}, staging)).text();
     expect(robots).toContain("Sitemap: https://staging.example.test/sitemap_index.xml");
     expect(robots).not.toContain("next.example.test");
   });
@@ -231,7 +231,7 @@ describe("static leaves (DB-free floor)", () => {
   });
 
   it("the home shell footers the leaf links, and the leaves are in the sitemap", async () => {
-    const xml = await (await app.request("/sitemap_index.xml", {}, env)).text();
+    const xml = await (await requestApp("/sitemap_index.xml", {}, env)).text();
     for (const leaf of ["about", "faq", "rules", "privacy"]) {
       expect(xml).toContain(`<loc>${APP_URL}/${leaf}</loc>`);
       const html = await (await app.request("/", {}, env)).text();
@@ -490,7 +490,7 @@ describe("security headers per route class", () => {
     // Trusted preview JSON stays untagged; the same URL with apex config is
     // instead a branded HTML refusal and must carry the noindex header.
     const preview = { ...env, APP_URL: "https://preview.example.test" };
-    const json = await app.request("/up", {}, preview);
+    const json = await requestApp("/up", {}, preview);
     expect(json.status).toBe(503); // trusted host, but the fixture has no DB
     expect(json.headers.get("content-type")).toContain("application/json");
     expect(json.headers.get("X-Robots-Tag")).toBeNull();
@@ -582,7 +582,7 @@ describe("URL freeze + no soft 404s", () => {
   });
 
   it("/discord redirects 302, never 301", async () => {
-    const res = await app.request("/discord", {}, env);
+    const res = await requestApp("/discord", {}, env);
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe("https://discord.gg/configured");
   });

@@ -9,7 +9,6 @@
 // A2 AI-friendly machine formats: /llms.txt + curated .md alternates.
 // Static suites are DB-free; collection/detail suites need agent-testdb.
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import app from "./app";
 import type { Env } from "../src/env";
 import { events, rsvps } from "../src/db/admin-schema";
 import { users } from "../src/db/schema";
@@ -31,6 +30,7 @@ import {
   mdText,
   type MdEvent,
 } from "../src/ai-friendly/md";
+import { requestApp } from "./helpers/fetch-app";
 
 // Production apex (the only host that indexes): plain responses carry no
 // X-Robots-Tag here, while STAGING_URL proves the staging noindex posture.
@@ -47,7 +47,7 @@ const baseEnv = (appUrl: string) =>
   }) as unknown as Env;
 
 const req = (path: string, appUrl = APP_URL, init: RequestInit = {}) =>
-  app.request(path, init, baseEnv(appUrl));
+  requestApp(path, init, baseEnv(appUrl));
 
 const past = {
   game: "Helldivers",
@@ -414,7 +414,7 @@ describe("static .md routes (DB-free)", () => {
   it.each(hostileJoinInvites)(
     "/join.md degrades a bad invite to the hardcoded fallback: %s",
     async (configured) => {
-      const res = await app.request(
+      const res = await requestApp(
         "/join.md",
         {},
         { ...baseEnv(APP_URL), DISCORD_INVITE_URL: configured },
@@ -429,7 +429,7 @@ describe("static .md routes (DB-free)", () => {
 
   it("/join.md keeps a plain valid invite on its own destination", async () => {
     const configured = "https://discord.gg/Ab12";
-    const res = await app.request(
+    const res = await requestApp(
       "/join.md",
       {},
       { ...baseEnv(APP_URL), DISCORD_INVITE_URL: configured },
@@ -482,7 +482,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event .md routes (agent-testdb)", ()
     await fixture?.dispose();
   });
   const tReq = (path: string, appUrl = APP_URL) =>
-    app.request(path, {}, {
+    requestApp(path, {}, {
       ...baseEnv(appUrl),
       get ADMIN_DB() {
         return db;
@@ -608,7 +608,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event .md routes (agent-testdb)", ()
   it("moderator draft HTML omits the alternate that would 403", async () => {
     await ins("01J0000000000000000000DRF1", "draft");
     const store = createMemorySessionStore();
-    const res = await app.request(
+    const res = await requestApp(
       "/e/01J0000000000000000000DRF1",
       { headers: { cookie: await cookieFor(store, MODERATOR) } },
       {

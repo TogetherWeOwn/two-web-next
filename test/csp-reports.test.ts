@@ -11,7 +11,7 @@ import {
   shouldSampleReport,
 } from "../src/csp-reports";
 import type { Env } from "../src/env";
-import { fetchApp } from "./helpers/fetch-app";
+import { fetchApp, requestApp } from "./helpers/fetch-app";
 
 const env: Env = {
   APP_URL: "https://next.example.test",
@@ -223,7 +223,7 @@ describe("POST /csp-reports sink (TOG-10107)", () => {
   it("touches no session, cookie, or database — 204 with the app DB down", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const forged = `__Host-two_session=${encodeURIComponent("two_forged-token")}.bad`;
-    const res = await app.request(
+    const res = await requestApp(
       "/csp-reports",
       { method: "POST", body: classicBody(), headers: { cookie: forged } },
       noDbEnv,
