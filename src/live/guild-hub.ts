@@ -65,10 +65,12 @@ export class LiveGuildHub {
       (topics) => snapshotTopics(topics, config.guildId),
       fetchSnapshot,
     );
-    this.#sequence = new LiveSequence(load, reduceLiveState, {
-      initial,
-      write: (watermarks) => kv.put(WATERMARKS, watermarks),
-    });
+    this.#sequence = new LiveSequence(
+      load,
+      reduceLiveState,
+      { initial, write: (watermarks) => kv.put(WATERMARKS, watermarks) },
+      { requireObservationDeadline: true },
+    );
   }
 
   protected readSocketSession(ref: string) {
