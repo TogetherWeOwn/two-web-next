@@ -683,12 +683,14 @@ export default {
     join(repo, "public"),
     secret,
   );
-  await listen(honoWithSession.child, honoWithSession.origin, () => honoWithSession.log);
+  const kitWithSession = await startWorker("kit-session", worker, assets, secret);
+  await Promise.all(
+    [honoWithSession, kitWithSession].map((instance) =>
+      listen(instance.child, instance.origin, () => instance.log),
+    ),
+  );
 
   if (args.length) {
-    const kitWithSession = await startWorker("kit-session", worker, assets, secret);
-    await listen(kitWithSession.child, kitWithSession.origin, () => kitWithSession.log);
-
     async function observeDataRedirect(worker, path) {
       const response = await fetch(`${worker.origin}${path}`, { redirect: "manual" });
       assert.equal(response.status, 302, `${path}: Hono guest redirect`);
@@ -854,7 +856,7 @@ export default {
 
   await assertStaticFeedParity({
     hono: honoWithSession,
-    kit,
+    kit: kitWithSession,
     databaseUrl,
     startKit: async (name, vars) => {
       const instance = await startWorker(

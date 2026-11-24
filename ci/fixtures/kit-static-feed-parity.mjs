@@ -306,8 +306,8 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
         return result;
       };
 
-      const moderator = target === kit ? undefined : await mintSession(true);
-      const publicHeaders = moderator ? { cookie: moderator } : undefined;
+      const moderator = await mintSession(true);
+      const publicHeaders = { cookie: moderator };
       const get = await run("public GET", publicPath, { status: 200, headers: publicHeaders });
       assert.equal(get.headers.get("cache-control"), detailCachePolicy);
       assert.equal(get.headers.get("content-type"), "text/calendar; charset=utf-8");
@@ -366,30 +366,26 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
         }
       }
 
-      const draftTag = detailBaseline.get("authorized draft GET")?.headers.get("etag");
-      let validator = draftTag;
-      if (moderator) {
-        const draft = await run("authorized draft GET", draftPath, {
-          status: 200,
-          headers: { cookie: moderator },
-        });
-        assert.match(draft.body, /SUMMARY:Fixture Draft Night\r\n/);
-        assert.equal(draft.headers.get("cache-control"), detailCachePolicy);
-        validator = draft.headers.get("etag");
-        assert.ok(validator, "draft GET supplies a validator");
-        const cached = await run("authorized draft HEAD", draftPath, {
-          method: "HEAD",
-          status: 304,
-          headers: { cookie: sessionRenewal(draft.headers), "if-none-match": validator },
-        });
-        assert.equal(cached.headers.get("cache-control"), detailCachePolicy);
-        assert.equal(cached.headers.get("etag"), validator);
-        await run("renewed draft HEAD", draftPath, {
-          method: "HEAD",
-          status: 200,
-          headers: { cookie: sessionRenewal(cached.headers) },
-        });
-      }
+      const draft = await run("authorized draft GET", draftPath, {
+        status: 200,
+        headers: { cookie: moderator },
+      });
+      assert.match(draft.body, /SUMMARY:Fixture Draft Night\r\n/);
+      assert.equal(draft.headers.get("cache-control"), detailCachePolicy);
+      const validator = draft.headers.get("etag");
+      assert.ok(validator, "draft GET supplies a validator");
+      const cached = await run("authorized draft HEAD", draftPath, {
+        method: "HEAD",
+        status: 304,
+        headers: { cookie: sessionRenewal(draft.headers), "if-none-match": validator },
+      });
+      assert.equal(cached.headers.get("cache-control"), detailCachePolicy);
+      assert.equal(cached.headers.get("etag"), validator);
+      await run("renewed draft HEAD", draftPath, {
+        method: "HEAD",
+        status: 200,
+        headers: { cookie: sessionRenewal(cached.headers) },
+      });
 
       for (const method of ["GET", "HEAD"]) {
         const denied = await run(`guest draft ${method}`, draftPath, {
@@ -401,23 +397,21 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
         assert.equal(denied.headers.get("etag"), null);
         assert.equal(denied.headers.get("set-cookie"), null);
       }
-      if (moderator) {
-        const member = await mintSession(false);
-        const denied = await run("member draft GET", draftPath, {
-          status: 403,
-          headers: { cookie: member, "if-none-match": validator },
-        });
-        assert.equal(denied.body, "Forbidden");
-        assert.equal(denied.headers.get("etag"), null);
-        // A valid non-moderator session renews before either refusal.
-        const head = await run("member draft HEAD", draftPath, {
-          method: "HEAD",
-          status: 403,
-          headers: { cookie: sessionRenewal(denied.headers), "if-none-match": validator },
-        });
-        assert.equal(head.headers.get("etag"), null);
-        sessionRenewal(head.headers);
-      }
+      const member = await mintSession(false);
+      const denied = await run("member draft GET", draftPath, {
+        status: 403,
+        headers: { cookie: member, "if-none-match": validator },
+      });
+      assert.equal(denied.body, "Forbidden");
+      assert.equal(denied.headers.get("etag"), null);
+      // A valid non-moderator session renews before either refusal.
+      const memberHead = await run("member draft HEAD", draftPath, {
+        method: "HEAD",
+        status: 403,
+        headers: { cookie: sessionRenewal(denied.headers), "if-none-match": validator },
+      });
+      assert.equal(memberHead.headers.get("etag"), null);
+      sessionRenewal(memberHead.headers);
     }
     console.log(
       "PASS built Worker per-event ICS absent/off/on: path and method ownership, one budget charge, public, draft renewal and refusal parity",
