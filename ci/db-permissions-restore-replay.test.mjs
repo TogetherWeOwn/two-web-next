@@ -323,13 +323,21 @@ test("PostgreSQL 18 branch replay preserves repair and Bot scope with alternate 
     assert.deepEqual(await readRestore(), replayed);
     await webReads(fresh, false);
     await botReads(connect);
+    t.diagnostic(
+      "Exact undo restored the original digest and the first revoke removed temporary authority.",
+    );
 
     phase = "forward and revoke while retaining repaired state";
     await runAuthority(connect, "provision");
-    assert.equal(await repair("forward"), "committed");
+    // The second provision creates a new pg_auth_members OID, which the
+    // unchanged repair includes in its digest. Pin this attempt separately.
+    const reprovisioned = await inspect(connect);
+    assert.notEqual(reprovisioned.digest, before);
+    const retained = await using(connect(executor), expectedForward);
+    assert.equal(await run(connect, "forward", reprovisioned.digest, retained.digest), "committed");
     await runAuthority(connect, "revoke");
     const { state: repaired } = await inspect(connect);
-    assert.deepEqual(repaired, { ...expected.state, memberships: unprovisioned.state.memberships });
+    assert.deepEqual(repaired, { ...retained.state, memberships: unprovisioned.state.memberships });
     assert.deepEqual(await readRestore(), replayed);
     await webReads(fresh, true);
     await botReads(connect);
