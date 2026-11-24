@@ -78,8 +78,9 @@ claim uses its last usable snapshot without calling Discord. A publisher already
 holding a lease can serve its valid live response if the completion times out.
 Its database lease expires normally. The subsequent ownership transfers take
 exclusive locks that can briefly block reads and writes on the affected tables
-until the repair transaction ends. A snapshot read that times out in this phase
-reports the Discord list unavailable and leaves the canonical calendar available.
+until the repair transaction ends. A snapshot read timeout affects the Discord
+list. The calendar request can also fail if its canonical events query times out
+waiting for that table's ownership lock.
 Observe Web readiness and queue delivery during classification and recovery.
 
 Confirm the bounded writer build is serving everywhere before provisioning the
