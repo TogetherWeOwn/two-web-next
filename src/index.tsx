@@ -14,7 +14,7 @@ import { databaseOptions, databaseUrl } from "./db/connection";
 import { isDatabaseUnavailable } from "./db/errors";
 import { upsertRosterUser } from "./db/roster";
 import { issueSession as persistSession, storeForEnv } from "./http/session";
-import { readContextSession as readSession } from "./http/session-context";
+import { readContextSession as readSession } from "./session-hono";
 import { pgQueueDepth } from "./jobs/postgres";
 import type { Env, Session } from "./env";
 import { operatorImageHosts } from "./config-warn";

@@ -41,12 +41,8 @@ const results = [
   { path: detailPath, feed: detail, marker: `SUMMARY:${row.title}\r\n`, cache: "private" },
 ] as const;
 
-const db = {} as Db;
-type ReadOptions = {
-  method?: "GET" | "HEAD";
-  actor?: typeof MEMBER | "renewed";
-  validator?: string;
-};
+type Actor = typeof MEMBER | "renewed";
+type ReadOptions = { method?: "GET" | "HEAD"; actor?: Actor; validator?: string };
 
 function fixture() {
   const sides = (["mounted", "candidate"] as const).map((side) => {
@@ -56,7 +52,7 @@ function fixture() {
     const env = {
       ...baseEnv,
       SESSION_STORE: store,
-      ADMIN_DB: db,
+      ADMIN_DB: {} as Db,
       THROTTLE_STORE: async () => null,
     };
     return { side, env, store, get, rotate, renewal: "" };
@@ -151,6 +147,7 @@ it.each(results)(
     const get = await compare(path, feed, { actor: MODERATOR });
     expect(get.status).toBe(200);
     expect(get.bytes.toString()).toContain(marker);
+    expect(get.cookies).toEqual([]);
     const etag = `"${createHash("sha256").update(get.bytes).digest("hex")}"`;
     expect(get.headers.get("etag")).toBe(etag);
     expect(get.headers.get("cache-control")).toBe(`max-age=300, ${cache}`);
@@ -167,6 +164,7 @@ it.each(results)(
       expect(response.status).toBe(304);
       expect(response.bytes).toHaveLength(0);
       expect(response.headers.get("etag")).toBe(etag);
+      expect(response.headers.get("cache-control")).toBe(get.headers.get("cache-control"));
       expect(response.headers.get("content-type")).toBeNull();
       expect(response.cookies).toEqual([]);
     }

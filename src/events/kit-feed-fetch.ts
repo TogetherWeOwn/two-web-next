@@ -3,7 +3,7 @@ import { getPath } from "hono/utils/url";
 import type { Env } from "../env";
 import { internalErrorHandler } from "../errors";
 import { safeRequestId } from "../http/request-log";
-import { readContextSession } from "../http/session-context";
+import { readContextSession } from "../session-hono";
 import { feedHandlers } from "./routes-feeds";
 
 export type FeedRead =

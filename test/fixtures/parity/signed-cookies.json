@@ -145,10 +145,10 @@
       "name": "__Host-two_session",
       "signedIn": [
         "src/admin/guard.ts",
-        "src/http/session-context.ts",
         "src/index.tsx",
         "src/kit-session.ts",
-        "src/profiles/routes-gate.ts"
+        "src/profiles/routes-gate.ts",
+        "src/session-hono.ts"
       ],
       "vectors": [
         {
