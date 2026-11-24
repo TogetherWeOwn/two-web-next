@@ -250,6 +250,29 @@ and bridge `/up` results before and after narrowing the synthetic login, and
 checks scoped app and audit access and the unchanged journal. This is database
 compatibility evidence, not staging or deployed Worker rollback qualification.
 
+The rehearsal also builds the current Kit server hook and the standalone Hono
+Worker with `__TWO_WEB_1033_COMPAT__` defined at build time. Both require the
+canonical web prefix through `1033` and accept the additive `1034`–`1037`
+transition. `1038` can remain absent. An applied web timestamp after a
+missing entry keeps that hole pending, and a malformed or unreadable ledger
+stays unready. `migration_ledger` reports only actual reads, so an optional
+absence never appears as an applied migration. Ordinary builds require the
+full journal.
+
+The fixture exercises the live event sync store before the expansion and
+after the login can read only the timestamp view. The protected deploy
+still requires the full candidate journal and uploads Hono. Qualification
+of a cutover build requires protected admission for its reviewed runtime
+requirements, an all-Hono Kit artifact with the existing queue and scheduled
+handlers, and a separately qualified Hono rollback version. Install and
+verify the timestamp view and its serving grants before revoking direct
+ledger access. A legacy Hono artifact that reads the ledger directly will
+fail readiness after that revocation.
+
+The member-erasure CLI reads `event_echo_members` in its dry run and erase
+transaction. The current CLI requires `1034`; verify the erasure path for
+the actual ledger before qualifying a cutover on `1033`.
+
 The runner also refuses at plan time while any reviewed object (the
 runtime-rights table/sequence census, plus the `drizzle` migration ledger and
 its sequence) is owned by a role the migrator cannot

@@ -93,6 +93,37 @@ describe("web migration journal comparison", () => {
       WEB_MIGRATIONS.length - 1,
     );
   });
+  it("requires the locked prefix and refuses holes in the cutover build", () => {
+    const index = (tag: string) =>
+      WEB_MIGRATIONS.findIndex((entry) => entry.tag.startsWith(`${tag}_`));
+    const baseline = index("1033") + 1;
+    const transition = index("1037") + 1;
+    const deferred = index("1038");
+    // Readiness excludes the two grandfathered 0000/0001 ledger rows.
+    expect(baseline).toBe(32);
+    expect(transition).toBe(36);
+    expect(deferred).toBe(36);
+    const laterRequired = applied.length - (deferred + 1);
+    const pendingAt = (end: number) => (laterRequired === 0 ? 0 : applied.length - end);
+    const newerForeignRow = { created_at: "9999999999999" };
+    expect(pendingWebMigrations(applied.slice(0, baseline))).toBe(5 + laterRequired);
+    for (let end = baseline; end <= transition; end += 1) {
+      expect(pendingWebMigrations([...applied.slice(0, end), newerForeignRow], true)).toBe(
+        pendingAt(end),
+      );
+    }
+    expect(pendingWebMigrations(applied.slice(0, baseline - 1), true)).toBe(
+      pendingAt(baseline) + 1,
+    );
+    expect(
+      pendingWebMigrations([...applied.slice(0, baseline), applied[baseline + 1]!], true),
+    ).toBe(laterRequired === 0 ? 1 : applied.length - baseline - 1);
+    expect(
+      pendingWebMigrations([...applied.slice(0, transition - 1), applied[deferred]!], true),
+    ).toBe(laterRequired + 1);
+    expect(pendingWebMigrations(applied, true)).toBe(0);
+    expect(() => pendingWebMigrations([{ created_at: null }], true)).toThrow();
+  });
   it.each([null, "", "bad", -1, 1.5, Infinity, "9007199254740993"])(
     "fails closed on malformed ledger timestamps (%s)",
     (created_at) => {
