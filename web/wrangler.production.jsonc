@@ -1,7 +1,6 @@
-// Source contract only, based on the retained draft #2092. Never deploy with
-// this file. Only a CI dry-run selects it; the root config still owns the
-// production route and upload. The adapter output path does not attest facade
-// installation. Production crons and consumers belong to the jobs Worker.
+// All-off production Kit version inputs. Protected deploy generates an upload
+// config from this source after verifying staging proof and the exact bytes.
+// The root config continues to own routes, triggers and ordinary Hono deploys.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "two-web-next-production",

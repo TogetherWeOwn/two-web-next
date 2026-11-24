@@ -5,6 +5,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      qualify_cutover:
+        description: "Exercise the exact cutover packet and Hono undo against a disposable database and isolated staging Worker"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -47,6 +52,8 @@ jobs:
           test "$result" -eq 42
 
   kit-fatal-proof:
+    outputs:
+      cutover_digest: ${{ steps.production-parity.outputs.digest }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -127,6 +134,7 @@ jobs:
         id: production-parity
         shell: bash
         env:
+          CUTOVER_PACKET_DIR: ${{ runner.temp }}/kit-cutover-packet
           PARITY_DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/two_web_next
         run: |
           out=artifacts/production-kit-parity
@@ -149,6 +157,15 @@ jobs:
           path: artifacts/production-kit-parity/
           if-no-files-found: error
           retention-days: 14
+      - name: Retain exact modules and assets for isolated cutover
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.qualify_cutover
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-cutover-packet-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/kit-cutover-packet/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
       - name: Verify loopback Postgres stopped
         if: always()
         shell: bash
@@ -158,3 +175,43 @@ jobs:
           docker stop "$POSTGRES_CONTAINER"
           test "$(docker inspect --format '{{.State.Running}}' "$POSTGRES_CONTAINER")" = false
           printf '%s\n' 'Disposable Postgres stopped; the runner removes job services at teardown'
+
+
+  isolated-cutover:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.qualify_cutover
+    needs: kit-fatal-proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: staging
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: |
+          npm ci --include=dev --ignore-scripts --no-audit --no-fund
+          npm ci --prefix web --include=dev --ignore-scripts --no-audit --no-fund
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: kit-cutover-packet-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/kit-cutover-packet
+      - name: Stage Hono, exercise Kit, and restore the exact Hono UUID
+        run: node ci/kit-cutover-staging.mjs "$RUNNER_TEMP/kit-cutover-packet" "$RUNNER_TEMP/kit-cutover-proof"
+        env:
+          CUTOVER_PACKET_DIGEST: ${{ needs.kit-fatal-proof.outputs.cutover_digest }}
+          KIT_CUTOVER_TEST_DATABASE_HOST: ${{ vars.KIT_CUTOVER_TEST_DATABASE_HOST }}
+          KIT_CUTOVER_TEST_DATABASE_URL: ${{ secrets.KIT_CUTOVER_TEST_DATABASE_URL }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_SEND_METRICS: "false"
+          CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: "false"
+      - name: Retain successful isolated cutover proof
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-cutover-proof-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/kit-cutover-proof/proof.json
+          if-no-files-found: error
+          retention-days: 30

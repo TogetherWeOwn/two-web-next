@@ -125,6 +125,12 @@ test("rehearsal and verification reject scratch drift and unclean parity", async
   for (const cutoverReadiness of [undefined, [], parity.cutoverReadiness.slice(1)]) {
     assert.throws(() => check(matched, { ...parity, cutoverReadiness }), /cutover readiness/);
   }
+  for (const override of [{ status: 503 }, { pending: 1 }]) {
+    const cutoverReadiness = parity.cutoverReadiness.map((row, i) =>
+      i === 0 ? { ...row, ...override } : row,
+    );
+    assert.throws(() => check(matched, { ...parity, cutoverReadiness }), /cutover readiness/);
+  }
   for (const outcome of [undefined, "module-mismatch", "refused", "wrangler-failed"]) {
     assert.throws(() => check({ ...matched, outcome }), /rehearsal refused/);
   }
