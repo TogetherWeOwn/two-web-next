@@ -23,7 +23,6 @@ on:
       expected_current_version_id:
         description: "Optional exact currently serving UUID. For Kit undo, always set the promoted Kit UUID"
         type: string
-        required: false
   workflow_call:
     inputs:
       environment:

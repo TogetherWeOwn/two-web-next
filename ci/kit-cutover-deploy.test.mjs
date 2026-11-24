@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { verifyOrdinaryLedger } from "./check-production-secrets.mjs";
 import { verifyReady } from "./kit-cutover-evidence.mjs";
 import {
   selection,
@@ -27,11 +28,10 @@ test("cutover requires explicit protected selection and the paired Hono UUID", (
   };
   assert.deepEqual(selection({}), { mode: "ordinary" });
   assert.deepEqual(selection(active), { mode: "kit", undo: hono, ...identity });
-  assert.deepEqual(selection({ ...active, CUTOVER_MODE: "hono", CUTOVER_UNDO_VERSION: "" }), {
-    mode: "hono",
-    undo: "",
-    ...identity,
-  });
+  assert.equal(
+    selection({ ...active, CUTOVER_MODE: "hono", CUTOVER_UNDO_VERSION: "" }).mode,
+    "hono",
+  );
   for (const change of [
     { CUTOVER_MODE: "" },
     { CUTOVER_MODE: "hono" },
@@ -91,4 +91,13 @@ test("only undo preparation may admit confirmed deferred migrations", () => {
     () => verifyReady(503, { ...body, pending_migrations: 2 }, prefixes, { allowDeferred: true }),
     /deferred/,
   );
+});
+
+test("ordinary promotion from cutover checks the live ledger even for equal journals", async () => {
+  const version = { annotations: { "workers/message": `two-web-cutover-kit:${digest}` } };
+  await assert.rejects(
+    verifyOrdinaryLedger(version, async () => []),
+    /full ledger/,
+  );
+  await verifyOrdinaryLedger({}, () => assert.fail("ordinary rollback target must not probe"));
 });

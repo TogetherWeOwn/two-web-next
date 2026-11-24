@@ -868,6 +868,7 @@ describe("workflow evidence wiring", () => {
       steps[smoke].env.CUTOVER_UPLOADED_VERSION,
       "${{ steps.cutover-upload.outputs.version_id }}",
     );
+    assert.equal(steps[proof].if, "env.CUTOVER_MODE != 'hono'");
     assert.match(steps[deployed].run, /worker-bundle-evidence.mjs deployed dist-production/);
     assert.equal(
       steps[deployed].env.PROMOTED_VERSION_ID,

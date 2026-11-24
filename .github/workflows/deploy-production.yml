@@ -19,11 +19,9 @@ on:
       cutover_pin:
         description: "Successful isolated staging run:attempt:manifest SHA-256 from its proof"
         type: string
-        required: false
       cutover_undo_version:
         description: "For kit only, the exact compatible Hono UUID already serving production"
         type: string
-        required: false
       migrations_applied:
         description: "Set to true only after db-migrate.yml (target production) applied the target's migrations out of band. Audited manual continuation past a ledger-unproven stop (ledger lacks target entries, ledger read failed, unusable target timestamp, or unknown live commit after 3 /up reads); automatic runs ignore it and halt on those stops unless the live ledger already proves every target web migration applied. The first promotion after the ledger signal ships needs one manual dispatch because the live Worker predates it"
         required: false
@@ -676,9 +674,10 @@ jobs:
           DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
           PROMOTED_VERSION_ID: ${{ steps.gradual.outputs.promoted-version-id }}
       - name: Upload production promotion proof
+        if: env.CUTOVER_MODE != 'hono'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ${{ env.CUTOVER_MODE == 'hono' && 'production-undo' || 'production-promotion' }}-${{ needs.preflight.outputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: production-promotion-${{ needs.preflight.outputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/promotion.json
           if-no-files-found: error
           retention-days: 30
