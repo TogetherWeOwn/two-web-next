@@ -4194,7 +4194,7 @@ test("Kit event writes preserve RSVP admission, scoped rank and native refusals"
     }
   } finally {
     await withSessionDb(async (sql) => {
-      await sql`delete from activity_log where causer_id = ${moderator.userId}`;
+      // The CI service teardown disposes of this test's append-only audit rows.
       await sql`delete from events where event_key in ${sql([key, otherKey])} or created_by = ${moderator.userId}`;
       await sql`delete from web_sessions where token_hash in ${sql(audience.map((who) => who.hash))}`;
       await sql`delete from web_throttle_hits where bucket = ${`rsvp-write:${member.userId}`}`;
