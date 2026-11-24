@@ -52,7 +52,7 @@ function fixture(hubEnv: LiveSocketEnv = config, sockets: WebSocket[] = []) {
   const storage = new Map();
   const kv = { get: storage.get.bind(storage), put: vi.fn(storage.set.bind(storage)) };
   const setAlarm = vi.fn<(until: number | Date) => Promise<void>>().mockResolvedValue(undefined);
-  const waitUntil = vi.fn();
+  const waitUntil = vi.fn<(work: Promise<unknown>) => void>();
   const txn = { getAlarm: async () => null, setAlarm };
   const transaction = (run: (storage: typeof txn) => Promise<void>) => run(txn);
   const ctx = {
@@ -101,14 +101,19 @@ function snapshot(seq: number, observedAt = new Date().toISOString()) {
 
 function guestSocket(until: number): WebSocket {
   let meta: unknown = { v: 1, ref: null, until, topics: null, nextResync: 0 };
+  let readyState: number = WebSocket.OPEN;
   return {
-    readyState: WebSocket.OPEN,
+    get readyState() {
+      return readyState;
+    },
     deserializeAttachment: () => structuredClone(meta),
     serializeAttachment: (value: unknown) => {
       meta = structuredClone(value);
     },
     send: vi.fn(),
-    close: vi.fn(),
+    close: vi.fn(() => {
+      readyState = WebSocket.CLOSED;
+    }),
   } as unknown as WebSocket;
 }
 
@@ -163,34 +168,63 @@ it.each([1, 2])("returns 503 if publishing cursor %i cannot be checkpointed", as
 });
 
 it.each([1, 2])(
-  "requires a new browser command after a failed public alarm at ingress cursor %i",
+  "recovers a guest subscription after a failed public alarm at ingress cursor %i",
   async (seq) => {
     const now = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-    const observedAt = new Date(now).toISOString();
+    const observation = now - 1_000;
+    const deadline = observation + 30_000;
+    const observedAt = new Date(observation).toISOString();
     const pull = vi.fn(async () => snapshot(1, observedAt));
     vi.stubGlobal("fetch", pull);
-    const { env, message, setAlarm, waitUntil } = fixture(publicConfig);
-    const socket = guestSocket(now + 60_000);
+    const guest = guestSocket(now + 60_000);
+    const requester = guestSocket(now + 60_000);
+    const { env, message, setAlarm, waitUntil, alarm, storage } = fixture(publicConfig, [
+      guest,
+      requester,
+    ]);
+    const unavailable = '{"v":1,"type":"unavailable","topic":"voice"}';
+    const baseline = '{"v":1,"type":"snapshot","topic":"voice","seq":1,"value":{"count":null}}';
     try {
       setAlarm.mockRejectedValueOnce(new Error("alarm write unavailable"));
       const send = async (cursor: number) => (await handleLiveIngress(signed(cursor), env))?.status;
       expect(await send(1)).toBe(204);
       expect(setAlarm).not.toHaveBeenCalled();
-      await message(socket, "subscribe");
-      expect(socket.close).toHaveBeenCalledWith(1011);
-      expect(await send(seq)).toBe(204);
-      expect(waitUntil).not.toHaveBeenCalled();
-      expect(setAlarm).toHaveBeenCalledOnce();
-      expect(pull).toHaveBeenCalledTimes(2);
+
+      // Establish a subscription while its independent browser pull is unavailable.
+      pull.mockResolvedValueOnce(new Response(null, { status: 503 }));
+      await message(guest, "subscribe");
+      expect(guest.send).toHaveBeenCalledExactlyOnceWith(unavailable);
 
       clock.mockReturnValue(now + 5_001);
-      pull.mockResolvedValueOnce(snapshot(seq, observedAt));
-      await message(guestSocket(now + 60_000), "subscribe");
-      expect(waitUntil).toHaveBeenCalledOnce();
+      await message(requester, "subscribe");
+      expect(requester.close).toHaveBeenCalledWith(1011);
+      expect(requester.send).toHaveBeenCalledExactlyOnceWith(unavailable);
+      expect(await send(seq)).toBe(204);
+      expect([...storage.values()]).toContainEqual({ applied: seq, minimum: seq });
+      expect(waitUntil).not.toHaveBeenCalled();
+      expect(setAlarm).toHaveBeenCalledExactlyOnceWith(deadline);
       expect(pull).toHaveBeenCalledTimes(3);
+      expect(guest.send).toHaveBeenCalledExactlyOnceWith(unavailable);
+
+      clock.mockReturnValue(now + 10_002);
+      pull.mockResolvedValueOnce(snapshot(seq, observedAt));
+      await message(guest, "resync");
+      expect(waitUntil).toHaveBeenCalledOnce();
+      await waitUntil.mock.calls[0]?.[0];
+      expect(pull).toHaveBeenCalledTimes(4);
       expect(setAlarm).toHaveBeenCalledTimes(2);
       expect(setAlarm.mock.calls[1]).toEqual(setAlarm.mock.calls[0]);
+      const recovered = [[unavailable], [unavailable], [baseline]];
+      expect(vi.mocked(guest.send).mock.calls).toEqual(recovered);
+
+      clock.mockReturnValue(deadline - 1);
+      await alarm();
+      expect(vi.mocked(guest.send).mock.calls).toEqual(recovered);
+      clock.mockReturnValue(deadline);
+      await alarm();
+      expect(vi.mocked(guest.send).mock.calls).toEqual([...recovered, [unavailable]]);
+      expect(guest.close).not.toHaveBeenCalled();
     } finally {
       clock.mockRestore();
     }
