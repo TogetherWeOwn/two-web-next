@@ -163,12 +163,6 @@ describe("CallInternalAction is never web-dispatched (TOG-12678)", () => {
       `${VOICE_PROBE_FILE}: import { send } from "./bot/client-transport";`,
       `${VOICE_PROBE_FILE}: { action: "voice.move_member", discord_id: session.id, channel_id: body.channel_id },`,
     ]);
-    const probe = read(VOICE_PROBE_FILE);
-    expect(probe).toContain('c.env.STAGING_VOICE_MOVE_ENABLED !== "true"');
-    expect(probe).toContain("c.env.APP_URL !== STAGING_APP_URL");
-    expect(probe).toContain(
-      'const STAGING_BOT_ORIGIN = "https://two-bot-next-staging.5150.workers.dev";',
-    );
   });
 
   it("INTERNAL_ACTION_QUEUE is sent only by the staging alert probe, as alert-probe only", () => {

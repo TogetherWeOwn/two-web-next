@@ -151,16 +151,13 @@ normal cache policy.
 
 ### Staging voice self-move
 
-`POST /__probe/voice-move` requires the staging `Origin`, the dedicated account's current
-Discord member session, and JSON with only `channel_id` under the 4 KiB action cap.
-Web signs one keyless request with the session's ID. Set `BOT_ENDPOINT_URL` to the exact
-staging Bot origin and use the receiver's `BOT_KEY_ID` and `BOT_SHARED_SECRET`. A `moved`
-receipt lacking the other fixture channel as source returns unconfirmed 502 without retry.
+`POST /__probe/voice-move` takes JSON with only `channel_id` (4 KiB cap) and requires the staging
+`Origin` and dedicated Discord member's current session. Web signs once using the session ID and
+staging Bot signer. A `moved` reply from outside the fixture returns unconfirmed 502 without retry.
 
-The probe defaults off. Live qualification needs the dedicated account, two fixture channels,
-verified occupancy and Connect permissions, and an exclusive staging window with the Bot's
-[lease-scoped opt-in](https://github.com/TogetherWeOwn/two-bot-next/pull/2427). At teardown,
-clear the Web flag and fixture settings and verify Web refusal and Bot OFF after lease release.
+Live qualification needs the dedicated account, two fixture channels, verified occupancy and
+Connect permissions, and an exclusive staging window with the [Bot lease opt-in](https://github.com/TogetherWeOwn/two-bot-next/pull/2427).
+At teardown, clear the Web settings and verify Web refusal and Bot OFF after lease release.
 
 ### `SESSION_SECRET` strength and rotation
 

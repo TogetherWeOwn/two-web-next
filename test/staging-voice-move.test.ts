@@ -11,7 +11,6 @@ import { cookieFor, env, MEMBER, MODERATOR } from "./helpers/member-data";
 const move = contract.verbs["voice.move_member"];
 const { discord_id: memberId, channel_id: target } = move.request;
 const source = move.results.moved.from_channel_id;
-const fixtureMember = { ...MEMBER, userId: memberId };
 const botUrl = "https://two-bot-next-staging.5150.workers.dev";
 const secret = "fixture-hmac-key-for-staging-voice-move";
 const requestId = move.refusals.discord_unavailable.body.request_id;
@@ -24,13 +23,18 @@ let cookie: string;
 beforeEach(async () => {
   now = Date.now();
   store = createMemorySessionStore(() => now);
-  cookie = await cookieFor(store, fixtureMember);
+  cookie = await cookieFor(store, { ...MEMBER, userId: memberId });
   outbound.mockReset().mockRejectedValue(new Error("fixture has no external network"));
   vi.stubGlobal("fetch", outbound);
 });
 afterEach(() => vi.unstubAllGlobals());
 
-function post(bind: Partial<Env> = {}, body = { channel_id: target }, bearer = cookie) {
+function post(
+  bind: Partial<Env> = {},
+  body = { channel_id: target },
+  bearer = cookie,
+  origin?: string | null,
+) {
   const bindings = {
     ...env,
     APP_URL: STAGING_APP_URL,
@@ -44,19 +48,18 @@ function post(bind: Partial<Env> = {}, body = { channel_id: target }, bearer = c
     BOT_KEY_ID: "voice-fixture",
     ...bind,
   };
+  const headers: Record<string, string> = { cookie: bearer, "content-type": "application/json" };
+  if (origin === null) headers["sec-fetch-site"] = "same-origin";
+  else headers.origin = origin ?? bindings.APP_URL;
   return app.request(
     "/__probe/voice-move",
-    {
-      method: "POST",
-      body: JSON.stringify(body),
-      headers: { origin: bindings.APP_URL, cookie: bearer, "content-type": "application/json" },
-    },
+    { method: "POST", body: JSON.stringify(body), headers },
     bindings,
   );
 }
 
-async function botReply(response: Response, channel = target) {
-  outbound.mockResolvedValueOnce(response);
+async function botReply(response: Response | null, channel = target) {
+  if (response) outbound.mockResolvedValueOnce(response);
   const result = await post({}, { channel_id: channel });
   expect(outbound).toHaveBeenCalledTimes(1);
   return result;
@@ -91,27 +94,33 @@ it.each(Object.values(move.results))("projects the mirrored $outcome result", as
   expect(await res.json()).toEqual(success(result));
 });
 
-it.each(Object.values(move.refusals))(
-  "projects a $status Bot refusal",
-  async ({ status, body }) => {
-    const input = { ...body, error: { ...body.error, message: "provider-text" } };
-    const res = await botReply(Response.json(input, { status, headers: { "Retry-After": "16" } }));
-    expect(res.status).toBe(status);
-    expect(res.headers.get("retry-after")).toBe(status === 429 ? "16" : null);
-    expect(await res.json()).toEqual(body);
-  },
-);
+it.each(Object.values(move.refusals))("projects $status refusal", async ({ status, body }) => {
+  const input = { ...body, error: { ...body.error, message: "provider-text" } };
+  const res = await botReply(Response.json(input, { status, headers: { "Retry-After": "16" } }));
+  expect(res.status).toBe(status);
+  expect(res.headers.get("retry-after")).toBe(status === 429 ? "16" : null);
+  expect(await res.json()).toEqual(body);
+});
 
-const limited = move.refusals.rate_limited.body;
+const { body: limited } = move.refusals.rate_limited;
+const moved = success(move.results.moved);
 it.each([
-  [429, { ...limited, ok: "false" }],
-  [429, { ...limited, error: { code: "rate_limited", message: "request refused" } }],
-  [502, success(move.results.moved)],
-  [200, success({ outcome: "moved", from_channel_id: "100000000000000013" })],
-] as const)("leaves an invalid %s Bot receipt unconfirmed", async (status, body) => {
-  const res = await botReply(Response.json(body, { status }));
+  Response.json({ ...limited, ok: "false" }, { status: 429 }),
+  Response.json({ ...limited, error: { ...limited.error, retryable: undefined } }, { status: 429 }),
+  Response.json(moved, { status: 502 }),
+  Response.json(success({ outcome: "moved", from_channel_id: "100000000000000013" })),
+  Response.json(moved, { headers: { "Idempotent-Replay": "true" } }),
+  Response.redirect("https://elsewhere.example", 307),
+  null,
+])("leaves invalid Bot replies and transport loss unconfirmed (%#)", async (response) => {
+  const res = await botReply(response);
   expect(res.status).toBe(502);
   expect(await res.json()).toEqual({ error: "bot_unavailable" });
+});
+
+it.each([null, "null", "https://elsewhere.example"])("refuses Origin %s", async (origin) => {
+  expect((await post({}, undefined, cookie, origin)).status).toBe(403);
+  expect(outbound).not.toHaveBeenCalled();
 });
 
 it.each([
