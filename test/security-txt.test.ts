@@ -2,10 +2,10 @@
 import { readFileSync } from "node:fs";
 import { URL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import app from "./app";
 import type { Env } from "../src/env";
 import { SECURITY_HEADERS } from "../src/headers";
 import { SECURITY_TXT_EXPIRES } from "../src/security-txt";
+import { requestApp } from "./helpers/fetch-app";
 
 const ORIGIN = "https://next.example.test";
 const CONTACT = "https://github.com/TogetherWeOwn/two-web-next/security/advisories/new";
@@ -24,7 +24,7 @@ const env: Env = {
 };
 
 const getSecurityTxt = (bindings: Env = env) =>
-  app.request("/.well-known/security.txt", {}, bindings);
+  requestApp("/.well-known/security.txt", {}, bindings);
 
 const expiresLine = (body: string) => body.split("\n").find((line) => line.startsWith("Expires: "));
 
@@ -98,7 +98,7 @@ describe("/.well-known/security.txt (RFC 9116)", () => {
   });
 
   it("answers HEAD with the same headers and an empty body", async () => {
-    const res = await app.request("/.well-known/security.txt", { method: "HEAD" }, env);
+    const res = await requestApp("/.well-known/security.txt", { method: "HEAD" }, env);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("text/plain; charset=utf-8");
     expect(res.headers.get("cache-control")).toBe("public, max-age=3600");
@@ -124,9 +124,9 @@ describe("/.well-known/security.txt (RFC 9116)", () => {
   });
 
   it("stays out of the sitemap and leaves robots.txt unchanged", async () => {
-    const sitemap = await (await app.request("/sitemap_index.xml", {}, env)).text();
+    const sitemap = await (await requestApp("/sitemap_index.xml", {}, env)).text();
     expect(sitemap).not.toContain("security.txt");
-    const robots = await (await app.request("/robots.txt", {}, env)).text();
+    const robots = await (await requestApp("/robots.txt", {}, env)).text();
     expect(robots).toBe(`User-agent: *\nDisallow:\nSitemap: ${ORIGIN}/sitemap_index.xml\n`);
   });
 });
