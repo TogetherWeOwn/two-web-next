@@ -5,12 +5,8 @@ type PublicVoiceCount = { count: number | null };
 function parseCount(value: unknown): PublicVoiceCount {
   if (value && typeof value === "object" && Object.keys(value).length === 1 && "count" in value) {
     const { count } = value;
-    if (
-      count === null ||
-      (typeof count === "number" && Number.isSafeInteger(count) && count >= 5)
-    ) {
-      return { count };
-    }
+    if (count === null) return { count };
+    if (typeof count === "number" && Number.isSafeInteger(count) && count >= 5) return { count };
   }
   throw new Error("Invalid public voice count");
 }

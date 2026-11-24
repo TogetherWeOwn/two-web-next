@@ -14,9 +14,12 @@ class FakeSocket extends EventTarget {
     this.dispatchEvent(new Event("open"));
     return this;
   }
-  receive(...frames: object[]) {
-    for (const frame of frames)
-      this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(frame) }));
+  receive(...frames: (object | string)[]) {
+    for (const frame of frames) {
+      const data =
+        typeof frame === "string" || frame instanceof ArrayBuffer ? frame : JSON.stringify(frame);
+      this.dispatchEvent(new MessageEvent("message", { data }));
+    }
   }
 }
 
@@ -48,7 +51,8 @@ it("applies the hub's public revisions and retains a quiet baseline until server
   const socket = sockets[0]!.open();
   expect(socket.url).toBe("wss://example.test/api/discord-live/v1");
   expect(socket.send.mock.calls).toEqual([['{"v":1,"type":"subscribe","topics":["voice"]}']]);
-  socket.receive(frames.covering, frames.initial, frames.five, frames.five, frames.suppressed);
+  const initialAtLimit = JSON.stringify(frames.initial).padEnd(128);
+  socket.receive(frames.covering, initialAtLimit, frames.five, frames.five, frames.suppressed);
   vi.advanceTimersByTime(31_000);
   expect(seen.mock.calls.slice(1)).toEqual([
     [{ value: { count: null }, source: "live" }],
@@ -100,8 +104,7 @@ it("retires a timed-out command and ignores its late frames and poll", async () 
   const { seen, start } = fixture(poll);
   const stop = start();
   const first = sockets[0]!.open();
-  first.receive(frames.initial);
-  first.receive(frames.withdrawal);
+  first.receive(frames.initial, frames.withdrawal);
   await vi.advanceTimersByTimeAsync(2_000);
   first.receive(frames.withdrawal);
   expect(seen).toHaveBeenLastCalledWith({ value: { count: null }, source: "poll" });
@@ -126,17 +129,20 @@ it("retires a timed-out command and ignores its late frames and poll", async () 
 });
 
 it.each([
-  { seq: 0 },
-  { seq: 1025 },
-  { stream: "obsolete" },
-  { value: { count: 4 } },
-  { value: { count: 5, rooms: [] } },
-])("fails closed on invalid public data %j", (overrides) => {
+  { ...frames.five, seq: 0 },
+  { ...frames.five, seq: 1025 },
+  { ...frames.five, stream: "obsolete" },
+  { ...frames.five, value: { count: 4 } },
+  { ...frames.five, value: { count: 5, rooms: [] } },
+  JSON.stringify(frames.five).padEnd(129),
+  '{"v":1,',
+  new ArrayBuffer(8),
+])("fails closed on invalid public data %j", (frame) => {
   const { seen, start } = fixture();
   const stop = start();
   const socket = sockets[0]!.open();
   socket.receive(frames.initial);
-  socket.receive({ ...frames.five, ...overrides });
+  socket.receive(frame);
   expect(seen).toHaveBeenLastCalledWith({ value: null, source: "stale" });
   expect(socket.close).toHaveBeenCalledOnce();
   stop();
