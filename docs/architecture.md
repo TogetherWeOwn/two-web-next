@@ -328,6 +328,7 @@ exactly once.
 | `src/jobs-worker.ts` | jobs |
 | `src/join/` | join |
 | `src/kit-access-sink.ts` | profiles |
+| `src/kit-auth-status.ts` | auth |
 | `src/kit-content-chunk.ts` | entry |
 | `src/kit-errors.ts` | entry |
 | `src/kit-event-states.ts` | events |
