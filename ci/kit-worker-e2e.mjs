@@ -737,6 +737,21 @@ export default {
     ),
   );
 
+  if (!args.length) {
+    const profile = await startWorker("kit-profile-write", worker, assets, secret, {
+      KIT_ROUTE_PROFILE_WRITES: "true",
+    });
+    await listen(profile.child, profile.origin, () => profile.log);
+    const { assertKitProfileWriteParity } = await import("./fixtures/kit-profile-write-parity.mjs");
+    await assertKitProfileWriteParity({
+      kit: profile.origin,
+      off: kitWithSession.origin,
+      hono: honoWithSession.origin,
+      databaseUrl,
+      secret,
+    });
+  }
+
   if (args.length) {
     const entry = join(scratch, "kit-admin.mjs");
     const vars = await prepareAdminFixture(worker, entry);

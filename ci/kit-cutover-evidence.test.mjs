@@ -8,6 +8,7 @@ import {
   STAGING_WORKER,
   WranglerOperationError,
   ledgerPrefixes,
+  productionUploadConfig,
   sourceInputs,
   verifyPackage,
   verifyReady,
@@ -139,6 +140,11 @@ test("isolated cutover proof requires both exact versions and six healthy transi
     bindingCheck: "isolated-and-all-off",
   };
   verifyStagingProof(proof, identity);
+  const ember = { ...proof, bindingCheck: "isolated-and-ember" };
+  verifyStagingProof(ember, { ...identity, mode: "ember" });
+  verifyStagingProof(ember, { ...identity, mode: "hono" });
+  assert.throws(() => verifyStagingProof(ember, { ...identity, mode: "kit" }), /profile/);
+  assert.throws(() => verifyStagingProof(proof, { ...identity, mode: "ember" }), /profile/);
   assert.throws(() => verifyStagingProof({ ...proof, kitReadinessSamples: 5 }, identity));
   assert.throws(() => verifyStagingProof({ ...proof, bindingCheck: "unobserved" }, identity));
   for (const change of [{ status: 503 }, { pending: 1 }, { version: kit }, { smoke: "failed" }]) {
@@ -159,6 +165,22 @@ test("isolated cutover proof requires both exact versions and six healthy transi
     () => verifyStagingProof({ ...proof, checks: checks.slice(0, 3) }, identity),
     /must prove/,
   );
+});
+
+test("Ember cutover configuration opts in only the Ember documents", () => {
+  const allOff = productionUploadConfig("kit", inputs);
+  assert.equal(allOff.vars.KIT_ROUTE_EMBER_PAGES, "false");
+  const vars = {
+    ...allOff.vars,
+    KIT_ROUTE_EMBER_PAGES: "true",
+    KIT_ROUTE_AUTH: "false",
+    KIT_ROUTE_FEEDS: "false",
+    KIT_ROUTE_SEO: "false",
+    KIT_ROUTE_SECURITY_TXT: "false",
+    DISCORD_LIVE_SOCKET_ENABLED: "false",
+  };
+  assert.deepEqual(productionUploadConfig("kit", inputs, true), { ...allOff, vars });
+  assert.throws(() => productionUploadConfig("hono", inputs, true), /requires the Kit artifact/);
 });
 
 test("isolated database admission fixes the host, database, owner, and run scope", async () => {

@@ -163,6 +163,11 @@
       "reads": "member profile plus the viewer's own games row for the shared-games match (audited)"
     },
     {
+      "route": "PATCH /members/:user",
+      "binding": "web/src/routes/members/[user]/+server.ts",
+      "reads": "own profile after signed member and owner admission"
+    },
+    {
       "route": "GET /leaderboards/members",
       "binding": "web/src/routes/leaderboards/members/+page.server.ts",
       "reads": "member ranking rows (audited)"
