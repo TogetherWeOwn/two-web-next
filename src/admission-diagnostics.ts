@@ -3,7 +3,7 @@ import { safeRequestId } from "./request-log";
 
 // Fixed categories only: even an error name/constructor can carry member data
 // or a throwing getter. Diagnostics must not turn an accepted fallback into 500.
-function admissionExceptionClass(err: unknown): string {
+export function admissionExceptionClass(err: unknown): string {
   try {
     if (err instanceof TypeError) return "TypeError";
     if (err instanceof RangeError) return "RangeError";
