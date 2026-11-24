@@ -48,11 +48,12 @@ export async function compileKitFixture({ fixture, props, ssrOnly = false }) {
     `data:text/javascript;base64,${Buffer.from(ssr).toString("base64")}`
   );
   if (ssrOnly) return { renderFixture, css };
-  const { body, head } = renderFixture(props);
-  const fixtureProps = `JSON.parse(${JSON.stringify(JSON.stringify(props ?? {}))})`;
+  // Hydrate from the same JSON projection rendered by SSR.
+  const fixtureProps = JSON.stringify(props ?? {});
+  const { body, head } = renderFixture(JSON.parse(fixtureProps));
   const js = await bundle(
     "client",
-    `import { hydrate } from 'svelte'; import Fixture from ${modulePath}; hydrate(Fixture, { target: document.getElementById('fixture'), props: ${fixtureProps}, recover: false }); document.documentElement.dataset.hydrated = 'true';`,
+    `import { hydrate } from 'svelte'; import Fixture from ${modulePath}; hydrate(Fixture, { target: document.getElementById('fixture'), props: JSON.parse(${JSON.stringify(fixtureProps)}), recover: false }); document.documentElement.dataset.hydrated = 'true';`,
   );
   return { body, head, css, js };
 }
