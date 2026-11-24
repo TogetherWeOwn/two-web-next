@@ -27,6 +27,7 @@ import {
   type Sql,
 } from "../src/sessions";
 import type { EnvWithThrottle } from "../src/throttle";
+import { mcpListEventsArgs, mcpToolCall } from "./helpers/machine-requests";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import { parseJsonLines } from "./helpers/parse-json-lines";
 import { validatePublicSchema } from "./helpers/public-api-schema";
@@ -197,7 +198,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
   const notifyInitialized = () => post({ jsonrpc: "2.0", method: "notifications/initialized" });
 
   const callTool = (name: string, args: Record<string, unknown>, id: number | string = 3) =>
-    post({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } });
+    post(mcpToolCall(name, args, id));
 
   it("completes the legacy-stateless handshake", async () => {
     const hello = await initialize();
@@ -251,7 +252,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
     await seed(45, { status: "draft", title: "Hidden draft" });
     await initialize();
     await notifyInitialized();
-    const called = await callTool("list_events", { per_page: 20, page: 1 });
+    const called = await callTool("list_events", mcpListEventsArgs);
     expect(called.status).toBe(200);
     const result = called.messages[0]!["result"] as Record<string, unknown>;
     expect(result["isError"]).toBeUndefined();
