@@ -179,7 +179,10 @@ it.each([1, 2])(
     vi.stubGlobal("fetch", pull);
     const guest = guestSocket(now + 60_000);
     const requester = guestSocket(now + 60_000);
-    const { env, message, setAlarm, waitUntil, alarm } = fixture(publicConfig, [guest, requester]);
+    const { env, message, setAlarm, waitUntil, alarm, storage } = fixture(publicConfig, [
+      guest,
+      requester,
+    ]);
     const unavailable = '{"v":1,"type":"unavailable","topic":"voice"}';
     const baseline = '{"v":1,"type":"snapshot","topic":"voice","seq":1,"value":{"count":null}}';
     try {
@@ -198,6 +201,7 @@ it.each([1, 2])(
       expect(requester.close).toHaveBeenCalledWith(1011);
       expect(requester.send).toHaveBeenCalledExactlyOnceWith(unavailable);
       expect(await send(seq)).toBe(204);
+      expect([...storage.values()]).toContainEqual({ applied: seq, minimum: seq });
       expect(waitUntil).not.toHaveBeenCalled();
       expect(setAlarm).toHaveBeenCalledExactlyOnceWith(deadline);
       expect(pull).toHaveBeenCalledTimes(3);
