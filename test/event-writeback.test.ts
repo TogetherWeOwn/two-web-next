@@ -982,6 +982,8 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     await enqueueEventSync(env, eventKey, "published");
     const original = sent[0]!.body;
     const bot = botDouble();
+    const events = pgEventStore(sql, { observeActiveClaims: true });
+    const dependencies = { ...deps(bot), events };
     bot.upsertEvent.mockResolvedValue({
       ok: false,
       code: "rate_limited",
@@ -992,7 +994,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
       retryAfterSeconds: 3600,
     });
     const before = Date.now();
-    await consume({ messages: [delivery(original)] }, deps(bot));
+    await consume({ messages: [delivery(original)] }, dependencies);
     const pending = (await pgEventStore(sql).pendingSync(eventKey))!;
     expect(pending.requestAttempts).toBe(1);
     expect(pending.nextAttemptAt!.getTime()).toBeGreaterThanOrEqual(before + 3600_000);
@@ -1006,7 +1008,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
       });
     expect(sent).toHaveLength(1);
     const early = delivery(original, 2);
-    await consume({ messages: [early] }, deps(bot));
+    await consume({ messages: [early] }, dependencies);
     expect(early.retry.mock.calls[0]![0]!.delaySeconds).toBeGreaterThan(3500);
     expect(bot.upsertEvent).toHaveBeenCalledOnce();
     for (let requestAttempt = 2; requestAttempt <= 6; requestAttempt++) {
@@ -1019,20 +1021,20 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
       });
       const recovered = sent.at(-1)!.body;
       expect(recovered.idempotencyKey).toBe(original.idempotencyKey);
-      await consume({ messages: [delivery(recovered, 1)] }, deps(bot));
+      await consume({ messages: [delivery(recovered, 1)] }, dependencies);
       expect((await pgEventStore(sql).pendingSync(eventKey))!.requestAttempts).toBe(requestAttempt);
     }
     expect(bot.upsertEvent).toHaveBeenCalledTimes(6); // carrier attempts=1 never resets request budget
-    const lastClaim = (await pgEventStore(sql).pendingSync(eventKey))!.claimStartedAt!;
+    const lastClaim = (await events.pendingSync(eventKey))!.claimStartedAt!;
     const recent = delivery(original, 2);
-    await consume({ messages: [recent] }, { ...deps(bot), now: () => lastClaim });
+    await consume({ messages: [recent] }, { ...dependencies, now: () => lastClaim });
     expect(recent.retry).toHaveBeenCalledOnce();
     expect(recent.ack).not.toHaveBeenCalled();
     expect(bot.upsertEvent).toHaveBeenCalledTimes(6);
     const last = delivery(original, 2);
     await consume(
       { messages: [last] },
-      { ...deps(bot), now: () => new Date(lastClaim.getTime() + 60_000) },
+      { ...dependencies, now: () => new Date(lastClaim.getTime() + 60_000) },
     );
     expect(last.ack).toHaveBeenCalledOnce();
     expect(bot.upsertEvent).toHaveBeenCalledTimes(6);
@@ -1145,7 +1147,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
   it("a claim abandoned before result settlement cannot regain eligibility after a lease", async () => {
     await seed();
     const start = new Date("2099-01-01T00:00:00Z");
-    const events = pgEventStore(sql);
+    const events = pgEventStore(sql, { observeActiveClaims: true });
     const key = crypto.randomUUID();
     const prepared = (await events.prepareSync(eventKey, key, start))!;
     if ("waiting" in prepared) throw new Error("unexpected pending conflict");
@@ -1157,6 +1159,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
       claimStartedAt: start,
     });
     expect((await events.pendingSync(eventKey))?.claimStartedAt).toEqual(start);
+    expect(await pgEventStore(sql).pendingSync(eventKey)).not.toHaveProperty("claimStartedAt");
     const bot = botDouble();
     expect(
       await handleSyncEvent({ eventKey, idempotencyKey: key }, 1, {

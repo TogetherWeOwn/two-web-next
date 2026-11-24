@@ -93,6 +93,8 @@ export type SyncAttempt = {
 export type StaleEventKeysPage = { keys: string[]; deferred: number };
 
 export interface EventStore {
+  /** Opt-in claim observation for fixtures. Queue wiring leaves this off. */
+  observeActiveClaims?: true;
   /** Snapshot at first attempt, not dispatch. Retries return the persisted request. */
   prepareSync(
     eventKey: string,

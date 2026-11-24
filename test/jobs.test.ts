@@ -126,19 +126,21 @@ describe("retry constants match the Laravel originals (two-web @ 3965a6e8)", () 
 
 describe("SyncEventToDiscord", () => {
   it.each([
-    { requestAttempts: 6, carrier: 1, age: 59_999, retry: true },
-    { requestAttempts: 1, carrier: 6, age: 59_999, retry: true },
-    { requestAttempts: 6, carrier: 6, age: 60_000, retry: false },
-    { requestAttempts: 6, carrier: 6, age: null, retry: false },
+    { requestAttempts: 6, carrier: 1, age: 59_999, observe: true, retry: true },
+    { requestAttempts: 1, carrier: 6, age: 59_999, observe: true, retry: true },
+    { requestAttempts: 6, carrier: 6, age: 60_000, observe: true, retry: false },
+    { requestAttempts: 6, carrier: 6, age: null, observe: true, retry: false },
+    { requestAttempts: 6, carrier: 6, age: 59_999, observe: false, retry: false },
   ])(
-    "protects only fresh active owners at the retry caps: $requestAttempts/$carrier/$age",
-    async ({ requestAttempts, carrier, age, retry }) => {
+    "checks active owners at retry caps: $requestAttempts/$carrier/$age (opt-in $observe)",
+    async ({ requestAttempts, carrier, age, observe, retry }) => {
       const clock = new Date("2099-01-01T00:01:00Z");
       const claimSync = vi.fn<EventStore["claimSync"]>();
       const deferSync = vi.fn<EventStore["deferSync"]>();
       const completeSync = vi.fn<EventStore["completeSync"]>();
       const failSync = vi.fn<EventStore["failSync"]>();
       const events = store({
+        observeActiveClaims: observe ? true : undefined,
         prepareSync: async (_eventKey, idempotencyKey, mirroredAt) => ({
           eventKey: "e1",
           idempotencyKey,

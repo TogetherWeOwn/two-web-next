@@ -351,69 +351,89 @@ describe("queue carrier lease ownership", () => {
     },
   );
 
-  it.each([6, 7])("rechecks ownership before retiring carrier delivery %i", async (delivery) => {
-    const { lock } = memoryLock();
-    const depth = ledger();
-    const leaseToken = await lock.acquire(key, 300);
-    const body: SyncMessage = {
-      kind: "sync-event",
-      eventKey,
-      idempotencyKey: "shared",
-      leaseToken: leaseToken!,
-      jobId: "loser",
-    };
-    const prepared = (await events.prepareSync(
-      eventKey,
-      body.idempotencyKey,
-      new Date(),
-    )) as SyncAttempt;
-    for (let i = 0; i < 5; i++) {
-      const current = (await events.prepareSync(
+  it.each([
+    { delivery: 6, read: "found" },
+    { delivery: 7, read: "found" },
+    { delivery: 6, read: "failed" },
+    { delivery: 7, read: "failed" },
+  ])(
+    "rechecks ownership before retiring carrier delivery $delivery ($read read)",
+    async ({ delivery, read }) => {
+      const { lock } = memoryLock();
+      const depth = ledger();
+      const leaseToken = await lock.acquire(key, 300);
+      const body: SyncMessage = {
+        kind: "sync-event",
+        eventKey,
+        idempotencyKey: "shared",
+        leaseToken: leaseToken!,
+        jobId: "loser",
+      };
+      const prepared = (await events.prepareSync(
         eventKey,
         body.idempotencyKey,
         new Date(),
       )) as SyncAttempt;
-      const claimed = await events.claimSync(current, new Date());
-      await events.deferSync(claimed!, new Date());
-    }
-    let releaseLoser!: () => void;
-    const loserGate = new Promise<void>((resolve) => {
-      releaseLoser = resolve;
-    });
-    let preparedLoser!: () => void;
-    const loserPrepared = new Promise<void>((resolve) => {
-      preparedLoser = resolve;
-    });
-    const observed = {
-      ...events,
-      prepareSync: vi.fn(async () => {
-        preparedLoser();
-        await loserGate;
-        return { ...prepared, requestAttempts: 5 };
-      }),
-    };
-    const send = vi.fn(async () => success);
-    const claim = vi.spyOn(observed, "claimSync");
-    const loser = carrier(body, delivery);
-    const run = consume(
-      { messages: [loser] },
-      { bot: { upsertEvent: send } as unknown as BotClient, events: observed, lock, ledger: depth },
-    );
-    await loserPrepared;
-    const winner = await events.claimSync({ ...prepared, requestAttempts: 5 }, new Date());
-    expect(winner?.requestAttempts).toBe(6);
-    releaseLoser();
-    await run;
-    expect(loser.retry).toHaveBeenCalledWith({ delaySeconds: SYNC_EVENT.uniqueForSeconds });
-    expect(loser.ack).not.toHaveBeenCalled();
-    expect(depth.failed).not.toHaveBeenCalled();
-    expect(lock.release).not.toHaveBeenCalled();
-    expect(send).not.toHaveBeenCalled();
-    if (delivery === 7) expect(claim).not.toHaveBeenCalled();
-    else expect(claim).toHaveBeenCalledOnce();
-  });
+      for (let i = 0; i < 5; i++) {
+        const current = (await events.prepareSync(
+          eventKey,
+          body.idempotencyKey,
+          new Date(),
+        )) as SyncAttempt;
+        const claimed = await events.claimSync(current, new Date());
+        await events.deferSync(claimed!, new Date());
+      }
+      let releaseLoser!: () => void;
+      const loserGate = new Promise<void>((resolve) => {
+        releaseLoser = resolve;
+      });
+      let preparedLoser!: () => void;
+      const loserPrepared = new Promise<void>((resolve) => {
+        preparedLoser = resolve;
+      });
+      const observed = {
+        ...events,
+        observeActiveClaims: true as const,
+        pendingSync: vi.fn(async (key: string) => {
+          if (read === "failed") throw new Error("fixture ownership read unavailable");
+          return events.pendingSync(key);
+        }),
+        prepareSync: vi.fn(async () => {
+          preparedLoser();
+          await loserGate;
+          return { ...prepared, requestAttempts: 5 };
+        }),
+      };
+      const send = vi.fn(async () => success);
+      const claim = vi.spyOn(observed, "claimSync");
+      const loser = carrier(body, delivery);
+      const run = consume(
+        { messages: [loser] },
+        {
+          bot: { upsertEvent: send } as unknown as BotClient,
+          events: observed,
+          lock,
+          ledger: depth,
+        },
+      );
+      await loserPrepared;
+      const winner = await events.claimSync({ ...prepared, requestAttempts: 5 }, new Date());
+      expect(winner?.requestAttempts).toBe(6);
+      releaseLoser();
+      await run;
+      expect(loser.retry).toHaveBeenCalledWith({ delaySeconds: SYNC_EVENT.uniqueForSeconds });
+      expect(loser.ack).not.toHaveBeenCalled();
+      expect(depth.failed).not.toHaveBeenCalled();
+      expect(lock.release).not.toHaveBeenCalled();
+      expect(send).not.toHaveBeenCalled();
+      expect(observed.pendingSync).toHaveBeenCalledExactlyOnceWith(eventKey);
+      if (delivery === 7) expect(claim).not.toHaveBeenCalled();
+      else expect(claim).toHaveBeenCalledOnce();
+    },
+  );
 
   it("protection redelivery cannot claim after the owner commits a retry", async () => {
+    events.observeActiveClaims = true;
     const { lock } = memoryLock();
     const depth = ledger();
     const firstLease = await lock.acquire(key, 300);
