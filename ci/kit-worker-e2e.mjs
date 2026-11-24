@@ -676,22 +676,18 @@ export default {
     return fromHono;
   }
 
+  const secret = FIXTURE_SECRETS.SESSION_SECRET;
+  const honoWithSession = await startWorker(
+    "hono-session",
+    join(repo, "src/worker.ts"),
+    join(repo, "public"),
+    secret,
+  );
+  await listen(honoWithSession.child, honoWithSession.origin, () => honoWithSession.log);
+
   if (args.length) {
-    // Only the data-redirect proof needs signed cookies. Leave the existing
-    // method-parity pair in its original, no-session configuration.
-    const secret = FIXTURE_SECRETS.SESSION_SECRET;
     const kitWithSession = await startWorker("kit-session", worker, assets, secret);
-    const honoWithSession = await startWorker(
-      "hono-session",
-      join(repo, "src/worker.ts"),
-      join(repo, "public"),
-      secret,
-    );
-    await Promise.all(
-      [kitWithSession, honoWithSession].map((instance) =>
-        listen(instance.child, instance.origin, () => instance.log),
-      ),
-    );
+    await listen(kitWithSession.child, kitWithSession.origin, () => kitWithSession.log);
 
     async function observeDataRedirect(worker, path) {
       const response = await fetch(`${worker.origin}${path}`, { redirect: "manual" });
@@ -857,7 +853,7 @@ export default {
   console.log("PASS generated Worker reserved method/path parity with API families off");
 
   await assertStaticFeedParity({
-    hono,
+    hono: honoWithSession,
     kit,
     databaseUrl,
     startKit: async (name, vars) => {

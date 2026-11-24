@@ -5,6 +5,7 @@ import { drizzle } from "drizzle-orm/pg-proxy";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
+import { KEY } from "./helpers/ics-wire-fixture";
 import {
   ARCHIVE_ORIGIN,
   archiveEnv,
@@ -88,12 +89,14 @@ describe("Kit GET /events binding anonymous payload", () => {
   }
 });
 
-describe("Kit static feed anonymous payloads", () => {
+describe("Kit feed anonymous payloads", () => {
   it.each([
     ["/events.ics", "text/calendar"],
     ["/events.rss", "application/rss+xml"],
+    [`/events/${KEY}.ics`, "text/calendar"],
   ])("GET %s excludes private fields from serialized feed items", async (path, mediaType) => {
     const row = archiveRow(7, {
+      eventKey: KEY,
       status: "published",
       title: "Public feed fixture title",
       startsAt: new Date("2099-01-02T18:00:00Z"),

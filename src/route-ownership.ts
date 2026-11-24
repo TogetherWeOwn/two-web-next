@@ -496,6 +496,10 @@ function isInNamespace(path: string, root: string): boolean {
   return path === root || path.startsWith(`${root}/`);
 }
 
+function isReservedPath(path: string): boolean {
+  return RESERVED_EXACT.has(path) || isInNamespace(path, RESERVED_API_ROOT);
+}
+
 function matchPattern(pattern: string, path: string): boolean {
   const patternParts = pattern.split("/");
   const pathParts = path.split("/");
@@ -546,7 +550,7 @@ function enabledRouteFor(
 ): OwnedRoute | undefined {
   const normalized = normalizePath(decision.path, stripData);
   if (normalized === null || isInNamespace(normalized, KIT_ASSET_ROOT)) return undefined;
-  const reserved = RESERVED_EXACT.has(normalized) || isInNamespace(normalized, RESERVED_API_ROOT);
+  const reserved = isReservedPath(normalized);
   const upper = decision.method.toUpperCase();
   const lookup = upper === "HEAD" ? "GET" : upper;
   // The reservation applies after decoding, but its release applies only to
@@ -1085,7 +1089,7 @@ async function dispatchFromManifest(
   // Use the tested Request-to-decision path for both the method and URL.
   const route = decideRoute(event.request, manifest, event.url);
   if (route) return dispatchKitRequest(event, deps, route);
-  const apiRoute = exactFamilyRouteFor(event, manifest, deps.apiFamilies);
+  const apiRoute = familyRouteFor(event, manifest, deps.apiFamilies);
   if (!apiRoute) return deps.honoFetch(event.request);
   const started = performance.now();
   setReleaseMetadata(deps.versionMetadata);
@@ -1147,8 +1151,8 @@ async function dispatchKitRequest(
     refused.headers.set("x-request-id", requestId);
     return refused;
   }
-  // Public API handlers own their route-level admission. They need correlation
-  // and global headers, but no document notice or session work.
+  // These API handlers own route-level admission, including any conditional
+  // session work. The dispatcher supplies correlation and global headers.
   if (api && route.reads === "public") {
     return finishKitResponse(await deps.resolve(event), event, deps, requestId);
   }
@@ -1418,44 +1422,63 @@ async function dispatchKitRequest(
 
 interface KitApiFamily {
   flag: string | undefined;
-  routes: readonly (OwnedRoute & { reads: RouteReads })[];
+  routes: readonly KitApiRoute[];
 }
 
-function exactFamilyRouteFor(
+interface KitApiRoute extends OwnedRoute {
+  reads: RouteReads;
+  // A dynamic family uses a mounted route ID plus an explicit path predicate.
+  // Its registered path remains the trusted route label for logging.
+  dynamic?: { id: string; matches: (raw: string, decoded: string) => boolean };
+}
+
+function familyRouteFor(
   event: HookEventLike,
   manifest: OwnedRoute[],
   families: readonly KitApiFamily[] | undefined,
 ): OwnedRoute | undefined {
-  if (!families?.length || event.isDataRequest) return undefined;
-  // Kit may strip the data suffix from event.url. Use the original pathname
-  // and require a mounted static route before releasing a reservation.
-  const { pathname } = new URL(event.request.url);
-  if (
-    event.route?.id !== pathname ||
-    pathname.includes("[") ||
-    pathname.includes(":") ||
-    pathname.includes("%") ||
-    normalizePath(pathname) !== pathname
-  ) {
+  const id = event.route?.id;
+  if (!id || event.isDataRequest || !families?.some(({ flag }) => flag === "true"))
     return undefined;
-  }
+  // Kit may strip the data suffix from event.url. Match the original request.
+  const { pathname } = new URL(event.request.url);
+  const decoded = normalizePath(pathname, false);
+  if (!decoded || decoded.endsWith(DATA_SUFFIX) || isInNamespace(decoded, KIT_ASSET_ROOT))
+    return undefined;
 
   const method = event.request.method === "HEAD" ? "GET" : event.request.method;
-  // A disabled page entry still reserves its pair for rollback. Check the
-  // shipped entries too, since a rollout manifest can omit them entirely.
-  const overlaps = (entry: OwnedRoute) =>
-    entry.method.toUpperCase() === method && matchPattern(entry.path, pathname);
-  if (manifest.some(overlaps) || ROUTE_MANIFEST.some(overlaps)) return undefined;
-  let selected: OwnedRoute | undefined;
+  let selected: KitApiRoute | undefined;
   for (const family of families) {
     if (family.flag !== "true") continue;
     for (const route of family.routes) {
-      if (route.method !== method || route.path !== pathname) continue;
+      if (route.method !== method) continue;
+      if (route.dynamic) {
+        if (
+          id !== route.dynamic.id ||
+          isReservedPath(decoded) ||
+          !route.dynamic.matches(pathname, decoded)
+        )
+          continue;
+      } else if (
+        id !== pathname ||
+        route.path !== pathname ||
+        decoded !== pathname ||
+        pathname.includes("[") ||
+        pathname.includes(":") ||
+        pathname.includes("%")
+      )
+        continue;
       if (selected) return undefined;
       selected = route;
     }
   }
   if (!selected) return undefined;
+  // A disabled page entry still reserves its pair for rollback. Check the
+  // shipped entries too, since a rollout manifest can omit them entirely.
+  const overlaps = (entry: OwnedRoute) =>
+    entry.method.toUpperCase() === method && matchPattern(entry.path, decoded);
+  if (manifest.some(overlaps) || ROUTE_MANIFEST.some(overlaps)) return undefined;
+  if (selected.dynamic) return selected.enabled && !selected.documentGetOnly ? selected : undefined;
   return enabledRouteFor({ method: event.request.method, path: pathname }, [selected], {
     originalUrl: event.request.url,
     reservedReleases: [selected],

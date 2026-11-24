@@ -25,6 +25,7 @@ import {
   resolveRouteOwner,
 } from "../src/route-ownership";
 import { KIT_STATIC_FEED_ROUTES } from "../src/events/kit-static-feed-routes";
+import { KIT_EVENT_CALENDAR_ROUTE } from "../src/events/kit-event-calendar-route";
 
 const APP_URL = "https://example.com";
 // Explicit Kit-owned view of the archive page for tests: the shipped manifest
@@ -624,7 +625,7 @@ describe("hooks.server route ownership wiring", () => {
     expect(source.match(/dispatchHookRequest\(event,/g)?.length).toBe(1);
     expect(source).toContain("sequence(admitCapture, dispatchWithSecurity)");
     expect(source).toContain(
-      "apiFamilies: [{ flag: env.KIT_ROUTE_FEEDS, routes: KIT_STATIC_FEED_ROUTES }]",
+      "{ flag: env.KIT_ROUTE_FEEDS, routes: [...KIT_STATIC_FEED_ROUTES, KIT_EVENT_CALENDAR_ROUTE] }",
     );
     // Production session composition lives in kitSessionBridge
     // (src/kit-session.ts), pinned by test/kit-session.test.ts: the hook must
@@ -771,16 +772,63 @@ describe("dormant API family admission", () => {
     }
   });
 
-  it.each(KIT_STATIC_FEED_ROUTES)(
-    "serves and logs $path without document or session work",
-    async (route) => {
-      const event = apiEvent(`${route.path}?game=fixture`);
+  const eventCalendar = KIT_EVENT_CALENDAR_ROUTE;
+  const calendarPath = "/events/01J00000000000000000001001.ics";
+  const calendarId = eventCalendar.dynamic.id;
+  const feeds = { flag: "true", routes: [...KIT_STATIC_FEED_ROUTES, eventCalendar] };
+
+  it.each([
+    [calendarPath, { method: "POST" }],
+    [`${calendarPath}/`, {}],
+    [`${calendarPath}/__data.json`, {}],
+    ["/events/outer/inner.ics", {}],
+    ["/events/bad%0Akey.ics", {}],
+    ["/events/invalid%FF.ics", {}],
+    ["/%65vents/key.ics", {}],
+    ["/events/key%2Eics", {}],
+    ["/events/key.json", {}],
+    ["/api/key.ics", {}],
+    [calendarPath, { routeId: HONO_FALLBACK_ROUTE_ID }],
+    [calendarPath, { host: "untrusted.example" }],
+  ])("leaves %s with Hono outside the mounted calendar read", async (pathname, options) => {
+    expect(await owner(apiEvent(pathname, { routeId: calendarId, ...options }), feeds)).toBe(
+      "hono",
+    );
+  });
+
+  it("keeps dynamic family conflicts and existing page reservations on Hono", async () => {
+    const event = apiEvent(calendarPath, { routeId: calendarId });
+    expect(await owner(event, { ...feeds, flag: "false" })).toBe("hono");
+    expect(await owner(event, feeds, feeds)).toBe("hono");
+    const d = deps({
+      manifest: [{ method: "GET", path: "/events/:key", enabled: false }],
+      apiFamilies: [feeds],
+    });
+    await dispatchHookRequest(event, d);
+    expect(d.honoFetch).toHaveBeenCalledExactlyOnceWith(event.request);
+    expect(d.resolve).not.toHaveBeenCalled();
+
+    const broad = { ...eventCalendar, dynamic: { ...eventCalendar.dynamic, matches: () => true } };
+    for (const reserved of ["/api/key.ics", "/version", "/_app/key.ics"]) {
+      const candidate = apiEvent(reserved, { routeId: calendarId });
+      expect(await owner(candidate, { flag: "true", routes: [broad] })).toBe("hono");
+    }
+  });
+
+  it.each([
+    ...KIT_STATIC_FEED_ROUTES.map((route) => ({ route, pathname: route.path, method: "GET" })),
+    { route: eventCalendar, pathname: calendarPath, method: "GET" },
+    { route: eventCalendar, pathname: "/events/%30fixture.ics", method: "HEAD" },
+  ])(
+    "serves and logs $method $pathname without document or session work",
+    async ({ route, pathname, method }) => {
+      const event = apiEvent(`${pathname}?game=fixture`, { method, routeId: route.dynamic?.id });
       const log = vi.spyOn(console, "log").mockImplementation(() => {});
       const version = "a".repeat(40);
       const sessionFor = vi.fn();
       const authStatusCookieFor = vi.fn();
       const d = deps({
-        apiFamilies: [{ flag: "true", routes: KIT_STATIC_FEED_ROUTES }],
+        apiFamilies: [feeds],
         versionMetadata: { tag: version },
         sessionFor,
         authStatusCookieFor,
@@ -792,7 +840,7 @@ describe("dormant API family admission", () => {
       });
 
       // This slice does not need a release of any Hono-reserved path.
-      expect(resolveRouteOwner(route, [route])).toBe("kit");
+      if (!route.dynamic) expect(resolveRouteOwner(route, [route])).toBe("kit");
       const response = await dispatchHookRequest(event, d);
       expect(response.status).toBe(304);
       expect(response.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
@@ -804,7 +852,7 @@ describe("dormant API family admission", () => {
       expect(log).toHaveBeenCalledTimes(1);
       expect(JSON.parse(log.mock.calls[0][0])).toMatchObject({
         event: "http.request",
-        method: "GET",
+        method,
         route: route.path,
         status: 304,
         request_id: response.headers.get("x-request-id"),
