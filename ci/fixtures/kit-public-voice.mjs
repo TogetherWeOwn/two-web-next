@@ -27,20 +27,29 @@ const upsert = (id) => ({
 
 async function capture(page, state) {
   const directory = process.env.KIT_PUBLIC_VOICE_SCREENSHOTS;
-  if (!directory) return;
-  await mkdir(directory, { recursive: true });
+  const event = state.startsWith("event-");
+  if (!directory && !event) return;
+  if (directory) await mkdir(directory, { recursive: true });
   for (const [width, height] of [
     [1280, 800],
     [390, 844],
   ]) {
     await page.setViewportSize({ width, height });
-    if (state.startsWith("event-")) {
+    if (event) {
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     }
-    await page.screenshot({
-      path: join(directory, `${state}-${width}x${height}.png`),
-      fullPage: state.startsWith("event-"),
-    });
+    if (state === "event-live") {
+      const panel = page.getByRole("complementary", { name: "Community voice" });
+      await expect(panel).toHaveCSS("border-top-width", "1px");
+      await expect(panel).toHaveCSS("padding-inline-start", "6px");
+      await expect(panel.getByRole("heading")).toHaveCSS("font-size", "15px");
+    }
+    if (directory) {
+      await page.screenshot({
+        path: join(directory, `${state}-${width}x${height}.png`),
+        fullPage: event,
+      });
+    }
   }
 }
 
