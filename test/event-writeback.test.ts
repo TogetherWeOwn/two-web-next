@@ -977,13 +977,14 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     });
   }
 
-  it("long Retry-After persists eligibility and request accounting across reconciliation and new carriers", async () => {
+  it.each([false, true])("keeps Retry-After across carriers (observe=%s)", async (observe) => {
     await seed();
     await enqueueEventSync(env, eventKey, "published");
     const original = sent[0]!.body;
     const bot = botDouble();
-    const events = pgEventStore(sql, { observeActiveClaims: true });
-    const dependencies = { ...deps(bot), events };
+    const dependencies = deps(bot);
+    if (observe) dependencies.events = pgEventStore(sql, { observeActiveClaims: true });
+    const { events } = dependencies;
     bot.upsertEvent.mockResolvedValue({
       ok: false,
       code: "rate_limited",
@@ -1025,20 +1026,34 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
       expect((await pgEventStore(sql).pendingSync(eventKey))!.requestAttempts).toBe(requestAttempt);
     }
     expect(bot.upsertEvent).toHaveBeenCalledTimes(6); // carrier attempts=1 never resets request budget
-    const lastClaim = (await events.pendingSync(eventKey))!.claimStartedAt!;
-    const recent = delivery(original, 2);
-    await consume({ messages: [recent] }, { ...dependencies, now: () => lastClaim });
-    expect(recent.retry).toHaveBeenCalledOnce();
-    expect(recent.ack).not.toHaveBeenCalled();
-    expect(bot.upsertEvent).toHaveBeenCalledTimes(6);
+    const lastClaim = (await events.pendingSync(eventKey))?.claimStartedAt;
+    if (observe) {
+      if (!lastClaim) throw new Error("Missing claim timestamp in the opted-in store");
+      const recent = delivery(original, 2);
+      await consume({ messages: [recent] }, { ...dependencies, now: () => lastClaim });
+      expect(recent.retry).toHaveBeenCalledOnce();
+      expect(recent.ack).not.toHaveBeenCalled();
+      expect(bot.upsertEvent).toHaveBeenCalledTimes(6);
+    } else {
+      expect(lastClaim).toBeUndefined();
+    }
     const last = delivery(original, 2);
     await consume(
       { messages: [last] },
-      { ...dependencies, now: () => new Date(lastClaim.getTime() + 60_000) },
+      {
+        ...dependencies,
+        now: lastClaim ? () => new Date(lastClaim.getTime() + 60_000) : undefined,
+      },
     );
     expect(last.ack).toHaveBeenCalledOnce();
+    expect(last.retry).not.toHaveBeenCalled();
     expect(bot.upsertEvent).toHaveBeenCalledTimes(6);
-    expect((await pgEventStore(sql).pendingSync(eventKey))!.nextAttemptAt).toBeNull();
+    expect(await events.pendingSync(eventKey)).toMatchObject({
+      idempotencyKey: original.idempotencyKey,
+      state: "pending",
+      requestAttempts: 6,
+      nextAttemptAt: null,
+    });
   });
 
   for (const failedWrites of [0, 2]) {
