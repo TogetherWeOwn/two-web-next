@@ -90,11 +90,10 @@ describe("detached sign-out parity", () => {
     expect(decideOwner(new Request(new URL(PATH, f.env.APP_URL), post(f, live.cookie)))).toBe(
       "hono",
     );
-    const everywhere = new Request(
-      new URL("/logout/everywhere", f.env.APP_URL),
-      post(f, live.cookie),
-    );
-    expect(await fetchKitSignOut(everywhere, f.env)).toBeNull();
+    for (const path of ["/profile", "/logout/everywhere"]) {
+      const unsupported = new Request(new URL(path, f.env.APP_URL), post(f, live.cookie));
+      expect(await fetchKitSignOut(unsupported, f.env)).toBeNull();
+    }
     for (const [origin, vector] of [
       ["https://other.example.test", vectors["POST origin:cross"]],
       [undefined, vectors["POST origin:missing"]],

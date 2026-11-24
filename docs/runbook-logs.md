@@ -624,9 +624,9 @@ secret or the live access token.
 
 ### Login-start store failures and logout revocation
 
-Three auth-scoped lines cover the session-store failures around the Discord
-round trip (`src/auth/routes.ts`). None pages: each line accompanies the
-member-visible redirect or 503 the member already sees. Correlate by the
+The Discord sign-in warnings and sign-out-everywhere errors come from
+`src/auth/routes.ts`. Ordinary sign-out errors come from `src/auth/sign-out.ts`.
+Each line accompanies a member-visible redirect or 503. Correlate by the
 validated `request_id`, which joins to the `http.request` line. Where a line
 carries an exception, it is the class name only, never the raw error text,
 which can quote connection strings or tokens. An `issue()` returning `false`
