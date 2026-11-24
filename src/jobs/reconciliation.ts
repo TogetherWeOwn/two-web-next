@@ -1,7 +1,14 @@
 // Dormant persistence only: no handler or queue settlement is wired to this store.
 import type postgres from "postgres";
 import { diagnosticCode } from "../bot/diagnostic-code";
-import { CALL_INTERNAL_ACTION, LEDGER_DB_TIMEOUT_MS } from "./constants";
+import {
+  ANNOUNCEMENT_RECONCILIATION_REASON,
+  CALL_INTERNAL_ACTION,
+  LEDGER_DB_LOCK_TIMEOUT_MS,
+  LEDGER_DB_TIMEOUT_MS,
+} from "./constants";
+import { stampQueueFailure } from "./postgres";
+import { MAX_RETRY_DELAY_SECONDS } from "./retry-delay";
 import type { TxClient } from "./types";
 
 export const SYNC_RECONCILIATION_MARKER = "request requires reconciliation";
@@ -22,14 +29,25 @@ const CHANNEL_ALIAS = /^[a-zA-Z0-9][a-zA-Z0-9_:-]{0,63}$/;
 const SEND_LEASE_SECONDS = 30; // Room for the 10s bot deadline and bounded DB settlement.
 const CARRIER_AGE_HOURS = 720; // Elapsed time: longer than queue retention, unaffected by DST.
 
+export function validAnnouncementIdentity(key: unknown, alias: unknown): boolean {
+  return (
+    typeof key === "string" &&
+    UUID.test(key) &&
+    typeof alias === "string" &&
+    CHANNEL_ALIAS.test(alias)
+  );
+}
+
 type SendClaim =
   | { kind: "claimed" | "sending" | "abandoned" | "closed"; attempts: number; claimUntil: Date }
+  | { kind: "waiting"; attempts: number; retryInSeconds: number }
   | { kind: "unavailable" };
 
 type AnnouncementSendRow = {
   channel_alias: string;
   send_attempts: number;
   claim_until_ms: number;
+  retry_in_seconds: number;
   kind: "sending" | "abandoned" | "retryable" | "closed";
 };
 
@@ -85,9 +103,9 @@ export function reconciliationIntent(input: ReconciliationIntent): Reconciliatio
  */
 export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
   async function bounded<T>(work: (tx: TxClient) => Promise<T>): Promise<T> {
-    return sql.begin(async (transaction) => {
+    return sql.begin("isolation level read committed", async (transaction) => {
       const tx = transaction as unknown as TxClient;
-      await tx`select set_config('lock_timeout', ${`${LEDGER_DB_TIMEOUT_MS}ms`}, true),
+      await tx`select set_config('lock_timeout', ${`${LEDGER_DB_LOCK_TIMEOUT_MS}ms`}, true),
         set_config('statement_timeout', ${`${LEDGER_DB_TIMEOUT_MS}ms`}, true)`;
       return work(tx);
     }) as Promise<T>;
@@ -114,14 +132,18 @@ export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
     tx: TxClient,
     key: string,
     attempts: number,
-    state: "retryable" | "closed",
+    retryInSeconds: number | null,
     orphan = false,
   ): Promise<string | undefined> {
+    const state = retryInSeconds === null ? "closed" : "retryable";
     // A lock-only waiter need not recheck UPDATE predicates. Read the clock after locking.
     const [locked] = await tx`select 1 from announcement_send_claims
       where idempotency_key = ${key}::uuid for update`;
     if (!locked) return undefined;
-    const [row] = await tx`update announcement_send_claims set state = ${state}
+    // In retryable state this timestamp is the next eligible send, not a lease.
+    const [row] = await tx`update announcement_send_claims set state = ${state},
+        claim_until = case when ${retryInSeconds}::int is null then claim_until
+          else clock_timestamp() + make_interval(secs => ${retryInSeconds}) end
       where idempotency_key = ${key}::uuid and state = 'sending' and send_attempts = ${attempts}
         and (claim_until <= clock_timestamp()) = ${orphan}
       returning channel_alias`;
@@ -132,10 +154,7 @@ export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
     /** Pass the original queue timestamp, not a retry time or a body field. */
     async claimAnnouncement(key: string, alias: string, queuedAt: Date): Promise<SendClaim> {
       if (
-        typeof key !== "string" ||
-        !UUID.test(key) ||
-        typeof alias !== "string" ||
-        !CHANNEL_ALIAS.test(alias) ||
+        !validAnnouncementIdentity(key, alias) ||
         !(queuedAt instanceof Date) ||
         !Number.isFinite(queuedAt.getTime())
       )
@@ -148,9 +167,11 @@ export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
             and ${queuedAt.toISOString()}::timestamptz <= statement_timestamp() + interval '5 seconds'
             and not exists (select 1 from bot_reconciliation_intents where idempotency_key = ${key}::uuid)
           on conflict (idempotency_key) do update set
-            send_attempts = claim.send_attempts + 1, state = 'sending', claim_until = excluded.claim_until
+            send_attempts = claim.send_attempts + 1, state = 'sending',
+            claim_until = clock_timestamp() + make_interval(secs => ${SEND_LEASE_SECONDS})
           where claim.state = 'retryable' and claim.channel_alias = excluded.channel_alias
             and claim.send_attempts < ${CALL_INTERNAL_ACTION.tries}
+            and claim.claim_until <= clock_timestamp()
           returning send_attempts, (extract(epoch from claim_until) * 1000)::double precision as claim_until_ms`;
         if (claimed) {
           const { send_attempts: attempts, claim_until_ms: deadline } = claimed;
@@ -160,10 +181,20 @@ export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
         // A separate statement sees a winning insert that committed while the upsert waited.
         const [current]: AnnouncementSendRow[] = await tx`select channel_alias, send_attempts,
             case when state = 'sending' and claim_until <= clock_timestamp() then 'abandoned' else state end as kind,
-            (extract(epoch from claim_until) * 1000)::double precision as claim_until_ms
-          from announcement_send_claims where idempotency_key = ${key}::uuid`;
-        if (!current || current.channel_alias !== alias || current.kind === "retryable")
-          return { kind: "unavailable" };
+            (extract(epoch from claim_until) * 1000)::double precision as claim_until_ms,
+            least(${MAX_RETRY_DELAY_SECONDS}::int,
+              greatest(1, ceil(extract(epoch from claim_until - clock_timestamp()))))::int as retry_in_seconds
+          from announcement_send_claims where idempotency_key = ${key}::uuid
+            and (state <> 'retryable' or (send_attempts < ${CALL_INTERNAL_ACTION.tries}
+              and ${queuedAt.toISOString()}::timestamptz > statement_timestamp() - make_interval(hours => ${CARRIER_AGE_HOURS})
+              and ${queuedAt.toISOString()}::timestamptz <= statement_timestamp() + interval '5 seconds'))`;
+        if (!current || current.channel_alias !== alias) return { kind: "unavailable" };
+        if (current.kind === "retryable")
+          return {
+            kind: "waiting",
+            attempts: current.send_attempts,
+            retryInSeconds: current.retry_in_seconds,
+          };
         return {
           kind: current.kind,
           attempts: current.send_attempts,
@@ -175,26 +206,51 @@ export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
     async finishAnnouncement(
       key: string,
       attempts: number,
-      state: "retryable" | "closed",
+      settlement:
+        | "closed"
+        | { done: true; jobId: string | null }
+        | { retryInSeconds: number }
+        | { failed: string; jobId: string | null },
     ): Promise<boolean> {
+      const detail = typeof settlement === "object" && settlement !== null ? settlement : null;
+      const refusal = detail && "failed" in detail ? detail : null;
+      const retry = detail && "retryInSeconds" in detail ? detail : null;
+      const success = detail && "done" in detail && detail.done === true ? detail : null;
       if (
         !validAnnouncementAttempt(key, attempts) ||
-        (state !== "retryable" && state !== "closed") ||
-        (state === "retryable" && attempts >= CALL_INTERNAL_ACTION.tries)
+        (settlement !== "closed" &&
+          (retry
+            ? !Number.isInteger(retry.retryInSeconds) ||
+              retry.retryInSeconds < 1 ||
+              retry.retryInSeconds > MAX_RETRY_DELAY_SECONDS ||
+              attempts >= CALL_INTERNAL_ACTION.tries
+            : !success && typeof refusal?.failed !== "string"))
       ) {
         throw new Error("Invalid announcement claim settlement");
       }
-      return bounded(async (tx) => (await settleClaim(tx, key, attempts, state)) !== undefined);
+      return bounded(async (tx) => {
+        if ((await settleClaim(tx, key, attempts, retry?.retryInSeconds ?? null)) === undefined)
+          return false;
+        if (refusal) {
+          // Tracked deliveries use the original ledger ID. Legacy carriers have only the key.
+          const jobId = refusal.jobId && UUID.test(refusal.jobId) ? refusal.jobId : key;
+          await stampQueueFailure(tx, jobId, "announcement", null, refusal.failed);
+        }
+        if (success?.jobId && UUID.test(success.jobId))
+          await tx`delete from queue_jobs where job_id = ${success.jobId}::uuid`;
+        return true;
+      });
     },
     /** Null evidence recovers an abandoned claim: a reservation does not prove a wire send. */
     async recordAnnouncement(
       key: string,
       attempts: number,
       evidence: Pick<ReconciliationIntent, "lastCode" | "lastStatus"> | null,
+      jobId?: string | null,
     ): Promise<void> {
       if (!validAnnouncementAttempt(key, attempts)) throw new Error("Invalid announcement claim");
       await bounded(async (tx) => {
-        const alias = await settleClaim(tx, key, attempts, "closed", evidence === null);
+        const alias = await settleClaim(tx, key, attempts, null, evidence === null);
         if (alias === undefined)
           throw new Error("Announcement claim changed before reconciliation");
         await insert(
@@ -208,6 +264,15 @@ export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
             lastStatus: evidence?.lastStatus ?? null,
           }),
         );
+        if (jobId !== undefined) {
+          await stampQueueFailure(
+            tx,
+            jobId && UUID.test(jobId) ? jobId : key,
+            "announcement",
+            null,
+            ANNOUNCEMENT_RECONCILIATION_REASON,
+          );
+        }
       });
     },
     /** Owner-only maintenance, unscheduled until integration. Never delete unresolved evidence. */

@@ -325,6 +325,25 @@ export function pgUniqueLock(sql: TxClient | Sql): UniqueLock {
   };
 }
 
+/** Move one dispatch to the failed ledger inside the caller's transaction. */
+export async function stampQueueFailure(
+  tx: TxClient,
+  jobId: string,
+  kind: string,
+  key: string | null,
+  reason: string,
+): Promise<void> {
+  // Fence even before the additive unique constraint lands. After the lock,
+  // a separate READ COMMITTED statement sees the previous delivery's insert.
+  await tx`select pg_advisory_xact_lock(hashtextextended('queue-failed:' || ${jobId}::uuid::text, 0))`;
+  await tx`
+    insert into queue_failed_jobs (job_id, kind, key, reason)
+    select ${jobId}::uuid, ${kind}, ${key}, ${reason.slice(0, 2000)}
+    where not exists (select 1 from queue_failed_jobs where job_id = ${jobId}::uuid)`;
+  // Keep the first failure, but retire any live row. Insert errors abort before delete.
+  await tx`delete from queue_jobs where job_id = ${jobId}::uuid`;
+}
+
 /**
  * N3 (TOG-9895): the Postgres side of the queue ledger. Cloudflare Queues is the
  * transport and exposes no depth API, so this ledger is the `jobs` table of the
@@ -377,19 +396,7 @@ export function pgQueueLedger(sql: Sql): QueueLedger {
         // cancelled by Postgres (rolling the whole move back) instead of
         // outliving the consumer's client-side race on this connection.
         await tx`select set_config('lock_timeout', ${`${LEDGER_DB_LOCK_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${LEDGER_DB_TIMEOUT_MS}ms`}, true)`;
-        // Fence one dispatch even before the additive unique constraint lands.
-        // Keep the insert separate: after waiting for the lock, READ COMMITTED
-        // takes a fresh snapshot and sees the preceding delivery's commit.
-        // https://www.postgresql.org/docs/current/functions-admin.html#FUNCTIONS-ADVISORY-LOCKS
-        // https://www.postgresql.org/docs/current/transaction-iso.html#XACT-READ-COMMITTED
-        await tx`select pg_advisory_xact_lock(hashtextextended('queue-failed:' || ${jobId}::uuid::text, 0))`;
-        await tx`
-          insert into queue_failed_jobs (job_id, kind, key, reason)
-          select ${jobId}::uuid, ${kind}, ${key}, ${reason.slice(0, 2000)}
-          where not exists (select 1 from queue_failed_jobs where job_id = ${jobId}::uuid)`;
-        // A redelivery keeps the first failure, but still retires any live row.
-        // Insert errors abort this transaction before delete; none are swallowed.
-        await tx`delete from queue_jobs where job_id = ${jobId}::uuid`;
+        await stampQueueFailure(tx as unknown as TxClient, jobId, kind, key, reason);
       });
     },
   };

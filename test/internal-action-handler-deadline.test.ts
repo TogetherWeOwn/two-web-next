@@ -152,6 +152,7 @@ describe("internal-action handler deadline (TOG-11628)", () => {
       ann.idempotencyKey,
       1,
       { lastCode: null, lastStatus: null },
+      null,
     );
     expect(announcementClaims.finishAnnouncement).not.toHaveBeenCalled();
     expect(postAnnouncement).toHaveBeenCalledOnce();

@@ -1,4 +1,8 @@
-import { CALL_INTERNAL_ACTION as C, backoffFor } from "./constants";
+import {
+  ANNOUNCEMENT_RECONCILIATION_REASON,
+  CALL_INTERNAL_ACTION as C,
+  backoffFor,
+} from "./constants";
 import { botRefusalReason, botRetryExhaustedReason, terminalFailureReason } from "./queue-error";
 import { withInternalActionDeadline } from "./internal-action-deadline";
 import { diagnosticCode } from "../bot/diagnostic-code";
@@ -48,8 +52,6 @@ export async function dispatchRoleAssign(
   };
   await queue.send(msg);
 }
-
-export const ANNOUNCEMENT_RECONCILIATION_REASON = "announcement.post requires reconciliation";
 
 type ReconciliationOutcome = {
   failed: string;

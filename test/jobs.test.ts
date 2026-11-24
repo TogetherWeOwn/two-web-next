@@ -472,6 +472,7 @@ describe("CallInternalAction", () => {
         ann.idempotencyKey,
         attempt,
         { lastCode: failure.code, lastStatus: failure.status },
+        null,
       );
       expect(announcementClaims.finishAnnouncement).not.toHaveBeenCalled();
       announcementClaims.claimAnnouncement.mockResolvedValueOnce({
@@ -511,7 +512,7 @@ describe("CallInternalAction", () => {
     expect(announcementClaims.finishAnnouncement).toHaveBeenCalledExactlyOnceWith(
       ann.idempotencyKey,
       1,
-      "retryable",
+      { retryInSeconds: 5 },
     );
     expect(postAnnouncement).toHaveBeenCalledExactlyOnceWith(ann.action, ann.idempotencyKey);
   });
@@ -540,8 +541,8 @@ describe("CallInternalAction", () => {
     await consume({ messages: [redelivery] }, deps);
     expect(redelivery.acked).toBe(true);
     expect(announcementClaims.recordAnnouncement.mock.calls).toEqual([
-      [ann.idempotencyKey, 1, { lastCode: "needs_reconciliation", lastStatus: 409 }],
-      [ann.idempotencyKey, 1, null],
+      [ann.idempotencyKey, 1, { lastCode: "needs_reconciliation", lastStatus: 409 }, null],
+      [ann.idempotencyKey, 1, null, null],
     ]);
     expect(postAnnouncement).toHaveBeenCalledExactlyOnceWith(ann.action, ann.idempotencyKey);
   });
