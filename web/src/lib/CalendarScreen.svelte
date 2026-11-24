@@ -97,11 +97,11 @@ let showPartial = $derived(
 );
 </script>
 
-<section data-island={EVENTS_CALENDAR_ISLAND} data-testid={EVENTS_CALENDAR_TESTID} data-discord-read={discordRead} data-view={state.view} data-month={state.month} data-past={state.past ? "1" : ""} data-load-error={EVENTS_CALENDAR_FETCH_FAILED} data-search-max-length={EVENTS_SEARCH_MAX_LENGTH} data-search-too-long={EVENTS_SEARCH_TOO_LONG_COPY} aria-labelledby="events-heading">
+<section class="events-page" data-island={EVENTS_CALENDAR_ISLAND} data-testid={EVENTS_CALENDAR_TESTID} data-discord-read={discordRead} data-view={state.view} data-month={state.month} data-past={state.past ? "1" : ""} data-load-error={EVENTS_CALENDAR_FETCH_FAILED} data-search-max-length={EVENTS_SEARCH_MAX_LENGTH} data-search-too-long={EVENTS_SEARCH_TOO_LONG_COPY} aria-labelledby="events-heading">
   <div class="schedule-heading">
     <p class="strap">Community schedule</p>
-    <h1 id="events-heading" tabindex="-1">Events</h1>
-    <p>Game nights, tournaments and whatever else the community puts on.</p>
+    <h1 id="events-heading" tabindex="-1">What's on. <span>Say you're in.</span></h1>
+    <p class="schedule-intro">Find a game night, tournament or drop-in. Open an event to see how to take part.</p>
     {#if !member}<a class="btn" href={loginReturnTo ? `/join?next=${encodeURIComponent(loginReturnTo)}` : "/join"}>Join the Discord</a>{/if}
   </div>
   {#if joinResult}
@@ -128,12 +128,16 @@ let showPartial = $derived(
     {#each Array.from({ length: EVENTS_LOADING_ROWS }) as _}<p aria-hidden="true">…</p>{/each}
   </div>
   <div data-cal-zone="content" data-testid={EVENTS_CONTENT_TESTID}>
+    <p class="schedule-clock">
+      {#if state.view === "list"}Schedule days use <strong>{zone}</strong>. Individual events show their own time zone.
+      {:else}Events appear on their local dates. Today, This month and Discord events without a time zone use <strong>{zone}</strong>.{/if}
+    </p>
     {#if showPartial}
       <CalendarEmpty kind="partial" {state} {gameFilter} past={gapPast} {inviteUrl} />
     {/if}
     {#if emptyState !== null}<CalendarEmpty kind={emptyState} {state} {gameFilter} past={gapPast} {inviteUrl} />{/if}
     {#if emptyState === null && hasResultsOrPageNotice && state.view === "list"}
-      <CalendarList {state} {upcoming} {past} {totalPages} {outOfRange} {pageUnreadable} {showPast} {member} {inviteUrl} {loginReturnTo} />
+      <CalendarList {zone} {now} {state} {upcoming} {past} {totalPages} {outOfRange} {pageUnreadable} {showPast} {member} {inviteUrl} {loginReturnTo} />
     {/if}
     {#if emptyState === null && state.view === "calendar"}
       <CalendarGrid {state} {weeks} {zone} {now} />

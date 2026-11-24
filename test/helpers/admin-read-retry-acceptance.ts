@@ -20,6 +20,7 @@ export type RetryPage = {
 };
 export type AdminRetryKit = {
   render: (boundary: AdminBoundary, page: RetryPage) => RenderedAdminError;
+  adminReadRetryHref: (url: unknown, boundary: AdminBoundary) => string | null;
   inputs: string[];
   css: string;
 };
@@ -77,6 +78,7 @@ import { render } from "svelte/server";
 import Admin from "./web/src/routes/admin/+error.svelte";
 import JoinAttempts from "./web/src/routes/admin/join-attempts/+error.svelte";
 import { setPage } from "$app/state";
+export { adminReadRetryHref } from "./web/src/lib/AdminShell.svelte";
 export function renderBoundary(boundary, page) {
   setPage(page);
   const { head, body } = render(boundary === "admin" ? Admin : JoinAttempts);
@@ -92,6 +94,8 @@ export function renderBoundary(boundary, page) {
     format: "esm",
     write: false,
     metafile: true,
+    // This fixture replaces Kit's state module and needs no generated config.
+    tsconfigRaw: { compilerOptions: {} },
     nodePaths: [join(root, "web/node_modules"), join(root, "node_modules")],
     alias: { "#lib": join(root, "web/src/lib") },
     plugins: [
@@ -124,6 +128,7 @@ export function renderBoundary(boundary, page) {
   );
   return {
     render: compiled.renderBoundary,
+    adminReadRetryHref: compiled.adminReadRetryHref,
     inputs: Object.keys(result.metafile!.inputs),
     css: styles.join("\n"),
   };

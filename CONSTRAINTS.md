@@ -51,6 +51,7 @@ while lowering it, or deleting the row, fails the gate.
 | Project coverage | Zero threshold violations: statements 90.8, branches 84.2, functions 92.3, lines 94.4, plus per-area floors (`vitest.config.ts`) | `npm run test:coverage` | every PR (`coverage-merge` job) |
 | Security: code | No sink or secret-literal findings; scanner and partial-parse errors fail closed | Semgrep HARD step in `.github/workflows/ci.yml` (`--strict --error`, planted-finding selftest) | every PR (`check` job) |
 | Test inventory | Every test file reachable from CI | `npm run test:inventory -- --strict` | every PR (`check` job, HARD) |
+| Focused mutation | Zero new survivors among applicable `R4`–`R7` and `W1`–`W3` | `npm run mutation:roles-wall-time -- "$TARGET_SHA"` in Actions | every PR (`focused-mutation` job, HARD) |
 | Bundle size | Served assets within budget | `npm run budget` | `bundle-budget` job, blocks merge |
 | Worker bundle | Main Worker dry-run bundle within budget | `npm run worker-budget` | every PR (`check` job) |
 | Page quality | Lighthouse categories within `ci/quality-budget.json` (see performance note below); security headers, HTML basics, internal links | `npm run lighthouse:quality`, `npm run standards` | `lighthouse` job, blocks merge |
@@ -69,7 +70,7 @@ number and no command here is an aspiration, not a constraint.
 
 | Metric | Today | Direction |
 |--------|-------|-----------|
-| Mutation signal | Nightly, non-blocking; `R4`–`R7` and `W1`–`W3` targeted mutants proposed as the first blocking subset (see `docs/quality-gates.md`) | toward blocking the ~3s subset |
+| Full mutation signal | Nightly, non-blocking (see [quality gates](docs/quality-gates.md#focused-mutation-gate)) | Focused PR gate covers the subset above |
 
 ## Exceptions
 

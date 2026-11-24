@@ -37,7 +37,7 @@
     th {
     top: 60px;
   }
-  [id="menu-sheet"] .menu-brand img {
+  .base-theme [id="menu-sheet"] .menu-brand img {
     width: auto;
     height: 32px;
   }

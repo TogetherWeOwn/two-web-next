@@ -237,4 +237,4 @@ merged separately in PR #2031; it is not a live prerequisite. Current merge
 verification belongs to exact-head Actions run/job links in the PR. No local
 full suite, app build, staging verification, merge or production deployment
 was performed for this acceptance step. Post-merge staging/e2e/soak and
-exact-head Release Manager approval remain separate release gates.
+exact-candidate release approval remain separate release gates.

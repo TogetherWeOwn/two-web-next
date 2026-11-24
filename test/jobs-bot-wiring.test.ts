@@ -51,6 +51,7 @@ function fetchDouble(...responses: Response[]) {
 
 const delivery = (body: unknown, attempts = 1) => ({
   body,
+  timestamp: new Date(),
   attempts,
   ack: vi.fn(),
   retry: vi.fn(),

@@ -1,0 +1,43 @@
+id: no-raw-byte-length-comparison
+valid:
+  - if (exceedsByteLimit(chunk.byteLength, remaining)) cancel();
+  - const fits = fitsUtf8ByteLimit(text, max);
+  - if (exceedsByteLimit(chunk.byteLength, max) === true) cancel();
+  - size += chunk.byteLength;
+  - const bytes = Buffer.byteLength(text, "utf8");
+  - "const payload = bytes.byteLength ? bytes : null;"
+  - if (label === "byteLength") report();
+  - if (typeof bytes.byteLength === "number") report();
+  - 'if ((bytes.byteLength ? "a" : "b") === status) report();'
+  - 'if (((bytes.byteLength + 1) ? "a" : "b") === status) report();'
+  - if (rows.length > MAX_ROWS) refuse();
+  - |
+    function authReturnHref() {
+      const fits = (href: string) => new TextEncoder().encode(href).byteLength <= maxBytes;
+      return fits(url);
+    }
+invalid:
+  - if (chunk.byteLength > remaining) cancel();
+  - if (max < size + chunk.byteLength) cancel();
+  - if ((chunk.byteLength + offset) <= max) accept();
+  - if (nextSize > bytes.byteLength) grow();
+  - if (Buffer.byteLength(text, "utf8") >= max) cancel();
+  - if (((Buffer.byteLength))(text) > max) cancel();
+  - if (new TextEncoder().encode(text).byteLength <= max) accept();
+  - if (chunk?.byteLength !== expected) refuse();
+  - if ((chunk["byteLength"] as number) >= max) refuse();
+  - if (chunk.byteLength === 0) refuse();
+  - "if ((chunk ? chunk.byteLength : 0) > max) refuse();"
+  - 'const status = chunk.byteLength <= max ? "a" : "b";'
+  - if (+chunk.byteLength > max) refuse();
+  - |
+    function authReturnHref() {
+      const fits = (href: string) => new TextEncoder().encode(href).byteLength <= maxBytes;
+      if (buffer.byteLength > maxBytes) refuse();
+      return fits(url);
+    }
+  - |
+    function returnHref() {
+      const fits = (href: string) => new TextEncoder().encode(href).byteLength <= maxBytes;
+      return fits(url);
+    }

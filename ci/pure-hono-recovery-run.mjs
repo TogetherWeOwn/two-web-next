@@ -32,7 +32,8 @@ export async function fetchPureHonoRecoveryRun(expected, token, fetchImpl) {
   } catch {
     throw new Error("pure Hono recovery run refused: GitHub metadata unavailable");
   }
-  // The exact-attempt REST example returns numeric IDs and a path qualified with @main.
+  // GitHub returns the bare path in live main runs and documents the @main form.
+  // Branch and exact attempt metadata independently pin the source.
   if (
     run?.id !== Number(runId) ||
     run.run_attempt !== Number(runAttempt) ||
@@ -40,7 +41,7 @@ export async function fetchPureHonoRecoveryRun(expected, token, fetchImpl) {
     !ownRepository(run.head_repository) ||
     run.repository.id !== run.head_repository.id ||
     run.head_sha !== sourceSha ||
-    run.path !== `${workflow}@main` ||
+    (run.path !== workflow && run.path !== `${workflow}@main`) ||
     run.head_branch !== "main" ||
     run.event !== event ||
     run.status !== "completed" ||

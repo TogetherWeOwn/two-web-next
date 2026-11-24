@@ -461,6 +461,7 @@ function sharedKitBundle(): Promise<KitBundle> {
 
 function kitHomeData(): Record<string, unknown> {
   return {
+    nowMs: Date.UTC(2030, 6, 19, 12),
     appUrl: APP_URL,
     session: null,
     sessionUnavailable: false,
