@@ -22,6 +22,11 @@ requirements below continue to govern the broader design.
   guests and session-bearing viewers. The public slice exposes only `voice`.
   The installed hub recognizes `channels`, `members` and `events` commands and
   returns unavailable controls for them. Keep them out of the public adapter.
+- After the session store returns no live row for a verified bearer, the
+  upgrade handler may reuse that refusal in the same Worker isolate for up to
+  60 seconds. Keep only bounded hashed references. Admission with a different
+  bearer and authorization on an established socket still read the session
+  authority. A failed store read is an indeterminate refusal and is retried.
 - Subscribe once with `{v:1,type:"subscribe",topics:["voice"]}`. Resync that
   subscription with `{v:1,type:"resync",topics:["voice"]}`. Commands are closed
   JSON text objects capped at 512 UTF-8 bytes. Serialize commands and respect the

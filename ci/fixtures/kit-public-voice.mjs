@@ -58,6 +58,41 @@ async function openHome(page, origin) {
   return response.text();
 }
 
+async function setSession(page, origin, cookie) {
+  await page.context().addCookies([
+    {
+      name: SESSION_COOKIE,
+      value: cookie.slice(SESSION_COOKIE.length + 1),
+      domain: new URL(origin).hostname,
+      path: "/",
+      secure: true,
+      httpOnly: true,
+    },
+  ]);
+}
+
+async function verifyRefusedRetries(sql, sockets, first, count, reason) {
+  async function scans() {
+    // This phase has no session writers or other session-bearing pages.
+    // Include sequential scans so the assertion is independent of the plan.
+    const [row] = await sql`select (seq_scan + idx_scan)::float8 as scans
+      from pg_stat_user_tables where relid = 'web_sessions'::regclass`;
+    return row.scans;
+  }
+  // The second refusal gives the initial database connection time to exit and
+  // flush its stats. Compare completed retries while the cookie is unchanged.
+  await expect.poll(() => sockets[first + 1]?.closed, { timeout: 12_000 }).toBe(true);
+  const before = await scans();
+  await expect.poll(() => sockets[first + 2]?.closed, { timeout: 12_000 }).toBe(true);
+  await expect.poll(() => sockets[first + 3]?.closed, { timeout: 12_000 }).toBe(true);
+  assert.equal(await scans(), before, `${reason} cookie retries should reuse the refusal`);
+  for (const attempt of sockets.slice(first, first + 4)) {
+    assert.deepEqual(attempt.sent, []);
+    assert.deepEqual(attempt.received, []);
+  }
+  await expect(count).toHaveText(unavailable);
+}
+
 export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, secret) {
   const source = async (seq, count) => {
     const response = await fetch(`${liveOrigin}/__fixture/live-source`, {
@@ -70,6 +105,13 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
   };
   const browser = await chromium.launch();
   const sql = postgres(databaseUrl, { max: 1 });
+  async function mintSession(lifetime) {
+    const { ref, cookie } = await fixtureSession(secret);
+    await sql`insert into web_sessions (token_hash, user_id, username, member, expires_at)
+      values (${ref}, ${memberId}, 'Synthetic homepage member', true,
+        clock_timestamp() + ${lifetime}::interval)`;
+    return cookie;
+  }
   try {
     const guest = await browser.newPage();
     const offSockets = observe(guest);
@@ -101,20 +143,9 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
     assert.deepEqual(sockets[0].received.at(-1), frames.five);
     await capture(page, "live");
 
-    const { ref, cookie } = await fixtureSession(secret);
-    await sql`insert into web_sessions (token_hash, user_id, username, member, expires_at)
-      values (${ref}, ${memberId}, 'Synthetic homepage member', true, now() + interval '10 minutes')`;
     const member = await browser.newPage();
     const memberSockets = observe(member);
-    await member.context().addCookies([
-      {
-        name: SESSION_COOKIE,
-        value: cookie.slice(SESSION_COOKIE.length + 1),
-        domain: new URL(liveOrigin).hostname,
-        path: "/",
-        secure: true,
-      },
-    ]);
+    await setSession(member, liveOrigin, await mintSession("10 minutes"));
     await source(101, 5);
     const memberHtml = await openHome(member, liveOrigin);
     await expect(member.locator("#discord-heading")).toBeVisible();
@@ -132,12 +163,9 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
     await expect(count).toHaveText(voice(6));
     await expect(memberCount).toHaveText(unavailable);
     assert.deepEqual(memberSockets[0].received.at(-1), publicBaseline);
-    // The presented revoked cookie must also fail a new upgrade before any command.
-    await expect.poll(() => memberSockets[1]?.closed).toBe(true);
-    assert.deepEqual(memberSockets[1].sent, []);
-    assert.deepEqual(memberSockets[1].received, []);
-    await member.context().clearCookies();
-    await expect(memberCount).toHaveText(voice(6), { timeout: 12_000 });
+    await verifyRefusedRetries(sql, memberSockets, 1, memberCount, "revoked");
+    await setSession(member, liveOrigin, await mintSession("10 minutes"));
+    await expect(memberCount).toHaveText(voice(6), { timeout: 20_000 });
     assert.deepEqual(memberSockets.at(-1).received.at(-1), {
       ...publicBaseline,
       value: { count: 6 },
@@ -173,10 +201,22 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
     assert.deepEqual(sockets[1].sent, [subscribe]);
     assert.deepEqual(sockets[1].received.at(-1), publicBaseline);
 
+    const expired = await browser.newPage();
+    const expiredSockets = observe(expired);
+    await setSession(expired, liveOrigin, await mintSession("-1 minute"));
+    await openHome(expired, liveOrigin);
+    const expiredCount = expired.locator("#home-public-voice");
+    await verifyRefusedRetries(sql, expiredSockets, 0, expiredCount, "expired");
+    await expired.context().clearCookies();
+    await expect(expiredCount).toHaveText(voice(5), { timeout: 20_000 });
+    assert.deepEqual(expiredSockets.at(-1).received.at(-1), publicBaseline);
+
     const socketUrl = new URL(socketPath, liveOrigin.replace(/^http:/, "ws:")).href;
-    assert.ok([...sockets, ...memberSockets].every(({ url }) => url === socketUrl));
+    assert.ok(
+      [...sockets, ...memberSockets, ...expiredSockets].every(({ url }) => url === socketUrl),
+    );
     console.log(
-      "PASS installed Kit home: default off, public-only updates, revoked admission, reconnect, gap withdrawal/resync and page lifecycle",
+      "PASS installed Kit home: default off, public-only updates, bounded revoked and expired admission reads, reconnect, gap withdrawal/resync and page lifecycle",
     );
   } finally {
     await browser.close();

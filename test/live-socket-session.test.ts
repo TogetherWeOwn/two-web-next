@@ -1,6 +1,6 @@
 import { serializeSigned } from "hono/utils/cookie";
 import { expect, it, vi } from "vitest";
-import { resolveLiveSocketSession } from "../src/live/socket-session";
+import { cacheSocketAdmissionRefusals, resolveLiveSocketSession } from "../src/live/socket-session";
 import { SESSION_COOKIE } from "../src/session-cookie";
 import {
   createMemorySessionStore,
@@ -180,4 +180,69 @@ it("fails closed when the store cannot prove liveness", async () => {
       throw new Error("fixture store unavailable");
     }),
   ).toEqual(unavailable);
+});
+
+it.each(["expired", "revoked"])("bounds admission reads for a %s signed session", async (state) => {
+  let time = 1000;
+  const now = () => time;
+  const store = createMemorySessionStore(now);
+  const token = newSessionToken();
+  const replacement = newSessionToken();
+  const ref = await hashToken(token);
+  const replacementRef = await hashToken(replacement);
+  const cookie = await signed(token);
+  const replacementCookie = await signed(replacement);
+  const viewer = { userId: "2", username: "fixture", avatar: null, member: true, moderator: false };
+  await store.create({ ...viewer, tokenHash: ref, expiresAt: new Date(time + 1000) });
+  await store.create({ ...viewer, tokenHash: replacementRef, expiresAt: new Date(time + 120_000) });
+  const lookup = vi.fn(store.getLive);
+  const read = cacheSocketAdmissionRefusals(lookup, now);
+  const resolve = (raw: string) => resolveLiveSocketSession(raw, signingKey, read, now, now);
+
+  expect(await resolve(cookie)).toMatchObject({ kind: "session", ref });
+  if (state === "revoked") await store.revoke(ref);
+  time += state === "expired" ? 1000 : 1;
+  const refusedAt = time;
+  expect(await resolve(cookie)).toEqual(denied);
+  for (const elapsed of [1000, 3000, 7000, 59_999]) {
+    time = refusedAt + elapsed;
+    expect(await resolve(`theme=dark; ${cookie}`)).toEqual(denied);
+  }
+  expect(lookup.mock.calls).toEqual([[ref], [ref]]);
+  expect(await resolve("")).toEqual({ kind: "guest" });
+  expect(await resolve(replacementCookie)).toMatchObject({ kind: "session", ref: replacementRef });
+  time = refusedAt + 60_000;
+  expect(await resolve(cookie)).toEqual(denied);
+  expect(lookup.mock.calls).toEqual([[ref], [ref], [replacementRef], [ref]]);
+});
+
+it("retries an indeterminate or transport-expired admission read", async () => {
+  let time = 1000;
+  const now = () => time;
+  const cookie = await signed(newSessionToken());
+  const live = { userId: "2", member: true, remainingMs: 5000 };
+  const lookup = vi
+    .fn(async () => live)
+    .mockRejectedValueOnce(new Error("fixture store unavailable"))
+    .mockImplementationOnce(async () => {
+      time += 5000;
+      return live;
+    });
+  const read = cacheSocketAdmissionRefusals(lookup, now);
+  const resolve = () => resolveLiveSocketSession(cookie, signingKey, read, now, now);
+
+  expect(await resolve()).toEqual(unavailable);
+  expect(await resolve()).toEqual(denied);
+  expect(await resolve()).toMatchObject({ kind: "session" });
+  expect(lookup).toHaveBeenCalledTimes(3);
+});
+
+it("evicts the oldest admission refusal when the cache fills", async () => {
+  const lookup = vi.fn(async () => null);
+  const read = cacheSocketAdmissionRefusals(lookup, () => 1000);
+  for (let ref = 0; ref <= 1024; ref++) await read(String(ref));
+  await read("1024");
+  expect(lookup).toHaveBeenCalledTimes(1025);
+  await read("0");
+  expect(lookup).toHaveBeenCalledTimes(1026);
 });
