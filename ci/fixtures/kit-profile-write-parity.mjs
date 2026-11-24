@@ -2,9 +2,14 @@ import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { generateSignedCookie } from "hono/cookie";
 import { chromium } from "playwright";
 import postgres from "postgres";
+import {
+  PROFILE_MIN_FILL_MS,
+  PROFILE_OPENED_AT_FIELD,
+} from "../../src/islands/contracts-member-profile.ts";
 import {
   parseRenderedPage,
   renderedAttribute,
@@ -160,9 +165,11 @@ async function nativeForm(origin, cookie) {
     await bio.fill(updated);
     await timezone.fill("Europe/London");
     await page.locator("#profile-games-text").fill("Chess\nGo\nChess");
-    // Submit the real page only after its unchanged minimum-fill timer.
-    const opened = Number(await form.locator('[name="formOpenedAt"]').inputValue());
-    await page.waitForFunction((time) => Date.now() - time >= 1000, opened);
+    // Workerd and the fixture share the runner clock. Wait outside the no-JS browser.
+    const opened = Number(await form.locator(`[name="${PROFILE_OPENED_AT_FIELD}"]`).inputValue());
+    const now = Date.now();
+    assert.ok(Number.isSafeInteger(opened) && opened > 0 && opened <= now);
+    await delay(Math.max(0, opened + PROFILE_MIN_FILL_MS - now + 1));
     const accepted = await submit();
     assert.equal(accepted.status(), 303);
     assert.equal(accepted.headers()["x-two-renderer"], "kit");
