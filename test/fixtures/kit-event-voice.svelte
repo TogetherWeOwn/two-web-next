@@ -1,5 +1,9 @@
 <script lang="ts">
-import { loginUrl, RSVP_CTA_COPY, RSVP_GUEST_CTA_COPY } from "../../src/islands/contracts-rsvp-button";
+import {
+  loginUrl,
+  RSVP_CTA_COPY,
+  RSVP_GUEST_CTA_COPY,
+} from "../../src/islands/contracts-rsvp-button";
 import Button from "../../web/src/lib/Button.svelte";
 import EmberShell from "../../web/src/lib/EmberShell.svelte";
 import EventVoicePlacement from "../../web/src/lib/EventVoicePlacement.svelte";
@@ -9,7 +13,7 @@ import { voiceViews } from "./kit-voice-views";
 
 const { state }: { state: string | null } = $props();
 const event = voiceViews.member.liveEvent;
-const path = `/e/${event.key}`;
+const _path = `/e/${event.key}`;
 const { view: memberView } = voiceViews.member;
 const otherEventRoom = {
   name: "Friday Raid lobby",
@@ -40,11 +44,13 @@ const cases: Record<string, Fixture> = {
   unlinkedOnly: { member: true, enabled: true, view: voiceViews.quiet.view },
   frozen: { member: true, enabled: true, view: voiceViews.frozen.view },
 };
-const fixture = $derived(state && Object.hasOwn(cases, state) ? cases[state] ?? beforeGuest : beforeGuest);
+const _fixture = $derived(
+  state && Object.hasOwn(cases, state) ? (cases[state] ?? beforeGuest) : beforeGuest,
+);
 </script>
 
 <SiteMetadata title={event.title} theme="event" />
-<EmberShell activeNav="event" member={fixture.member} authenticated={fixture.member} menuFallbackOnly>
+<EmberShell activeNav="event" member={_fixture.member} authenticated={_fixture.member} menuFallbackOnly>
   <div class="event-placement">
     <div class="event-composition">
       <div class="event-overview">
@@ -55,19 +61,19 @@ const fixture = $derived(state && Object.hasOwn(cases, state) ? cases[state] ?? 
       <div class="event-rail">
         <section class="seat-card" aria-labelledby="seat-heading">
           <h2 id="seat-heading">Save a seat</h2>
-          {#if fixture.member}
-            <form method="post" action="{path}/rsvp">
+          {#if _fixture.member}
+            <form method="post" action="{_path}/rsvp">
               <Button variant="primary" type="submit" fullWidth>{RSVP_CTA_COPY}</Button>
             </form>
           {:else}
-            <Button variant="primary" href={loginUrl(path)} fullWidth>{RSVP_GUEST_CTA_COPY}</Button>
+            <Button variant="primary" href={loginUrl(_path)} fullWidth>{RSVP_GUEST_CTA_COPY}</Button>
           {/if}
           <a href="/events/{event.key}.ics">Add to calendar</a>
         </section>
         <dl class="event-facts">
           <div><dt>Game</dt><dd>Deep Rock Galactic</dd></div>
         </dl>
-        <EventVoicePlacement enabled={fixture.enabled} eventKey={event.key} view={fixture.view} />
+        <EventVoicePlacement enabled={_fixture.enabled} eventKey={event.key} view={_fixture.view} />
       </div>
       <section class="event-about">
         <h2>About this event</h2>
