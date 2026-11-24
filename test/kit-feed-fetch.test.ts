@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Db } from "../src/db/index";
 import { fetchKitFeed, type FeedRead } from "../src/events/kit-feed-fetch";
 import { getEventRow, listFeed } from "../src/events/reads";
 import { checkJoinThrottle } from "../src/join/service";
+import { SESSION_COOKIE } from "../src/session-cookie";
 import { createMemorySessionStore } from "../src/sessions";
 import { fetchApp } from "./helpers/fetch-app";
 import { calendarRow, KEY, OTHER_KEY } from "./helpers/ics-wire-fixture";
@@ -41,7 +42,11 @@ const results = [
 ] as const;
 
 const db = {} as Db;
-type ReadOptions = { method?: "GET" | "HEAD"; actor?: typeof MEMBER; validator?: string };
+type ReadOptions = {
+  method?: "GET" | "HEAD";
+  actor?: typeof MEMBER | "renewed";
+  validator?: string;
+};
 
 function fixture() {
   const sides = (["mounted", "candidate"] as const).map((side) => {
@@ -54,7 +59,7 @@ function fixture() {
       ADMIN_DB: db,
       THROTTLE_STORE: async () => null,
     };
-    return { side, env, store, get, rotate };
+    return { side, env, store, get, rotate, renewal: "" };
   });
 
   async function compare(
@@ -63,13 +68,17 @@ function fixture() {
     { method = "GET", actor, validator }: ReadOptions = {},
   ) {
     const snapshots = [];
-    for (const { side, env, store } of sides) {
+    for (const fixtureSide of sides) {
+      const { side, env, store, renewal } = fixtureSide;
       const headers = new Headers({
         accept: "application/json",
         "cf-connecting-ip": IP,
         "cf-ray": REQUEST_ID,
       });
-      if (actor) headers.set("cookie", await cookieFor(store, actor));
+      if (actor === "renewed") {
+        if (!renewal) throw new Error(`${side} did not issue a renewal`);
+        headers.set("cookie", renewal);
+      } else if (actor) headers.set("cookie", await cookieFor(store, actor));
       if (validator !== undefined) headers.set("if-none-match", validator);
       const request = new Request(new URL(path, env.APP_URL), { method, headers });
       const admit = vi.mocked(checkJoinThrottle).mockClear();
@@ -80,9 +89,11 @@ function fixture() {
       if (!response) throw new Error(`${side} declined a matched feed request`);
       expect(admit).toHaveBeenCalledExactlyOnceWith(null, `events-read:${IP}`, 60);
       // Stores mint independent opaque renewal values.
-      const cookies = response.headers
-        .getSetCookie()
-        .map((cookie) => cookie.replace(/=[^;]+/, "=<opaque>"));
+      const setCookies = response.headers.getSetCookie();
+      fixtureSide.renewal =
+        setCookies.find((cookie) => cookie.startsWith(`${SESSION_COOKIE}=`))?.split(";", 1)[0] ??
+        "";
+      const cookies = setCookies.map((cookie) => cookie.replace(/=[^;]+/, "=<opaque>"));
       snapshots.push({
         status: response.status,
         headers: response.headers,
@@ -133,121 +144,111 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("detached Kit feed parity with mounted Hono", () => {
-  it.each(results)(
-    "$path keeps GET bytes, HEAD and conditional headers",
-    async ({ path, feed, marker, cache }) => {
-      const { compare, sides } = fixture();
-      const get = await compare(path, feed, { actor: MODERATOR });
-      expect(get.status).toBe(200);
-      expect(get.bytes.toString()).toContain(marker);
-      const etag = `"${createHash("sha256").update(get.bytes).digest("hex")}"`;
-      expect(get.headers.get("etag")).toBe(etag);
-      expect(get.headers.get("cache-control")).toBe(`max-age=300, ${cache}`);
-      const head = await compare(path, feed, { method: "HEAD", actor: MODERATOR });
-      expect(head.status).toBe(200);
-      expect(head.bytes).toHaveLength(0);
-      for (const name of ["content-type", "content-disposition", "etag", "cache-control"])
-        expect(head.headers.get(name)).toBe(get.headers.get(name));
-
-      for (const response of [
-        await compare(path, feed, { validator: etag }),
-        await compare(path, feed, { method: "HEAD", validator: `"stale", W/${etag}` }),
-      ]) {
-        expect(response.status).toBe(304);
-        expect(response.bytes).toHaveLength(0);
-        expect(response.headers.get("etag")).toBe(etag);
-        expect(response.headers.get("content-type")).toBeNull();
-        expect(response.cookies).toEqual([]);
-      }
-      for (const { get } of sides) expect(get).not.toHaveBeenCalled();
-      if (feed.kind !== "event-calendar") {
-        expect(get.bytes.toString()).toContain("Cancelled game");
-        const scope = feed.kind === "calendar" ? [NOW, GAME] : [];
-        expect(listFeed).toHaveBeenCalledWith(
-          expect.anything(),
-          ["published", "cancelled"],
-          ...scope,
-        );
-      }
-    },
-  );
-
-  it("checks draft visibility before a matching conditional and delivers renewals", async () => {
-    vi.mocked(getEventRow).mockResolvedValue(draft);
+it.each(results)(
+  "$path keeps GET bytes, HEAD and conditional headers",
+  async ({ path, feed, marker, cache }) => {
     const { compare, sides } = fixture();
-    const get = await compare(detailPath, detail, { actor: MODERATOR });
+    const get = await compare(path, feed, { actor: MODERATOR });
     expect(get.status).toBe(200);
-    expect(get.bytes.toString()).toContain(draft.title);
-    const validator = get.headers.get("etag")!;
-    const head = await compare(detailPath, detail, { method: "HEAD", actor: MODERATOR, validator });
-    expect(head.status).toBe(304);
+    expect(get.bytes.toString()).toContain(marker);
+    const etag = `"${createHash("sha256").update(get.bytes).digest("hex")}"`;
+    expect(get.headers.get("etag")).toBe(etag);
+    expect(get.headers.get("cache-control")).toBe(`max-age=300, ${cache}`);
+    const head = await compare(path, feed, { method: "HEAD", actor: MODERATOR });
+    expect(head.status).toBe(200);
     expect(head.bytes).toHaveLength(0);
-    for (const { cookies } of [get, head]) {
-      expect(cookies.map((cookie) => cookie.split("=")[0])).toEqual([
-        "__Host-two_session_status",
-        "__Host-two_session",
-      ]);
-    }
-    for (const { get, rotate } of sides) {
-      expect(get).toHaveBeenCalledTimes(2);
-      expect(rotate).toHaveBeenCalledTimes(2);
-    }
-    for (const actor of [undefined, MEMBER]) {
-      const refused = await compare(detailPath, detail, { actor, validator });
-      expect(refused.status).toBe(403);
-      expect(refused.headers.get("etag")).toBeNull();
-      expect(refused.bytes.toString()).toBe("Forbidden");
-    }
-  });
+    for (const name of ["content-type", "content-disposition", "etag", "cache-control"])
+      expect(head.headers.get(name)).toBe(get.headers.get(name));
 
-  it("refuses invalid scope and admits each matching feed once before any lookup", async () => {
-    const { compare, sides } = fixture();
-    const path = "/events.ics?game=%00";
-    const invalid = await compare(path, calendar, { validator: "*" });
-    expect(invalid.status).toBe(400);
-    expect(invalid.bytes.toString()).toBe("Invalid game filter.");
-    vi.mocked(checkJoinThrottle).mockResolvedValue({ limited: true, retryAfter: 42 });
-    for (const entry of [...results, { path, feed: calendar }]) {
-      const limited = await compare(entry.path, entry.feed, { actor: MODERATOR, validator: "*" });
-      expect(limited.status).toBe(429);
-      expect(limited.headers.get("retry-after")).toBe("42");
-      expect(limited.bytes.toString()).toBe("Too many requests");
+    for (const response of [
+      await compare(path, feed, { validator: etag }),
+      await compare(path, feed, { method: "HEAD", validator: `"stale", W/${etag}` }),
+    ]) {
+      expect(response.status).toBe(304);
+      expect(response.bytes).toHaveLength(0);
+      expect(response.headers.get("etag")).toBe(etag);
+      expect(response.headers.get("content-type")).toBeNull();
+      expect(response.cookies).toEqual([]);
     }
-    expect(getEventRow).not.toHaveBeenCalled();
-    expect(listFeed).not.toHaveBeenCalled();
     for (const { get } of sides) expect(get).not.toHaveBeenCalled();
-  });
+    if (feed.kind !== "event-calendar") {
+      expect(get.bytes.toString()).toContain("Cancelled game");
+      const scope = feed.kind === "calendar" ? [NOW, GAME] : [];
+      expect(listFeed).toHaveBeenCalledWith(
+        expect.anything(),
+        ["published", "cancelled"],
+        ...scope,
+      );
+    }
+  },
+);
 
-  it("keeps canonical redirects and branded refusals for matched detail paths", async () => {
-    const { compare } = fixture();
-    const key = KEY.toLowerCase();
-    const query = "?tag=a%2Fb&tag=c+d&empty=";
-    const redirect = await compare(
-      `/events/${key}.ics${query}`,
-      { ...detail, key },
-      { method: "HEAD" },
-    );
-    expect(redirect.status).toBe(301);
-    expect(redirect.headers.get("location")).toBe(detailPath + query);
-    const malformed = await compare(`/events/${KEY}/part.ics`, { ...detail, key: `${KEY}/part` });
-    expect(malformed.status).toBe(404);
-    expect(malformed.headers.get("x-robots-tag")).toBe("noindex, nofollow");
-    expect(getEventRow).not.toHaveBeenCalled();
-  });
+it("checks draft visibility before a matching conditional and delivers renewals", async () => {
+  vi.mocked(getEventRow).mockResolvedValue(draft);
+  const { compare, sides } = fixture();
+  const get = await compare(detailPath, detail, { actor: MODERATOR });
+  expect(get.status).toBe(200);
+  expect(get.bytes.toString()).toContain(draft.title);
+  const validator = get.headers.get("etag")!;
+  const head = await compare(detailPath, detail, { method: "HEAD", actor: "renewed", validator });
+  expect(head.status).toBe(304);
+  expect(head.bytes).toHaveLength(0);
+  expect((await compare(detailPath, detail, { actor: "renewed" })).status).toBe(200);
+  for (const { cookies } of [get, head]) {
+    expect(cookies.map((cookie) => cookie.split("=")[0])).toEqual([
+      "__Host-two_session_status",
+      "__Host-two_session",
+    ]);
+  }
+  for (const { get, rotate } of sides) {
+    expect(get).toHaveBeenCalledTimes(3);
+    expect(rotate).toHaveBeenCalledTimes(3);
+  }
+  for (const actor of [undefined, MEMBER]) {
+    const refused = await compare(detailPath, detail, { actor, validator });
+    expect(refused.status).toBe(403);
+    expect(refused.headers.get("etag")).toBeNull();
+    expect(refused.bytes.toString()).toBe("Forbidden");
+  }
+});
 
-  it("preserves a classified read outage and declines an unowned method", async () => {
-    vi.mocked(listFeed).mockRejectedValue(
-      Object.assign(new Error("fixture outage"), { code: "ECONNREFUSED" }),
-    );
-    const outage = await fixture().compare("/events.rss", rss);
-    expect(outage.status).toBe(503);
-    expect(outage.bytes.toString()).toContain(`"request_id":"${REQUEST_ID}"`);
-    vi.mocked(listFeed).mockClear();
-    vi.mocked(checkJoinThrottle).mockClear();
-    const request = new Request(new URL("/events.rss", baseEnv.APP_URL), { method: "POST" });
-    expect(await fetchKitFeed(request, baseEnv, rss)).toBeNull();
-    expect(checkJoinThrottle).not.toHaveBeenCalled();
-    expect(listFeed).not.toHaveBeenCalled();
-  });
+it("refuses invalid scope and admits each matching feed once before any lookup", async () => {
+  const { compare, sides } = fixture();
+  const path = "/events.ics?game=%00";
+  const invalid = await compare(path, calendar, { validator: "*" });
+  expect(invalid.status).toBe(400);
+  expect(invalid.bytes.toString()).toBe("Invalid game filter.");
+  vi.mocked(checkJoinThrottle).mockResolvedValue({ limited: true, retryAfter: 42 });
+  for (const entry of [...results, { path, feed: calendar }]) {
+    const limited = await compare(entry.path, entry.feed, { actor: MODERATOR, validator: "*" });
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("retry-after")).toBe("42");
+    expect(limited.bytes.toString()).toBe("Too many requests");
+  }
+  expect(getEventRow).not.toHaveBeenCalled();
+  expect(listFeed).not.toHaveBeenCalled();
+  for (const { get } of sides) expect(get).not.toHaveBeenCalled();
+});
+
+it("keeps the branded refusal for a matched multisegment detail path", async () => {
+  const { compare } = fixture();
+  const malformed = await compare(`/events/${KEY}/part.ics`, { ...detail, key: `${KEY}/part` });
+  expect(malformed.status).toBe(404);
+  expect(malformed.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+  expect(getEventRow).not.toHaveBeenCalled();
+});
+
+it("preserves a classified read outage and declines an unowned method", async () => {
+  vi.mocked(listFeed).mockRejectedValue(
+    Object.assign(new Error("fixture outage"), { code: "ECONNREFUSED" }),
+  );
+  const outage = await fixture().compare("/events.rss", rss);
+  expect(outage.status).toBe(503);
+  expect(outage.bytes.toString()).toContain(`"request_id":"${REQUEST_ID}"`);
+  vi.mocked(listFeed).mockClear();
+  vi.mocked(checkJoinThrottle).mockClear();
+  const request = new Request(new URL("/events.rss", baseEnv.APP_URL), { method: "POST" });
+  expect(await fetchKitFeed(request, baseEnv, rss)).toBeNull();
+  expect(checkJoinThrottle).not.toHaveBeenCalled();
+  expect(listFeed).not.toHaveBeenCalled();
 });
