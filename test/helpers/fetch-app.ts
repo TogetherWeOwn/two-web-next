@@ -33,3 +33,14 @@ export function requestApp(
   const request = url instanceof Request && !init ? url : new Request(url, init);
   return fetchApp(request, env, ...target);
 }
+
+const fixtureContext = {
+  waitUntil: () => {},
+  passThroughOnException: () => {},
+} as unknown as ExecutionContext;
+
+// Preserve the fixture origin for relative paths and explicit host probes as written.
+export function fetchAppPath(path: string, init: RequestInit | undefined, env: Env) {
+  const url = path.startsWith("/") ? new URL(path, env.APP_URL) : path;
+  return fetchApp(new Request(url, init), env, fixtureContext);
+}
