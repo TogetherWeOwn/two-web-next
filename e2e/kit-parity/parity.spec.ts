@@ -4112,8 +4112,8 @@ test("Kit event writes preserve RSVP admission, scoped rank and native refusals"
     });
     const targetRows = await withSessionDb(
       (sql) => sql`
-      select user_id, status from rsvps join events on events.id = rsvps.event_id
-      where event_key = ${key} order by rsvps.created_at`,
+      select rsvps.user_id, rsvps.status from rsvps join events on events.id = rsvps.event_id
+      where events.event_key = ${key} order by rsvps.created_at`,
     );
     expect(targetRows).toEqual([
       { user_id: "900000000000000854", status: "going" },
@@ -4130,8 +4130,8 @@ test("Kit event writes preserve RSVP admission, scoped rank and native refusals"
     expect(withdrawal.headers().location).toBe(`/e/${key}?attendees=2`);
     const remaining = await withSessionDb(
       (sql) => sql`
-      select event_key from rsvps join events on events.id = rsvps.event_id
-      where user_id = ${member.userId}`,
+      select events.event_key from rsvps join events on events.id = rsvps.event_id
+      where rsvps.user_id = ${member.userId}`,
     );
     expect(remaining).toEqual([{ event_key: otherKey }]);
 
