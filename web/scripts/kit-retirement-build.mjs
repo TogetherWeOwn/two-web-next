@@ -18,6 +18,22 @@ const loadInventory = () => ({
   inventory: readFixture("route-inventory"),
   rows: readFixture("route-kit-map").rows,
 });
+const reportPrefix = "Kit retirement report ";
+
+export function requireKitRetirementReport(output, mode) {
+  const reports = output.split("\n").filter((line) => line.startsWith(reportPrefix));
+  assert.equal(reports.length, 1, "expected exactly one Kit retirement report");
+  const report = JSON.parse(reports[0].slice(reportPrefix.length));
+  assert.equal(report.mode, mode, "wrong Kit retirement report mode");
+  assert.ok(Number.isSafeInteger(report.checked) && report.checked > 0, "empty retirement report");
+  assert.ok(
+    typeof report.ready === "boolean" &&
+      Array.isArray(report.honoDependencies) &&
+      Array.isArray(report.unowned),
+    "incomplete Kit retirement report",
+  );
+  return report;
+}
 
 /** @param {import("vite").Rollup.OutputBundle} bundle */
 export function inspectSsrBundle(bundle) {
@@ -132,13 +148,8 @@ export function kitRetirementBuild(adapter, mode, load = loadInventory) {
         const { inventory, rows } = load();
         const { checked, unowned } = inspectRoutes(builder.routes, inventory, rows);
         const ready = honoDependencies.length === 0 && unowned.length === 0;
-        console.log(
-          JSON.stringify(
-            { guard: "kit-retirement", mode, ready, checked, honoDependencies, unowned },
-            null,
-            2,
-          ),
-        );
+        const report = { mode, ready, checked, honoDependencies, unowned };
+        console.log(reportPrefix + JSON.stringify(report));
         assert.ok(mode === "report" || ready, "Kit retirement guard found blockers");
         return adapter.adapt(builder);
       },

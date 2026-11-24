@@ -194,29 +194,20 @@ are public-cacheable and single-event downloads are private-cacheable.
 
 ## Offline retirement guard
 
-The Kit archive parity job runs the existing build with
-`KIT_RETIREMENT_GUARD=report`. The build log lists Hono imports, bundled Hono
-modules, and the legacy entry points still present in the emitted SSR graph.
-It also lists legacy method/path pairs that lack a matching native page,
-action, or endpoint in Kit's analyzed adapter routes. It uses the mounted
-inventory, reviewed targets, and synthetic path samples from the parity
-recorder. A generic rest fallback cannot satisfy a registration, and a
-single-segment route cannot satisfy a registered multisegment sample.
+The Kit archive parity job sets `KIT_RETIREMENT_GUARD=report` and requires the
+build's report. It lists Hono dependencies in the emitted SSR graph and legacy
+method/path pairs without native Kit coverage. The check reuses the mounted
+inventory, proposed targets, and synthetic parity samples, including multisegment paths.
 
-Run the offline gate with `KIT_RETIREMENT_GUARD=strict npm run build --prefix web`
-after installing the locked dependencies. Strict mode fails before adapter
-output if either list contains blockers. An ordinary build uses the existing
-adapter directly. The source baseline has 99 endpoint and 11 method-fallback
-registrations to check, plus six middleware registrations tracked separately.
-The report measures structural coverage. Request parity still needs to prove
-middleware, named matchers, accepted methods and content types, assets,
-error handling and response branches against the built Worker.
+With locked dependencies installed, run `KIT_RETIREMENT_GUARD=strict npm run build --prefix web`
+to fail before generating new adapter output when either blocker remains.
+An ordinary build calls the stock adapter. The source baseline has 99 endpoints
+and 11 method fallbacks. Six middleware registrations, matcher behavior, assets,
+content negotiation and error handling need separate built-Worker parity evidence.
 
-The [all-off cutover and Hono undo](kit-cutover-release.md) come first.
-Retirement follows M0 and production parity for every live page and API
-family, with an audited disposition for every inventory row and a passing
-post-release watch for each cutover. Recheck the full installed candidate,
-including the adapter and jobs path, for remaining Hono dependencies.
-Qualify the final cutover and rollback on the exact candidate through the
-[production release gate](../CONTRIBUTING.md#production-release-gate).
-Measure bundle size and cold start again on the fallback-free candidate.
+Retirement follows the [all-off cutover and Hono undo](kit-cutover-release.md),
+M0 and production parity for every live page and API family. Record each
+registration's disposition and every cutover's post-release watch. Recheck the
+full installed candidate, including the adapter and jobs, for Hono dependencies.
+Measure bundle size and cold start again, then qualify the exact retirement
+candidate and rollback through the [production release gate](../CONTRIBUTING.md#production-release-gate).

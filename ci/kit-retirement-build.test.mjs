@@ -5,6 +5,7 @@ import {
   inspectRoutes,
   inspectSsrBundle,
   kitRetirementBuild,
+  requireKitRetirementReport,
 } from "../web/scripts/kit-retirement-build.mjs";
 
 const source = (path) => fileURLToPath(new URL(`../${path}`, import.meta.url));
@@ -156,9 +157,20 @@ test("explicit strict mode blocks adapter output and report mode lets it proceed
   report.adapter.adapt(unowned);
   assert.equal(adapted, 2);
 
-  const [dependencyOnly, routeOnly, clean, reportOnly] = log.mock.calls.map(
-    ({ arguments: [line] }) => JSON.parse(line),
+  const lines = log.mock.calls.map(({ arguments: [line] }) => line);
+  const [dependencyOnly, routeOnly, clean] = lines
+    .slice(0, 3)
+    .map((line) => requireKitRetirementReport(line, "strict"));
+  const reportOnly = requireKitRetirementReport(lines[3], "report");
+  assert.throws(
+    () => requireKitRetirementReport("npm build passed", "report"),
+    /expected exactly one/,
   );
+  assert.throws(
+    () => requireKitRetirementReport(lines.join("\n"), "report"),
+    /expected exactly one/,
+  );
+  assert.throws(() => requireKitRetirementReport(lines[2], "report"), /wrong.*mode/);
   assert.deepEqual(dependencyOnly.honoDependencies, ["hono"]);
   assert.deepEqual(dependencyOnly.unowned, []);
   assert.deepEqual(routeOnly.honoDependencies, []);
