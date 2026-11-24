@@ -22,7 +22,10 @@ import {
   KIT_RENDERER_VALUE,
   ROUTE_MANIFEST,
   dispatchHookRequest,
+  resolveRouteOwner,
 } from "../src/route-ownership";
+import { KIT_STATIC_FEED_ROUTES } from "../src/events/kit-static-feed-routes";
+import { KIT_EVENT_CALENDAR_ROUTE } from "../src/events/kit-event-calendar-route";
 
 const APP_URL = "https://example.com";
 // Explicit Kit-owned view of the archive page for tests: the shipped manifest
@@ -40,6 +43,18 @@ function eventFor(appUrl, path, host) {
 
 function trustedEvent(path, host = "example.com") {
   return eventFor(APP_URL, path, host);
+}
+
+function apiEvent(path, { method = "GET", routeId, origin = APP_URL, host = "example.com" } = {}) {
+  const request = new Request(new URL(path, APP_URL), {
+    method,
+    headers: { host, origin },
+    body: method === "POST" ? "fixture body" : undefined,
+  });
+  const url = new URL(request.url);
+  const isDataRequest = url.pathname.endsWith("/__data.json");
+  if (isDataRequest) url.pathname = url.pathname.slice(0, -"/__data.json".length);
+  return { request, url, isDataRequest, route: { id: routeId ?? url.pathname } };
 }
 
 function deps(overrides = {}) {
@@ -64,16 +79,17 @@ beforeEach(() => {
 });
 
 describe("hooks.server route ownership wiring", () => {
-  it("ships the native archive, events list, about/faq leaves and join-attempts pair enabled with the homepage, privacy, rules, join, recover, remaining admin and profile reads still on Hono", () => {
+  it("pins the full shipped ownership manifest", () => {
+    const homeReads = { resource: "member", action: "list", route: "home" };
     expect(ROUTE_MANIFEST).toEqual([
-      { method: "GET", path: "/", enabled: false, reads: "public" },
+      { method: "GET", path: "/", enabled: true, reads: homeReads },
       { method: "GET", path: "/events/past", enabled: true, reads: "public" },
       { method: "GET", path: "/events", enabled: true, reads: "public" },
       { method: "GET", path: "/about", enabled: true, reads: "public" },
       { method: "GET", path: "/privacy", enabled: false, reads: "public" },
       { method: "GET", path: "/rules", enabled: false, reads: "public" },
       { method: "GET", path: "/faq", enabled: true, reads: "public" },
-      { method: "GET", path: "/join", enabled: false, reads: "public" },
+      { method: "GET", path: "/join", enabled: true, reads: "public" },
       {
         method: "GET",
         path: "/admin",
@@ -135,7 +151,7 @@ describe("hooks.server route ownership wiring", () => {
         enabled: true,
         reads: { resource: "join_attempts", action: "view", route: "admin.join-attempts.show" },
       },
-      { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
+      { method: "GET", path: "/auth/recover", enabled: true, reads: "public" },
       {
         method: "GET",
         path: "/profile",
@@ -580,7 +596,9 @@ describe("hooks.server route ownership wiring", () => {
     expect(source).toContain("kitEventsSessionFor(env)");
     expect(source).toContain("kitEventsJourneyFor(env)");
     expect(source).toContain("journeyFor: kitEventsJourneyFor(env),\n        requestId,");
-    expect(source).toContain("honoFetch,");
+    expect(source).toContain(
+      "honoFetch: (request) => {\n      honoOwned = true;\n      return honoFetch(request);",
+    );
     // The content-leaf zero-stylesheet strip travels as a resolve option:
     // the hook must forward it untouched. Dropping the second argument
     // serves the layout stylesheet on /about and /faq while every dispatch
@@ -595,9 +613,21 @@ describe("hooks.server route ownership wiring", () => {
     // on staging (static requires archive). The exact lines must fail.
     expect(source).toContain("kitRouteArchive: env.KIT_ROUTE_ARCHIVE");
     expect(source).toContain("kitRouteStatic: env.KIT_ROUTE_STATIC");
+    expect(source).toContain("kitRouteEvents: env.KIT_ROUTE_EVENTS");
+    expect(source).toContain("kitRouteHome: env.KIT_ROUTE_HOME");
+    expect(source).toContain("kitRouteJoin: env.KIT_ROUTE_JOIN");
     expect(source).toContain("sessionFor: kitSessionBridge(env)");
     expect(source).toContain("authStatusCookieFor: kitAuthStatusCookieFor(env)");
+    // Dispatch tests inject these callbacks; pin the Worker bindings so that
+    // dropping either one also fails a test.
+    expect(source).toContain("homePanelsFor: (request) => prepareKitHomePanels(env, request)");
+    expect(source).toContain("homeRenewalFor: kitDocumentRotationFor(env)");
     expect(source.match(/dispatchHookRequest\(event,/g)?.length).toBe(1);
+    expect(source).toContain("sequence(admitCapture, dispatchWithSecurity)");
+    expect(source).toContain(
+      "{ flag: env.KIT_ROUTE_FEEDS, routes: [...KIT_STATIC_FEED_ROUTES, KIT_EVENT_CALENDAR_ROUTE] }",
+    );
+    expect(source).toContain("{ flag: env.KIT_ROUTE_SEO, routes: KIT_SEO_ROUTES }");
     // Production session composition lives in kitSessionBridge
     // (src/kit-session.ts), pinned by test/kit-session.test.ts: the hook must
     // not carry any session logic to mutate. Each of these mutants stays green
@@ -632,5 +662,256 @@ describe("hooks.server route ownership wiring", () => {
     expect(source).not.toContain('"kit"');
     expect(source).not.toContain("'kit'");
     expect(source).not.toContain("as const");
+  });
+});
+
+describe("dormant API family admission", () => {
+  const path = "/api/fixture";
+  const read = { method: "GET", path, enabled: true, reads: "public" };
+  const write = { ...read, method: "POST" };
+  const memberReads = { resource: "profile", action: "view", route: "fixture" };
+
+  async function owner(event, ...apiFamilies) {
+    const d = deps(apiFamilies.length ? { apiFamilies } : {});
+    const response = await dispatchHookRequest(event, d);
+    if (response.headers.get(KIT_RENDERER_HEADER) === KIT_RENDERER_VALUE) {
+      expect(d.resolve).toHaveBeenCalledExactlyOnceWith(event);
+      expect(d.honoFetch).not.toHaveBeenCalled();
+      return "kit";
+    }
+    expect(d.honoFetch).toHaveBeenCalledExactlyOnceWith(event.request);
+    expect(d.resolve).not.toHaveBeenCalled();
+    expect(event.request.bodyUsed).toBe(false);
+    return "hono";
+  }
+
+  it.each([
+    [undefined, undefined, "hono", "hono"],
+    ["false", "false", "hono", "hono"],
+    ["true", "false", "kit", "hono"],
+    ["false", "true", "hono", "kit"],
+    ["true", "true", "kit", "kit"],
+    ["TRUE", "1", "hono", "hono"],
+  ])("selects each family's method only with its own flag (%s, %s)", async (r, w, get, post) => {
+    const families = [
+      { flag: r, routes: [read] },
+      { flag: w, routes: [write] },
+    ];
+    expect(await owner(apiEvent(`${path}?q=one&q=two`), ...families)).toBe(get);
+    expect(await owner(apiEvent(path, { method: "HEAD" }), ...families)).toBe(get);
+    expect(await owner(apiEvent(path, { method: "POST" }), ...families)).toBe(post);
+  });
+
+  it.each([
+    [path, { method: "OPTIONS" }],
+    [`${path}/`, {}],
+    [`${path}/__data.json`, {}],
+    ["/api/fixture-sibling", {}],
+    [path, { routeId: HONO_FALLBACK_ROUTE_ID }],
+    [path, { host: "untrusted.example" }],
+  ])("leaves %s with Hono outside the exact trusted endpoint", async (url, options) => {
+    expect(await owner(apiEvent(url, options), { flag: "true", routes: [read] })).toBe("hono");
+  });
+
+  it("uses the request pathname even when Kit sees the decoded path", async () => {
+    const event = apiEvent("/api/%66ixture", { routeId: path });
+    event.url.pathname = path;
+    expect(await owner(event, { flag: "true", routes: [read] })).toBe("hono");
+  });
+
+  it("uses the existing owner policy when an enabled family claims the same pair", async () => {
+    const event = apiEvent("/events/past");
+    const pastArchive = vi.fn(async (_request, render) => render());
+    const sessionFor = vi.fn();
+    const competing = { ...read, path: event.url.pathname, reads: memberReads };
+    const d = deps({
+      manifest: KIT_MANIFEST,
+      apiFamilies: [{ flag: "true", routes: [competing] }],
+      pastArchive,
+      sessionFor,
+    });
+
+    const response = await dispatchHookRequest(event, d);
+    expect(response.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+    expect(pastArchive).toHaveBeenCalledExactlyOnceWith(
+      event.request,
+      expect.any(Function),
+      expect.any(String),
+    );
+    expect(sessionFor).not.toHaveBeenCalled();
+    expect(d.resolve).toHaveBeenCalledExactlyOnceWith(event);
+    expect(d.honoFetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps absent, disabled, conflicting, asset and parameter entries with Hono", async () => {
+    expect(await owner(apiEvent(path))).toBe("hono");
+    expect(
+      await owner(apiEvent(path), { flag: "true", routes: [{ ...read, enabled: false }] }),
+    ).toBe("hono");
+    const enabled = { flag: "true", routes: [read] };
+    expect(await owner(apiEvent(path), enabled, enabled)).toBe("hono");
+    for (const excluded of ["/_app/fixture.js", "/api/items/[id]"]) {
+      const routes = [{ ...read, path: excluded }];
+      expect(await owner(apiEvent(excluded), { flag: "true", routes })).toBe("hono");
+    }
+  });
+
+  it("does not let a family release a disabled Kit route or parameter overlap", async () => {
+    for (const [pathname, overlap] of [
+      ["/admin", { ...read, path: "/admin", enabled: false }],
+      ["/api/fixture", { ...read, path: "/api/:key", enabled: false }],
+    ]) {
+      const event = apiEvent(pathname);
+      const d = deps({
+        // The active rollout may omit /admin, but the shipped manifest still reserves it.
+        manifest: pathname === "/admin" ? [] : [overlap],
+        apiFamilies: [{ flag: "true", routes: [{ ...read, path: pathname }] }],
+      });
+      await dispatchHookRequest(event, d);
+      expect(d.honoFetch).toHaveBeenCalledExactlyOnceWith(event.request);
+      expect(d.resolve).not.toHaveBeenCalled();
+    }
+  });
+
+  const eventCalendar = KIT_EVENT_CALENDAR_ROUTE;
+  const calendarPath = "/events/01J00000000000000000001001.ics";
+  const calendarId = eventCalendar.dynamic.id;
+  const feeds = { flag: "true", routes: [...KIT_STATIC_FEED_ROUTES, eventCalendar] };
+
+  it.each([
+    [calendarPath, { method: "POST" }],
+    [`${calendarPath}/`, {}],
+    [`${calendarPath}/__data.json`, {}],
+    ["/events/outer/inner.ics", {}],
+    ["/events/bad%0Akey.ics", {}],
+    ["/events/invalid%FF.ics", {}],
+    ["/%65vents/key.ics", {}],
+    ["/events/key%2Eics", {}],
+    ["/events/key.json", {}],
+    ["/api/key.ics", {}],
+    [calendarPath, { routeId: HONO_FALLBACK_ROUTE_ID }],
+    [calendarPath, { host: "untrusted.example" }],
+  ])("leaves %s with Hono outside the mounted calendar read", async (pathname, options) => {
+    expect(await owner(apiEvent(pathname, { routeId: calendarId, ...options }), feeds)).toBe(
+      "hono",
+    );
+  });
+
+  it("keeps dynamic family conflicts and existing page reservations on Hono", async () => {
+    const event = apiEvent(calendarPath, { routeId: calendarId });
+    expect(await owner(event, { ...feeds, flag: "false" })).toBe("hono");
+    expect(await owner(event, feeds, feeds)).toBe("hono");
+    const d = deps({
+      manifest: [{ method: "GET", path: "/events/:key", enabled: false }],
+      apiFamilies: [feeds],
+    });
+    await dispatchHookRequest(event, d);
+    expect(d.honoFetch).toHaveBeenCalledExactlyOnceWith(event.request);
+    expect(d.resolve).not.toHaveBeenCalled();
+
+    const broad = { ...eventCalendar, dynamic: { ...eventCalendar.dynamic, matches: () => true } };
+    for (const reserved of ["/api/key.ics", "/version", "/_app/key.ics"]) {
+      const candidate = apiEvent(reserved, { routeId: calendarId });
+      expect(await owner(candidate, { flag: "true", routes: [broad] })).toBe("hono");
+    }
+  });
+
+  it.each([
+    ...KIT_STATIC_FEED_ROUTES.map((route) => ({ route, pathname: route.path, method: "GET" })),
+    { route: eventCalendar, pathname: calendarPath, method: "GET" },
+    { route: eventCalendar, pathname: "/events/%30fixture.ics", method: "HEAD" },
+  ])(
+    "serves and logs $method $pathname without document or session work",
+    async ({ route, pathname, method }) => {
+      const event = apiEvent(`${pathname}?game=fixture`, { method, routeId: route.dynamic?.id });
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      const version = "a".repeat(40);
+      const sessionFor = vi.fn();
+      const authStatusCookieFor = vi.fn();
+      const d = deps({
+        apiFamilies: [feeds],
+        versionMetadata: { tag: version },
+        sessionFor,
+        authStatusCookieFor,
+        resolve: vi.fn(async (resolved) => {
+          expect(resolved.request).toBe(event.request);
+          expect(resolved.locals).not.toHaveProperty("restoredWrite");
+          return new Response(null, { status: 304 });
+        }),
+      });
+
+      // This slice does not need a release of any Hono-reserved path.
+      if (!route.dynamic) expect(resolveRouteOwner(route, [route])).toBe("kit");
+      const response = await dispatchHookRequest(event, d);
+      expect(response.status).toBe(304);
+      expect(response.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+      expect(response.headers.get("content-security-policy")).toBeTruthy();
+      expect(d.resolve).toHaveBeenCalledExactlyOnceWith(event);
+      expect(d.honoFetch).not.toHaveBeenCalled();
+      expect(sessionFor).not.toHaveBeenCalled();
+      expect(authStatusCookieFor).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(log.mock.calls[0][0])).toMatchObject({
+        event: "http.request",
+        method,
+        route: route.path,
+        status: 304,
+        request_id: response.headers.get("x-request-id"),
+        build_sha: version,
+      });
+    },
+  );
+
+  it("applies existing Kit security before a selected write can read a body", async () => {
+    const sessionFor = vi.fn(async () => ({ status: "guest", session: null }));
+    const d = deps({
+      apiFamilies: [{ flag: "true", routes: [{ ...write, reads: memberReads }] }],
+      sessionFor,
+      resolve: vi.fn(async ({ request, locals }) => {
+        expect(locals.status).toBe("guest");
+        expect(request.bodyUsed).toBe(false);
+        return new Response(await request.text());
+      }),
+    });
+    const crossOrigin = apiEvent(path, { method: "POST", origin: "https://other.example" });
+    const refused = await dispatchHookRequest(crossOrigin, d);
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toEqual({ error: "cross_origin" });
+    expect(refused.headers.get("content-security-policy")).toBeTruthy();
+    expect(refused.headers.get("x-request-id")).toBeTruthy();
+    expect(crossOrigin.request.bodyUsed).toBe(false);
+    expect(sessionFor).not.toHaveBeenCalled();
+    expect(d.resolve).not.toHaveBeenCalled();
+
+    const sameOrigin = apiEvent(path, { method: "POST" });
+    const accepted = await dispatchHookRequest(sameOrigin, d);
+    expect(accepted.status).toBe(200);
+    expect(await accepted.text()).toBe("fixture body");
+    expect(sessionFor).toHaveBeenCalledExactlyOnceWith(sameOrigin);
+    expect(d.resolve).toHaveBeenCalledExactlyOnceWith(sameOrigin);
+    expect(d.honoFetch).not.toHaveBeenCalled();
+  });
+
+  it("uses the selected family's refusal renderer before session and body work", async () => {
+    const crossOriginRefusal = vi.fn(() => new Response("refused", { status: 403 }));
+    const sessionFor = vi.fn();
+    const d = deps({
+      apiFamilies: [{ flag: "true", routes: [write], crossOriginRefusal }],
+      sessionFor,
+    });
+    const event = apiEvent(path, { method: "POST", origin: "https://other.example" });
+    const response = await dispatchHookRequest(event, d);
+    expect(response.status).toBe(403);
+    expect(await response.text()).toBe("refused");
+    expect(response.headers.get("x-two-renderer")).toBe("kit");
+    expect(response.headers.get("content-security-policy")).toBeTruthy();
+    expect(crossOriginRefusal).toHaveBeenCalledExactlyOnceWith(
+      event.request,
+      response.headers.get("x-request-id"),
+    );
+    expect(event.request.bodyUsed).toBe(false);
+    expect(sessionFor).not.toHaveBeenCalled();
+    expect(d.resolve).not.toHaveBeenCalled();
+    expect(d.honoFetch).not.toHaveBeenCalled();
   });
 });

@@ -108,6 +108,18 @@ describe("Kit GET /join markup contract (src/screens/join.tsx parity)", () => {
     }
   });
 
+  it("uses the Ember shell while retaining metadata and the restored-write notice", () => {
+    expect(page).toContain("<EmberShell {accountChrome} menuFallbackOnly>");
+    expect(page).toContain("<SiteMetadata");
+    expect(page).toContain('canonical={canonicalUrl(appUrl, "/join")}');
+    expect(page).toContain("{#if data.restoredWrite}");
+    expect(page).toContain('data-testid="auth-error"');
+    expect(page).toContain(
+      "You signed in again. Your earlier changes were not saved. Review and submit them again.",
+    );
+    expect(page.indexOf("{#if data.restoredWrite}")).toBeLessThan(page.indexOf("{#if joinResult}"));
+  });
+
   it("defers the widget to a click: no-referrer facade link and island, no iframe", () => {
     expect(page).toContain('referrerpolicy="no-referrer"');
     expect(page).toContain('<script src="/islands/join-widget.js"');

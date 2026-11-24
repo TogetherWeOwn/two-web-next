@@ -76,12 +76,13 @@ jobs:
         env:
           HEAD_SHA: ${{ steps.candidate.outputs.sha }}
           WORKFLOW_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           # The trusted tree supplies the helper import inventory. If main
           # moved past the candidate, that inventory cannot justify a skip.
           # Manual dispatch and a candidate without a parent also run fully.
-          if [ "${{ github.event_name }}" = workflow_dispatch ] || [ "$HEAD_SHA" != "$WORKFLOW_SHA" ] || ! git rev-parse --verify --quiet "$HEAD_SHA~1" >/dev/null; then
+          if [ "$EVENT_NAME" = workflow_dispatch ] || [ "$HEAD_SHA" != "$WORKFLOW_SHA" ] || ! git rev-parse --verify --quiet "$HEAD_SHA~1" >/dev/null; then
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
             echo "skip_e2e=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -105,7 +106,7 @@ jobs:
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
-    uses: ./.github/workflows/zap-staging.yml
+    uses: TogetherWeOwn/two-web-next/.github/workflows/zap-staging.yml@57f1abbc25d0b39a77d83b46eb8b803b0249bb66 # v2026.1115.0
     with:
       candidate_sha: ${{ needs.scope.outputs.sha }}
 
@@ -284,7 +285,7 @@ jobs:
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
-    uses: ./.github/workflows/web-quality-origin.yml
+    uses: TogetherWeOwn/two-web-next/.github/workflows/web-quality-origin.yml@38581ef492f5c972969f5dfada396a9f0e2ee989
     with:
       origin: https://next.togetherweown.com
       candidate_sha: ${{ needs.scope.outputs.sha }}

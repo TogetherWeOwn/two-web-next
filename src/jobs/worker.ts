@@ -27,7 +27,6 @@ import type {
 } from "./types";
 import { dispatchSyncEvent } from "./sync-event";
 import { pgEventStore } from "./events";
-import { pgReconciliationStore } from "./reconciliation";
 
 /**
  * Live bot transport for the queue consumer. Configuration is checked per call
@@ -151,7 +150,6 @@ export async function handleQueue(
     await consume(batch, {
       bot: botClientFor(env),
       events: pgEventStore(sql),
-      reconciliation: pgReconciliationStore(sql),
       lock: pgUniqueLock(cleanupSql),
       ledger,
       needsSync: pgEventStore(cleanupSql).needsSync,

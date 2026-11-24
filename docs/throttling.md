@@ -54,7 +54,7 @@ oldest-hit-plus-window minus now), otherwise the admission inserts one hit row
 and lets the request through. The count-then-insert runs under a per-bucket
 Postgres advisory lock so concurrent bursts cannot overshoot; the lock waits
 at most `WEB_THROTTLE_LOCK_TIMEOUT_MS` (`SET LOCAL lock_timeout` in
-[`checkJoinThrottle`](../src/join/service.ts)). Failure posture
+[`chargeWebThrottle`](../src/http/throttle.ts)). Failure posture
 differs by call site:
 
 - Absent store allows: [`checkJoinThrottle`](../src/join/service.ts) returns
@@ -114,7 +114,7 @@ RSVP writes use
 | Auth | 10 / 60 s | `AUTH_THROTTLE_PER_MINUTE` in [`src/throttle.ts`](../src/throttle.ts) | `login-redirect` (`GET /auth/discord`), `login-callback` (`GET /auth/discord/callback`), `qa-login` (`POST /auth/qa/:identity`) in [`src/auth/routes.ts`](../src/auth/routes.ts), `login-recover` (`GET /auth/recover`, oversized `?next=` skips spend) in [`src/write-recovery.tsx`](../src/write-recovery.tsx), `alert-probe` in [`src/alert-probe.ts`](../src/alert-probe.ts) |
 | Join | 10 / 60 s | `JOIN_THROTTLE_PER_MINUTE` with `JOIN_THROTTLE_BUCKET = "join"` in [`src/join/service.ts`](../src/join/service.ts) | `join:<clientKey>` shared by `GET /join/discord` and `GET /join/callback` in [`src/join/route-shared.ts`](../src/join/route-shared.ts) (`GET /join` lives in [`src/join/route-page.ts`](../src/join/route-page.ts)) |
 | Write | 30 / 60 s | `WRITE_THROTTLE_PER_MINUTE` in [`src/throttle.ts`](../src/throttle.ts) | `logout` (`POST /logout`) in [`src/auth/routes.ts`](../src/auth/routes.ts), which `POST /logout/everywhere` shares as one budget; `event-write` on `POST /events`, `PATCH /events/:key` and `POST /events/:key/{publish,cancel,duplicate,rsvp-pause,rsvp-reopen}` in [`src/events/routes-writes.ts`](../src/events/routes-writes.ts) |
-| Admin write | 30 / 60 s | `WRITE_THROTTLE_PER_MINUTE` in [`src/throttle.ts`](../src/throttle.ts) | `admin-write:<clientKey>` shared by all admin writes in [`src/admin/routes.tsx`](../src/admin/routes.tsx): `POST /admin/queue/failed/:id/redispatch`, `POST /admin/events`, `POST /admin/events/:key`, `POST /admin/events/:key/{publish,cancel,duplicate,rsvp-pause,rsvp-reopen}`, `POST /admin/featured`, `POST /admin/featured/:id`, `POST /admin/featured/:id/unpublish`, `POST /admin/featured/:id/delete` |
+| Admin write | 30 / 60 s | `WRITE_THROTTLE_PER_MINUTE` in [`src/throttle.ts`](../src/throttle.ts) | `admin-write:<clientKey>` shared by all admin writes in [`src/admin/routes.tsx`](../src/admin/routes.tsx): `POST /admin/queue/failed/:id/redispatch`, `POST /admin/events`, `POST /admin/events/:key`, `POST /admin/events/:key/{publish,cancel,duplicate,rsvp-pause,rsvp-reopen}`, `POST /admin/featured`, `POST /admin/featured/:id`, `POST /admin/featured/:id/unpublish`, `POST /admin/featured/:id/delete`; the loopback-only Kit fixture's `POST /admin/reconciliation/:key` shares the bucket via [`src/admin/kit-reconciliation-write.ts`](../src/admin/kit-reconciliation-write.ts) |
 | Profile write | 30 / 60 s | `PROFILE_WRITE_THROTTLE_PER_MINUTE` in [`src/profiles/routes-admission.ts`](../src/profiles/routes-admission.ts) | `profile-write:<viewerId>` per member on `PATCH /members/:user` and form-override `POST /members/:user` in [`src/profiles/routes-writes.tsx`](../src/profiles/routes-writes.tsx) via [`admitWrite`](../src/profiles/routes-admission.ts) |
 | Public event reads | 60 / 60 s | `PUBLIC_EVENT_READS_PER_MINUTE` in [`src/events/routes-shared.ts`](../src/events/routes-shared.ts) | `events-read:<clientKey>` across public event pages and feeds; see [`event-read-admission.md`](event-read-admission.md) |
 | Shared public reads | 60 / 60 s | `PUBLIC_EVENT_READS_PER_MINUTE` via `publicReadGuard` in [`src/events/routes-shared.ts`](../src/events/routes-shared.ts) | `events-read:<clientKey>`, the same bucket as public event reads, shared by `GET /api/public/*` (via `admitted` in [`src/public-data/routes.ts`](../src/public-data/routes.ts)) and `POST /mcp` (via `mcpRefused` in [`src/mcp/routes.ts`](../src/mcp/routes.ts)) |
@@ -195,7 +195,8 @@ two call sites, both with a 5-minute bound:
   transactions are skipped for a later pass. The cleanup stays outside the lock
   so it never prolongs it; refused requests prune the same age-only rows
   instead of letting expired rows accumulate until some request is admitted.
-  Best-effort: a throwing prune keeps the decided verdict.
+  [`pruneWebThrottle`](../src/http/throttle.ts) runs the batch. A throwing
+  or stalled prune keeps the decided verdict.
 - [`src/events/rsvp.ts`](../src/events/rsvp.ts) (`pruneThrottle`, called from
   `writeRsvp` and both `withdrawRsvp` paths): inside the same transaction,
   before the budget charge and the write, at most one 1,000-row batch of

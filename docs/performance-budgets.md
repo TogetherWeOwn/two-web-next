@@ -11,29 +11,31 @@ CI runs two independent jobs in `.github/workflows/ci.yml`:
   `npm run check` also runs these checks.
 - `lighthouse`: pinned `@lhci/cli`, actual `wrangler dev --local`, three samples per
   page, mobile performance assertions, desktop Lighthouse category scores, and a
-  web-standards check. These checks fail the CI job when they fail. Reports and
-  assertion results (also on failure) are uploaded as the `lighthouse-<sha>` GitHub
+  web-standards check. Incomplete collection, desktop accessibility, best
+  practices and SEO misses, and web-standards failures still fail the CI job.
+  Reports and assertion results (also on failure) are uploaded as the `lighthouse-<sha>` GitHub
   artifact for 14 days in the repository artifact store, not a public LHCI server.
 - main Worker bundle: the `check` job dry-runs the Hono Worker
   (`npx wrangler deploy --dry-run --outdir dist`, no deploy) and gates
   `dist/worker.js` against `ci/worker-bundle-budget.json` with
   `node ci/check-worker-bundle.mjs`. Served-asset and Kit budgets are untouched.
 
-The required `ci-ok` job is the result gate; the standalone `check` job depends
-only on `scope` and runs alongside the audit and performance jobs. `ci-ok`
-aggregates `scope`, `check`, `docs-links` and the selected audit/performance
-results. For an in-scope, non-draft run, both `lighthouse` and `bundle-budget`
-must succeed. A failed or cancelled selected job, an unexpected skip, a failed
-`scope`/`check`/`docs-links` result, or an invalid scope verdict fails `ci-ok`.
+The required `ci-ok` job is the result gate. The standalone `check` job waits for
+`scope` and `dependency-admission`, not the accessibility or performance jobs.
+`ci-ok` aggregates those results alongside `docs-links`. For an in-scope,
+non-draft run, both `lighthouse` and `bundle-budget` must succeed. A failed or
+cancelled selected job, an unexpected skip, a non-success result from `scope`,
+`dependency-admission`, `check` or `docs-links`, or an invalid scope verdict
+fails `ci-ok`.
 A skipped audit or performance job passes only when `scope` marks it out of
 scope or the PR is a draft. `ci-ok` runs unless the workflow is cancelled; a
 cancelled run must be followed by a run with a successful `ci-ok` result before
 merge. Since GitHub can treat a skipped required check as mergeable, `ci-ok`
 validates the selected job results and scope verdict instead of relying on check
 skips to enforce the gate.
-`test/performance-ci.test.ts` sends synthetic over-budget LCP/CLS reports through
-the real LHCI assertion command, proves its nonzero exit fails this gate, and pins
-the workflow wiring. `npm run gate:selftest` covers result-state handling offline.
+`test/performance-ci.test.ts` sends synthetic over-budget LCP, CLS and TTFB reports
+through the real LHCI assertion command, verifies the warnings and zero exit, and
+pins the workflow wiring. `npm run gate:selftest` covers result-state handling offline.
 
 ## Main Worker bundle
 
@@ -127,7 +129,8 @@ repository floor above. The performance regression suite
 ([`test/performance-ci.test.ts`](../test/performance-ci.test.ts)) checks LHCI's
 temporary-file cleanup and both CommonJS/ESM Puppeteer entry points.
 These import checks do not replace actual Chromium collection: the Lighthouse
-job must still collect all twenty-four samples (eight routes, three runs each) and pass the unchanged assertions.
+job must still collect all twenty-four samples (eight routes, three runs each)
+and pass the blocking assertions.
 
 Mobile collection survives one transient the same way desktop does:
 `npm run lighthouse` runs `ci/lighthouse-perf-run.mjs`, which uses the desktop
@@ -136,9 +139,13 @@ when any planned URL is short of its three samples, and never when full
 evidence failed an assertion. Every run writes `.lighthouseci/perf-collect.log`
 and, on failure, `.lighthouseci/perf-collect-diagnosis.md` (COLLECT FAILURE,
 BUDGET BREACH or an unclassified step failure). Both ship in the
-`lighthouse-<sha>` artifact. Its selftest evaluates the real mobile assertions
-over synthetic reports: a short collect retries, and an LCP over budget fails
-without a retry.
+`lighthouse-<sha>` artifact. In that artifact, `mobile-fixture/` holds the raw
+`lhr-*.json` reports and available `assertion-results.json` from the final mobile
+attempt, copied before desktop collection. The top-level LHRs are desktop; the
+mobile `reports/` manifest points to representative reports, not independent
+samples. The snapshot is evidence only and does not change either gate's verdict.
+The mobile runner's selftest evaluates the real assertions over synthetic
+reports: a short collect retries, and an LCP over budget records a warning without a retry.
 
 LHCI starts/stops the fixture worker itself, listening only on `127.0.0.1:8787`.
 Do not run another service on that port. The dedicated Wrangler config has no
@@ -219,15 +226,17 @@ run score. The mobile performance category floor is read from
 
 | Assertion | Threshold | Severity |
 |---|---:|---|
-| Performance category score (mobile) | 0.9 (90%) minimum | error |
-| Largest contentful paint | 2000 ms | error |
-| Cumulative layout shift | 0.1 | error |
-| Server response time (observed TTFB) | 600 ms | error |
-| Total blocking time | 200 ms | error |
+| Performance category score (mobile) | 0.9 (90%) minimum | warning |
+| Largest contentful paint | 2000 ms | warning |
+| Cumulative layout shift | 0.1 | warning |
+| Server response time (observed TTFB) | 600 ms | warning |
+| Total blocking time | 200 ms | warning |
 | First contentful paint | 1800 ms | warning |
 
 The separate desktop category check uses the same category floors from
-`ci/quality-budget.json`:
+`ci/quality-budget.json`. Mobile and desktop performance budget misses report
+but do not block until the Ember + SvelteKit migration is done (owner decision,
+2026-11-14). Desktop accessibility, best-practices and SEO remain blocking in PR CI.
 
 | Category | Minimum score |
 |---|---:|
@@ -420,8 +429,9 @@ routes x 3 runs = 24 with a discovered event, 7 x 3 = 21 when the event route
 is skipped), counted from collect's per-run `.lighthouseci/lhr-*.json` files.
 The retry also fires on the truncation signature of exit 0 with tail routes
 unmeasured, which the old single-shot runner failed closed on with no
-diagnosis, and on a marginal `/` LCP breach: complete evidence where the only
-error-level assertion is the homepage `largest-contentful-paint` strictly
+diagnosis. The marginal `/` LCP retry is dormant while LCP is advisory; it
+requires complete evidence where the only error-level assertion is the homepage
+`largest-contentful-paint` strictly
 inside (budget, budget * 1.1) with every other route pass or warn-only. The
 retry gates; the first attempt's table (`watch-summary.attempt1.md`) and
 per-run files (`marginal-attempt1/`) stay in the artifact next to the gating
@@ -486,8 +496,9 @@ Browser server wait includes network/edge time and is **not** Worker duration.
 No accessible matching telemetry means unknown, not evidence of network noise.
 Inspect the next naturally executed staging artifact after merge; do not dispatch
 a workflow, deploy, or add telemetry authority to obtain it. Preservation is not
-a latency repair: the 600ms server-response median gate stays unchanged and red
-for a 754.261ms median. Rollback removes only the archive call, informative audit
+a latency repair: a 754.261ms median still exceeds the unchanged 600ms
+server-response threshold and is recorded as a warning. Rollback of the evidence change
+removes only the archive call, informative audit
 and its config argument, never a budget or failure check.
 
 Hermetic verification: `npm run lighthouse:evidence:selftest` exercises mobile

@@ -29,6 +29,44 @@ Guidance for human and AI contributors.
 - Read [CONSTRAINTS.md](CONSTRAINTS.md) before writing code. Do not weaken it to make a change pass.
 - Done means merged. Do not leave an orphan PR open: merge it, or close it with a note naming its replacement.
 
+## Models and effort
+
+T3 Code selects the provider, model and effort through the project default,
+thread selection or delegated reviewer target. Keep model overrides out of role
+frontmatter, settings, environment defaults and hooks. `CLAUDE.md` imports this file.
+
+- Use `gpt-6.2-sol` at `high` for routine implementation, or `xhigh` with a reason
+  in the brief. Verify the picker's model label and available effort options.
+- Use `claude-opus-5-5` at `medium` for design or difficult work such as auth,
+  crypto, concurrency and debugging. It is also the default reviewer for a GPT
+  author. Use `high` or `xhigh` only when the task warrants it and record the
+  reason in the brief. Specify effort explicitly when selecting Opus. For a
+  Claude author, use `gpt-6.2-sol` at `high` for independent review.
+- Never use `max`, `ultra` or `ultrathink` effort.
+
+The owner manages T3 Settings and answers owner-routed approval prompts in the
+thread. Agents select models for their tasks and handle technical decisions,
+staging and releases within their authority. Ask the owner about spending beyond
+existing budgets, permanent member data deletion, shutdown of a member-facing
+service, or legal, terms or privacy decisions.
+
+## Review and release
+
+Apply the PR's [risk tier](CONTRIBUTING.md#review-by-risk-tier) to its exact head.
+T2 uses a self-check, T1 requires one independent cross-model review, and T0
+requires two independent cross-model reviews in parallel, including one focused on
+security. Required hosted checks apply to every tier. The author resolves
+findings and verifies promotion-path routing before the pinned squash merge.
+Technical PR work proceeds without an owner decision.
+
+The [release gate](CONTRIBUTING.md#production-release-gate) requires a separate
+task, passing exact-candidate CI, staging checks and smoke, a verified backup
+before data or schema changes, and written rollback rehearsed where supported. Resolve
+recovery blockers and obtain explicit independent approval before protected
+execution. For release review use `claude-opus-5-5` at `high` for a GPT author
+or `gpt-6.2-sol` at `high` for a Claude author. Watch health and errors for at
+least 30 minutes, roll back through the protected path on regression, and log the outcome.
+
 ## Commands
 
 Use Node 22.23.0+ on the 22.x line, or 24+ (CI uses Node 24).
@@ -64,12 +102,26 @@ A user-visible change to a page, component, CSS, typography, navigation, form, o
 4. Run the existing gates (AI contributors use exact-head GitHub Actions, not local gate commands): `npm run a11y`, `npm run lighthouse`, `npm run lighthouse:quality`, and the visual specs in [docs/visual-regression.md](docs/visual-regression.md). These gates cover the Hono site only: for a `web/` change, the screenshots from step 3 are the visual evidence, and the PR body says the Hono gates did not exercise the Kit route. The visual specs compare reliably only in CI (`browser-smoke` on the pinned runner); accept an intentional diff only through the failure artifact and `node ci/visual-accept.mjs`. Meet each threshold by improving the UI. Loosening any threshold (lowering a score floor, raising a time or pixel budget, adding `skipAudits`), masking more of a page, or regenerating baselines wholesale needs its own PR with a justification.
 5. Put the evidence in the PR body: the contract, reference links, before/after screenshots at both widths, the commands you ran, and each intentional baseline change. Report only what you opened or ran.
 
+## Modern web platform guidance
+
+Before writing or changing browser-facing code in the SvelteKit app under `web/` (`.svelte` components, CSS and Tailwind, HTML, client-side TypeScript), consult Modern Web Guidance. It covers current HTML, CSS and DOM APIs, accessibility, forms and performance. Skip it for server-only code (`+page.server.ts` and `+server.ts` data handling, Drizzle, Workers jobs) and for the Hono site under `src/`, which the Kit app is replacing.
+
+1. If your agent harness provides the `modern-web-guidance` skill, use it. Otherwise use Node 22 or later.
+   Run `DISABLE_TELEMETRY=1 npm_config_ignore_scripts=true npx -y modern-web-guidance@latest search "<2-5 word capability>"`, then
+   `DISABLE_TELEMETRY=1 npm_config_ignore_scripts=true npx -y modern-web-guidance@latest retrieve "<id>"`.
+   Search one capability at a time (for example `"light dismiss dialog"`), without framework or app names.
+2. Apply only the retrieved guidance that fits the task. Keep existing behavior, copy, design tokens and
+   the stack the route already uses; record any guide you followed in the PR body.
+3. The guidance never overrides [CONSTRAINTS.md](CONSTRAINTS.md), this file, or a project decision. If they
+   conflict, follow the project and note the conflict in the PR.
+
 ## Definition of done
 
 - Behavior matches the request.
 - Tests and the `npm run check` gates pass on GitHub Actions for the exact PR head, with run/job links recorded. AI contributors do not run local full suites or CI mirrors; local focused reproduction is diagnostic only. Human local verification follows CONTRIBUTING.md.
 - A UI change carries the evidence listed under UI changes.
-- Every required check is green on the exact head SHA that merges: `ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`, `CodeRabbit` and `Devin Review`. No approving review is required.
+- `ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint` and the other [required checks](CONTRIBUTING.md#branch-protection-and-required-checks) are green on the exact head SHA that merges. Complete the repository's independent review for the declared tier.
 - Every review finding is fixed, or answered with evidence.
-- When native review stages apply, the final-stage reviewer squash-merges the exact reviewed head before closing the task; otherwise the author merges. Pin the merge to that SHA. A merge to `main` here deploys production, so it requires a fresh per-PR exact-head Release Manager `request_confirmation` on a child card assigned and addressed to the Release Manager; every other production deploy also needs Release Manager confirmation. Any push requires a new exact-head confirmation. Follow [CONTRIBUTING.md](CONTRIBUTING.md#merge-and-production-staging-evidence) for the automatic post-merge, pre-production staging/e2e/soak gate, retained safeguards and release-log recording; neither pre-merge staging nor artifact equality is a merge prerequisite.
+- Follow [CONTRIBUTING.md](CONTRIBUTING.md#merge-and-production-staging-evidence) to verify exact-head promotion-path routing. Obtain fresh review for changed content or review context.
+- Pin the squash merge to the reviewed head and record the reviewed head and resulting squash SHA. Production release requires separate exact-SHA qualification and approval.
 - The PR is squash-merged, and the docs it made stale are updated.

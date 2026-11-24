@@ -10,12 +10,18 @@ import { describe, expect, it } from "vitest";
 // needs verified upstream hashes so local tests cannot cover stale code.
 const gradualPromoteHashesByRef: Record<
   string,
-  { helper: string; manifest: string; gate: string }
+  { helper: string; manifest: string; gate: string; prePromotion?: string }
 > = {
   "89c290be20c0044efaf6916f28341c76e75fff06": {
     helper: "8f87a83d79cc24dacdb5a7247eb1ad67afa0dde71ce3d210980927fe681a320a",
     manifest: "3ec491a337a484c5cdcb25695c6d0d9c48576a76a13c94453bd5ff98aa59b13a",
     gate: "973d48bd7a0ee0c130a4842e4bd2441451791d1483abdef37fcd7a0895766914",
+  },
+  "8059ac2b121b63443db656b1e10e927b8af8133c": {
+    helper: "8f87a83d79cc24dacdb5a7247eb1ad67afa0dde71ce3d210980927fe681a320a",
+    manifest: "e2f34a41d902be69371342c1fbc37f6cabf07ddc697fe60c3ebf4278cd2ae92a",
+    gate: "629091bf134d50211759bca63b7b6fe7c812187c2858c9b369be237514d7b7bf",
+    prePromotion: "9d61c85f02c461fdd002a6c09ea2a0da6fe220f8ca6f27d7357b7b1413074bce",
   },
   d427f7212f478ea3823a605edb394b0722e152b5: {
     helper: "8f87a83d79cc24dacdb5a7247eb1ad67afa0dde71ce3d210980927fe681a320a",
@@ -289,10 +295,9 @@ describe("deploy public-route smoke (offline)", () => {
     expect(smokeSection).toContain('SMOKE_ALLOW_MISSING_BASELINE: "1"');
   });
 
-  it("hands the pre-promote dead-letter baseline to every promote smoke via GITHUB_ENV", () => {
-    // The gradual-promote action runs this repo's bin/smoke.mjs in the same
-    // job, so the $GITHUB_ENV export scopes every stage gate plus the
-    // post-promotion verify to growth past the retained count.
+  it("hands the pre-promote dead-letter baseline to both production smoke steps", () => {
+    // Both the gradual action's stage smokes and the final verification
+    // compare against the same pre-promote count.
     const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
     const jobAt = workflow.indexOf("\n  deploy-production:\n");
     const releaseAt = workflow.indexOf("\n  release:\n");
@@ -312,8 +317,16 @@ describe("deploy public-route smoke (offline)", () => {
     expect(captureBlock).toContain("for i in 1 2 3 4 5");
     expect(captureBlock).toContain('fetch("https://togetherweown.com/up"');
     expect(captureBlock).toContain("::warning::dead-letter baseline unreadable");
-    expect(captureBlock).toContain('echo "SMOKE_FAILED_BASELINE=$baseline" >> "$GITHUB_ENV"');
-    expect(captureBlock).toContain('echo "SMOKE_ALLOW_MISSING_BASELINE=1" >> "$GITHUB_ENV"');
+    expect(captureBlock).toContain('echo "failed=$baseline" >> "$GITHUB_OUTPUT"');
+    expect(captureBlock).not.toContain("$GITHUB_ENV");
+    const receiptAt = job.indexOf("- name: Record successful production promotion");
+    expect(receiptAt).toBeGreaterThan(verifyAt);
+    for (const step of [job.slice(gradualAt, verifyAt), job.slice(verifyAt, receiptAt)]) {
+      expect(step).toContain(
+        "SMOKE_FAILED_BASELINE: ${{ steps.dead-letter-baseline.outputs.failed }}",
+      );
+      expect(step).toContain('SMOKE_ALLOW_MISSING_BASELINE: "1"');
+    }
   });
 
   it("hands the pre-rollback dead-letter baseline to rollback smoke after capture", () => {
@@ -604,7 +617,7 @@ describe("production deploy smoke (offline)", () => {
   it("probes the apex origin with the indexable posture, never staging", () => {
     const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
     expect(workflow).toContain(
-      "uses: TogetherWeOwn/.github/actions/gradual-promote@d427f7212f478ea3823a605edb394b0722e152b5",
+      "uses: TogetherWeOwn/.github/actions/gradual-promote@8059ac2b121b63443db656b1e10e927b8af8133c",
     );
     const centralActionRef = workflow.match(
       /uses: TogetherWeOwn\/\.github\/actions\/gradual-promote@([0-9a-f]{40})/,
@@ -619,6 +632,12 @@ describe("production deploy smoke (offline)", () => {
       .update(readFileSync(".github/actions/gradual-promote/error-rate-gate.mjs"))
       .digest("hex");
     expect(gateSha256).toBe(expectedHashes?.gate);
+    if (expectedHashes?.prePromotion) {
+      const prePromotionSha256 = createHash("sha256")
+        .update(readFileSync(".github/actions/gradual-promote/pre-promotion-check.mjs"))
+        .digest("hex");
+      expect(prePromotionSha256).toBe(expectedHashes.prePromotion);
+    }
     const action = readFileSync(".github/actions/gradual-promote/action.yml", "utf8");
     expect(actionManifestSha256(action)).toBe(expectedHashes?.manifest);
     expect(workflow).toContain("domain: togetherweown.com");

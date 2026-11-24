@@ -418,7 +418,7 @@ describe("kit session-store outage warning docs", () => {
 
   it("sources emit the warnings with class-only fields, request_id on the probe leg only", () => {
     const cases = [
-      { file: "src/auth-status.ts", message: AUTH_STATUS_DOWN, requestId: true },
+      { file: "src/http/auth-status.ts", message: AUTH_STATUS_DOWN, requestId: true },
       { file: "src/kit-session.ts", message: KIT_SESSION_DOWN, requestId: false },
       { file: "src/kit-session.ts", message: KIT_BRIDGE_DOWN, requestId: false },
       { file: "src/kit-session.ts", message: KIT_EVENTS_DOWN, requestId: false },
@@ -428,7 +428,7 @@ describe("kit session-store outage warning docs", () => {
       const call = `console.warn("${message}"`;
       const start = source.indexOf(call);
       expect(start, `missing ${call} in ${file}`).toBeGreaterThanOrEqual(0);
-      // The warn payload carries the exception class plus, on the Hono probe
+      // The warn payload carries the exception class plus, on the status probe
       // leg only, the validated request id: no message, token, cookie, or
       // member identity travels on any leg.
       const payload = source.slice(start, source.indexOf("});", start));
@@ -661,7 +661,7 @@ describe("kit session-bridge and auth-status probe runbook row cites", () => {
   const KIT_SESSION = "src/kit-session.ts";
   const BRIDGE = "kit session bridge unavailable; rendering without locals.";
   const PROBE = "kit auth-status probe unavailable; rendering without probe cookie.";
-  const ROTATION = "kit event-detail rotation unavailable; rendering without renewal.";
+  const ROTATION = "kit document rotation unavailable; rendering without renewal.";
   const ADMIN = "kit admin renewal unavailable; rendering without renewal.";
   // Emitted by the fallback-document style-hash read, not a session leg: no row
   // in this section (a separate rowing decision), but it must stay named here.
@@ -722,15 +722,17 @@ describe("kit session-bridge and auth-status probe runbook row cites", () => {
     viewerOf: () => span(ROUTE_OWNERSHIP, /^function viewerOf\(/, "}"),
     bridge: () => span(ROUTE_OWNERSHIP, /^ {2}const bridgeSession = async/, "  };"),
     probe: () => span(ROUTE_OWNERSHIP, /^ {4}deps\.authStatusCookieFor &&$/, "  }", 1),
+    homeRotationPredicate: () =>
+      span(ROUTE_OWNERSHIP, /^ {2}const renewHome =$/, '    locals?.status === "authenticated";'),
     rotationPredicate: () =>
       span(ROUTE_OWNERSHIP, /^function releasedEventDetailRenewsSession\(/, "}"),
-    rotationAppend: () => span(ROUTE_OWNERSHIP, /^ {2}if \(deps\.eventDetailRotationFor &&/, "  }"),
+    rotationAppend: () => span(ROUTE_OWNERSHIP, /^ {2}if \(documentRotationFor\)/, "  }"),
     adminPredicate: () => span(ROUTE_OWNERSHIP, /^function releasedAdminRenewsSession\(/, "}"),
     adminAppend: () => span(ROUTE_OWNERSHIP, /^ {2}if \(deps\.adminRenewalFor &&/, "  }"),
   };
   const session = {
     bridge: () => span(KIT_SESSION, /^export function kitSessionBridge\(/, "}"),
-    rotation: () => span(KIT_SESSION, /^export function kitEventDetailRotationFor\(/, "}"),
+    rotation: () => span(KIT_SESSION, /^export function kitDocumentRotationFor\(/, "}"),
     adminRenewal: () => span(KIT_SESSION, /^export function kitAdminRenewalFor\(/, "}"),
     signer: () => span(KIT_SESSION, /^export function kitAuthStatusCookieFor\(/, "}"),
   };
@@ -776,6 +778,7 @@ describe("kit session-bridge and auth-status probe runbook row cites", () => {
     expectContainsWarn(ownership.probe(), ROUTE_OWNERSHIP, PROBE);
 
     const rotation = rowFor(ROTATION);
+    expectCited(rotation, ownership.homeRotationPredicate());
     expectCited(rotation, ownership.rotationPredicate());
     expectCited(rotation, ownership.rotationAppend());
     expectCited(rotation, session.rotation());
@@ -792,7 +795,12 @@ describe("kit session-bridge and auth-status probe runbook row cites", () => {
     const allowed: Record<string, string[]> = {
       [BRIDGE]: [ownership.bridge(), ownership.viewerOf(), session.bridge()],
       [PROBE]: [ownership.probe(), session.signer()],
-      [ROTATION]: [ownership.rotationPredicate(), ownership.rotationAppend(), session.rotation()],
+      [ROTATION]: [
+        ownership.homeRotationPredicate(),
+        ownership.rotationPredicate(),
+        ownership.rotationAppend(),
+        session.rotation(),
+      ],
       [ADMIN]: [ownership.adminPredicate(), ownership.adminAppend(), session.adminRenewal()],
     };
     for (const [message, spans] of Object.entries(allowed)) {
@@ -812,9 +820,9 @@ describe("kit session-bridge and auth-status probe runbook row cites", () => {
           /keeps an authorized admin response when the probe rejects/,
       },
       [ROTATION]: {
-        "test/kit-event-detail-session-renewal.test.ts:499":
+        "test/kit-event-detail-session-renewal.test.ts:502":
           /a rotation store error delivers the released 200/,
-        "test/kit-event-detail-session-renewal.test.ts:533":
+        "test/kit-event-detail-session-renewal.test.ts:536":
           /re-verifies the cookie: forged locals/,
       },
       [ADMIN]: {

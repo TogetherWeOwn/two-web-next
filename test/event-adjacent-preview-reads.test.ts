@@ -179,33 +179,37 @@ for (const twin of ["Hono", "Kit"] as const) {
       expect(target(html, "event-series-next")).toBe(`/e/${adjacentKey(30)}`);
       // Each rail selects different rows. Borrowing the other rail's metadata
       // must fail even when the title and destination href remain correct.
-      for (const [id, instant, formatted, venue] of [
+      for (const [id, instant, honoLabel, kitLabel, venue] of [
         [
           "event-previous",
           "2030-06-13T19:00:00.000Z",
           "Thursday, 13 June 2030 at 19:00 GMT+00:00",
+          "Thu 13 Jun, 19:00 UTC",
           "Global previous room",
         ],
         [
           "event-next",
           "2030-06-15T19:00:00.000Z",
           "Saturday, 15 June 2030 at 19:00 GMT+00:00",
+          "Sat 15 Jun, 19:00 UTC",
           "Global next room",
         ],
         [
           "event-series-previous",
           "2030-06-21T19:00:00.000Z",
           "Friday, 21 June 2030 at 20:00 GMT+01:00",
+          "Fri 21 Jun, 19:00 UTC",
           "Series previous room",
         ],
         [
           "event-series-next",
           "2030-06-07T19:00:00.000Z",
           "Friday, 7 June 2030 at 15:00 GMT-04:00",
+          "Fri 7 Jun, 19:00 UTC",
           "Series next room",
         ],
       ] as const) {
-        expectPreview(link(html, id), instant, formatted, venue);
+        expectPreview(link(html, id), instant, twin === "Hono" ? honoLabel : kitLabel, venue);
       }
       expect(html).not.toMatch(/Hidden draft|Hidden cancelled|Hidden venue|Ended event/);
       expect(headers["cache-control"]).toBe("private, no-store");

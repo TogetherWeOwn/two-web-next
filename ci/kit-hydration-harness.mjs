@@ -10,8 +10,9 @@ const { compile } = createRequire(new URL("../web/package.json", import.meta.url
   "svelte/compiler",
 );
 
-// The caller owns the returned server and must close it, including on assertion failures.
-export async function serveKitFixture({ fixture, styles = "", bodyClass = "", routes = {} }) {
+// Compile a trusted Svelte fixture without starting a server. The client bundle
+// hydrates the server-rendered body inside #fixture.
+export async function compileKitFixture({ fixture, props, ssrOnly = false }) {
   let css = "";
   async function bundle(generate, contents) {
     const result = await build({
@@ -22,13 +23,14 @@ export async function serveKitFixture({ fixture, styles = "", bodyClass = "", ro
       platform: generate === "server" ? "node" : "browser",
       conditions: generate === "client" ? ["browser"] : [],
       nodePaths: [join(root, "web/node_modules"), join(root, "node_modules")],
+      alias: { "#lib": join(root, "web/src/lib") },
       plugins: [
         {
           name: `fixture-${generate}`,
           setup(plugin) {
             plugin.onLoad({ filter: /\.svelte$/ }, ({ path }) => {
               const result = compile(readFileSync(path, "utf8"), { generate, filename: path });
-              if (generate === "client") css += `${result.css?.code ?? ""}\n`;
+              if (ssrOnly || generate === "client") css += `${result.css?.code ?? ""}\n`;
               return { contents: result.js.code, loader: "js", resolveDir: dirname(path) };
             });
           },
@@ -40,16 +42,26 @@ export async function serveKitFixture({ fixture, styles = "", bodyClass = "", ro
   const modulePath = JSON.stringify(fixture);
   const ssr = await bundle(
     "server",
-    `import { render } from 'svelte/server'; import Fixture from ${modulePath}; export const { body, head } = render(Fixture);`,
+    `import { render } from 'svelte/server'; import Fixture from ${modulePath}; export const renderFixture = (props) => render(Fixture, { props });`,
   );
-  const { body, head } = await import(
+  const { renderFixture } = await import(
     `data:text/javascript;base64,${Buffer.from(ssr).toString("base64")}`
   );
+  if (ssrOnly) return { renderFixture, css };
+  // Hydrate from the same JSON projection rendered by SSR.
+  const fixtureProps = JSON.stringify(props ?? {});
+  const { body, head } = renderFixture(JSON.parse(fixtureProps));
   const js = await bundle(
     "client",
-    `import { hydrate } from 'svelte'; import Fixture from ${modulePath}; hydrate(Fixture, { target: document.getElementById('fixture'), recover: false }); document.documentElement.dataset.hydrated = 'true';`,
+    `import { hydrate } from 'svelte'; import Fixture from ${modulePath}; hydrate(Fixture, { target: document.getElementById('fixture'), props: JSON.parse(${JSON.stringify(fixtureProps)}), recover: false }); document.documentElement.dataset.hydrated = 'true';`,
   );
-  const server = createServer((request, response) => {
+  return { body, head, css, js };
+}
+
+// The caller owns the returned server and must close it, including on assertion failures.
+export async function serveKitFixture({ fixture, styles = "", bodyClass = "", routes = {} }) {
+  const { body, head, css, js } = await compileKitFixture({ fixture });
+  return listenOnLoopback((request, response) => {
     if (request.url === "/style.css") {
       response.writeHead(200, { "content-type": "text/css" }).end(styles + css);
     } else if (request.url === "/fixture.js") {
@@ -66,6 +78,10 @@ export async function serveKitFixture({ fixture, styles = "", bodyClass = "", ro
       response.writeHead(404).end();
     }
   });
+}
+
+export async function listenOnLoopback(handler) {
+  const server = createServer(handler);
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);

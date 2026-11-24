@@ -1,15 +1,11 @@
 <script lang="ts">
+import Button from "#lib/Button.svelte";
 import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
+import Tag from "#lib/Tag.svelte";
 import { EXISTING_RESPONSES_TESTID, existingResponsesText } from "../../../src/islands/contracts";
 import type { EventGoneModel } from "../../../src/kit-event-states";
 
-// Cancelled-event presentation for GET /e/:key (card 24/43). Markup contract
-// of EventGonePage (src/events/pages-gone.tsx): the hero core (kicker,
-// status notice, title, upcoming button) is shared, extended here with the
-// correct alternatives (upcoming same-game siblings) and the per-event
-// calendar download. No canonical link (so no og:/twitter: share tags, as
-// served), no RSVP, join-pitch, copy-link or attendee surface anywhere.
 let { model }: { model: EventGoneModel } = $props();
 </script>
 
@@ -24,37 +20,99 @@ let { model }: { model: EventGoneModel } = $props();
   activeNav="event"
   hideAccount
 >
-  <nav class="event-back" aria-label="Event calendar">
-    <a href="/events">← All events</a>
-  </nav>
-  <section class="event-hero event-gone" aria-label="Cancelled event">
-    <p class="event-kicker">{model.game ?? "Community event"}</p>
-    <p class="notice" role="status" data-testid="event-cancelled">Cancelled</p>
-    <h1>{model.title}</h1>
-    <p data-testid={EXISTING_RESPONSES_TESTID}>{existingResponsesText(model.existingResponses)}</p>
-    <p>
-      <a class="btn" href={model.upcomingUrl}>See upcoming events</a>
-    </p>
-    <p>
-      <a href={model.icsUrl} data-testid="event-cancelled-ics">Download calendar entry (.ics)</a>
-    </p>
-    {#if model.related.length > 0}
-      <section aria-labelledby="event-cancelled-alternatives-heading">
-        <h2 id="event-cancelled-alternatives-heading">Other upcoming events</h2>
-        <ul class="facts" data-testid="event-cancelled-alternatives">
-          {#each model.related as alternative (alternative.key)}
-            <li class="card">
-              <a href="/e/{alternative.key}" data-testid="event-cancelled-alternative">{alternative.title}</a>
-              <p>
-                <time datetime={alternative.datetime}>{alternative.whenText}</time>
-                {#if alternative.location} · {alternative.location}{/if}
-              </p>
-            </li>
-          {/each}
-        </ul>
+  <div class="event-layout">
+    <div class="event-head">
+      <nav class="event-back" aria-label="Event calendar">
+        <a href="/events">← All events</a>
+      </nav>
+      <section class="event-hero event-gone" aria-label="Cancelled event">
+        <p class="event-kicker">{model.game ?? "Community event"}</p>
+        <p class="notice" role="status" data-testid="event-cancelled">Cancelled</p>
+        <h1>{model.title}</h1>
+        {#if model.scheduled}
+          <div class="scheduled">
+            <time data-testid="event-cancelled-time" datetime={model.scheduled.datetime}><s>{model.scheduled.clock}</s></time>
+            <div>
+              <p>Cancelled · {model.scheduled.day}</p>
+              <p class="anchor">{model.scheduled.anchor}</p>
+            </div>
+          </div>
+        {/if}
       </section>
-    {/if}
-  </section>
+    </div>
+    <div class="event-rail">
+      <section class="record" aria-labelledby="event-cancelled-record-heading" data-testid="event-cancelled-record">
+        <div class="record-head">
+          <h2 id="event-cancelled-record-heading">Cancelled</h2>
+          <Tag>Cancelled</Tag>
+        </div>
+        <p data-testid={EXISTING_RESPONSES_TESTID}>{existingResponsesText(model.existingResponses)}</p>
+        {#if model.nextDate}
+          <p>Next one: <time datetime={model.nextDate.datetime}>{model.nextDate.whenText}</time></p>
+        {/if}
+        <p>Nothing else to do.</p>
+        {#if model.nextDate}
+          <Button href={model.nextDate.href} fullWidth>See the next date</Button>
+        {/if}
+      </section>
+      {#if model.facts.length > 0}
+        <section class="event-facts" aria-label="Event facts" data-testid="kit-event-facts">
+          <dl>
+            {#each model.facts as fact (fact.key)}
+              <div><dt>{fact.key}</dt><dd>{fact.value}</dd></div>
+            {/each}
+          </dl>
+        </section>
+      {/if}
+    </div>
+    <div class="event-recovery">
+      <p><a class="btn" href={model.upcomingUrl}>See upcoming events</a></p>
+      <p><a href={model.icsUrl} data-testid="event-cancelled-ics">Download calendar entry (.ics)</a></p>
+      {#if model.related.length > 0}
+        <section aria-labelledby="event-cancelled-alternatives-heading">
+          <h2 id="event-cancelled-alternatives-heading">Other upcoming events</h2>
+          <ul class="facts" role="list" aria-labelledby="event-cancelled-alternatives-heading" data-testid="event-cancelled-alternatives">
+            {#each model.related as alternative (alternative.key)}
+              <li class="card">
+                <a href="/e/{alternative.key}" data-testid="event-cancelled-alternative">{alternative.title}</a>
+                <p>
+                  <time datetime={alternative.datetime}>{alternative.whenText}</time>
+                  {#if alternative.location} · {alternative.location}{/if}
+                </p>
+              </li>
+            {/each}
+          </ul>
+        </section>
+      {/if}
+    </div>
+  </div>
   <JsonLd testid="event-jsonld" json={model.jsonLd} />
   <JsonLd testid="site-jsonld" json={model.siteJsonLd} />
 </Shell>
+
+<style>
+  .event-head { grid-area: head; min-width: 0; }
+  .event-rail { grid-area: rail; min-width: 0; display: grid; gap: var(--space-4); }
+  .event-recovery { grid-area: recovery; min-width: 0; }
+  .event-layout { display: grid; gap: var(--space-4); grid-template-areas: "head" "rail" "recovery"; }
+  .scheduled { border-top: 1px solid var(--color-hair1); padding-top: var(--space-5); display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); }
+  .scheduled > time { font-size: var(--text-figure); line-height: 1; font-variant-numeric: tabular-nums; }
+  .scheduled p { margin: 0; }
+  .anchor { font: var(--text-label) / var(--leading-label) var(--font-data); color: var(--color-t3); }
+  .record, .event-facts { border: 0; border-radius: var(--radius-l); background: var(--color-g2); }
+  .record { padding: var(--space-inset-card); }
+  .record-head { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: var(--space-2); }
+  .record-head h2 { margin: 0; font-size: var(--text-title); font-weight: var(--font-weight-semibold); line-height: var(--leading-title); }
+  .record p { margin: var(--space-inset-tight) 0; font-size: var(--text-small); color: var(--color-t2); }
+  .event-facts { padding: var(--space-2) var(--space-inset-card); }
+  .event-facts dl { margin: 0; }
+  .event-facts dl > div { display: flex; justify-content: space-between; gap: var(--space-4); padding: var(--space-inset-tight) 0; }
+  .event-facts dl > div + div { border-top: 1px solid var(--color-hair1); }
+  .event-facts dt { color: var(--color-t3); font: var(--text-label) / var(--leading-label) var(--font-data); letter-spacing: var(--tracking-label); text-transform: uppercase; }
+  .event-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; text-align: right; }
+  /* Kit breakpoint.compact-max, layout.rail.seat, and layout.sticky-offset. */
+  @media (min-width: 821px) {
+    .event-layout { grid-template-columns: minmax(0, 1fr) 380px; grid-template-areas: "head rail" "recovery rail"; column-gap: var(--space-9); align-items: start; }
+    .event-rail { position: sticky; top: 92px; }
+  }
+</style>

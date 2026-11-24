@@ -219,18 +219,9 @@ describe("sync-event bot calls are bounded by the shared deadline", () => {
     await done;
 
     expect(settledOnBudget).toBe(true);
-    expect(box.value).toEqual({
-      reconciliation: {
-        idempotencyKey,
-        verb: "event.upsert",
-        subject: eventKey,
-        attempts: 6,
-        lastCode: null,
-        lastStatus: null,
-      },
-    });
+    expect(box.value).toEqual({ failed: "carrier exhausted; unresolved identity retained" });
     expect(box.value).not.toHaveProperty("definitive");
-    expect(d.events.deferSync).not.toHaveBeenCalled();
+    expect(d.events.deferSync).toHaveBeenCalledExactlyOnceWith(d.attempt, null);
     expect(d.events.failSync).not.toHaveBeenCalled();
     expect(d.events.completeSync).not.toHaveBeenCalled();
     expect(d.attempt.state).toBe("pending");

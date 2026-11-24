@@ -43,7 +43,7 @@ const qs = $derived(season === "all" ? "" : `?season=${season}`);
   <p>Successful joins only (added or already a member); denied, error and degraded attempts never count.</p>
   {#if retentionNote}<p>{retentionNote}</p>{/if}
   {@html periodPickerHtml}
-  <nav aria-label="Signals">
+  <nav aria-label="Hot zones">
     <ul>
       <li><a href="/hotzones/joins{qs}">Joins heatmap</a></li>
       <li><a href="/hotzones/voice{qs}">Voice heatmap</a></li>

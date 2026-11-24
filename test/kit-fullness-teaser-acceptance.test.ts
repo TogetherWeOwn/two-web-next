@@ -21,7 +21,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { FALLBACK_RANKS, HOME_JOIN_RESULT_COPY, HOME_NOTICES } from "../src/home-copy";
+import { FALLBACK_RANKS, HOME_JOIN_RESULT_COPY, HOME_NOTICES, JOIN_INTRO } from "../src/home-copy";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const webRequire = createRequire(join(root, "web/package.json"));
@@ -41,6 +41,7 @@ const APP_URL = "https://example.test";
 
 function baseData(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
+    nowMs: Date.UTC(2030, 6, 19, 12),
     session: null,
     sessionUnavailable: false,
     notice: null,
@@ -52,7 +53,7 @@ function baseData(overrides: Record<string, unknown> = {}): Record<string, unkno
     eventsUnavailable: false,
     featured: [],
     imageHosts: "",
-    homeCopy: { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS },
+    homeCopy: { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS, JOIN_INTRO },
     ...overrides,
   };
 }

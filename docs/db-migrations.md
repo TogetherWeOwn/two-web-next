@@ -82,11 +82,15 @@ is the sanctioned live web apply path, not `npm run db:migrate` from an agent
 workspace. Follow the [operator procedure and recovery gates](runbook.md#neon-web-schema-migrations-separate-operator-action).
 It loads the selected GitHub Environment secret, rejects disabled production,
 plans from the SQL journal/Drizzle ledger, records a pre-apply PITR timestamp,
-applies transactionally and verifies zero pending migrations. The staging
+and applies transactionally. Staging and full-release verification require zero
+pending migrations. Production scoped readback verifies only the approved end,
+reports deferred migrations, and does not qualify a release. The staging
 `deploy.yml` runs the same script for `staging` after CI and before the Worker
 deploy; live production execution always requires separate authorization and is
 never part of a Worker deploy.
 `npm run db:migrate:selftest` exercises only disposable local/CI databases.
+For a human local run, install the pinned Kit workspace dependencies before
+the selftest. Its readiness rehearsal loads the real Kit hook.
 
 ### Adding a migration and running the offline gate
 
@@ -214,7 +218,13 @@ The `drizzle` schema itself gets the same check: its owner (`nspowner`)
 can drop and recreate the ledger whatever the ledger's own ACLs say, and
 any `nspacl` right (`CREATE` or `USAGE`) for `two_web_app`, `PUBLIC`, or a
 role the runtime is a member of also refuses, because the runtime has no
-reviewed need for the schema.
+reviewed need for the schema. The guard also refuses membership in the
+predefined `pg_read_all_data`, `pg_write_all_data` and `pg_maintain` roles:
+their implicit schema or ledger rights do not appear in object ACLs.
+For an already-provisioned target, `assertServingLedgerIsolation` also requires
+the exact configured serving login and an existing ledger and sequence. Bind
+the login to the serving target independently, then pass it to the verifier
+without logging it. This is not inferred from the migrator's `current_user`.
 Unrelated owners and grantees stay allowed. The runner
 never revokes such a right itself, so an already-exposed ledger stays refused
 until the right is removed outside the runner. The refusal names the offending
@@ -236,6 +246,43 @@ run-owned shard container. The SQL serializes role creation, verifies a test
 lifetime. GitHub jobs run it twice to exercise idempotence. This preparation is
 not part of the live migrator or a bootstrap instruction for shared databases.
 
+The `check` job's **web readiness bridge rehearsal** applies the locked journal
+through `1033` and `1037` in one disposable database. It logs the pinned legacy
+and bridge `/up` results before and after narrowing the synthetic login, and
+checks scoped app and audit access and the unchanged journal. This is database
+compatibility evidence, not staging or deployed Worker rollback qualification.
+
+The rehearsal also builds the current Kit server hook and the standalone Hono
+Worker with `__TWO_WEB_1033_COMPAT__` defined at build time. Both require the
+canonical web prefix through `1033` and accept the additive `1034`–`1037`
+transition. `1038` can remain absent. An applied web timestamp after a
+missing entry keeps that hole pending, and a malformed or unreadable ledger
+stays unready. `migration_ledger` reports only actual reads, so an optional
+absence never appears as an applied migration. Ordinary builds require the
+full journal.
+
+The fixture exercises the live event sync store before the expansion and
+after the login can read only the timestamp view. The hosted all-off parity
+job builds the Kit server with `TWO_WEB_1033_COMPAT=true` and installs the
+production cutover facade, which attaches the same queue and scheduled
+handlers as the Hono Worker. It leaves routes, consumers, and cron
+configuration alone. The job checks the installed artifact's `/up` with
+synthetic projections through `1033` and `1037`, a hole, and malformed
+data. It compares fetch behavior at the production origin and verifies
+the serialized module digests in a Wrangler upload dry run.
+
+The protected deploy still requires the full candidate journal and uploads
+Hono. Cutover qualification needs protected admission of the exact
+all-off Kit artifact on the approved ledger, staging checks for the same
+artifact, and a compatible Hono version qualified through protected
+rollback. Install and verify the timestamp view and its serving grants
+before revoking direct ledger access. A legacy Hono artifact that reads
+the ledger directly will fail readiness after that revocation.
+
+The member-erasure CLI reads `event_echo_members` in its dry run and erase
+transaction. The current CLI requires `1034`; verify the erasure path for
+the actual ledger before qualifying a cutover on `1033`.
+
 The runner also refuses at plan time while any reviewed object (the
 runtime-rights table/sequence census, plus the `drizzle` migration ledger and
 its sequence) is owned by a role the migrator cannot
@@ -246,6 +293,38 @@ migrator exempt. The refusal names the object and its owner before any DDL is
 attempted, instead of surfacing as a masked mid-transaction failure; repairing
 the ownership is an operator action outside the runner, which never changes
 owners or role memberships itself.
+
+## Install or remove the readiness projection
+
+Use the [manual readiness workflow](../.github/workflows/db-readiness-projection.yml)
+after the [production release gate](../CONTRIBUTING.md#production-release-gate).
+It uses the [shared definition](web-readiness-projection.sql) outside the Drizzle
+journal, and accepts only `1033_session-roles-checked-at` or `1037_waitlist-offers`
+as the exact ledger end. Keep `1038` deferred.
+The readiness workflow uses `queue: max` in both shared lanes. Other workflows
+can still use GitHub's default policy and replace a pending entry when they queue.
+
+Set these pins in the `production` Environment:
+
+- `PRODUCTION_DB_READINESS_APPROVED_SHA` is the full dispatch commit.
+- `PRODUCTION_DB_READINESS_DATABASE_URL` uses the [pinned PlanetScale production host and branch](runbook.md#neon-web-schema-migrations-separate-operator-action)
+  over direct TLS to `/postgres`, with the ledger owner's schema creation rights.
+- `PRODUCTION_DB_READINESS_PLAN` is JSON with `operation` (`forward` or `undo`),
+  `identity` (the [executor fingerprint](runbook.md#neon-web-schema-migrations-separate-operator-action)),
+  `ledger` (one full tag above), `servingRole` (the shared Web and Jobs login),
+  and `webVersion` (`null` for forward or the qualified fallback Worker UUID for undo).
+  `PRODUCTION_DB_READINESS_PLAN_SHA256` pins the exact JSON bytes.
+- Undo uses `PRODUCTION_DB_READINESS_CF_ACCOUNT_ID` and
+  `PRODUCTION_DB_READINESS_CF_READ_TOKEN` with Workers read access.
+
+Install while the serving login can still read the base timestamp column.
+Before narrowing direct access, rehearse `/up` with the exact fallback Worker,
+direct timestamp access, and the view absent. For undo, restore that access and
+confirm the live binding. If another version serves, switch to the approved
+fallback through [protected Worker rollback](../.github/workflows/rollback-production.yml).
+Then dispatch the separately approved undo. It checks direct access, 100% fallback
+traffic, and healthy `/up` on the same ledger before dropping the view and schema with `RESTRICT`.
+Recheck `/up` and the ledger after the inverse.
 
 ## Audit tables are append-only (deployed-role prerequisite)
 
@@ -292,26 +371,40 @@ with `target: production`, behind the `production` Environment:
 
 - Script: `bin/db-backup.sh` (`backup` | `promote-weekly` |
   `rotate` | `check`). Connection comes from `DATABASE_URL` env only —
-  never argv, never logs. Every `wrangler r2 object` call passes
-  `--jurisdiction eu` (overridable via `BACKUP_JURISDICTION`, default
-  `eu`); the bucket default is `two-web-next-backups` (overridable via
-  `BACKUP_BUCKET`).
+  never argv, never logs. Wrangler is the default transport; `BACKUP_TRANSPORT=s3`
+  uses the AWS CLI v2 with region `auto` and bucket-scoped R2 S3 credentials.
+  The default `BACKUP_JURISDICTION=eu` selects Wrangler's `--jurisdiction eu`
+  or the `.eu.r2.cloudflarestorage.com` S3 endpoint. The bucket default remains
+  `two-web-next-backups` (overridable via `BACKUP_BUCKET`).
 - `paperclip-backups` is explicitly out of scope for member-data dumps
   (jurisdiction `default` / location `ENAM`; must never receive them).
 - Schedule: `.github/workflows/db-backup.yml` — nightly `03:17Z` cron
   binds `environment: ${{ inputs.target || 'staging' }}`, so scheduled runs
   (which carry no inputs) always dump staging. A production dump is a manual
   `workflow_dispatch` with `target: production`, which binds the `production`
-  Environment and waits on its required reviewers and main-only branch policy.
+  Environment. Its main-only branch policy applies, and GitHub waits for
+  required reviewers if configured. Obtain operational approval before dispatch.
+  See [Backups and restore drill](runbook.md#backups-and-restore-drill).
   Staging reads the staging-Environment secret `PLANETSCALE_STAGING_DATABASE_URL` (operator-provisioned, same secret the migrate/deploy paths use);
   the production target reads `PRODUCTION_BACKUP_DATABASE_URL` (a read-only role
   that inherits `pg_read_all_data` and no write, DDL or admin role, on the
   PlanetScale direct endpoint, same `pg_dump -Fc` path — direct `5432`, never
   the pooled `6432` port).
-  Also needs Cloudflare credentials from the bound Environment:
-  `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` (staging Environment), or
-  `PRODUCTION_CLOUDFLARE_API_TOKEN` / `PRODUCTION_CLOUDFLARE_ACCOUNT_ID`
-  (production Environment) behind the same `inputs.target` guard.
+- Backup storage credentials depend on the transport and come from the bound
+  Environment. Wrangler (the default when the target's transport variable is
+  unset) uses `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` in staging, or
+  the corresponding `PRODUCTION_` secrets in production. S3 uses
+  `R2_ACCOUNT_ID`, `R2_S3_ACCESS_KEY_ID`, and `R2_S3_SECRET_ACCESS_KEY` in staging,
+  or the corresponding `PRODUCTION_` secrets in production. The workflow only
+  passes S3 credentials to the backup, rotation, and check steps when S3 is selected.
+  Set the `BACKUP_TRANSPORT` repository variable to `s3` to opt in for staging
+  only. Production uses `PRODUCTION_BACKUP_TRANSPORT` independently; leave it
+  unset until production cutover is approved.
+- Before narrowing the existing backup-related R2 write grant, verify a staging
+  S3 dispatch and a separately approved production S3 dispatch with read-back.
+  A dispatch does not exercise retention. For rollout verification, also observe
+  the scheduled staging S3 path, including Sunday promotion and deletion when
+  archives are eligible.
 - Branch/target correspondence: `branch` must be empty (defaults to `target`),
   equal to `target`, or `test-*`; staging↔production swaps and other overrides
   refuse before provisioning or I/O. Local operators must declare

@@ -50,13 +50,16 @@ import { MEMBER_MILESTONES_CAP } from "../../../src/profiles/stats-limits";
 import type { MemberView } from "../../../src/profiles/store";
 import type { JoinResult } from "../../../src/return-journey";
 import { canonicalUrl, shareImageUrl } from "../../../src/seo";
+import Button from "./Button.svelte";
+import Tag from "./Tag.svelte";
+
+const PRIVACY_HELP_ID = "profile-leaderboard-privacy-help";
 
 // Markup contract of ProfilePage (src/profiles/pages.tsx): the header bar,
 // test ids and copy are shared, so the existing profile tests and islands
 // apply. Member fields render through Svelte interpolation only — never
 // {@html} — so a hostile username, bio or game name stays escaped text, like
-// the Hono JSX render. The edit form posts to the Hono-owned write routes
-// (POST/PATCH /members/:user stay off the manifest until edit parity).
+// the Hono JSX render. Both write owners use the same form action URL.
 let {
   member,
   stats = null,
@@ -66,6 +69,7 @@ let {
   joinResult = null,
   errors = null,
   values = null,
+  statsDraftWarning = false,
   sharedGames = undefined,
   restoredWrite = false,
 }: {
@@ -77,9 +81,7 @@ let {
   joinResult?: JoinResult | null;
   errors?: Record<string, string> | null;
   values?: ProfileFormValues | null;
-  // No statsDraftWarning: Kit is GET-only and the 422 re-render is Hono-owned,
-  // so no Kit route can set it. Re-add with wiring and a render test if Kit
-  // write parity ever needs it.
+  statsDraftWarning?: boolean;
   /** Member's displayed game strings the viewer also plays; entries exactly
    * equal to a value render the shared marker. Absent (or empty) renders the
    * plain list: own profile and zero-shared never mark. */
@@ -201,13 +203,11 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
           </span>
         </span>
         <div>
-          <p class="profile-caption">Member profile</p>
           <h1 id="member-heading" tabindex="-1" data-testid={PROFILE_NAME_TESTID}>
             {member.username}
           </h1>
-          <p class="profile-handle" data-testid="profile-handle">@{member.username}</p>
           <div class="profile-meta">
-            <p class="profile-chip" data-testid="profile-provenance">From Discord</p>
+            <p class="profile-handle" data-testid="profile-handle">@{member.username}</p>
             {#if !stats?.joinedAt && joined}
               <p data-testid={PROFILE_JOINED_TESTID}>Joined {joined}</p>
             {/if}
@@ -221,7 +221,13 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
               </button>
             </div>
           </div>
+          <div class="profile-provenance" data-testid="profile-provenance"><Tag>From Discord</Tag></div>
         </div>
+        {#if isOwner}
+          <div class="profile-identity-actions" data-testid="profile-identity-actions">
+            <Button href="#edit-heading">{PROFILE_COPY.edit}</Button>
+          </div>
+        {/if}
       </div>
       <div class="profile-details">
         <section aria-labelledby="profile-about-heading">
@@ -275,6 +281,7 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
           <p class="profile-hint">Member stats unavailable right now.</p>
           <p class="profile-hint">
             <a href={`/members/${member.id}`}>Retry loading member stats</a>
+            {#if statsDraftWarning} Reloading discards your unsaved changes.{/if}
           </p>
         </section>
       {:else}
@@ -321,6 +328,7 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
             <p class="profile-hint">Milestones unavailable right now.</p>
             <p class="profile-hint">
               <a href={`/members/${member.id}`}>Retry loading milestones</a>
+              {#if statsDraftWarning} Reloading discards your unsaved changes.{/if}
             </p>
           {:else}
             {#if stats.milestonesTruncated}
@@ -382,30 +390,6 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
         <form method="post" action={`/members/${member.id}`} data-testid={PROFILE_FORM_TESTID}>
           <input type="hidden" name="_method" value="PATCH" />
           <input type="hidden" name="leaderboard_opt_out" value="0" />
-          <label class="profile-field profile-switch">
-            <input
-              id={PROFILE_FIELD_IDS.leaderboard_opt_out}
-              name="leaderboard_opt_out"
-              type="checkbox"
-              value="1"
-              checked={form.leaderboard_opt_out}
-              aria-invalid={errors?.leaderboard_opt_out ? "true" : undefined}
-              aria-describedby={errors?.leaderboard_opt_out
-                ? PROFILE_ERROR_IDS.leaderboard_opt_out
-                : undefined}
-            />
-            Hide me from the member leaderboard
-          </label>
-          <p class="profile-hint">
-            Opted out, you leave every board and every count. Tick to hide, untick to show again.
-          </p>
-          {#if errors?.leaderboard_opt_out}
-            <p id={PROFILE_ERROR_IDS.leaderboard_opt_out} class="error">
-              {errors.leaderboard_opt_out}
-            </p>
-          {/if}
-          <p class="profile-hint" id={PROFILE_BIO_HINT_ID}>{PROFILE_BIO_HINT_COPY}</p>
-          <p class="profile-count" id={PROFILE_BIO_COUNT_ID}>{bioCount}</p>
           <label class="profile-field">
             Bio{" "}
             <textarea
@@ -422,8 +406,8 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
           {#if errors?.bio}
             <p id={PROFILE_ERROR_IDS.bio} class="error">{errors.bio}</p>
           {/if}
-          <p class="profile-hint" id={PROFILE_GAMES_TEXT_HINT_ID}>{PROFILE_GAMES_TEXT_HINT_COPY}</p>
-          <p class="profile-count" id={PROFILE_GAMES_TEXT_COUNT_ID}>{gamesCount}</p>
+          <p class="profile-hint" id={PROFILE_BIO_HINT_ID}>{PROFILE_BIO_HINT_COPY}</p>
+          <p class="profile-count" id={PROFILE_BIO_COUNT_ID}>{bioCount}</p>
           <label class="profile-field">
             Games (one per line){" "}
             <textarea
@@ -440,6 +424,8 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
           {#if gamesError}
             <p id={PROFILE_ERROR_IDS.games_text} class="error">{gamesError}</p>
           {/if}
+          <p class="profile-hint" id={PROFILE_GAMES_TEXT_HINT_ID}>{PROFILE_GAMES_TEXT_HINT_COPY}</p>
+          <p class="profile-count" id={PROFILE_GAMES_TEXT_COUNT_ID}>{gamesCount}</p>
           <label class="profile-field">
             Timezone{" "}
             <input
@@ -470,6 +456,32 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
               {PROFILE_COPY.deviceTimezoneHelp}
             </p>
           </div>
+          <section class="profile-privacy" aria-labelledby="profile-privacy-heading">
+            <h3 id="profile-privacy-heading">Privacy</h3>
+            <label class="profile-field profile-switch">
+              <span>Hide me from the member leaderboard</span>
+              <input
+                id={PROFILE_FIELD_IDS.leaderboard_opt_out}
+                name="leaderboard_opt_out"
+                type="checkbox"
+                value="1"
+                checked={form.leaderboard_opt_out}
+                aria-invalid={errors?.leaderboard_opt_out ? "true" : undefined}
+                aria-describedby={errors?.leaderboard_opt_out
+                  ? `${PRIVACY_HELP_ID} ${PROFILE_ERROR_IDS.leaderboard_opt_out}`
+                  : PRIVACY_HELP_ID}
+              />
+            </label>
+            {#if errors?.leaderboard_opt_out}
+              <p id={PROFILE_ERROR_IDS.leaderboard_opt_out} class="error">
+                {errors.leaderboard_opt_out}
+              </p>
+            {/if}
+            <p id={PRIVACY_HELP_ID} class="profile-hint">
+              After you save, hiding removes you from every member leaderboard and its counts.
+              Untick and save to show again.
+            </p>
+          </section>
           <div aria-hidden="true" class="sr-only">
             <label>
               Website <input name={PROFILE_HONEY_FIELD} tabindex="-1" autocomplete="off" />
@@ -480,9 +492,13 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
             <button class="btn" type="submit" data-testid={PROFILE_SAVE_TESTID}>
               {PROFILE_COPY.save}
             </button>
-            <button class="btn profile-secondary" type="reset" data-testid={PROFILE_CANCEL_TESTID}>
-              {PROFILE_COPY.cancel}
-            </button>
+            {#if values}
+              <a class="btn profile-secondary" href={`/members/${member.id}`} data-testid={PROFILE_CANCEL_TESTID}>{PROFILE_COPY.cancel}</a>
+            {:else}
+              <button class="btn profile-secondary" type="reset" data-testid={PROFILE_CANCEL_TESTID}>
+                {PROFILE_COPY.cancel}
+              </button>
+            {/if}
           </div>
         </form>
         {@html editorIsland}
@@ -490,3 +506,91 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
     {/if}
   </main>
 </div>
+
+<style>
+  .profile-theme .profile-player {
+    background: transparent; border: 0; padding-inline: 0;
+  }
+  .profile-theme .profile-identity {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: var(--space-7); padding-bottom: var(--space-7);
+    border-bottom: 1px solid var(--color-hair2);
+  }
+  /* G1's 120 px portrait on wide screens, 72 px on compact screens. */
+  .profile-theme .profile-identity .avatar {
+    width: 120px; height: 120px; border-radius: var(--radius-pill); overflow: hidden;
+  }
+  .profile-theme .profile-identity .avatar-initial {
+    background: var(--g3); color: var(--t1); border: 0;
+    font-size: var(--text-tile); font-weight: var(--font-weight-semibold);
+  }
+  .profile-theme #member-heading {
+    margin: 0 0 var(--space-2); font-size: var(--text-hero); line-height: var(--leading-display);
+    font-stretch: var(--font-width-display); font-weight: var(--font-weight-display);
+    letter-spacing: var(--tracking-display); text-transform: none;
+  }
+  .profile-theme .profile-meta {
+    gap: var(--space-2) var(--space-3); font: var(--text-label)/var(--leading-label) var(--font-data);
+    letter-spacing: var(--tracking-label); text-transform: uppercase;
+  }
+  .profile-provenance { margin-top: var(--space-3); }
+  .profile-identity-actions { align-self: end; }
+  [data-local-time-compare] { flex-basis: 100%; }
+  [data-local-time-compare]:has(> button[hidden]) { display: none; }
+  .profile-meta [data-local-time-compare] > :global([role="status"]) { margin-top: var(--space-3); }
+  /* Match the kit's A1 pill treatment without replacing island-owned controls. */
+  .profile-theme :is(.profile-meta, .profile-editor) .btn {
+    min-height: 44px; padding: 0 var(--space-5); border-radius: var(--radius-pill);
+    font-size: var(--text-ui); font-weight: var(--font-weight-semibold);
+    font-stretch: var(--font-width-button); text-transform: none; letter-spacing: normal;
+  }
+
+  .profile-theme .profile-editor {
+    background: var(--g1); border-color: var(--color-hair2); border-radius: var(--radius-l);
+  }
+  .profile-theme #edit-heading, .profile-theme #profile-privacy-heading {
+    font-weight: var(--font-weight-display); text-transform: none;
+  }
+  .profile-theme #edit-heading { font-size: var(--text-h2); }
+  .profile-theme .profile-editor .profile-field { font-weight: var(--font-weight-semibold); }
+  .profile-theme .profile-field :is(input:not([type="checkbox"]), textarea) {
+    background: var(--g0); color: var(--t1); border: 1px solid var(--color-border);
+    border-radius: var(--radius-m); font: var(--text-ui)/var(--leading-body) var(--font-ui);
+  }
+  .profile-theme .profile-editor .profile-field input::placeholder { color: var(--t3); }
+  .profile-theme .profile-editor :is(input, textarea)[aria-invalid="true"] { border-color: var(--danger); }
+  .profile-theme .profile-editor :is(input, textarea):focus-visible {
+    outline: var(--focus-width) solid var(--focus-ring); outline-offset: var(--focus-offset);
+  }
+  .profile-theme .profile-editor :global(.error) { color: var(--danger); font-size: var(--text-small); }
+  .profile-theme .profile-privacy {
+    margin-top: var(--space-6); padding: var(--space-inset-compact);
+    background: var(--g2); border: 1px solid var(--color-hair2); border-radius: var(--radius-m);
+  }
+  .profile-theme #profile-privacy-heading { margin: 0; font-size: var(--text-h3); }
+  .profile-theme .profile-privacy .profile-switch {
+    margin: var(--space-2) 0 0; min-height: 44px; align-items: center; justify-content: space-between;
+  }
+  /* A12 treatment of the existing checkbox. Keep native keyboard and form semantics. */
+  .profile-theme .profile-privacy .profile-switch input {
+    appearance: none; display: grid; align-items: center; width: 44px; height: 24px;
+    padding: 2px; background: var(--g3); border: 1px solid var(--color-border);
+    border-radius: var(--radius-pill); color: var(--t1); cursor: pointer;
+  }
+  .profile-theme .profile-privacy .profile-switch input::before {
+    content: ""; width: 18px; height: 18px; border-radius: var(--radius-pill); background: currentColor;
+  }
+  .profile-theme .profile-privacy .profile-switch input:checked {
+    justify-items: end; background: var(--ember); color: var(--on-accent);
+  }
+  .profile-theme .profile-privacy .profile-switch input[aria-invalid="true"] { border-color: var(--danger); }
+  @media (forced-colors: active) {
+    .profile-theme .profile-privacy .profile-switch input { appearance: auto; }
+    .profile-theme .profile-privacy .profile-switch input::before { content: none; }
+  }
+  @media (max-width: 48rem) {
+    .profile-theme .profile-identity { grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
+    .profile-theme .profile-identity .avatar { width: var(--space-10); height: var(--space-10); }
+    .profile-theme .profile-identity .avatar-initial { font-size: var(--text-h3); }
+  }
+</style>

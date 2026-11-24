@@ -42,6 +42,43 @@
       "note": "Executes the bundled GET with hostile database rows; checks response bytes, not a source substring."
     },
     {
+      "id": "kit-payload-static-ics",
+      "route": "GET /events.ics",
+      "binding": "web/src/routes/events.ics/+server.ts",
+      "tests": ["Kit feed anonymous payloads"]
+    },
+    {
+      "id": "kit-payload-static-rss",
+      "route": "GET /events.rss",
+      "binding": "web/src/routes/events.rss/+server.ts",
+      "tests": ["Kit feed anonymous payloads"]
+    },
+    {
+      "id": "kit-payload-event-ics",
+      "route": "GET /events/:key.ics",
+      "binding": "web/src/routes/events/[key].ics/+server.ts",
+      "tests": ["Kit feed anonymous payloads"],
+      "note": "Published downloads exclude private fields. The hosted Worker parity fixture separately covers draft authorization and renewal."
+    },
+    {
+      "id": "kit-payload-robots",
+      "route": "GET /robots.txt",
+      "binding": "web/src/routes/robots.txt/+server.ts",
+      "tests": ["Kit search indexing anonymous payloads"]
+    },
+    {
+      "id": "kit-payload-sitemap",
+      "route": "GET /sitemap_index.xml",
+      "binding": "web/src/routes/sitemap_index.xml/+server.ts",
+      "tests": ["Kit search indexing anonymous payloads"]
+    },
+    {
+      "id": "kit-payload-security-txt",
+      "route": "GET /.well-known/security.txt",
+      "binding": "web/src/routes/.well-known/security.txt/+server.ts",
+      "tests": ["Kit security.txt anonymous payload"]
+    },
+    {
       "id": "kit-payload-events-past",
       "route": "GET /events/past",
       "binding": "web/src/routes/events/past/+page.server.ts",
@@ -111,6 +148,11 @@
   ],
   "sessionRequired": [
     {
+      "route": "POST /admin/*",
+      "binding": "web/src/routes/admin/[...action]/+page.server.ts",
+      "reads": "exact moderator form actions admitted by the hook before controller dispatch"
+    },
+    {
       "route": "GET /profile",
       "binding": "web/src/routes/profile/+page.server.ts",
       "reads": "own member record (audited)"
@@ -119,6 +161,11 @@
       "route": "GET /members/:user",
       "binding": "web/src/routes/members/[user]/+page.server.ts",
       "reads": "member profile plus the viewer's own games row for the shared-games match (audited)"
+    },
+    {
+      "route": "PATCH /members/:user",
+      "binding": "web/src/routes/members/[user]/+server.ts",
+      "reads": "own profile after signed member and owner admission"
     },
     {
       "route": "GET /leaderboards/members",
@@ -166,6 +213,16 @@
       "reads": "join_attempts/view (audited)"
     },
     {
+      "route": "GET /admin/reconciliation",
+      "binding": "web/src/routes/admin/reconciliation/+page.server.ts",
+      "reads": "reconciliation list (audited)"
+    },
+    {
+      "route": "GET /admin/reconciliation/:key",
+      "binding": "web/src/routes/admin/reconciliation/[key]/+page.server.ts",
+      "reads": "reconciliation view (audited)"
+    },
+    {
       "route": "GET /admin/featured",
       "binding": "web/src/routes/admin/featured/+page.server.ts",
       "reads": "featured list (audited)"
@@ -183,6 +240,11 @@
   ],
   "outOfScope": [
     {
+      "route": "GET /admin/ops-overrides",
+      "binding": "web/src/routes/admin/ops-overrides/+server.ts",
+      "reason": "Private operator record behind independent control-bearer admission."
+    },
+    {
       "route": "GET /e/:key",
       "binding": "web/src/routes/e/[key]/+page.server.ts",
       "reason": "Hono-owned member-read boundary (detail + neighbors); covered by the Hono payload audit, not this contract."
@@ -195,7 +257,37 @@
     {
       "route": "GET /auth/recover",
       "binding": "web/src/routes/auth/recover/+page.server.ts",
-      "reason": "Hono-owned transient outcome page (journey writes + /join/callback outcomes stay Hono)."
+      "reason": "Transient SSR-only page: Hono admits the landing and supplies a display model; the dispatcher does not serve a Kit data response."
+    },
+    {
+      "route": "GET /auth/discord",
+      "binding": "web/src/routes/auth/discord/+server.ts",
+      "reason": "OAuth authorization redirect issues signed journey cookies. The installed Worker auth fixture covers this endpoint without a Kit data response."
+    },
+    {
+      "route": "GET /auth/discord/callback",
+      "binding": "web/src/routes/auth/discord/callback/+server.ts",
+      "reason": "OAuth callback issues session cookies on success. The installed Worker auth fixture covers this endpoint without a Kit data response."
+    },
+    {
+      "route": "GET /auth/discord/redirect",
+      "binding": "web/src/routes/auth/discord/redirect/+server.ts",
+      "reason": "Legacy location-only OAuth entry. The installed Worker auth fixture covers this endpoint without a Kit data response."
+    },
+    {
+      "route": "GET /auth/status",
+      "binding": "web/src/routes/auth/status/+server.ts",
+      "reason": "Session liveness protocol returns one boolean. The installed Worker auth fixture covers this endpoint without a Kit data response."
+    },
+    {
+      "route": "POST /logout",
+      "binding": "web/src/routes/logout/+server.ts",
+      "reason": "Native POST redirects and clears session cookies. The installed Worker auth fixture covers this endpoint without a Kit data response."
+    },
+    {
+      "route": "POST /logout/everywhere",
+      "binding": "web/src/routes/logout/everywhere/+server.ts",
+      "reason": "Native POST revokes member sessions and clears session cookies. The installed Worker auth fixture covers this endpoint without a Kit data response."
     },
     {
       "route": "*",

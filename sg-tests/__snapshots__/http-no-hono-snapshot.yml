@@ -1,0 +1,126 @@
+id: http-no-hono
+snapshots:
+  import { Hono } from 'hono':
+    labels:
+      - source: "'hono'"
+        style: primary
+        start: 21
+        end: 27
+      - source: import { Hono } from 'hono'
+        style: secondary
+        start: 0
+        end: 27
+  import type { Context } from 'hono':
+    labels:
+      - source: "'hono'"
+        style: primary
+        start: 29
+        end: 35
+      - source: import type { Context } from 'hono'
+        style: secondary
+        start: 0
+        end: 35
+  import { cors } from 'hono/cors':
+    labels:
+      - source: "'hono/cors'"
+        style: primary
+        start: 21
+        end: 32
+      - source: import { cors } from 'hono/cors'
+        style: secondary
+        start: 0
+        end: 32
+  import 'hono/secure-headers':
+    labels:
+      - source: "'hono/secure-headers'"
+        style: primary
+        start: 7
+        end: 28
+      - source: import 'hono/secure-headers'
+        style: secondary
+        start: 0
+        end: 28
+  export { Hono } from 'hono':
+    labels:
+      - source: "'hono'"
+        style: primary
+        start: 21
+        end: 27
+      - source: export { Hono } from 'hono'
+        style: secondary
+        start: 0
+        end: 27
+  export type { Context } from 'hono/context':
+    labels:
+      - source: "'hono/context'"
+        style: primary
+        start: 29
+        end: 43
+      - source: export type { Context } from 'hono/context'
+        style: secondary
+        start: 0
+        end: 43
+  export * from 'hono/utils/http-status':
+    labels:
+      - source: "'hono/utils/http-status'"
+        style: primary
+        start: 14
+        end: 38
+      - source: export * from 'hono/utils/http-status'
+        style: secondary
+        start: 0
+        end: 38
+  const load = () => import('hono/cors'):
+    labels:
+      - source: "'hono/cors'"
+        style: primary
+        start: 26
+        end: 37
+      - source: import
+        style: secondary
+        start: 19
+        end: 25
+      - source: import('hono/cors')
+        style: secondary
+        start: 19
+        end: 38
+      - source: ('hono/cors')
+        style: secondary
+        start: 25
+        end: 38
+  const hono = require('hono'):
+    labels:
+      - source: "'hono'"
+        style: primary
+        start: 21
+        end: 27
+      - source: require
+        style: secondary
+        start: 13
+        end: 20
+      - source: require('hono')
+        style: secondary
+        start: 13
+        end: 28
+      - source: ('hono')
+        style: secondary
+        start: 20
+        end: 28
+  const cors = require('hono/cors'):
+    labels:
+      - source: "'hono/cors'"
+        style: primary
+        start: 21
+        end: 32
+      - source: require
+        style: secondary
+        start: 13
+        end: 20
+      - source: require('hono/cors')
+        style: secondary
+        start: 13
+        end: 33
+      - source: ('hono/cors')
+        style: secondary
+        start: 20
+        end: 33

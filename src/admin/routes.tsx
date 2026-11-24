@@ -35,7 +35,7 @@
 import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { requestBodyLimit } from "../body-limit";
 import { Hono } from "hono";
-import type { Context } from "hono";
+import type { Context, MiddlewareHandler } from "hono";
 import { queuePreviewAdmission, queuePreviewHandler, type QueuePreviewVars } from "./queue-preview";
 import { queueRedispatchHandler, queueRedispatchPreThrottleRefusal } from "./queue-redispatch";
 import { sourceEvidenceHandler, sourceEvidenceMethodRefused } from "./source-evidence";
@@ -86,7 +86,7 @@ import { parseRecordId } from "./record-id";
 import { parseRecurrenceForm } from "./recurrence";
 import {
   isKnownTimezone,
-  parseEventForm,
+  parseHumanEventForm,
   parseFeaturedForm,
   utcToWall,
   ValidationError,
@@ -241,7 +241,7 @@ function refusedEventSave(
 ) {
   let errors: Record<string, string> = {};
   try {
-    parseEventForm(values);
+    parseHumanEventForm(values);
   } catch (err) {
     if (!(err instanceof ValidationError)) throw err;
     errors = { ...err.fields };
@@ -303,6 +303,10 @@ function refusedFeaturedSave(
  * admin tables read/write Postgres.
  */
 export function adminApp(overrides?: AdminOverrides | SessionStore) {
+  return buildAdminApp(adminGuard(overrides));
+}
+
+export function buildAdminApp(admit: MiddlewareHandler<Vars>) {
   const admin = new Hono<Vars>();
   // Control-token holders only: no session lookup, role admission or writes.
   admin.get("/ops-overrides", opsOverridesHandler);
@@ -331,7 +335,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     sourceEvidenceMethodRefused,
   );
   admin.use("/queue/*", queuePreviewAdmission);
-  admin.use("/*", adminGuard(overrides));
+  admin.use("/*", admit);
   admin.get("/queue/failed/:id/preview", queuePreviewHandler);
   // Action-class admin write: the wire cap runs before the shared throttle
   // (oversized attempts 413 without spending the bucket), the cap refuses
@@ -545,7 +549,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         // rules own starts/timezone errors, the recurrence rules own theirs.
         const errors: Record<string, string> = {};
         try {
-          input = parseEventForm(values);
+          input = parseHumanEventForm(values);
         } catch (err) {
           if (!(err instanceof ValidationError)) throw err;
           Object.assign(errors, err.fields);
@@ -633,7 +637,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       };
       let input;
       try {
-        input = parseEventForm(values, carriers);
+        input = parseHumanEventForm(values, carriers);
       } catch (err) {
         if (err instanceof ValidationError) {
           return formError(

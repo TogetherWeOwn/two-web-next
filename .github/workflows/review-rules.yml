@@ -12,7 +12,7 @@ jobs:
   review-rules:
     permissions:
       contents: read
-    uses: TogetherWeOwn/.github/.github/workflows/review-rules.yml@63699075b492914c137281acffd4c89e51cc1c4c
+    uses: TogetherWeOwn/.github/.github/workflows/review-rules.yml@8059ac2b121b63443db656b1e10e927b8af8133c
     with:
       packs: ts,security
       mode: warn

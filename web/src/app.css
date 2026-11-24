@@ -23,6 +23,8 @@
 @source not "./lib/Chip.svelte";
 @source not "./lib/SegmentedControl.svelte";
 @source not "./lib/StructuredTime.svelte";
+/* The unmounted season board uses scoped styles and must not emit shared utilities. */
+@source not "./lib/SeasonBoard.svelte";
 /* Prose, attributes, component CSS and the relative leaderboard scope produce
  * these false candidates, never classes. kit-tailwind-sources.test.ts guards that boundary. */
 @source not inline("visible relative static block hidden table inline outline flex flex-wrap");
@@ -57,6 +59,16 @@ html body {
  * The light ink is set directly on those elements: overriding --muted on the
  * shell would also recolor the dashboard's light resource cards
  * (.card p uses var(--muted) on #fffdf8), dropping them to 1.81:1. */
+.kit-admin .brand {
+  color: var(--color-lobby-ink);
+  outline-color: currentColor;
+}
+.kit-admin :is(.reconciliation-focus, .reconciliation-error a):focus-visible {
+  outline-color: var(--color-lobby-focus);
+}
+.kit-admin :is(.facts .card h2 a, p.notice) {
+  color: var(--ink);
+}
 .kit-admin :is(.field .hint, .hint) {
   color: var(--color-lobby-muted);
 }
@@ -65,4 +77,24 @@ html body {
 }
 .kit-admin fieldset {
   background: var(--color-lobby-raised);
+}
+
+/* Use the dark admin roles for event validation without retheming other notices. */
+.kit-admin .notice[data-admin-validation-summary] {
+  background: var(--color-lobby-raised);
+  border-left-color: var(--color-lobby-accent);
+  color: var(--color-lobby-ink);
+}
+.kit-admin .notice[data-admin-validation-summary] a {
+  color: var(--color-lobby-accent);
+}
+.kit-admin .notice[data-admin-validation-summary]:focus-visible,
+.kit-admin .notice[data-admin-validation-summary] a:focus-visible,
+.kit-admin
+  :is(#f-accessibility-notes, #f-organizer-name, #f-join-url, #f-join-instructions):focus-visible {
+  outline-color: var(--color-lobby-focus);
+}
+.kit-admin [data-event-editor][data-event-draft] .field .error,
+.kit-admin [data-event-editor] [data-event-text-limit] + .error {
+  color: var(--color-danger);
 }

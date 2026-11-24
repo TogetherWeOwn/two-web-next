@@ -79,11 +79,23 @@ describe("Tail alert parser and redaction", () => {
     ).toEqual(alert);
   });
 
+  it.each(["/e/:file{.+\\.md}", "/__probe/alert"])(
+    "preserves the reviewed label %s",
+    async (route) => {
+      const alert = await parseAlert(JSON.stringify({ ...requestAlert, route }), timestamp);
+      expect(alert?.route).toBe(route);
+    },
+  );
+
   it("redacts raw paths, query strings, unknown routes and forged fingerprints", async () => {
     for (const route of [
       "/members/private-user",
+      "/e/never-send.md",
       "/join?token=never-send",
+      "/__probe/alert?token=never-send",
       "/unknown/never-send",
+      "/admin/*",
+      "unmatched",
     ]) {
       const alert = await parseAlert(
         JSON.stringify({ ...requestAlert, route, fingerprint: `never-send@${route}` }),
@@ -108,8 +120,10 @@ describe("Tail alert parser and redaction", () => {
     const inventory = JSON.parse(readFileSync("test/fixtures/route-inventory.json", "utf8")) as {
       path: string;
     }[];
+    const kitOnly = ["/admin/reconciliation", "/admin/reconciliation/:key"];
+    const paths = [...inventory.map((r) => r.path), ...kitOnly];
     expect([...ALERT_ROUTES].sort()).toEqual(
-      [...new Set(inventory.map((r) => r.path).filter((p) => !p.includes("*")))].sort(),
+      [...new Set(paths.filter((p) => !p.includes("*")))].sort(),
     );
   });
 

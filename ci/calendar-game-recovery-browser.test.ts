@@ -3,8 +3,9 @@
 // Builder owns registration in browser CI and before/after visual/a11y evidence.
 // Test Author owns this file: implement the behavior, never edit these assertions.
 import { readFileSync } from "node:fs";
-import { extname, resolve } from "node:path";
+import { basename, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { build } from "esbuild";
 import { chromium, type Browser, type BrowserContext, type Page, type Route } from "playwright";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { __resetAnonEventCacheForTests } from "../src/events/anon-cache";
@@ -16,6 +17,9 @@ import {
   GAME_TWINS,
   gameRecoveryFixture,
   type GameTwin,
+  kitCalendarCss,
+  kitCalendarStyles,
+  retainKitCalendarStyles,
 } from "../test/helpers/calendar-game-recovery";
 
 const publicDir = fileURLToPath(new URL("../public/", import.meta.url)).replace(/\/+$/, "");
@@ -111,7 +115,8 @@ async function open(
           } as Record<string, string>
         )[extname(path)] ?? "application/octet-stream";
       publicFulfilled.push(url.pathname);
-      return route.fulfill({ body: readFileSync(path), contentType });
+      const style = twin === "Kit" ? kitCalendarStyles.get(url.pathname) : undefined;
+      return route.fulfill({ body: style ?? readFileSync(path), contentType });
     } catch {
       publicAborted.push(url.pathname);
       return route.abort();
@@ -218,22 +223,36 @@ async function open(
     expect(reads.every((read) => read.method === "GET")).toBe(true);
     if (javaScriptEnabled) {
       expect(calendarLoads).toBe(1);
-      // Both route twins render the shared calendar shell. It may deliver the
-      // schedule rules externally or inline; check their actual cascade instead.
-      const styles = await page.locator(".events-page").evaluate((root) => {
-        const views = root.querySelector(".schedule-views")!;
-        const filter = root.querySelector(".schedule-game-filter")!;
+      // Kit's compatibility renderer uses the legacy controls. Select the
+      // expectation by the rendered structure, not by the route twin's name.
+      const { native, styles } = await page.locator(".events-page").evaluate((root) => {
+        const views = root.querySelectorAll(".schedule-views, .segments");
+        const filters = root.querySelectorAll(".schedule-game-filter");
+        if (views.length !== 1 || filters.length !== 1) {
+          throw new Error(
+            `Expected one calendar view control and one game filter; found ${views.length} and ${filters.length}`,
+          );
+        }
+        const view = views[0]!;
+        const native = view.matches("nav.segments:not(.schedule-views)");
+        if (!native && !view.matches('div.schedule-views[role="group"]:not(.segments)')) {
+          throw new Error("Unexpected calendar view control structure");
+        }
         return {
-          views: getComputedStyle(views).display,
-          border: getComputedStyle(views).borderTop,
-          filter: getComputedStyle(filter).display,
-          alignment: getComputedStyle(filter).alignItems,
+          native,
+          styles: {
+            views: getComputedStyle(view).display,
+            border: getComputedStyle(view).borderTop,
+            filter: getComputedStyle(filters[0]!).display,
+            alignment: getComputedStyle(filters[0]!).alignItems,
+          },
         };
       });
-      expect(styles).toEqual({
+      expect(styles, "calendar control styles").toEqual({
+        // The native view control and game filter declare inline-flex, but
+        // Chromium blockifies both as direct children of flex containers.
         views: "flex",
-        border: "1px solid rgb(133, 118, 107)",
-        // The inline-flex filter is blockified as a child of the flex search form.
+        border: native ? "1px solid rgba(255, 236, 220, 0.08)" : "1px solid rgb(133, 118, 107)",
         filter: "flex",
         alignment: "center",
       });
@@ -266,6 +285,39 @@ async function open(
   };
 }
 
+it("serves the CSS emitted by the Calendar fixture bundler", async () => {
+  const { outputFiles } = await build({
+    stdin: {
+      contents: 'export { default as stylesheet } from "./calendar-bundle-probe.css";',
+      resolveDir: fileURLToPath(new URL("../test/fixtures/", import.meta.url)),
+    },
+    bundle: true,
+    format: "esm",
+    write: false,
+    outdir: ".",
+    plugins: [kitCalendarCss],
+  });
+  const css = outputFiles.find((file) => file.path.endsWith(".css"));
+  if (!css) throw new Error("The fixture bundler did not emit a stylesheet");
+  const path = `/${basename(css.path)}`;
+  retainKitCalendarStyles(outputFiles);
+  try {
+    const { page } = await open("Kit", "shipped");
+    const asset = await page.evaluate(async (path) => {
+      const response = await fetch(path);
+      return {
+        status: response.status,
+        type: response.headers.get("content-type"),
+        body: await response.text(),
+      };
+    }, path);
+    expect(asset).toEqual({ status: 200, type: "text/css", body: css.text });
+    expect(asset.body).toContain("--two-size-header-compact: 60px");
+  } finally {
+    kitCalendarStyles.delete(path);
+  }
+});
+
 for (const twin of GAME_TWINS) {
   describe(`${twin} asset proof negative controls`, () => {
     it("rejects a calendar with stylesheets disabled", async () => {
@@ -274,7 +326,7 @@ for (const twin of GAME_TWINS) {
       await h.page.evaluate(() => {
         for (const sheet of Array.from(document.styleSheets)) sheet.disabled = true;
       });
-      await expect(h.clean()).rejects.toThrow();
+      await expect(h.clean()).rejects.toThrow(/calendar control styles/);
     });
 
     it("rejects an aborted required non-calendar island", async () => {

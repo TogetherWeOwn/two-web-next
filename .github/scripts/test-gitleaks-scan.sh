@@ -2,12 +2,12 @@
 # Offline self-test for gitleaks-scan.sh: a pull request or merge-queue commit
 # must not be able to silence the secret scan that gates it.
 #
-# Builds throwaway git repos (a "base" commit on main plus a PR commit on top,
-# with refs/remotes/origin/main standing in for the fetched base branch) and
-# runs the real wrapper with the real gitleaks binary. The planted token is
-# synthetic: it is derived at run time from a hash, so neither this file nor
-# the repo history contains a string that looks like a credential. Nothing here
-# touches the network, a real credential or the workspace under test.
+# Builds throwaway git repos (with refs/remotes/origin/main standing in for
+# the fetched base branch) and runs the real wrapper with the real gitleaks
+# binary. The planted token is synthetic and derived at run time from a hash,
+# so neither this file nor the repo history contains a string that looks like
+# a credential. Nothing here touches the network, a real credential or the
+# workspace under test.
 #
 # Usage: GITLEAKS_BIN=/path/to/gitleaks .github/scripts/test-gitleaks-scan.sh
 set -euo pipefail
@@ -95,6 +95,25 @@ expect() {
   fi
 }
 
+# Exit 1 can also mean a scan error. Require the redacted finding at HEAD.
+expect_fixture() {
+  local rc fingerprint log="${work}/last-plain.log"
+  fingerprint="$(git -C "${repo}" rev-parse HEAD):fixture.txt:github-pat:1"
+  rc="$(scan_rc pull_request)"
+  # Gitleaks can style the verbose Secret field even when output is redirected.
+  sed -E $'s/\033\\[[0-9;]*m//g' "${work}/last.log" > "${log}"
+  cases=$((cases + 1))
+  if [[ "${rc}" == 1 ]] &&
+    grep -Eq '^Secret:[[:blank:]]+REDACTED$' "${log}" &&
+    grep -Fxq "$(printf '%-12s %s' 'Fingerprint:' "${fingerprint}")" "${log}" &&
+    ! grep -Fq -- "${token}" "${log}"; then
+    printf 'ok   %s (exit 1, redacted github-pat finding in fixture.txt)\n' "$1"
+  else
+    failures=$((failures + 1))
+    printf 'FAIL %s: expected exit 1 and redacted finding %s, got exit %s\n' "$1" "${fingerprint}" "${rc}"
+  fi
+}
+
 # fingerprint_of CONFIG: gitleaks fingerprint of the planted finding in ${repo}.
 fingerprint_of() {
   (cd "${repo}" && "${GITLEAKS_BIN}" git . --config "$1" --log-opts=HEAD --no-banner \
@@ -115,7 +134,35 @@ write_stock_config
 base_commit
 plant_token
 pr_commit
-expect "pr: planted token is detected" 1 "$(scan_rc pull_request)"
+expect_fixture "pr: planted token is detected"
+
+new_repo pr-no-diff
+write_stock_config
+base_commit
+printf 'fixture.txt -diff\n' > "${repo}/.gitattributes"
+plant_token
+pr_commit
+expect_fixture "pr: planted token in a -diff file is detected"
+
+new_repo pr-merge-resolution
+write_stock_config
+printf 'base value\n' > "${repo}/fixture.txt"
+base_commit
+# Both parents change the same line without adding a token.
+git -C "${repo}" switch -q -c topic
+printf 'topic value\n' > "${repo}/fixture.txt"
+pr_commit
+git -C "${repo}" switch -q main
+printf 'main value\n' > "${repo}/fixture.txt"
+base_commit
+if git -C "${repo}" -c rerere.enabled=false merge --no-edit topic ||
+  [[ -z "$(git -C "${repo}" ls-files -u -- fixture.txt)" ]]; then
+  echo 'FAIL pr: expected a merge conflict in fixture.txt' >&2
+  exit 1
+fi
+plant_token
+pr_commit
+expect_fixture "pr: planted token added only in the merge resolution is detected"
 
 # -- the bypasses a PR could add itself ---------------------------------------
 new_repo pr-config

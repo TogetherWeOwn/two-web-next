@@ -4,7 +4,8 @@
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderEventsHtml } from "../src/kit-events-html";
+import { renderKitEvents as realRender } from "./helpers/calendar-game-recovery";
+import { gathering } from "./helpers/calendar-multiday-acceptance";
 
 const modelModule = fileURLToPath(new URL("../src/events/page-models.server.ts", import.meta.url));
 const virtualModules = new Map([
@@ -74,7 +75,7 @@ beforeAll(async () => {
             [/src\/kit-session$/, "session"],
             [/\/events\/discord-transients$/, "discord"],
             [/\/events\/page-models\.server$/, "model"],
-            [/src\/kit-events-html$/, "renderer"],
+            [/lib\/server\/render-events-html$/, "renderer"],
           ];
           for (const [filter, path] of replacements) {
             build.onResolve({ filter }, () => ({ path, namespace: "kit-events-endpoint-test" }));
@@ -96,20 +97,20 @@ beforeAll(async () => {
 beforeEach(() => {
   seams = {
     HttpError,
-    model: vi.fn(async () => ({
-      state: { view: "list", month: "2026-10", q: "", past: false, page: 1 },
-      upcoming: [],
+    model: vi.fn(async ({ input: { q, page } }) => ({
+      state: { view: "list", month: "2026-10", q, past: false, page },
+      upcoming: page === 2 ? [] : [gathering({ title: "<drill>", proofMarker: "not-public" })],
       past: [],
       zone: "Europe/London",
       now: new Date("2026-10-13T12:00:00Z"),
-      totalPages: 1,
+      totalPages: page === 2 ? 2 : 1,
       emptyState: null,
       robots: undefined,
       discordFailed: false,
       games: [],
       gameFilter: null,
     })),
-    render: vi.fn(renderEventsHtml),
+    render: vi.fn(realRender),
   };
   vi.stubGlobal("__kitEventsEndpoint", seams);
   vi.stubGlobal("fetch", () => {
@@ -122,8 +123,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function requestEvent({ flash = false, method = "GET", island = false } = {}) {
-  const request = new Request("https://example.test/events", {
+function requestEvent(options = {}) {
+  const { flash, method = "GET", island, restoredWrite, search = "" } = options;
+  const request = new Request(`https://example.test/events${search}`, {
     method,
     headers: {
       ...(flash ? { cookie: "__Host-two_join_result=pending" } : {}),
@@ -138,7 +140,7 @@ function requestEvent({ flash = false, method = "GET", island = false } = {}) {
     // The binding threads locals.requestId into the load (the dispatch sets
     // it on the Kit branch); this harness drives the endpoint without the
     // dispatch, so locals carries no id, exactly like a headerless request.
-    locals: {},
+    locals: { restoredWrite },
     cookies: { delete: deleteCookie },
     setHeaders(values) {
       for (const [name, value] of Object.entries(values)) headers.set(name, value);
@@ -222,12 +224,21 @@ describe("Kit events endpoint flash-consumption controls", () => {
     expect(response.headers.get("content-type")).toContain("text/html");
     expect(response.headers.get("cache-control")).toBe("public, max-age=60");
     expect(response.headers.get("vary")).toBe("Cookie, X-Two-Island");
-    expect(await response.text()).toContain('data-testid="events-calendar"');
+    const body = await response.text();
+    expect(body).toContain('data-testid="events-calendar"');
+    expect(body).toMatch(/<nav\b[^>]*class="segments"/);
+    expect(body).toContain("&lt;drill");
+    expect(body).not.toContain("<drill>");
+    expect(body).not.toContain("not-public");
+    expect(body).toContain('<link rel="stylesheet" href="/schedule-theme.css"');
+    expect(body).toContain('<link rel="stylesheet" href="/kit-events-controls.css"');
+    expect(body).toContain('src="/islands/events-calendar.js"');
+    expect(body).not.toMatch(/<script\b[^>]*\btype="module"/);
     expect(deleteCookie).not.toHaveBeenCalled();
   });
 
   it("consumes the pending flash exactly once on a successful full GET with Host-safe options", async () => {
-    const { event, deleteCookie } = requestEvent({ flash: true });
+    const { event, deleteCookie } = requestEvent({ flash: true, restoredWrite: true });
 
     const response = await GET(event);
 
@@ -236,6 +247,7 @@ describe("Kit events endpoint flash-consumption controls", () => {
     const body = await response.text();
     expect(body).toContain('data-testid="events-calendar"');
     expect(body).toContain('data-testid="join-result"');
+    expect(body).toMatch(/<main\b[^>]*><div role="status" tabindex="-1" data-testid="auth-error"/);
     expect(deleteCookie.mock.calls).toEqual([
       ["__Host-two_join_result", { path: "/", secure: true, httpOnly: true, sameSite: "lax" }],
     ]);
@@ -252,6 +264,49 @@ describe("Kit events endpoint flash-consumption controls", () => {
 
     expect(response.status).toBe(200);
     expect(seams.render.mock.calls[0][0]).toMatchObject({ joinResult: null });
+    expect(await response.text()).not.toContain('data-testid="join-result"');
+    expect(deleteCookie).not.toHaveBeenCalled();
+  });
+
+  it("renders an unreadable list fragment with the same swap zones", async () => {
+    const { event, deleteCookie } = requestEvent({
+      flash: true,
+      island: true,
+      restoredWrite: true,
+      search: "?q=Paged&page=2",
+    });
+    const body = await (await GET(event)).text();
+    expect(body).toContain('data-testid="events-page-unreadable">Events on page 2 can');
+    expect(body).toContain('data-testid="events-search-status">Events on page 2 can');
+    expect(body).toContain('href="/events?q=Paged" data-testid="events-pager-first"');
+    expect(body).not.toContain('data-testid="events-empty-search"');
+    expect(body).not.toMatch(/<!doctype|<(?:html|body|main|script)\b/i);
+    expect(body).toContain('data-island="events-calendar"');
+    const zones = Array.from(body.matchAll(/data-cal-zone="([^"]+)"/g), (match) => match[1]);
+    expect(zones).toEqual(["head", "subscribe", "actions", "miss", "content"]);
+    const head = body.split('data-cal-zone="head">')[1]?.trimStart();
+    expect(head).toMatch(/^<link rel="stylesheet" href="\/kit-events-controls\.css"/);
+    expect(body).not.toContain('data-testid="auth-error"');
+    expect(body).not.toContain('data-testid="join-result"');
+    expect(deleteCookie).not.toHaveBeenCalled();
+  });
+
+  it("keeps the query refusal out of the calendar renderer and leaves the flash pending", async () => {
+    const query = `must-not-echo-${"x".repeat(256)}`;
+    const { event, deleteCookie } = requestEvent({
+      flash: true,
+      restoredWrite: true,
+      search: `?q=${query}`,
+    });
+    const response = await GET(event);
+    const body = await response.text();
+    expect(response.headers.get("x-two-events-too-long")).toBe("true");
+    expect(body).toContain('role="alert"');
+    expect(body).not.toContain(query);
+    expect(body).not.toContain('data-testid="events-calendar"');
+    expect(body).not.toContain('data-testid="auth-error"');
+    expect(seams.model).not.toHaveBeenCalled();
+    expect(seams.render.mock.calls[0][0]).toMatchObject({ queryTooLong: true });
     expect(deleteCookie).not.toHaveBeenCalled();
   });
 });

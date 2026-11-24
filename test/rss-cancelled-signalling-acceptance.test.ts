@@ -31,7 +31,7 @@ import { drizzle } from "drizzle-orm/pg-proxy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
-import app from "./app";
+import { fetchAppPath } from "./helpers/fetch-app";
 import { APP_URL, type CalendarRow, calendarRow } from "./helpers/ics-wire-fixture";
 import { encodeEventRow } from "./helpers/pg-proxy-event-projection";
 
@@ -279,7 +279,7 @@ function feedSource(rows: CalendarRow[]) {
   return {
     query,
     seenStatuses,
-    request: (init: RequestInit = {}) => app.request("/events.rss", init, env),
+    request: (init: RequestInit = {}) => fetchAppPath("/events.rss", init, env),
   };
 }
 

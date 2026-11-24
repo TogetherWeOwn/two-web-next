@@ -172,6 +172,9 @@ function fixture(search = "") {
   const newMember = node(page, "section", "profile-new-member");
   newMember.hidden = true;
   const cta = node(newMember, "a", "profile-new-member-cta", "Add profile details");
+  const identityActions = node(page, "div", "profile-identity-actions");
+  const identityEdit = node(identityActions, "a");
+  identityEdit.setAttribute("href", "#edit-heading");
   const root = node(page, "section", "profile-edit");
   root.setAttribute("data-island", "member-profile");
   root.setAttribute("data-member-id", "100000000000000001");
@@ -242,6 +245,7 @@ function fixture(search = "") {
     timezone,
     newMember,
     cta,
+    identityEdit,
     form,
     edit,
     editControl,
@@ -367,6 +371,25 @@ describe("shipped member-profile edit lifecycle", () => {
     f.cancel();
     f.enter({ bio: "New draft after reset" });
     expect(f.departure().defaultPrevented).toBe(true);
+  });
+
+  it("reopens the collapsed editor from the Kit identity Edit shortcut", async () => {
+    const f = fixture();
+    expect(f.identityEdit.dispatch("click", { button: 0 }).preventDefault).not.toHaveBeenCalled();
+    f.enter({ bio: "Saved from Kit" });
+    f.form.dispatch("submit");
+    f.requests[0]!.resolve(success());
+    await flush();
+    expect(f.form.hidden).toBe(true);
+    expect(
+      f.identityEdit.dispatch("click", { button: 0, ctrlKey: true }).preventDefault,
+    ).not.toHaveBeenCalled();
+    expect(f.form.hidden).toBe(true);
+    expect(f.identityEdit.dispatch("click", { button: 0 }).preventDefault).toHaveBeenCalledOnce();
+    expect(f.form.hidden).toBe(false);
+    expect(f.editControl.hidden).toBe(true);
+    expect(f.document.activeElement).toBe(f.heading);
+    expect(f.fetch).toHaveBeenCalledOnce();
   });
 
   it("supports two saves, re-edit and cancel to the latest accepted values without reloading", async () => {

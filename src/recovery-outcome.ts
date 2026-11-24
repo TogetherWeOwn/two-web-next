@@ -24,6 +24,11 @@ export interface RecoveryModel {
   supportReference?: string;
 }
 
+// Internal override on the per-request Hono execution context. No client
+// header, URL, or cookie can select a renderer.
+export const RECOVERY_RENDER = Symbol("recovery-render");
+export type RecoveryRender = (model: RecoveryModel, requestId: string) => Promise<Response>;
+
 export interface RecoveryOutcomeOptions {
   status?: ContentfulStatusCode;
   headers?: Record<string, string>;

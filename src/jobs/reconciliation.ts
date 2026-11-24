@@ -1,7 +1,7 @@
-// Reconciliation records contain only bounded scalar context.
+// Dormant persistence only: no handler or queue settlement is wired to this store.
 import type postgres from "postgres";
 import { diagnosticCode } from "../bot/diagnostic-code";
-import { LEDGER_DB_TIMEOUT_MS } from "./constants";
+import { CALL_INTERNAL_ACTION, LEDGER_DB_TIMEOUT_MS } from "./constants";
 import type { TxClient } from "./types";
 
 export const SYNC_RECONCILIATION_MARKER = "request requires reconciliation";
@@ -17,6 +17,31 @@ const VERBS = new Set([
 const SUBJECT = /^[a-zA-Z0-9][a-zA-Z0-9_:-]{0,199}$/;
 const ACTOR = /^[0-9]{1,20}$/;
 const RESOLUTIONS = new Set(["confirmed", "not_applied", "superseded"]);
+
+const CHANNEL_ALIAS = /^[a-zA-Z0-9][a-zA-Z0-9_:-]{0,63}$/;
+const SEND_LEASE_SECONDS = 30; // Room for the 10s bot deadline and bounded DB settlement.
+const CARRIER_AGE_HOURS = 720; // Elapsed time: longer than queue retention, unaffected by DST.
+
+type SendClaim =
+  | { kind: "claimed" | "sending" | "abandoned" | "closed"; attempts: number; claimUntil: Date }
+  | { kind: "unavailable" };
+
+type AnnouncementSendRow = {
+  channel_alias: string;
+  send_attempts: number;
+  claim_until_ms: number;
+  kind: "sending" | "abandoned" | "retryable" | "closed";
+};
+
+function validAnnouncementAttempt(key: string, attempts: number): boolean {
+  return (
+    typeof key === "string" &&
+    UUID.test(key) &&
+    Number.isInteger(attempts) &&
+    attempts >= 1 &&
+    attempts <= CALL_INTERNAL_ACTION.tries
+  );
+}
 
 export type ReconciliationIntent = {
   idempotencyKey: string;
@@ -85,7 +110,120 @@ export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
     if (rows.length !== 1) throw new Error("Reconciliation key is not an open matching intent");
   }
 
+  async function settleClaim(
+    tx: TxClient,
+    key: string,
+    attempts: number,
+    state: "retryable" | "closed",
+    orphan = false,
+  ): Promise<string | undefined> {
+    // A lock-only waiter need not recheck UPDATE predicates. Read the clock after locking.
+    const [locked] = await tx`select 1 from announcement_send_claims
+      where idempotency_key = ${key}::uuid for update`;
+    if (!locked) return undefined;
+    const [row] = await tx`update announcement_send_claims set state = ${state}
+      where idempotency_key = ${key}::uuid and state = 'sending' and send_attempts = ${attempts}
+        and (claim_until <= clock_timestamp()) = ${orphan}
+      returning channel_alias`;
+    return row?.channel_alias as string | undefined;
+  }
+
   return {
+    /** Pass the original queue timestamp, not a retry time or a body field. */
+    async claimAnnouncement(key: string, alias: string, queuedAt: Date): Promise<SendClaim> {
+      if (
+        typeof key !== "string" ||
+        !UUID.test(key) ||
+        typeof alias !== "string" ||
+        !CHANNEL_ALIAS.test(alias) ||
+        !(queuedAt instanceof Date) ||
+        !Number.isFinite(queuedAt.getTime())
+      )
+        throw new Error("Invalid announcement carrier");
+      return bounded(async (tx) => {
+        const [claimed] = await tx`insert into announcement_send_claims as claim
+          (idempotency_key, channel_alias, send_attempts, state, claim_until)
+          select ${key}::uuid, ${alias}, 1, 'sending', clock_timestamp() + make_interval(secs => ${SEND_LEASE_SECONDS})
+          where ${queuedAt.toISOString()}::timestamptz > statement_timestamp() - make_interval(hours => ${CARRIER_AGE_HOURS})
+            and ${queuedAt.toISOString()}::timestamptz <= statement_timestamp() + interval '5 seconds'
+            and not exists (select 1 from bot_reconciliation_intents where idempotency_key = ${key}::uuid)
+          on conflict (idempotency_key) do update set
+            send_attempts = claim.send_attempts + 1, state = 'sending', claim_until = excluded.claim_until
+          where claim.state = 'retryable' and claim.channel_alias = excluded.channel_alias
+            and claim.send_attempts < ${CALL_INTERNAL_ACTION.tries}
+          returning send_attempts, (extract(epoch from claim_until) * 1000)::double precision as claim_until_ms`;
+        if (claimed) {
+          const { send_attempts: attempts, claim_until_ms: deadline } = claimed;
+          return { kind: "claimed", attempts, claimUntil: new Date(deadline) };
+        }
+
+        // A separate statement sees a winning insert that committed while the upsert waited.
+        const [current]: AnnouncementSendRow[] = await tx`select channel_alias, send_attempts,
+            case when state = 'sending' and claim_until <= clock_timestamp() then 'abandoned' else state end as kind,
+            (extract(epoch from claim_until) * 1000)::double precision as claim_until_ms
+          from announcement_send_claims where idempotency_key = ${key}::uuid`;
+        if (!current || current.channel_alias !== alias || current.kind === "retryable")
+          return { kind: "unavailable" };
+        return {
+          kind: current.kind,
+          attempts: current.send_attempts,
+          claimUntil: new Date(current.claim_until_ms),
+        };
+      });
+    },
+    /** Fence stale completions. The last attempt can close but cannot reopen for a send. */
+    async finishAnnouncement(
+      key: string,
+      attempts: number,
+      state: "retryable" | "closed",
+    ): Promise<boolean> {
+      if (
+        !validAnnouncementAttempt(key, attempts) ||
+        (state !== "retryable" && state !== "closed") ||
+        (state === "retryable" && attempts >= CALL_INTERNAL_ACTION.tries)
+      ) {
+        throw new Error("Invalid announcement claim settlement");
+      }
+      return bounded(async (tx) => (await settleClaim(tx, key, attempts, state)) !== undefined);
+    },
+    /** Null evidence recovers an abandoned claim: a reservation does not prove a wire send. */
+    async recordAnnouncement(
+      key: string,
+      attempts: number,
+      evidence: Pick<ReconciliationIntent, "lastCode" | "lastStatus"> | null,
+    ): Promise<void> {
+      if (!validAnnouncementAttempt(key, attempts)) throw new Error("Invalid announcement claim");
+      await bounded(async (tx) => {
+        const alias = await settleClaim(tx, key, attempts, "closed", evidence === null);
+        if (alias === undefined)
+          throw new Error("Announcement claim changed before reconciliation");
+        await insert(
+          tx,
+          reconciliationIntent({
+            idempotencyKey: key,
+            verb: "announcement.post",
+            attempts,
+            subject: alias,
+            lastCode: evidence?.lastCode ?? null,
+            lastStatus: evidence?.lastStatus ?? null,
+          }),
+        );
+      });
+    },
+    /** Owner-only maintenance, unscheduled until integration. Never delete unresolved evidence. */
+    // Retire by lease end to cover enqueue clock skew and in-flight admission statements.
+    async pruneClosedAnnouncements(): Promise<number> {
+      return bounded(async (tx) => {
+        const rows = await tx`delete from announcement_send_claims where idempotency_key in (
+          select c.idempotency_key from announcement_send_claims c
+          where c.state = 'closed' and c.claim_until <= statement_timestamp() - make_interval(hours => ${CARRIER_AGE_HOURS})
+            and not exists (select 1 from bot_reconciliation_intents i
+              where i.idempotency_key = c.idempotency_key and i.resolved_at is null)
+          order by c.claim_until, c.idempotency_key limit 1000 for update skip locked
+        ) returning idempotency_key`;
+        return rows.length;
+      });
+    },
     async record(input: ReconciliationIntent): Promise<void> {
       const intent = reconciliationIntent(input);
       await bounded((tx) => insert(tx, intent));

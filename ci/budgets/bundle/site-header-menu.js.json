@@ -1,0 +1,6 @@
+{
+  "$comment": "See ci/budgets/README.md for budget policy.",
+  "budgets": {
+    "public/islands/site-header-menu.js": { "maxRawBytes": 2048, "maxGzipBytes": 1024 }
+  }
+}

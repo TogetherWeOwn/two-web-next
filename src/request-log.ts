@@ -1,6 +1,7 @@
 import type { Context, Next } from "hono";
 import { matchedRoutes } from "hono/route";
 import { selectRequestId } from "./http/request-log";
+import { selectRouteLabel } from "./http/route-labels";
 import { currentReleaseFields, setReleaseMetadata } from "./release-tag";
 import { STAGING_APP_URL } from "./qa";
 
@@ -59,15 +60,11 @@ declare module "hono" {
 
 /** Registered patterns include mount prefixes, but never resolved params. */
 export function requestRoute(c: Context): string {
-  // routeIndex is the handler that responded, so /events/new is not logged as
-  // a later /events/:key. A wildcard guard or 404 names the first endpoint the
-  // router would run, and wildcard-only matches get one constant label, never
-  // the user-supplied path (or an identity).
-  // Source: https://hono.dev/docs/helpers/route#matchedroutes
-  const paths = matchedRoutes(c).map((r) => r.path);
-  const responded = paths[c.req.routeIndex];
-  if (responded && !responded.endsWith("*")) return responded;
-  return paths.find((path) => !path.endsWith("*")) ?? "unmatched";
+  // The current handler can differ from the first match when it calls next().
+  return selectRouteLabel(
+    matchedRoutes(c).map((route) => route.path),
+    c.req.routeIndex,
+  );
 }
 
 export async function requestLog(c: Context, next: Next): Promise<void> {
@@ -94,15 +91,33 @@ export async function requestLog(c: Context, next: Next): Promise<void> {
   // Source: https://hono.dev/docs/guides/middleware#execution-order
   await next();
   c.header("x-request-id", requestId);
-  const colo = (c.req.raw.cf as { colo?: unknown } | undefined)?.colo;
-  const phases = c.get("calendarPhaseRecorder");
+  writeHttpRequestLog(
+    c.req.raw,
+    requestId,
+    requestRoute(c),
+    c.res.status,
+    started,
+    c.get("calendarPhaseRecorder"),
+  );
+}
+
+/** Emit completion for a registered route. The caller supplies its trusted route label. */
+export function writeHttpRequestLog(
+  request: Request,
+  requestId: string,
+  route: string,
+  status: number,
+  started: number,
+  phases?: CalendarPhaseRecorder,
+): void {
+  const colo = (request.cf as { colo?: unknown } | undefined)?.colo;
   console.log(
     JSON.stringify({
       event: "http.request",
       request_id: requestId,
-      method: c.req.method,
-      route: requestRoute(c),
-      status: c.res.status,
+      method: request.method,
+      route,
+      status,
       duration_ms: Math.max(0, Math.round((performance.now() - started) * 100) / 100),
       colo: typeof colo === "string" && /^[A-Z]{3}$/.test(colo) ? colo : null,
       // Same fields on every structured line: this record has no error.

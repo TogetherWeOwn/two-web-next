@@ -23,11 +23,12 @@ import { SiteHeader } from "../src/pages";
 import type { Session } from "../src/env";
 import type { Env } from "../src/env";
 import { aboutPageData } from "../src/about-content";
-import { FALLBACK_RANKS, HOME_JOIN_RESULT_COPY, HOME_NOTICES } from "../src/home-copy";
+import { FALLBACK_RANKS, HOME_JOIN_RESULT_COPY, HOME_NOTICES, JOIN_INTRO } from "../src/home-copy";
 import { withEventDetailHtml, type DetailLeavesModel } from "../src/events/detail-leaves";
 import { kitSeatCard } from "../src/events/kit-detail";
 import { loginUrl } from "../src/islands/contracts";
 import { LEAF_CRITICAL_CSS } from "../src/leaf-critical-css";
+import type { EventGoneModel } from "../src/kit-event-states";
 import { renderEventsHtml } from "../src/kit-events-html";
 import app from "./app";
 import { EVENT_KEY, pageShellFixture } from "./helpers/page-shells";
@@ -102,8 +103,8 @@ const assertSkipAndLandmarks = (html: string, opts: { account: boolean }): void 
   }
 };
 
-const assertPrimaryOrder = (html: string, opts: { leaderboard: boolean }): void => {
-  const nav = primaryNavOf(html);
+const assertPrimaryOrder = (html: string, opts: { leaderboard: boolean; home?: boolean }): void => {
+  const nav = opts.home ? headerOf(html) : primaryNavOf(html);
   const home = nav.indexOf('href="/"');
   const events = nav.indexOf('href="/events"');
   expect(home).toBeGreaterThanOrEqual(0);
@@ -136,7 +137,7 @@ type KitRenders = {
   renderSiteHeader: (props: Record<string, unknown>) => string;
   renderHome: (data: Record<string, unknown>) => string;
   renderEventDetail: (model: Record<string, unknown>) => string;
-  renderEventGone: (model: Record<string, unknown>) => string;
+  renderEventGone: (model: EventGoneModel) => string;
   renderBoard: (data: Record<string, unknown>) => string;
   renderAbout: (data: Record<string, unknown>) => string;
   renderPast: (data: Record<string, unknown>) => string;
@@ -147,6 +148,7 @@ let kit: KitRenders;
 let kitScratch = "";
 
 const baseHomeData = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+  nowMs: Date.UTC(2030, 6, 19, 12),
   session: null,
   sessionUnavailable: false,
   notice: null,
@@ -162,7 +164,7 @@ const baseHomeData = (overrides: Record<string, unknown> = {}): Record<string, u
   eventsUnavailable: false,
   featured: [],
   imageHosts: "",
-  homeCopy: { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS },
+  homeCopy: { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS, JOIN_INTRO },
   ...overrides,
 });
 
@@ -222,6 +224,7 @@ const rawDetailModel = (
   showJoinPitch: true,
   joinReturnTo: `/e/${EVENT_KEY}`,
   joinResult: null,
+  viewerAuthenticated: false,
   viewerMember: false,
   viewerModerator: false,
   viewerUsername: null,
@@ -239,17 +242,20 @@ const baseDetailModel = (overrides: Record<string, unknown> = {}): Record<string
   };
 };
 
-const baseGoneModel = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+const baseGoneModel = (): EventGoneModel => ({
   title: "Cancelled game night",
   game: "Chess",
   eventKey: EVENT_KEY,
+  existingResponses: 0,
   icsUrl: `${APP_URL}/events/${EVENT_KEY}.ics`,
   markdownAlternate: `/e/${EVENT_KEY}.md`,
   upcomingUrl: "/events",
+  scheduled: null,
+  facts: [],
+  nextDate: null,
   related: [],
   jsonLd: "{}",
   siteJsonLd: "{}",
-  ...overrides,
 });
 
 const baseBoardData = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
@@ -667,7 +673,7 @@ describe("kit home: board discovery", () => {
   it("offers no board link to guests", () => {
     const html = kit.renderHome(baseHomeData({ session: null }));
     expect(primaryNavOf(html)).not.toContain('href="/leaderboards/members"');
-    expect(headerOf(html)).toContain('href="/auth/discord" data-testid="signin"');
+    expect(headerOf(html)).toMatch(/<a href="\/auth\/discord"[^>]* data-testid="signin"/);
     expect(headerOf(html)).toContain("Welcome, guest");
   });
 
@@ -681,29 +687,29 @@ describe("kit home: board discovery", () => {
   it("renders member chrome for members without a sign-in link", () => {
     const header = headerOf(kit.renderHome(baseHomeData({ session: kitMemberSession })));
     expect(header).toContain('<form method="post" action="/logout">');
-    expect(header).toContain('<span class="account-caption">Signed in</span>');
+    expect(header).toContain('<span class="sr-only">Signed in</span>');
     expect(header).toContain('<span class="who">Vic</span>');
     expect(header).not.toContain('data-testid="signin"');
   });
 
   it("marks home current with Events unmarked", () => {
     for (const session of [null, kitNonMemberSession, kitMemberSession]) {
-      const nav = primaryNavOf(kit.renderHome(baseHomeData({ session })));
-      expect(nav).toContain('<a href="/" aria-current="page">Home</a>');
-      expect(nav).toContain('<a href="/events">Events</a>');
+      const html = kit.renderHome(baseHomeData({ session }));
+      expect(headerOf(html)).toMatch(/<a class="brand" href="\/" aria-current="page">/);
+      expect(primaryNavOf(html)).toContain('<a href="/events">Events</a>');
     }
   });
 
   it("preserves the skip target, landmarks and keyboard order for guests", () => {
     const guest = kit.renderHome(baseHomeData({ session: null }));
     assertSkipAndLandmarks(guest, { account: true });
-    assertPrimaryOrder(guest, { leaderboard: false });
+    assertPrimaryOrder(guest, { home: true, leaderboard: false });
   });
 
-  it("keeps the member board link last in keyboard order", () => {
+  it("puts the member board link after Events in keyboard order", () => {
     const member = kit.renderHome(baseHomeData({ session: kitMemberSession }));
     assertSkipAndLandmarks(member, { account: true });
-    assertPrimaryOrder(member, { leaderboard: true });
+    assertPrimaryOrder(member, { home: true, leaderboard: true });
   });
 });
 

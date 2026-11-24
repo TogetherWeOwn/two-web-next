@@ -10,7 +10,7 @@ const get = (path: string, init?: RequestInit) =>
 // when its manifest entry is explicitly enabled.
 describe("route ownership", () => {
   it("sends unknown paths to Hono", () => {
-    expect(resolveRouteOwner({ method: "GET", path: "/" })).toBe("hono");
+    expect(resolveRouteOwner({ method: "GET", path: "/unknown" })).toBe("hono");
     expect(resolveRouteOwner({ method: "GET", path: "/events/some-key" })).toBe("hono");
     expect(resolveRouteOwner({ method: "POST", path: "/events" })).toBe("hono");
   });

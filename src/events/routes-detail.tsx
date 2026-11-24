@@ -36,15 +36,8 @@ import { archiveEventHref, authReturnHref } from "./attendee-paths";
 import { waitlistPosition } from "./waitlist";
 import { recordAccess } from "../admin/store";
 import { EventGonePage, EventPage } from "./pages";
-import {
-  dbUnavailableJson,
-  eventJson,
-  jsonResponse,
-  jsonSession,
-  publicReadGuard,
-  type App,
-  type SessionReader,
-} from "./routes-shared";
+import { eventDetailJson } from "./routes-json";
+import { publicReadGuard, type App, type SessionReader } from "./routes-shared";
 
 // The per-event block stays a top-level Event (existing readers pin that
 // shape) with a stable @id, organizer reference and attendance mode; the
@@ -62,41 +55,7 @@ export function registerDetailRoutes(
   readSession: SessionReader,
   readFragmentSession: SessionReader,
 ): void {
-  app.get("/events/:key", async (c) => {
-    const limited = await publicReadGuard(c);
-    if (limited) return limited;
-    const key = c.req.param("key");
-    // One canonical key form per event, mirroring /e/:key: a valid key in
-    // another letter case 301s to the canonical URL before any read.
-    // Seed/demo keys and unparsable keys keep their current path (forged
-    // keys still refuse, unknown keys still 404).
-    const canonical = canonicalEventKey(key);
-    if (canonical && canonical !== key) {
-      const search = new URL(c.req.url).search;
-      return c.redirect(`/events/${encodeURIComponent(canonical)}${search}`, 301);
-    }
-    const session = await jsonSession(c, readFragmentSession);
-    if (session instanceof Response) return session;
-    if (!eventKeyAllowed(key, c.env.APP_URL)) return c.json({ error: "not_found" }, 404);
-    const db = await dbFor(c);
-    if (!db) return dbUnavailableJson(c);
-    const e = await getPublicEvent(db, key);
-    if (!e) return c.json({ error: "not_found" }, 404);
-    if (e.status === "draft" && !session.moderator) return c.json({ error: "forbidden" }, 403);
-    if (e.status === "cancelled")
-      return c.json(
-        {
-          reason: "event_cancelled",
-          message: "This event was cancelled.",
-          event_key: e.eventKey,
-          status: e.status,
-        },
-        410,
-      );
-    if (e.status === "draft") c.header("x-robots-tag", "noindex, nofollow");
-    const position = await waitlistPosition(db, e.id, session.id);
-    return jsonResponse(c, { data: { ...eventJson(e), waitlist_position: position } });
-  });
+  app.get("/events/:key", (c) => eventDetailJson(c, () => c.req.param("key"), readFragmentSession));
 
   app.get("/e/:key", async (c) => {
     const now =

@@ -545,8 +545,7 @@ describe("retry diagnostics preserve behavior and survive carrier exhaustion", (
         const calls = capture();
         const d = fixture(priorRequests, action);
         const m = carrier(carrierAttempts);
-        const reconciliation = { recordSync: vi.fn(async () => {}) };
-        await consume({ messages: [m] }, { ...d, bot: transportBot(), reconciliation });
+        await consume({ messages: [m] }, { ...d, bot: transportBot() });
         expect(alerts(calls)[0]).toMatchObject({
           sync_retry_class: "BotTransportError",
           queue_carrier_attempts: carrierAttempts,
@@ -554,16 +553,10 @@ describe("retry diagnostics preserve behavior and survive carrier exhaustion", (
           sync_snapshot_age_at_claim_seconds: 12,
         });
         expect(alerts(calls)[0]).not.toHaveProperty("sync_retry_code");
-        if (priorRequests === 5) {
-          expect(d.events.deferSync).not.toHaveBeenCalled();
-          expect(reconciliation.recordSync).toHaveBeenCalledOnce();
-        } else {
-          expect(d.events.deferSync).toHaveBeenCalledExactlyOnceWith(
-            d.attempt,
-            new Date(clock + 3_600_000),
-          );
-          expect(reconciliation.recordSync).not.toHaveBeenCalled();
-        }
+        expect(d.events.deferSync).toHaveBeenCalledExactlyOnceWith(
+          d.attempt,
+          priorRequests === 5 ? null : new Date(clock + 3_600_000),
+        );
         expect(d.attempt.state).toBe("pending");
         expect(d.events.failSync).not.toHaveBeenCalled();
         expect(d.events.completeSync).not.toHaveBeenCalled();

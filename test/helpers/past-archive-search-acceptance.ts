@@ -13,7 +13,13 @@ import { events } from "../../src/db/admin-schema";
 import type { Db } from "../../src/db/index";
 import type { Env } from "../../src/env";
 import { discordEventsSource } from "../../src/events/discord-transients";
-import { eventLinkAvailability, listPast, type PublicEvent } from "../../src/events/reads";
+import { fetchKitFeed } from "../../src/events/kit-feed-fetch";
+import {
+  eventLinkAvailability,
+  listPast,
+  type PublicEvent,
+  sitemapEvents,
+} from "../../src/events/reads";
 import { dispatchEventsRequest, loadEventsPage } from "../../src/kit-events";
 import { renderEventsHtml } from "../../src/kit-events-html";
 import {
@@ -185,13 +191,16 @@ export function archiveReadFixture() {
     const limit = Number(params.at(sql.includes(" offset ") ? -2 : -1));
     const columns = Object.keys(getTableColumns(events)) as (keyof typeof events.$inferSelect)[];
     return {
-      rows: selected
-        .slice(offset, offset + limit)
-        .map((row) =>
-          columns.map((key) =>
-            row[key] instanceof Date ? (row[key] as Date).toISOString() : row[key],
-          ),
-        ),
+      rows: selected.slice(offset, offset + limit).map((row) =>
+        columns.map((key) => {
+          const value = row[key];
+          if (!(value instanceof Date)) return value;
+          // Model a finite PostgreSQL timestamp whose JS Date cannot be formatted.
+          return Number.isFinite(value.getTime())
+            ? value.toISOString()
+            : "280000-06-01 20:00:00+00";
+        }),
+      ),
     };
   }) as unknown as Db;
   return {
@@ -207,6 +216,7 @@ export function archiveReadFixture() {
 const kitDependencies = {
   dbFor: async (c: { env: Env }) => (c.env as Env & { ADMIN_DB?: Db }).ADMIN_DB ?? null,
   listPast,
+  sitemapEvents,
   eventLinkAvailability,
   loadPastArchivePage,
   toPublicPastArchiveRow,
@@ -215,6 +225,7 @@ const kitDependencies = {
   kitEventsSessionFor,
   kitEventsJourneyFor,
   discordEventsSource,
+  fetchKitFeed,
 };
 type KitBinding = {
   request: (request: Request, env: Env, deps: typeof kitDependencies) => Promise<Response>;
@@ -234,12 +245,13 @@ export async function compileArchiveKit() {
   const outfile = join(scratch, "kit.mjs");
   const dependencyExports = new Map([
     [join(root, "src/admin/db.ts"), ["dbFor"]],
-    [join(root, "src/events/reads.ts"), ["listPast", "eventLinkAvailability"]],
+    [join(root, "src/events/reads.ts"), ["listPast", "eventLinkAvailability", "sitemapEvents"]],
     [join(root, "src/kit-past-events.ts"), ["loadPastArchivePage", "toPublicPastArchiveRow"]],
     [join(root, "src/kit-events.ts"), ["loadEventsPage"]],
     [join(root, "src/kit-events-html.ts"), ["renderEventsHtml"]],
     [join(root, "src/kit-session.ts"), ["kitEventsSessionFor", "kitEventsJourneyFor"]],
     [join(root, "src/events/discord-transients.ts"), ["discordEventsSource"]],
+    [join(root, "src/events/kit-feed-fetch.ts"), ["fetchKitFeed"]],
   ]);
   const result = await build({
     metafile: true,
@@ -249,12 +261,28 @@ export async function compileArchiveKit() {
         import Page from ${JSON.stringify(join(root, "web/src/routes/events/past/+page.svelte"))};
         import { load } from ${JSON.stringify(join(root, "web/src/routes/events/past/+page.server.ts"))};
         import { GET } from ${JSON.stringify(join(root, "web/src/routes/events/+server.ts"))};
+        import { GET as calendar } from ${JSON.stringify(join(root, "web/src/routes/events.ics/+server.ts"))};
+        import { GET as rss } from ${JSON.stringify(join(root, "web/src/routes/events.rss/+server.ts"))};
+        import { GET as eventCalendar } from ${JSON.stringify(join(root, "web/src/routes/events/[key].ics/+server.ts"))};
+        import { GET as robots } from ${JSON.stringify(join(root, "web/src/routes/robots.txt/+server.ts"))};
+        import { GET as sitemap } from ${JSON.stringify(join(root, "web/src/routes/sitemap_index.xml/+server.ts"))};
+        import { GET as securityTxt } from ${JSON.stringify(join(root, "web/src/routes/.well-known/security.txt/+server.ts"))};
+        import { KIT_EVENT_CALENDAR_ROUTE } from ${JSON.stringify(join(root, "src/events/kit-event-calendar-route.ts"))};
         import { bind } from "acceptance:bindings";
+        const endpoints = new Map([
+          ["/events.ics", calendar], ["/events.rss", rss],
+          ["/robots.txt", robots], ["/sitemap_index.xml", sitemap],
+          ["/.well-known/security.txt", securityTxt],
+        ]);
         export async function request(request, env, deps) {
           bind(env, deps);
+          const pathname = new URL(request.url).pathname;
+          const endpoint = endpoints.get(pathname) ??
+            (KIT_EVENT_CALENDAR_ROUTE.dynamic.matches(pathname, pathname) ? eventCalendar : undefined);
+          if (endpoint) return endpoint({request, locals: {}});
           const headers = new Headers({"content-type": "text/html; charset=utf-8"});
           try {
-            if (new URL(request.url).pathname === "/events") {
+            if (pathname === "/events") {
               return await GET({request, url: new URL(request.url), locals: {}, cookies: {delete() {
                 throw new Error("Anonymous calendar fixture unexpectedly consumed a cookie");
               }}, setHeaders: next => {

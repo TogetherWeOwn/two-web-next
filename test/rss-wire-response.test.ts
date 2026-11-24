@@ -4,7 +4,7 @@ import { drizzle } from "drizzle-orm/pg-proxy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
-import app from "./app";
+import { fetchAppPath } from "./helpers/fetch-app";
 import { APP_URL, KEY, OTHER_KEY, type CalendarRow, calendarRow } from "./helpers/ics-wire-fixture";
 import { encodeEventRow } from "./helpers/pg-proxy-event-projection";
 
@@ -36,7 +36,7 @@ function fixture(rows: CalendarRow[]) {
   return {
     query,
     request: (etag?: string) =>
-      app.request("/events.rss", etag ? { headers: { "if-none-match": etag } } : {}, env),
+      fetchAppPath("/events.rss", etag ? { headers: { "if-none-match": etag } } : {}, env),
   };
 }
 

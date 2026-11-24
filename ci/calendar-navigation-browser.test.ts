@@ -1,10 +1,16 @@
 // Independent, unconditional Chromium acceptance; no live DB or external server.
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { extname, resolve } from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetAnonEventCacheForTests } from "../src/events/anon-cache";
-import { GAME_ORIGIN, type GameTwin } from "../test/helpers/calendar-game-recovery";
+import {
+  GAME_ORIGIN,
+  gameRecoveryFixture,
+  gameRow,
+  type GameTwin,
+  kitCalendarStyles,
+} from "../test/helpers/calendar-game-recovery";
 import {
   firstPageName,
   hidePastName,
@@ -28,7 +34,13 @@ beforeEach(() => __resetAnonEventCacheForTests());
 const publicRoot = resolve("public");
 const entry = "/events?game=Chess&past=1&page=2";
 
-async function open(twin: GameTwin, path = entry, width = 390, javaScriptEnabled = true) {
+async function open(
+  twin: GameTwin,
+  path = entry,
+  width = 390,
+  javaScriptEnabled = true,
+  render?: ReturnType<typeof navigationRouteFixture>["request"],
+) {
   const fixture = navigationRouteFixture();
   const requests: { path: string; fragment: boolean; method: string }[] = [];
   const errors: string[] = [];
@@ -54,13 +66,15 @@ async function open(twin: GameTwin, path = entry, width = 390, javaScriptEnabled
         fail = false;
         return route.fulfill({ status: 503, contentType: "text/html", body: "Unavailable" });
       }
-      const response = await fixture.request(twin, url.pathname + url.search, fragment);
+      const response = await (render ?? fixture.request)(twin, url.pathname + url.search, fragment);
       return route.fulfill({
         status: response.status,
         headers: Object.fromEntries(response.headers),
         body: await response.text(),
       });
     }
+    const style = twin === "Kit" ? kitCalendarStyles.get(url.pathname) : undefined;
+    if (style !== undefined) return route.fulfill({ contentType: "text/css", body: style });
     const file = resolve(publicRoot, `.${url.pathname}`);
     if (!file.startsWith(`${publicRoot}/`) || !existsSync(file))
       return route.fulfill({ status: 404, body: "" });
@@ -139,9 +153,208 @@ function clean(journey: Awaited<ReturnType<typeof open>>, documents = 1) {
   expect(journey.requests.filter((r) => !r.fragment)).toHaveLength(documents);
 }
 
+async function listItemKeys(list: Locator) {
+  return list
+    .getByRole("listitem")
+    .getByTestId("event-card")
+    .evaluateAll((cards) => cards.map((card) => card.getAttribute("data-event-key")));
+}
+
+describe("Kit: Calendar list semantics in Chromium", () => {
+  for (const width of [1280, 390]) {
+    it(`${width}: named event lists preserve keyboard navigation and omit empty lists`, async () => {
+      const journey = await open("Kit", "/events?game=Chess&page=2", width);
+      const { page } = journey;
+      const upcoming = page.getByTestId("events-list");
+      const firstDay = upcoming.getByRole("list", { name: /1 May/ });
+      const secondDay = upcoming.getByRole("list", { name: /2 May/ });
+      const drawer = page.getByTestId("events-past-list");
+      const past = page.getByRole("list", { name: "Past events", exact: true });
+      const toggle = page.getByTestId("events-past-toggle");
+      const show = toggle.and(page.getByRole("link", { name: "Show past events" }));
+      const hide = toggle.and(page.getByRole("link", { name: hidePastName }));
+      const evidence =
+        process.env.KIT_CALENDAR_LIST_EVIDENCE_DIR ??
+        (process.env.GITHUB_ACTIONS === "true" ? "artifacts/a11y/kit-calendar-lists" : undefined);
+      if (evidence) mkdirSync(evidence, { recursive: true });
+
+      expect(await upcoming.getByRole("list").count()).toBe(2);
+      for (const [list, start, count] of [
+        [firstDay, 21, 4],
+        [secondDay, 25, 16],
+      ] as const) {
+        expect(await list.getAttribute("role")).toBe("list");
+        expect(await listItemKeys(list)).toEqual(
+          Array.from({ length: count }, (_, i) => `navigation-${start + i}`),
+        );
+      }
+      expect(await drawer.count()).toBe(0);
+      expect(
+        await upcoming.getByRole("link", { name: "Navigation gathering 21" }).getAttribute("href"),
+      ).toBe("/e/navigation-21");
+      const lastCard = upcoming.getByTestId("event-card").last();
+      await lastCard.getByRole("link", { name: "Navigation gathering 40" }).focus();
+      for (const target of [
+        lastCard.getByTestId("signin"),
+        page.getByTestId("events-pager-first"),
+        page.getByTestId("events-pager-prev"),
+        page.getByTestId("events-pager-next"),
+        page.getByTestId("events-pager-last"),
+        show,
+      ]) {
+        await page.keyboard.press("Tab");
+        expect(await target.evaluate((link) => link.matches(":focus-visible"))).toBe(true);
+      }
+      if (evidence) await page.screenshot({ path: resolve(evidence, `${width}-closed.png`) });
+      await page.keyboard.press("Enter");
+      await expect.poll(() => new URL(page.url()).searchParams.get("past")).toBe("1");
+      expect(await hide.evaluate((link) => link.matches(":focus-visible"))).toBe(true);
+      expect(await drawer.getAttribute("role")).toBe("list");
+      expect(await past.count()).toBe(1);
+      expect(await listItemKeys(past)).toEqual(
+        Array.from({ length: 20 }, (_, i) => `past-navigation-${i}`),
+      );
+      expect(await past.evaluate((list) => getComputedStyle(list).listStyleType)).toBe("none");
+      expect(await drawer.getByTestId("signin").count()).toBe(0);
+      const firstPast = past.getByRole("link", {
+        name: "Past navigation gathering 0",
+        exact: true,
+      });
+      expect(await firstPast.getAttribute("href")).toBe("/e/past-navigation-0");
+      await page.keyboard.press("Tab");
+      expect(await firstPast.evaluate((link) => link.matches(":focus-visible"))).toBe(true);
+      if (evidence) {
+        writeFileSync(
+          resolve(evidence, `${width}-lists.yml`),
+          `${await upcoming.ariaSnapshot()}\n${await past.ariaSnapshot()}\n`,
+        );
+        const after = await page.screenshot({ path: resolve(evidence, `${width}-open-after.png`) });
+        // Recreate the base markup on the same fixture, including its focused link.
+        await past.evaluate((list) => {
+          list.removeAttribute("role");
+          list.removeAttribute("aria-labelledby");
+        });
+        const before = await drawer.evaluate((list) => list.getAttribute("aria-labelledby"));
+        expect(before).toBeNull();
+        const baseImage = await page.screenshot({
+          path: resolve(evidence, `${width}-open-before.png`),
+        });
+        expect(baseImage.equals(after)).toBe(true);
+      }
+
+      await page.keyboard.press("Shift+Tab");
+      expect(await hide.evaluate((link) => link.matches(":focus-visible"))).toBe(true);
+      await page.keyboard.press("Enter");
+      await expect.poll(() => new URL(page.url()).searchParams.has("past")).toBe(false);
+      expect(await show.evaluate((link) => link.matches(":focus-visible"))).toBe(true);
+      expect(await drawer.count()).toBe(0);
+      expect(Object.fromEntries(new URL(page.url()).searchParams)).toEqual({
+        game: "Chess",
+        page: "2",
+      });
+      expect(journey.requests.filter((r) => r.fragment)).toHaveLength(2);
+
+      await page.goto(`${GAME_ORIGIN}/events?game=Go&past=1`);
+      expect(await upcoming.getByRole("listitem").count()).toBe(1);
+      expect(await drawer.count()).toBe(0);
+      expect(await toggle.count()).toBe(0);
+      if (evidence) {
+        await upcoming.scrollIntoViewIfNeeded();
+        await page.screenshot({ path: resolve(evidence, `${width}-no-past.png`) });
+      }
+
+      await page.goto(`${GAME_ORIGIN}/events?game=Go&q=Missing&past=1`);
+      const miss = page.getByTestId("events-empty-search");
+      expect(await miss.isVisible()).toBe(true);
+      expect(await upcoming.count()).toBe(0);
+      expect(await drawer.count()).toBe(0);
+      expect(await toggle.count()).toBe(0);
+      if (evidence) {
+        await miss.scrollIntoViewIfNeeded();
+        await page.screenshot({ path: resolve(evidence, `${width}-no-results.png`) });
+      }
+      clean(journey, 3);
+    });
+  }
+});
+
 for (const twin of ["Hono", "Kit"] as const) {
   describe(`${twin}: shipped schedule navigation in Chromium`, () => {
     for (const width of [1280, 390]) {
+      it(`${width}: calendar status badges keep whole words within their cells`, async () => {
+        const fixture = gameRecoveryFixture({
+          upcomingRows: [
+            {
+              ...gameRow(1, "Chess"),
+              title: "Cooperative expedition",
+              startsAt: new Date("2099-05-05T20:00:00Z"),
+              endsAt: new Date("2099-05-05T22:00:00Z"),
+            },
+            {
+              ...gameRow(2, "Chess"),
+              title: "Chess tournament",
+              startsAt: new Date("2099-05-05T22:00:00Z"),
+              endsAt: new Date("2099-05-05T23:00:00Z"),
+              status: "cancelled",
+            },
+          ],
+        });
+        const path = "/events?view=calendar&month=2099-05";
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date("2099-05-05T21:00:00Z"));
+        const response = await fixture.render(twin, path).finally(() => vi.useRealTimers());
+        const journey = await open(twin, path, width, true, async () => response.clone());
+        const { page } = journey;
+        const badges = page.locator("[data-cal-jump] .schedule-badge");
+        expect(await badges.allTextContents()).toEqual(["Happening now", "Cancelled"]);
+        await page.evaluate(async () => {
+          await document.fonts.ready;
+        });
+        const lines = await badges.evaluateAll((nodes) =>
+          nodes.map((badge) => {
+            const text = Array.from(badge.childNodes).find(
+              (node): node is Text => node instanceof Text && node.data.trim() !== "",
+            );
+            if (!text) throw new Error("Missing calendar badge text");
+            const box = badge.getBoundingClientRect();
+            const cell = badge.closest("td")?.getBoundingClientRect();
+            if (!cell || box.left < cell.left || box.right > cell.right)
+              throw new Error("Badge overflows its calendar cell");
+            return Array.from(text.data.matchAll(/\S+/g), (word) => {
+              const range = document.createRange();
+              range.setStart(text, word.index);
+              range.setEnd(text, word.index + word[0].length);
+              return Array.from(range.getClientRects(), ({ left, right }) =>
+                left >= box.left && right <= box.right ? word[0] : "overflow",
+              );
+            });
+          }),
+        );
+        expect(lines).toEqual([[["Happening"], ["now"]], [["Cancelled"]]]);
+        clean(journey);
+        if (process.env.GITHUB_ACTIONS === "true") {
+          const dir = "artifacts/a11y/calendar-badge-wrap";
+          mkdirSync(dir, { recursive: true });
+          const name = `${twin.toLowerCase()}-${width}x${width === 390 ? 844 : 800}`;
+          const cell = page.locator('td[data-date="2099-05-05"]');
+          const scrollToCell = () =>
+            cell.evaluate((node) => node.scrollIntoView({ block: "center", inline: "nearest" }));
+          await scrollToCell();
+          await page.screenshot({ path: resolve(dir, `${name}-after.png`) });
+          await badges.evaluateAll((nodes) => {
+            for (const badge of nodes as HTMLElement[]) {
+              // Recreate the old inherited wrap and padding on the same rendered page.
+              badge.style.overflowWrap = "inherit";
+              badge.style.maxInlineSize = "none";
+              badge.style.fontSize = "inherit";
+              badge.style.paddingInline = ".5rem";
+            }
+          });
+          await scrollToCell();
+          await page.screenshot({ path: resolve(dir, `${name}-before.png`) });
+        }
+      });
+
       it(`${width}: CONTROL: a closed preview stays absent until a native Show turn opens it`, async () => {
         const journey = await open(twin, "/events?game=Chess&page=2", width);
         const { page } = journey;

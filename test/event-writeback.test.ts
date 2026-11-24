@@ -1,5 +1,6 @@
 import postgres from "postgres";
 import { sql as drizzleSql } from "drizzle-orm";
+import { resolveReconciliation } from "../src/admin/reconciliation-resolution";
 import { createEvent, updateEvent } from "../src/admin/store";
 import type { EventFormInput } from "../src/admin/validation";
 import { serializeSigned } from "hono/utils/cookie";
@@ -214,7 +215,6 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
   const deps = (bot: BotClient) => ({
     bot,
     events: pgEventStore(sql),
-    reconciliation: pgReconciliationStore(sql),
     lock: pgUniqueLock(sql),
     ledger: pgQueueLedger(sql),
     dispatchPending: (key: string) => enqueueSyncEvent(env, buildSyncMessage(key, "published")!),
@@ -253,6 +253,27 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
       await sql`select last_code, last_status from bot_reconciliation_intents where idempotency_key = ${key}::uuid`;
     expect(saved).toMatchObject({ last_code: "needs_reconciliation", last_status: 409 });
     await expect(store.recordSync({ ...intent, attempts: 2 })).rejects.toThrow();
+  });
+
+  it("stores a resolution receipt as a queryable JSON object", async () => {
+    const key = crypto.randomUUID();
+    const store = pgReconciliationStore(sql);
+    await store.record({
+      idempotencyKey: key,
+      verb: "event.upsert",
+      subject: eventKey,
+      attempts: 1,
+      lastCode: null,
+      lastStatus: null,
+    });
+
+    await expect(resolveReconciliation(store, key, "123", "not_applied")).resolves.toBe(true);
+    const receipts = await sql`select jsonb_typeof(properties) as type,
+      properties->'resolution'->>'after' as resolution, properties->'resolution'->'before' as before
+      from activity_log where subject_id = ${key} and description = 'bot-reconciliation.resolve'`;
+    expect(receipts).toEqual([{ type: "object", resolution: "not_applied", before: null }]);
+    await expect(resolveReconciliation(store, key, "123", "confirmed")).resolves.toBe(false);
+    expect(await sql`select id from activity_log where subject_id = ${key}`).toHaveLength(1);
   });
 
   it("does not claim a reopened attempt from a stale snapshot after reconciliation", async () => {
@@ -830,31 +851,11 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
       await consume({ messages: [other] }, deps(bot));
       expect(other.ack).toHaveBeenCalledOnce();
       expect(bot.upsertEvent).toHaveBeenCalledTimes(6);
-      expect(
-        await sql`select idempotency_key, verb, subject, attempts, resolved_at
-        from bot_reconciliation_intents`,
-      ).toMatchObject([
-        {
-          idempotency_key: original.idempotencyKey,
-          verb: "event.upsert",
-          subject: eventKey,
-          attempts: 6,
-          resolved_at: null,
-        },
-      ]);
-      // Simulate an explicit resolution with its receipt. No automatic
-      // edit/reconcile renews eligibility or changes the action/payload/key.
-      expect(
-        await pgReconciliationStore(sql).resolve(
-          original.idempotencyKey,
-          "123",
-          "not_applied",
-          async (tx) => {
-            await tx`update event_sync_attempts set request_attempts = 1, next_attempt_at = now() - interval '1 second', terminal_reason = null
-            where idempotency_key = ${original.idempotencyKey}::uuid`;
-          },
-        ),
-      ).toBe(true);
+      // Explicit operator recovery renews only the budget/eligibility, never
+      // action/payload/key or the fact that this request was already attempted.
+      // No automatic edit/reconcile performs this renewal.
+      await sql`update event_sync_attempts set request_attempts = 1, next_attempt_at = now() - interval '1 second'
+        where idempotency_key = ${original.idempotencyKey}::uuid`;
       bot.upsertEvent.mockResolvedValue({ ok: true, requestId: null, discordEventId: "discord-1" });
       await reconcileEvents({
         events: pgEventStore(sql),
@@ -1111,21 +1112,9 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
           now: () => new Date(clock),
         });
         expect(sent).toHaveLength(1);
-        expect(await handleSyncEvent(original, 1, dependencies)).toEqual({
-          failed: "request requires reconciliation; unresolved identity retained",
-        });
+        expect(await handleSyncEvent(original, 1, dependencies)).toEqual({ retryInSeconds: 300 });
         expect(bot.upsertEvent).toHaveBeenCalledOnce();
-        expect(
-          await pgReconciliationStore(sql).resolve(
-            original.idempotencyKey,
-            "123",
-            "not_applied",
-            async (tx) => {
-              await tx`update event_sync_attempts set terminal_reason = null, next_attempt_at = ${new Date(start + 3600_000)}
-                where idempotency_key = ${original.idempotencyKey}::uuid`;
-            },
-          ),
-        ).toBe(true);
+        await events.deferSync(pending, new Date(start + 3600_000));
       }
       await reconcileEvents({
         events,

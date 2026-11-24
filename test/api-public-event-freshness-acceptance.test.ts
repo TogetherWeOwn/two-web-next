@@ -26,7 +26,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { URL } from "node:url";
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import app from "./app";
+import { fetchAppPath } from "./helpers/fetch-app";
 import { events, rsvps } from "../src/db/admin-schema";
 import { users } from "../src/db/schema";
 import type { Env } from "../src/env";
@@ -275,7 +275,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public API event freshness acceptanc
   });
 
   const get = async (path: string, init: RequestInit = {}, ip = "192.0.2.81") =>
-    app.request(path, { ...init, headers: { "cf-connecting-ip": ip, ...init.headers } }, env);
+    fetchAppPath(path, { ...init, headers: { "cf-connecting-ip": ip, ...init.headers } }, env);
 
   const seed = (n: number, extra: Record<string, unknown> = {}) =>
     db.insert(events).values({
@@ -312,7 +312,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public API event freshness acceptanc
   };
 
   const modWrite = async (method: string, path: string, body?: unknown): Promise<Response> =>
-    app.request(
+    fetchAppPath(
       path,
       {
         method,
@@ -541,7 +541,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public API event freshness acceptanc
     expect(await (await get(`/api/public/events/${key(95)}`)).text()).toContain("Old title");
 
     // Unauthenticated: no cookie.
-    const anon = await app.request(
+    const anon = await fetchAppPath(
       `/events/${key(95)}`,
       {
         method: "PATCH",

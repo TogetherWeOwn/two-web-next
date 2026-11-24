@@ -38,7 +38,7 @@ import {
   stableHex,
 } from "./normalize.mjs";
 import { goldenJson, packRecording } from "./golden.mjs";
-import { buildVectors, loadVectorInputs } from "./vectors.mjs";
+import { buildVectors, loadVectorInputs, SAME_ORIGIN } from "./vectors.mjs";
 
 export const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 /** Inputs whose git trees decide whether a golden directory still applies. */
@@ -118,8 +118,8 @@ function send(port, options, body) {
 async function waitReady(port, child, log) {
   const started = Date.now();
   while (Date.now() - started < 120_000) {
-    if (child.exitCode !== null)
-      throw new Error(`wrangler dev exited (${child.exitCode}):\n${log().slice(-4000)}`);
+    const exit = child.exitCode ?? child.signalCode;
+    if (exit !== null) throw new Error(`wrangler dev exited (${exit}):\n${log().slice(-4000)}`);
     try {
       const res = await send(port, { method: "GET", path: "/__parity/ready" });
       if (res.status === 200) {
@@ -176,7 +176,8 @@ function requestHeaders(vector, context) {
     "x-parity-client": clientAddress(key),
     accept: vector.accept ?? "*/*",
   };
-  if (vector.origin) headers.origin = vector.origin;
+  if (vector.origin)
+    headers.origin = vector.origin === SAME_ORIGIN ? context.appUrl : vector.origin;
   if (vector.contentType) headers["content-type"] = vector.contentType;
   if (vector.authorization) headers.authorization = vector.authorization;
   if (vector.bearer === "ops-control-bearer")
@@ -263,6 +264,7 @@ async function recordRun({
   out,
   tailLabel,
   meta,
+  beforeRecording,
 }) {
   const admin = postgres(adminUrl.href, { max: 1, onnotice: () => {} });
   const runDb = `${template}_run${runIndex}`;
@@ -274,7 +276,7 @@ async function recordRun({
   await refreshClone(clone);
 
   const scratch = await mkdtemp(join(process.env.RUNNER_TEMP ?? tmpdir(), "route-parity-"));
-  const { path: config } = await harnessConfig(targetConfig, scratch, runUrl.href);
+  const { path: config, appUrl } = await harnessConfig(targetConfig, scratch, runUrl.href);
   const port = await unusedPort();
   const child = spawn(
     join(repo, "node_modules/.bin/wrangler"),
@@ -308,7 +310,16 @@ async function recordRun({
     stream.on("data", (data) => (workerLog += data));
   try {
     await waitReady(port, child, () => workerLog);
-    const context = { cookies: await identityCookies(), etags: new Map() };
+    if (beforeRecording) {
+      await beforeRecording(clone, () =>
+        send(port, {
+          method: "GET",
+          path: "/up",
+          headers: { "x-parity-vector": "cutover-readiness", "x-parity-client": "192.0.2.1" },
+        }),
+      );
+    }
+    const context = { cookies: await identityCookies(), etags: new Map(), appUrl };
     const files = new Map();
     for (const vector of vectors) {
       await resetState(clone);
@@ -336,8 +347,10 @@ async function recordRun({
     }
     await writeFile(join(out, "index.json"), goldenJson(meta, { shared: packed.shared, coverage }));
   } finally {
-    child.kill("SIGTERM");
-    await new Promise((done) => (child.exitCode !== null ? done() : child.once("exit", done)));
+    if ((child.exitCode ?? child.signalCode) === null) {
+      child.kill("SIGTERM");
+      await new Promise((done) => child.once("exit", done));
+    }
     await rm(scratch, { recursive: true, force: true });
     await clone.end();
     await admin.unsafe(`drop database if exists ${runDb} with (force)`);
@@ -346,10 +359,20 @@ async function recordRun({
   return workerLog;
 }
 
-export async function record({ out, runs = 1, targetConfig = "wrangler.jsonc", databaseUrl }) {
+export async function record({
+  out,
+  runs = 1,
+  targetConfig = "wrangler.jsonc",
+  databaseUrl,
+  extraPublicFiles = [],
+  beforeRecording,
+}) {
   const adminUrl = requireDisposableDatabase(databaseUrl);
   const inputs = await loadVectorInputs(repo);
-  const { vectors, coverage } = buildVectors(inputs);
+  const { vectors, coverage } = buildVectors({
+    ...inputs,
+    publicFiles: [...inputs.publicFiles, ...extraPublicFiles],
+  });
   const { ALERT_ROUTES } = await import(pathToFileURL(join(repo, "tail/worker.ts")).href);
   const tailLabel = (route) => (route ? (ALERT_ROUTES.has(route) ? route : "[redacted]") : null);
   const meta = {
@@ -394,13 +417,14 @@ export async function record({ out, runs = 1, targetConfig = "wrangler.jsonc", d
         out: dir,
         tailLabel,
         meta,
+        beforeRecording,
       });
       console.log(
         `route parity: recorded ${vectors.length} vectors from ${targetConfig} into ${dir}`,
       );
       dirs.push(dir);
     }
-    return { dirs, meta };
+    return { dirs, meta: { ...meta, coverage } };
   } finally {
     await admin.unsafe(`drop database if exists ${template} with (force)`);
     await admin.end();

@@ -38,6 +38,8 @@ export interface DiscordEventsSource {
   upcoming(now?: Date): Promise<DiscordTransient[]>;
   /** True when the read behind `upcoming` failed — drives the error state. */
   lastReadFailed(): boolean;
+  /** Persisted success epoch (ms) behind this read, 0 for known cold failure, absent if unknown. */
+  lastReadSnapshotAt?(): number | null | undefined;
   /** Sanitized internal metadata from this read, never reparsed from logs. */
   lastReadFailure?(): ReadFailure | null;
 }

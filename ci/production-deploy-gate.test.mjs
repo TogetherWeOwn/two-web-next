@@ -1,15 +1,27 @@
 import assert from "node:assert/strict";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "node:test";
+import { parse, parseDocument } from "yaml";
 import { readWranglerConfig } from "./wrangler-config.mjs";
 import {
   AUTOMATIC_PROMOTION_EVENTS,
   PRODUCTION_HOLD_MAX_MS,
+  KIT_ROUTE_FLAGS,
   PRODUCTION_ORIGIN,
+  assertKitProductionCandidate,
   assertProductionCredentials,
   assertProductionHold,
   assertProductionProtection,
@@ -255,6 +267,71 @@ test("checkout/dispatch SHA mismatch refuses production deployment", async () =>
     checkGreen(ciEvidence(), {}, greenEnv, { checkoutSha: otherSha }),
     /Checkout does not match deployment SHA/,
   );
+});
+
+const repoText = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
+const kitPair = () => ({
+  root: repoText("../wrangler.jsonc"),
+  kit: readWranglerConfig(repoText("../web/wrangler.production.jsonc")),
+});
+
+test("the reviewed Kit candidate passes; drift in name, flags, crons or bindings refuses", () => {
+  const { root, kit } = kitPair();
+  assert.doesNotThrow(() => assertKitProductionCandidate(root, JSON.stringify(kit)));
+  const cases = [
+    [(kit) => Object.assign(kit, { name: "two-web-next" }), /two-web-next-production/],
+    ...KIT_ROUTE_FLAGS.map((flag) => [(kit) => (kit.vars[flag] = "true"), new RegExp(flag)]),
+    [(kit) => (kit.vars.KIT_ROUTE_HOME = false), /KIT_ROUTE_HOME/],
+    [(kit) => (kit.triggers.crons = ["*/10 * * * *"]), /empty crons/],
+    [(kit) => (kit.routes = [{ pattern: "togetherweown.com" }]), /routes/],
+    [(kit) => (kit.workers_dev = true), /workers.dev/],
+    [(kit) => (kit.preview_urls = true), /preview URLs/],
+    [(kit) => delete kit.preview_urls, /preview URLs/],
+    [(kit) => (kit.hyperdrive[0].id = "f".repeat(32)), /hyperdrive bindings/],
+    [(kit) => (kit.queues.consumers = [{ queue: "q" }]), /queues bindings/],
+    [(kit) => delete kit.tail_consumers, /tail_consumers bindings/],
+    [(kit) => (kit.kv_namespaces = [{ binding: "KV", id: "x" }]), /kv_namespaces bindings/],
+    [(kit) => (kit.send_email = [{ name: "EMAIL" }]), /unreviewed config section send_email/],
+    [(kit) => (kit.assets.binding = "STATIC"), /assets settings/],
+    [(kit) => (kit.assets.directory = "./public"), /assets settings/],
+    [(kit) => (kit.vars.APP_URL = "https://example.com"), /var APP_URL/],
+    [(kit) => delete kit.vars.DISCORD_MODERATOR_ROLE_IDS, /var DISCORD_MODERATOR_ROLE_IDS/],
+  ];
+  for (const [mutate, message] of cases) {
+    const { root, kit } = kitPair();
+    mutate(kit);
+    assert.throws(() => assertKitProductionCandidate(root, JSON.stringify(kit)), message);
+  }
+});
+
+test("--kit-candidate CLI checks the working-directory checkout", () => {
+  const dir = mkdtempSync(join(tmpdir(), "gate-kit-"));
+  try {
+    const script = fileURLToPath(new URL("./production-deploy-gate.mjs", import.meta.url));
+    const { root, kit } = kitPair();
+    mkdirSync(join(dir, "web"));
+    writeFileSync(join(dir, "wrangler.jsonc"), root);
+    writeFileSync(join(dir, "web/wrangler.production.jsonc"), JSON.stringify(kit));
+    const run = () =>
+      spawnSync(process.execPath, [script, "--kit-candidate"], { cwd: dir, encoding: "utf8" });
+    const ok = run();
+    assert.equal(ok.status, 0, ok.stderr);
+    assert.match(ok.stdout, /matches root env.production/);
+    kit.vars.KIT_ROUTE_ARCHIVE = "true";
+    writeFileSync(join(dir, "web/wrangler.production.jsonc"), JSON.stringify(kit));
+    const bad = run();
+    assert.equal(bad.status, 1);
+    assert.match(bad.stderr, /::error::Kit candidate KIT_ROUTE_ARCHIVE/);
+
+    kit.vars.KIT_ROUTE_ARCHIVE = "false";
+    kit.assets.run_worker_first = false;
+    writeFileSync(join(dir, "web/wrangler.production.jsonc"), JSON.stringify(kit));
+    const badAssets = run();
+    assert.equal(badAssets.status, 1, badAssets.stdout);
+    assert.match(badAssets.stderr, /::error::Kit candidate assets settings/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 const sentinel = "00000000000000000000000000000000";
@@ -713,21 +790,15 @@ test("preflight checkouts materialize ci and wrangler.jsonc for the production g
   }
 });
 
-test("manual production workflow routes runners by repo visibility and uses production-only secrets", () => {
+test("production workflow uses hosted runners and production-only secrets", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/deploy-production.yml", import.meta.url),
     "utf8",
   );
-  // Self-hosted while private; GitHub-hosted only while public (TOG-12326).
-  const runsOn = `runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`;
   // preflight, staging-soak, regression, deploy-production,
-  // post-deploy-watch and notify.
-  assert.equal(workflow.split(runsOn).length - 1, 6);
-  assert.equal(
-    workflow.split("ubuntu-latest").length - 1,
-    6,
-    "ubuntu-latest only as the public-repo branch",
-  );
+  // post-deploy-watch and notify use hosted runners in either visibility.
+  assert.equal((workflow.match(/^    runs-on: ubuntu-latest$/gm) ?? []).length, 6);
+  assert.equal((workflow.match(/^    runs-on:/gm) ?? []).length, 6);
   // Staging credentials appear only in the staging-soak job, which binds
   // the staging Environment, runs no wrangler and makes one gate call.
   const soak = workflow.slice(
@@ -767,7 +838,7 @@ test("manual production workflow routes runners by repo visibility and uses prod
   );
   const upload = workflow.indexOf("npx wrangler versions upload --env production --tag ");
   const gradual = workflow.indexOf(
-    "uses: TogetherWeOwn/.github/actions/gradual-promote@d427f7212f478ea3823a605edb394b0722e152b5",
+    "uses: TogetherWeOwn/.github/actions/gradual-promote@8059ac2b121b63443db656b1e10e927b8af8133c",
   );
   assert.ok(
     credentialCheck > 0 &&
@@ -794,6 +865,168 @@ test("manual production workflow routes runners by repo visibility and uses prod
   assert.match(call, /account-id: \$\{\{ secrets\.PRODUCTION_CLOUDFLARE_ACCOUNT_ID \}\}/);
   assert.ok(!workflow.includes("npx wrangler versions deploy --env production"));
   assert.ok(!workflow.includes("wrangler deploy --env production"));
+});
+
+function* workflowExpressions(value, isCondition = false) {
+  if (typeof value === "string") {
+    if (isCondition && !value.trimStart().startsWith("${{")) {
+      yield value;
+      return;
+    }
+    let start;
+    let quoted = false;
+    for (const { 0: token, index } of value.matchAll(/\$\{\{|\}\}|'/g)) {
+      if (start === undefined) {
+        if (token === "${{") start = index + token.length;
+      } else if (token === "'") {
+        // A doubled quote toggles twice, leaving us inside the string.
+        quoted = !quoted;
+      } else if (token === "}}" && !quoted) {
+        yield value.slice(start, index);
+        start = undefined;
+      }
+    }
+  } else if (value && typeof value === "object") {
+    for (const child of Object.values(value)) yield* workflowExpressions(child);
+  }
+}
+
+function* deployExpressions({ steps, ...job }) {
+  // Only the job and its steps have `if` conditions with optional delimiters.
+  for (const { if: condition, ...fields } of [job, ...steps]) {
+    yield* workflowExpressions(condition, true);
+    yield* workflowExpressions(fields);
+  }
+}
+
+function assertProductionBaselineScope(workflow) {
+  const config = parse(workflow);
+  const deploy = config.jobs["deploy-production"];
+  const { steps } = deploy;
+  const baseline = steps.find((step) => step.name === "Capture pre-promote dead-letter baseline");
+  assert.equal(baseline?.id, "dead-letter-baseline");
+  assert.match(baseline.run, /echo "failed=\$baseline" >> "\$GITHUB_OUTPUT"/);
+  assert.doesNotMatch(baseline.run, /GITHUB_ENV/);
+
+  // The regression job has its own missing-baseline policy; only check the deploy job here.
+  const consumers = [
+    "Gradual promotion 5-50-100 with automatic rollback",
+    "Verify public routes on the promoted version",
+  ];
+  for (const name of consumers) {
+    const step = steps.find((step) => step.name === name);
+    assert.equal(
+      step?.env?.SMOKE_FAILED_BASELINE,
+      "${{ steps.dead-letter-baseline.outputs.failed }}",
+      name,
+    );
+    assert.equal(step.env.SMOKE_ALLOW_MISSING_BASELINE, "1", name);
+    assert.ok(steps.indexOf(baseline) < steps.indexOf(step), `${name} follows baseline capture`);
+  }
+  const deployText = JSON.stringify(deploy);
+  for (const key of ["SMOKE_FAILED_BASELINE", "SMOKE_ALLOW_MISSING_BASELINE"]) {
+    assert.ok(!Object.hasOwn(config.env ?? {}, key), `${key} must not be set workflow-wide`);
+    assert.equal(
+      deployText.split(key).length - 1,
+      consumers.length,
+      `${key} belongs only to the two smoke consumers`,
+    );
+  }
+  let baselineRefs = 0;
+  for (const expression of deployExpressions(deploy)) {
+    // Skip quoted literals and property names. Only read `steps` by literal step ID.
+    const lookups =
+      /'(?:[^']|'')*'|\.\s*[\w-]+|(?<![\w-])(steps)(?![\w-])(?:\s*(?:\.\s*([\w-]+)|\[\s*'([\w-]+)'\s*\]))?/gi;
+    for (const [, context, property, index] of expression.matchAll(lookups)) {
+      if (!context) continue;
+      const id = property ?? index;
+      assert.ok(id, "the steps context must be read by literal step ID");
+      if (id.toLowerCase() === baseline.id) baselineRefs++;
+    }
+  }
+  assert.equal(
+    baselineRefs,
+    consumers.length,
+    "the baseline output must not be read under another variable name or input",
+  );
+}
+
+const productionWorkflow = () =>
+  readFileSync(new URL("../.github/workflows/deploy-production.yml", import.meta.url), "utf8");
+
+test("production dead-letter baseline is scoped to the gradual and post-promotion smokes", () => {
+  assertProductionBaselineScope(productionWorkflow());
+});
+
+test("production dead-letter baseline scope ignores YAML comments and sibling step IDs", () => {
+  const workflow = `# SMOKE_FAILED_BASELINE must be step-local\n${productionWorkflow()}`;
+  const withOtherRead = workflow.replace(
+    "\n  post-deploy-watch:",
+    "\n      # ${{ steps['dead-letter-baseline'].outputs.failed }}\n" +
+      "      - name: Read another output\n" +
+      "        if: contains('toJSON(steps)', '(') && steps.dead-letter-baseline-check.outputs.failed == '0'\n" +
+      "        run: 'true'\n\n  post-deploy-watch:",
+  );
+  assertProductionBaselineScope(withOtherRead);
+});
+
+test("production dead-letter baseline scope rejects workflow defaults and extra reads", () => {
+  const workflow = productionWorkflow();
+  const withDefaults = parseDocument(workflow);
+  withDefaults.setIn(["env", "UNRELATED_FIXTURE_DEFAULT"], "1");
+  assertProductionBaselineScope(withDefaults.toString());
+  withDefaults.setIn(["env", "SMOKE_FAILED_BASELINE"], "0");
+  assert.throws(
+    () => assertProductionBaselineScope(withDefaults.toString()),
+    /SMOKE_FAILED_BASELINE must not be set workflow-wide/,
+  );
+  for (const [condition, error] of [
+    ["steps.dead-letter-baseline.outputs.failed == '0'", /must not be read under another variable/],
+    [
+      "steps['dead-letter-baseline'].outputs.failed == '0'",
+      /must not be read under another variable/,
+    ],
+    ["steps[format('{0}', 'dead-letter-baseline')].outputs.failed == '0'", /literal step ID/],
+    [
+      "${{ contains('it''s }}', '}') && steps.dead-letter-baseline.outputs.failed == '0' }}",
+      /must not be read under another variable/,
+    ],
+    [
+      "contains('${{', '{') && steps.dead-letter-baseline.outputs.failed == '0'",
+      /must not be read under another variable/,
+    ],
+  ]) {
+    const withExtraRead = workflow.replace(
+      "\n  post-deploy-watch:",
+      `\n      - name: Read an extra output\n        if: ${condition}\n        run: 'true'\n\n  post-deploy-watch:`,
+    );
+    assert.throws(() => assertProductionBaselineScope(withExtraRead), error);
+  }
+});
+
+test("production dead-letter baseline scope checks interpolation in an env key named if", () => {
+  const workflow = parseDocument(productionWorkflow());
+  workflow.addIn(["jobs", "deploy-production", "steps"], {
+    name: "Read an extra output in env",
+    env: { if: "baseline: '${{ steps.dead-letter-baseline.outputs.failed }}'" },
+    run: "true",
+  });
+  assert.throws(
+    () => assertProductionBaselineScope(workflow.toString()),
+    /must not be read under another variable/,
+  );
+});
+
+test("production dead-letter baseline scope rejects whole-context and wildcard reads", () => {
+  for (const expression of ["toJSON(steps)", "toJSON(steps.*.outputs)"]) {
+    const workflow = parseDocument(productionWorkflow());
+    workflow.addIn(["jobs", "deploy-production", "steps"], {
+      name: "Read aggregate step outputs",
+      env: { READ_OUTPUTS: `\${{ ${expression} }}` },
+      run: "true",
+    });
+    assert.throws(() => assertProductionBaselineScope(workflow.toString()), /literal step ID/);
+  }
 });
 
 test("shared gradual action promotes 5-50-100 with per-stage gates and auto-rollback", () => {
@@ -1508,7 +1741,13 @@ test("auto-approve's staging quality job and steps are the ones the workflows ru
   );
   assert.match(
     e2e,
-    /\n {2}staging-quality:\n {4}name: staging-quality\n[\s\S]*?uses: \.\/\.github\/workflows\/web-quality-origin\.yml\n/,
+    /\n {2}staging-quality:\n {4}name: staging-quality\n[\s\S]*?uses: TogetherWeOwn\/two-web-next\/\.github\/workflows\/web-quality-origin\.yml@38581ef492f5c972969f5dfada396a9f0e2ee989\n/,
+  );
+  // The caller runs the pinned definition, not necessarily this checkout's copy.
+  assert.equal(
+    createHash("sha256").update(quality).digest("hex"),
+    "ee636905e04598b8280f68626570a6f731a090814ff6fef0b09835b2eb097031",
+    "local quality workflow must match the pinned definition before checking its steps",
   );
   assert.match(quality, /\n {2}quality:\n {4}name: quality\n/);
   assert.equal(stagingQualityJob, "staging-quality / quality");

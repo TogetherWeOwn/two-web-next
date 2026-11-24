@@ -111,6 +111,10 @@ test("RSVP control upload predicate never gates browser checks or cleanup", () =
   assert.match(screenshots[0], /^        uses: actions\/upload-artifact@/m);
   assert.match(screenshots[0], /test-results\/\*\*\/attachments\/hono-review-\*\.png/);
   assert.match(screenshots[0], /test-results-kit-parity\/\*\*\/attachments\/kit-review-\*\.png/);
+  assert.match(
+    screenshots[0],
+    /test-results-kit-visual\/\*\*\/attachments\/kit-review-calendar-\*\.png/,
+  );
   assert.match(screenshots[0], /if-no-files-found: error/);
   assert.match(screenshots[0], /retention-days: 7/);
   const execution = steps

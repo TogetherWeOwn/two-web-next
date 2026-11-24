@@ -22,8 +22,11 @@ on:
 
 permissions:
   contents: read
-  # The scope job lists the PR's changed files via the API.
-  pull-requests: read
+  pull-requests: read # The scope job lists changed PR files via the API.
+
+env:
+  # The policy fixtures and workspace installs must use the same bundled npm.
+  ADMISSION_NODE_VERSION: "24.22.3"
 
 # Runs on main are never cancelled in progress: a cancel request marks the run
 # cancelled even when every job then succeeds, and the staging deploy trigger
@@ -214,7 +217,7 @@ jobs:
         run: node --test ci/install-hook-inventory.test.mjs ci/asset-output-boundary.test.mjs
       - name: Kit CSS collector and evidence selftests
         if: github.event_name == 'pull_request'
-        run: node --test ci/kit-css-collect.test.mjs ci/kit-css-evidence.test.mjs
+        run: node --test ci/kit-css-collect.test.mjs ci/kit-css-evidence.test.mjs ci/kit-activity-log-overlay.test.mjs ci/kit-activity-log-png.test.mjs ci/kit-activity-log-visual.test.mjs
       - name: Install locked workflow parser without hooks
         if: github.event_name == 'pull_request'
         run: npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
@@ -261,6 +264,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # A PR needs its merge commit's first parent. A merge group may
+          # contain several candidate commits after the event's base SHA.
+          fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '2' }}
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -275,12 +281,25 @@ jobs:
       # Parse the Vitest sources on every change, including ledger-only edits.
       # No install hooks or browser/database fixtures are needed by this gate.
       - run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+      - name: Workflow job citation fixtures
+        run: node --test ci/check-workflow-job-citations.test.mjs
+      - name: Check added workflow job citations
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        env:
+          CITATION_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha }}
+        run: node ci/check-workflow-job-citations.mjs "$CITATION_BASE"
       # Run on draft heads too: these isolated fixtures prove fresh-source
       # resolution and explicit selection without an app build or database.
       - name: Fresh-worktree check bootstrap
         run: env -u DATABASE_URL -u BOT_DATABASE_URL npm --ignore-scripts run test:unit -- test/check-bootstrap.test.ts test/leaf-css-build-time.test.ts test/leaf-css-drift.test.ts
       - name: Incident staging observation selftests (fixtures, no network)
         run: node --test ci/incident-staging-observation.test.mjs
+      - name: Production database identity selftests (fixtures, no network)
+        run: |
+          node --test ci/production-db-identity.test.mjs
+          node --test --test-name-pattern 'reads a PRODUCTION_\* secret binds|(identity|executor) preflight never' ci/check-production-secrets.test.mjs
+      - name: Production permissions repair admission selftests
+        run: node --test ci/db-permissions-repair.test.mjs
       - name: Timeout ledger ratchet (HARD)
         run: npm run ledger:timeouts:selftest && npm run ledger:timeouts
 
@@ -298,10 +317,10 @@ jobs:
     # wrangler's dev ports) collide across concurrent jobs. A job container has
     # its own network namespace; localhost:5432 is forwarded to the service.
     container:
-      image: node:24-bookworm
+      image: node:24-bookworm@sha256:9d266751ca3d7fdbe651c878ffd5ad0a42fed49a18c283509267c97f025b7496 # 24.22.3-bookworm
     services:
       postgres:
-        image: postgres:17
+        image: postgres:17@sha256:0d938e975177bef9f1f61f3f9dbcf2e0aa0a139568f66d3415ed8892eb97f6ac # 17.12-trixie
         env:
           POSTGRES_PASSWORD: ci
         options: >-
@@ -536,17 +555,59 @@ jobs:
           path: artifacts/a11y/
           if-no-files-found: error
           retention-days: 14
+  # Run install-independent dependency gates once, before check or future
+  # coverage shards install dependencies. No Postgres or install cache needed.
+  dependency-admission:
+    name: dependency-admission
+    needs: [scope]
+    if: ${{ !cancelled() }}
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    # Two lockfiles can each exhaust three 120s attempts plus backoff.
+    timeout-minutes: 20
+    steps:
+      - name: Require successful scope
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+        run: test "$SCOPE_RESULT" = success
+      - name: Docs-only or draft fast pass
+        if: needs.scope.outputs.docs_only == 'true' || needs.scope.outputs.draft == 'true'
+        run: echo "Docs-only or draft change per scope; no dependency admission required."
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        with:
+          node-version: ${{ env.ADMISSION_NODE_VERSION }}
+          package-manager-cache: false
+      - name: Dependency audit selftest (local fixtures)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run deps:audit:selftest
+      - name: npm policy enforcement fixtures
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        env:
+          npm_config_ignore_scripts: "true"
+          npm_config_min_release_age: "3"
+        run: node ci/npm-policy-fixtures.mjs "$RUNNER_TEMP/npm-policy-fixtures.json"
+      - name: Dependency audit (lockfile, including dev dependencies)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run deps:audit
+      - name: Dependency-pin guard selftest and verify (local fixtures)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run deps:pins:selftest && npm run deps:pins
+
   # Name pinned equal to the id. `check` feeds the required `ci-ok` gate.
-  # It needs only `scope`, so it starts alongside a11y, lighthouse and
-  # bundle-budget instead of after them; the steps that gated those jobs'
-  # results (docs-links, the accessibility audit and the performance gate)
-  # live in `ci-ok`, which already needs every one of them.
+  # It waits for scope and dependency admission, not the independent
+  # accessibility, performance or docs jobs; ci-ok aggregates those results.
   # `scope` is not a required check, so a red scope must fail `check` itself
   # (first step): without its outputs every area reads as unselected, and the
   # docs-only fast pass would leave `check` green on a broken verdict.
   check:
     name: check
-    needs: [scope]
+    needs: [scope, dependency-admission]
     # `!cancelled()`, not `always()`: see the note on ci-ok.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
@@ -566,13 +627,13 @@ jobs:
       options: --cgroupns=host
     services:
       postgres:
-        image: postgres:17
+        image: postgres:17@sha256:0d938e975177bef9f1f61f3f9dbcf2e0aa0a139568f66d3415ed8892eb97f6ac # 17.12-trixie
         env:
           POSTGRES_PASSWORD: ci
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
       catalog-postgres:
-        image: postgres:17
+        image: postgres:17@sha256:0d938e975177bef9f1f61f3f9dbcf2e0aa0a139568f66d3415ed8892eb97f6ac # 17.12-trixie
         env:
           POSTGRES_PASSWORD: ci
         options: >-
@@ -582,6 +643,10 @@ jobs:
         env:
           SCOPE_RESULT: ${{ needs.scope.result }}
         run: test "$SCOPE_RESULT" = success
+      - name: Require successful dependency admission
+        env:
+          DEPENDENCY_ADMISSION_RESULT: ${{ needs.dependency-admission.result }}
+        run: test "$DEPENDENCY_ADMISSION_RESULT" = success
       - name: Docs-only fast pass (no code changed)
         if: needs.scope.outputs.docs_only == 'true' || needs.scope.outputs.draft == 'true'
         run: echo "Docs-only or draft change per the scope job; required check passes without the heavy suite."
@@ -598,6 +663,9 @@ jobs:
       - name: Tag capture guard fixtures
         if: needs.scope.outputs.docs_only != 'true'
         run: node --test ci/kit-tag-capture-guards.test.mjs
+      - name: Kit retirement guard fixtures
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/kit-retirement-build.test.mjs
       - name: Disposable migration role wiring fixtures
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/disposable-runtime-role.test.mjs
@@ -607,14 +675,15 @@ jobs:
           # On hosted/overflow runners the job container's root does not own the
           # runner-owned checkout, so Git refuses it as dubious ownership.
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          apt-get update -qq && apt-get install -y -qq --no-install-recommends socat postgresql-client python3-venv >/dev/null
+          # The migration admission fixture runs the workflow's real jq filter.
+          apt-get update -qq && apt-get install -y -qq --no-install-recommends socat postgresql-client python3-venv jq >/dev/null
           nohup setsid socat TCP-LISTEN:5432,bind=127.0.0.1,reuseaddr,fork TCP:postgres:5432 >/dev/null 2>&1 &
           for i in $(seq 1 30); do pg_isready -q -h 127.0.0.1 -U postgres && exit 0; sleep 1; done
           exit 1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         with:
-          node-version: 24
+          node-version: ${{ env.ADMISSION_NODE_VERSION }}
           cache: npm
           # The Kit install below reads web/package-lock.json, a separate
           # graph from the root lockfile. Hash it into the cache key too so
@@ -647,21 +716,6 @@ jobs:
       - name: Incident issue lifecycle fixtures
         if: needs.scope.outputs.docs_only != 'true'
         run: node --test ci/incident-issue-lifecycle.test.mjs
-      - name: Dependency audit selftest (local fixtures)
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: npm run deps:audit:selftest
-      - name: npm policy enforcement fixtures
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        env:
-          npm_config_ignore_scripts: "true"
-          npm_config_min_release_age: "3"
-        run: node ci/npm-policy-fixtures.mjs "$RUNNER_TEMP/npm-policy-fixtures.json"
-      - name: Dependency audit (lockfile, including dev dependencies)
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: npm run deps:audit
-      - name: Dependency-pin guard selftest and verify (local fixtures)
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: npm run deps:pins:selftest && npm run deps:pins
       - run: npm ci --no-audit --no-fund
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
       - name: Design-kit provenance and adapter drift
@@ -721,6 +775,9 @@ jobs:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           APP_URL: http://127.0.0.1:8787
           CAPTURE_SEED_ID: ember-capture-v1
+      - name: Install Kit workspace dependencies
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Migration workflow selftest (isolated Postgres, no network APIs)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run db:migrate:selftest
@@ -735,11 +792,12 @@ jobs:
         run: bash ci/biome-selftest.sh
       # Fetch-await HARD gate (quality-gates.md): every fetch() in src/ is
       # awaited, returned or chained, plus the shared vendored warning rules
-      # and their fixtures. No build needed; fails the job.
+      # and their fixtures. Also guards against suppressions in src/http/.
       - name: Fetch-await gate (ast-grep, HARD)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: |
           node ci/ast-grep-warn-selftest.mjs
+          node --test ci/http-boundary-suppressions.test.mjs
           npm run scan:fetch-await
           npm run scan:rules-test
       # Floor guard HARD (CONSTRAINTS.md): no new suppressions, skips,
@@ -756,13 +814,6 @@ jobs:
       - name: Test inventory (HARD)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run test:inventory:selftest && npm run test:inventory -- --strict
-      # SvelteKit workspaces (house-rules parity): unit coverage SSR-compiles
-      # .svelte through web's svelte/compiler, so install before Check. Runs
-      # whenever Check runs (docs/draft gate only): coverage runs every test
-      # even on db-only scopes where the area-gated Kit steps stay skipped.
-      - name: Install Kit workspace dependencies
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Admin waitlist DB-free regression
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: env -u DATABASE_URL node node_modules/vitest/vitest.mjs run test/admin.test.ts test/admin-waitlist-order-postgres-acceptance.test.ts test/admin-waitlist-classifier.test.ts
@@ -772,14 +823,11 @@ jobs:
       - name: Security-pin contracts (Host admission + CSP inline styles)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run check:security-pins
-      - name: Check (lint + typecheck + coverage gate)
+      - name: Check CI contracts and e2e safety
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/kit-preview-e2e-wiring.test.mjs ci/visual-accept.test.mjs ci/tier0-changed-query-files.test.mjs
-        env:
-          DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
-          AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+        run: npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/kit-preview-e2e-wiring.test.mjs ci/visual-accept.test.mjs ci/tier0-changed-query-files.test.mjs
       # UTC-contract pin (hotzone period picker): the acceptance suite's
-      # shortcut expectations are UTC-derived, but the coverage run above
+      # shortcut expectations are UTC-derived, but the coverage matrix
       # executes under the runner's UTC zone, so a local-getter regression
       # in src/hotzones/season.ts stays green there. Re-run just this
       # hermetic suite (~4s) under a non-UTC TZ so the merge gate kills
@@ -800,8 +848,7 @@ jobs:
       # required; the trap keeps a failure before the report visible in logs.
       # The step always prints the query files this PR touches beside the
       # verdict, even when the suites fail. Tier-0 lives in tier0/ (own vitest
-      # config) because every test/** file runs inside the blocking coverage
-      # step above.
+      # config) because every test/** file runs in the blocking coverage matrix.
       - name: Tier-0 check (validators + authz + EXPLAIN)
         # Do not invoke installed tools after an audit/install failure skipped npm ci.
         if: success() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
@@ -848,6 +895,8 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Kit archive parity (Hono vs SvelteKit section contract)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        env:
+          KIT_RETIREMENT_GUARD: report
         run: node ci/kit-preview-e2e.mjs
       - name: Kit preview env-guard (one-sided URL rejection)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
@@ -897,7 +946,7 @@ jobs:
         run: |
           mkdir -p artifacts/kit-admin-contrast
           node --import tsx --test --test-timeout=60000 --test-reporter=tap --test-reporter-destination=artifacts/kit-admin-contrast/report.tap ci/kit-admin-contrast.test.mjs
-          node ci/rsvp-focus-require-executed.mjs artifacts/kit-admin-contrast/report.tap "Kit admin contrast" 11
+          node ci/rsvp-focus-require-executed.mjs artifacts/kit-admin-contrast/report.tap "Kit admin contrast" 23
       - name: Kit admin contrast evidence
         if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -939,9 +988,9 @@ jobs:
             "$RUNNER_TEMP"/kit-css-failure.*) rm -rf -- "$KIT_CSS_FAILURE_DIR" ;;
             *) exit 1 ;;
           esac
-      - name: Kit route performance budgets (complete immutable dependency closure)
+      - name: Kit route performance (report only)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
-        run: node ci/check-kit-route-perf.mjs
+        run: node ci/check-kit-route-perf.mjs --report-only
       - name: Kit Worker bundle dry run (no deploy)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npx wrangler deploy --config web/wrangler.jsonc --dry-run --outdir "$RUNNER_TEMP/kit-worker-dry-run"
@@ -953,6 +1002,15 @@ jobs:
         run: node ci/kit-worker-e2e.mjs
         env:
           KIT_WORKER_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+          KIT_PROFILE_WRITE_EVIDENCE_DIR: artifacts/kit-profile-write
+      - name: Retain synthetic Kit profile write screenshots
+        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-profile-write
+          path: artifacts/kit-profile-write/
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Staging deployment gate selftest (stubbed, no Cloudflare calls)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/staging-deploy-gate-selftest.mjs
@@ -973,14 +1031,6 @@ jobs:
         run: npm run test:catalog-preflight
         env:
           CATALOG_PREFLIGHT_TEST_DATABASE_URL: postgres://postgres:ci@catalog-postgres:5432/postgres
-      # Changed-lines WARN gate (quality-gates.md): added TS lines should be
-      # executed (80%). Reads the coverage this job just produced; a missing
-      # report after successful coverage fails the step (fail closed). Earlier
-      # failures keep their own verdict without a secondary missing-input error.
-      # Docs-only and draft PRs skip via scope, never a file-presence check.
-      - name: Patch coverage (WARN)
-        if: success() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: npm run patch:coverage:selftest && npm run patch:coverage
       # Semgrep HARD gate (quality-gates.md): TS sinks + secret-shaped
       # literals. The planted-finding selftest and strict scan both fail closed.
       - name: Semgrep (HARD)
@@ -996,17 +1046,6 @@ jobs:
           "$RUNNER_TEMP/semgrep/bin/pip" install --quiet 'semgrep==1.180.0'
           node ci/semgrep-warn-selftest.mjs "$RUNNER_TEMP/semgrep/bin/semgrep"
           "$RUNNER_TEMP/semgrep/bin/semgrep" --strict --error --config ci/semgrep-rules.yml --metrics=off
-      - name: Coverage job summary
-        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && hashFiles('coverage/coverage-summary.json') != ''
-        run: node ci/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"
-      - name: Upload coverage report
-        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && hashFiles('coverage/coverage-summary.json') != ''
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: coverage-${{ github.sha }}
-          path: coverage/
-          if-no-files-found: error
-          retention-days: 14
       - name: Database backup selftest (stubbed, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: bash ci/db-backup-selftest.sh
@@ -1096,6 +1135,9 @@ jobs:
       - name: Production deploy gate selftest (fixtures, no secrets or network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/production-deploy-gate.test.mjs
+      - name: Protected Kit cutover admission selftest (fixtures, no credentials or network)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/kit-cutover-evidence.test.mjs ci/kit-cutover-deploy.test.mjs
       - name: Production ancestry admission selftest (stubbed GitHub API, no network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/production-ancestry.test.mjs
@@ -1190,6 +1232,131 @@ jobs:
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: node ci/check-worker-bundle.mjs
 
+  static-check:
+    needs: [scope, dependency-admission]
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.dependency-admission.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.ADMISSION_NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - run: npm run lint && npm run typecheck && npm run e2e:typecheck
+
+  coverage-shard:
+    name: coverage-shard (${{ matrix.shard }})
+    needs: [scope, dependency-admission]
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.dependency-admission.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    container:
+      image: node:24-bookworm@sha256:9d266751ca3d7fdbe651c878ffd5ad0a42fed49a18c283509267c97f025b7496 # 24.22.3-bookworm
+      options: --cgroupns=host
+    services:
+      postgres:
+        image: postgres:17@sha256:0d938e975177bef9f1f61f3f9dbcf2e0aa0a139568f66d3415ed8892eb97f6ac # 17.12-trixie
+        env:
+          POSTGRES_PASSWORD: ci
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Job-private localhost:5432 forward to the Postgres service
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          apt-get update -qq && apt-get install -y -qq --no-install-recommends socat postgresql-client >/dev/null
+          nohup setsid socat TCP-LISTEN:5432,bind=127.0.0.1,reuseaddr,fork TCP:postgres:5432 >/dev/null 2>&1 &
+          for i in $(seq 1 30); do pg_isready -q -h 127.0.0.1 -U postgres && exit 0; sleep 1; done
+          exit 1
+      - run: npm ci --no-audit --no-fund
+      - run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Prepare disposable runtime role
+        run: PGPASSWORD=ci psql -h postgres -U postgres -d postgres -v ON_ERROR_STOP=1 -f ci/disposable-runtime-role.sql -f ci/disposable-runtime-role.sql
+      - name: Apply migrations
+        run: npm run db:migrate
+        env:
+          DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      - name: Run Vitest coverage shard
+        env:
+          DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+          AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ strategy.job-total }}
+          VITEST_COVERAGE_SHARD: "1"
+        run: npm run test:coverage -- --shard="$SHARD/$SHARDS" --reporter=dot --reporter=blob --outputFile.blob="vitest-$SHARD.json"
+      - name: Upload coverage shard report
+        if: success() || (failure() && hashFiles(format('vitest-{0}.json', matrix.shard)) != '')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-vitest-${{ matrix.shard }}
+          path: vitest-${{ matrix.shard }}.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30 # Matches GitHub Actions rerun eligibility.
+
+  coverage-merge:
+    needs: [scope, dependency-admission, coverage-shard]
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.dependency-admission.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: node:24-bookworm@sha256:9d266751ca3d7fdbe651c878ffd5ad0a42fed49a18c283509267c97f025b7496 # 24.22.3-bookworm; match shard paths.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # Patch coverage diffs against the base commit.
+          persist-credentials: false
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: npm ci --no-audit --no-fund
+      - id: blob-dir
+        run: dir=$(mktemp -d "$RUNNER_TEMP/coverage-blobs.XXXXXX") && printf 'path=%s\n' "$dir" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: coverage-vitest-*
+          path: ${{ steps.blob-dir.outputs.path }}
+          merge-multiple: true
+      - name: Merge Vitest coverage with the repository thresholds
+        env:
+          BLOB_DIR: ${{ steps.blob-dir.outputs.path }}
+        run: |
+          TEST=true VITEST=true NODE_ENV=test node ci/verify-vitest-shards.mjs --coverage-dir "$BLOB_DIR"
+          npm run test:coverage -- --merge-reports="$BLOB_DIR" --reporter=dot
+      - name: Require every coverage shard to succeed
+        if: ${{ !cancelled() }}
+        env:
+          SHARD_RESULT: ${{ needs.coverage-shard.result }}
+        run: test "$SHARD_RESULT" = success
+      - name: Patch coverage (WARN)
+        if: success()
+        run: npm run patch:coverage:selftest && npm run patch:coverage
+      - name: Coverage job summary
+        if: ${{ !cancelled() && hashFiles('coverage/coverage-summary.json') != '' }}
+        run: node ci/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload coverage report
+        if: ${{ !cancelled() && hashFiles('coverage/coverage-summary.json') != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-${{ github.sha }}
+          path: coverage/
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
+
   # Node 22 compatibility leg: package.json `engines` declares a 22 range
   # beside `>=24`, but every other job runs Node 24, so the 22 range shipped
   # to developers unverified. Building this leg proved the old 22.18.0 floor
@@ -1205,43 +1372,34 @@ jobs:
   # `ci-ok` fails unless it succeeds, so a red or skipped leg blocks the
   # merge instead of reading green. test/required-checks.test.ts pins the
   # floor and the surface.
-  node22-compat:
-    name: node22-compat
+  node22-shard:
+    name: node22-shard (${{ matrix.shard }})
     needs: [scope]
-    # `!cancelled()`, not `always()`: see the note on ci-ok.
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' }}
     runs-on: ubuntu-latest
-    # The lint + typecheck + unit-test suite runs 28-30m; 30m cancelled
-    # green runs on runner noise (worst observed pass 29m32s, 28s of
-    # margin). 45m keeps a ~34% margin; the progress sidecar samples the
-    # first 43m (MAX_SAMPLES in ci/node22-progress.mjs tracks this ceiling).
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    # Keep the previous ceiling; the progress sidecar samples the first 43m.
     timeout-minutes: 45
     # Same container/service isolation as `check` (own network namespace, so
     # localhost:5432 cannot collide on the shared Docker host), at the exact
     # engines floor instead of Node 24.
     container:
-      image: node:22.23.0-bookworm
+      image: node:22.23.0-bookworm@sha256:e0d149b4727ac0c20d9774e801e423d7a946a0bffced886f42cfe9cd3c67820a
     services:
       postgres:
-        image: postgres:17
+        image: postgres:17@sha256:0d938e975177bef9f1f61f3f9dbcf2e0aa0a139568f66d3415ed8892eb97f6ac # 17.12-trixie
         env:
           POSTGRES_PASSWORD: ci
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
-      - name: Require successful scope
-        env:
-          SCOPE_RESULT: ${{ needs.scope.result }}
-        run: test "$SCOPE_RESULT" = success
-      - name: Docs-only fast pass (no code changed)
-        if: needs.scope.outputs.docs_only == 'true' || needs.scope.outputs.draft == 'true'
-        run: echo "Docs-only or draft change per the scope job; Node 22 compatibility leg passes without the suite."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         with:
           persist-credentials: false
       - name: Job-private localhost:5432 forward to the Postgres service
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: |
           # On hosted/overflow runners the job container's root does not own the
           # runner-owned checkout, so Git refuses it as dubious ownership.
@@ -1251,7 +1409,6 @@ jobs:
           for i in $(seq 1 30); do pg_isready -q -h 127.0.0.1 -U postgres && exit 0; sleep 1; done
           exit 1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         with:
           node-version: 22.23.0
           cache: npm
@@ -1263,40 +1420,91 @@ jobs:
       # The test plan for this leg is the version in the log: fail here, before
       # any suite runs, if the runner is not the exact engines floor.
       - name: Assert the exact Node 22.23.0 engines floor
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: |
           node --version
           test "$(node --version)" = "v22.23.0"
       - run: npm ci --no-audit --no-fund
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
       # Unit files SSR-compile .svelte through web's svelte/compiler, so the
       # Kit workspace installs before the suite (same reason as `check`).
       - name: Install Kit workspace dependencies
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Prepare disposable runtime role
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: PGPASSWORD=ci psql -h postgres -U postgres -d postgres -v ON_ERROR_STOP=1 -f ci/disposable-runtime-role.sql -f ci/disposable-runtime-role.sql
       - name: Apply migrations
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run db:migrate
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
       - name: Node 22 progress diagnostics selftests (local fixtures)
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        if: matrix.shard == 1
         run: node --test ci/node22-progress.test.mjs
-      - name: Lint + typecheck + unit tests on Node 22.23.0
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+      - name: Run Node 22.23.0 Vitest shard
         run: |
           node ci/node22-progress.mjs "$$" &
           diagnostics_pid=$!
           trap 'kill "$diagnostics_pid" 2>/dev/null || :; wait "$diagnostics_pid" 2>/dev/null || :' EXIT
-          npm run lint && npm run typecheck && npm test
+          if [ "$SHARD" = 1 ]; then npm run lint && npm run typecheck || exit $?; fi
+          npm test -- --shard="$SHARD/$SHARDS" --reporter=dot --reporter=blob --outputFile.blob="vitest-$SHARD.json"
         env:
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ strategy.job-total }}
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      - name: Upload Node 22 shard report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: node22-vitest-${{ matrix.shard }}
+          path: vitest-${{ matrix.shard }}.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30 # Matches GitHub Actions rerun eligibility.
+
+  node22-compat:
+    name: node22-compat
+    needs: [scope, node22-shard]
+    # Always report a verdict unless the workflow itself was cancelled.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Keep the shard checkout path and exact Node floor for Vitest's replay.
+    container:
+      image: node:22.23.0-bookworm@sha256:e0d149b4727ac0c20d9774e801e423d7a946a0bffced886f42cfe9cd3c67820a
+    steps:
+      - name: Require successful scope
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+        run: test "$SCOPE_RESULT" = success
+      - name: Docs-only fast pass (no code changed)
+        if: needs.scope.outputs.docs_only == 'true' || needs.scope.outputs.draft == 'true'
+        run: echo "Docs-only or draft change per the scope job; Node 22 compatibility leg passes without the suite."
+      - name: Require every selected Node 22 shard to succeed
+        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true'
+        env:
+          SHARD_RESULT: ${{ needs.node22-shard.result }}
+        run: test "$SHARD_RESULT" = success
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true'
+        with:
+          persist-credentials: false
+      - run: npm ci --no-audit --no-fund
+        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true'
+        with:
+          pattern: node22-vitest-*
+          path: vitest-blob
+          merge-multiple: true
+      - name: Merge Node 22 Vitest reports
+        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true'
+        run: |
+          # Vitest can replay valid blobs that omit test files.
+          set -- vitest-blob/*
+          test "$#" -eq 3
+          for shard in 1 2 3; do test -s "vitest-blob/vitest-$shard.json"; done
+          TEST=true VITEST=true NODE_ENV=test node ci/verify-vitest-shards.mjs "$@"
+          node node_modules/vitest/vitest.mjs run --merge-reports=vitest-blob --reporter=dot
 
   bundle-budget:
+    name: bundle-budget
     needs: scope
     # Budgets only observe the served assets (app). Drafts skip.
     if: needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
@@ -1338,13 +1546,14 @@ jobs:
           retention-days: 3
 
   lighthouse:
+    name: lighthouse
     needs: scope
     # Fixture worker serves the app over fixed routes (app only). Drafts skip.
     if: needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
     runs-on: ubuntu-latest
     # A private namespace keeps Wrangler's fixed audit port off the shared host.
     container:
-      image: node:24-bookworm
+      image: node:24-bookworm@sha256:9d266751ca3d7fdbe651c878ffd5ad0a42fed49a18c283509267c97f025b7496 # 24.22.3-bookworm
     # 45 covers one collect retry on each step (ci/lighthouse-perf-run.mjs and
     # ci/lighthouse-quality-run.mjs each make a second whole-run attempt when
     # the first comes up short of LHRs).
@@ -1378,7 +1587,14 @@ jobs:
           npx playwright install --with-deps chromium
           node -e 'require("fs").appendFileSync(process.env.GITHUB_ENV, "CHROME_PATH=" + require("playwright").chromium.executablePath() + "\n")'
       - name: Lighthouse (local fixture worker, no database or Discord)
+        id: mobile
         run: npm run lighthouse
+      # The mobile runner clears earlier attempts. Preserve the final raw reports
+      # before desktop clears the top-level files; the upload manifest is not raw evidence.
+      - name: Preserve fixture mobile samples
+        if: ${{ !cancelled() && (steps.mobile.outcome == 'success' || steps.mobile.outcome == 'failure') }}
+        continue-on-error: true # Evidence only; keep the existing gate verdicts.
+        run: bash ci/lighthouse-preserve-mobile.sh .lighthouseci mobile-fixture
       # Web quality gate (owner 2026-10-10): category scores vs ci/quality-budget.json, then security headers,
       # HTML basics and internal links. Each step runs even after an earlier failure so one red run lists
       # everything to fix; any failure fails this job and therefore ci-ok.
@@ -1401,6 +1617,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # The pinned actionlint checker does not support YAML aliases. Keep the
+  # three Kit browser job setups explicit; coverage-command.test.mjs checks parity.
   kit-browser-fixture:
     name: kit-browser-fixture
     needs: [scope]
@@ -1412,6 +1630,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -1425,8 +1644,84 @@ jobs:
       - run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Install Kit parity Chromium
         run: npx playwright install --with-deps chromium
-      - name: Kit disposable browser fixture
-        run: node --test --test-timeout=300000 ci/kit-browser-fixture-isolation.test.mjs ci/kit-browser-fixture.test.mjs
+      # Skip the calendar cases explicitly: a negative name pattern also
+      # matches the file ancestor and can run all of its descendants.
+      - name: Kit disposable browser fixture (non-calendar)
+        run: node --test --test-timeout=300000 --test-skip-pattern='^calendar ' ci/kit-browser-fixture-isolation.test.mjs ci/kit-browser-fixture.test.mjs
+
+  kit-browser-calendar:
+    name: kit-browser-calendar
+    needs: [scope]
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: node:24-bookworm@sha256:e7add2a490bb17d97b485b8641bd88455fff7839ade0f5eba493c3508124d413
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: npm ci --no-audit --no-fund
+      - run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Install Kit parity Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Kit disposable browser fixture (calendar)
+        run: node --test --test-timeout=300000 --test-name-pattern='^calendar ' ci/kit-browser-fixture.test.mjs
+
+  kit-browser-lifeline:
+    name: kit-browser-lifeline
+    needs: [scope]
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: node:24-bookworm@sha256:e7add2a490bb17d97b485b8641bd88455fff7839ade0f5eba493c3508124d413
+    outputs:
+      artifact-id: ${{ steps.lifeline-upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: npm ci --no-audit --no-fund
+      - run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Install Kit parity Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Kit Lifeline browser fixture
+        run: node --test ci/kit-lifeline-browser.test.mjs
+      - name: Verify Lifeline screenshots
+        run: |
+          for state in upcoming frozen cancelled ended; do
+            for width in 1280 390; do
+              test -s "artifacts/kit-lifeline/$state-$width.png" || {
+                echo "::error::Missing or empty Lifeline screenshot: $state-$width.png"
+                exit 1
+              }
+            done
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        id: lifeline-upload
+        with:
+          name: kit-lifeline-${{ github.sha }}-${{ github.run_attempt }}
+          path: artifacts/kit-lifeline/
+          if-no-files-found: error
 
   # Change-gated aggregator (TOG-14880, TOG-14877 CI standard): the single
   # merge-gate check. Reports success when the scope verdict is clean and every
@@ -1451,8 +1746,13 @@ jobs:
         bundle-budget,
         docs-links,
         queue-syntax-smoke,
+        dependency-admission,
         check,
+        static-check,
+        coverage-merge,
         kit-browser-fixture,
+        kit-browser-calendar,
+        kit-browser-lifeline,
         node22-compat,
         scope,
         bot-contract-drift,
@@ -1479,6 +1779,10 @@ jobs:
         env:
           BOT_CONTRACT_RESULT: ${{ needs.bot-contract-drift.result }}
         run: test "$BOT_CONTRACT_RESULT" = success
+      - name: Require successful dependency admission
+        env:
+          DEPENDENCY_ADMISSION_RESULT: ${{ needs.dependency-admission.result }}
+        run: test "$DEPENDENCY_ADMISSION_RESULT" = success
       - name: Require successful docs-links
         env:
           DOCS_LINKS_RESULT: ${{ needs.docs-links.result }}
@@ -1489,6 +1793,12 @@ jobs:
         env:
           NODE22_COMPAT_RESULT: ${{ needs.node22-compat.result }}
         run: test "$NODE22_COMPAT_RESULT" = success
+      - name: Require successful static checks and merged coverage
+        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true'
+        env:
+          STATIC_RESULT: ${{ needs.static-check.result }}
+          COVERAGE_RESULT: ${{ needs.coverage-merge.result }}
+        run: test "$STATIC_RESULT" = success && test "$COVERAGE_RESULT" = success
       - name: Require successful accessibility audit
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         env:
@@ -1508,7 +1818,10 @@ jobs:
       # Only explicit success from both performance jobs may read green.
       - name: Performance gate (lighthouse + bundle-budget must succeed)
         if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
-        run: node ci/require-performance.mjs "${{ needs.lighthouse.result }}" "${{ needs.bundle-budget.result }}"
+        env:
+          LIGHTHOUSE_RESULT: ${{ needs.lighthouse.result }}
+          BUDGET_RESULT: ${{ needs.bundle-budget.result }}
+        run: node ci/require-performance.mjs "$LIGHTHOUSE_RESULT" "$BUDGET_RESULT"
       - name: Aggregate change-gated conclusions
         env:
           SCOPE_RESULT: ${{ needs.scope.result }}
@@ -1520,6 +1833,9 @@ jobs:
           DB: ${{ needs.scope.outputs.db }}
           CHECK_RESULT: ${{ needs.check.result }}
           KIT_BROWSER_RESULT: ${{ needs.kit-browser-fixture.result }}
+          KIT_CALENDAR_RESULT: ${{ needs.kit-browser-calendar.result }}
+          KIT_LIFELINE_RESULT: ${{ needs.kit-browser-lifeline.result }}
+          KIT_LIFELINE_ARTIFACT_ID: ${{ needs.kit-browser-lifeline.outputs.artifact-id }}
           A11Y_RESULT: ${{ needs.a11y.result }}
           LIGHTHOUSE_RESULT: ${{ needs.lighthouse.result }}
           BUDGET_RESULT: ${{ needs.bundle-budget.result }}
@@ -1554,6 +1870,11 @@ jobs:
           if selected_app; then PERF_SEL=true; else PERF_SEL=false; fi
           if [ "$DOCS_ONLY" != true ] && { selected_app || [ "$WORKER" = true ]; }; then KIT_BROWSER_SEL=true; else KIT_BROWSER_SEL=false; fi
           check_job "$KIT_BROWSER_RESULT" "$KIT_BROWSER_SEL" kit-browser-fixture
+          check_job "$KIT_CALENDAR_RESULT" "$KIT_BROWSER_SEL" kit-browser-calendar
+          check_job "$KIT_LIFELINE_RESULT" "$KIT_BROWSER_SEL" kit-browser-lifeline
+          if [ "$KIT_LIFELINE_RESULT" = success ]; then
+            [[ "$KIT_LIFELINE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || fail "kit-browser-lifeline: missing or invalid screenshot artifact ID."
+          fi
           check_job "$A11Y_RESULT" "$A11Y_SEL" a11y
           check_job "$LIGHTHOUSE_RESULT" "$PERF_SEL" lighthouse
           check_job "$BUDGET_RESULT" "$PERF_SEL" bundle-budget

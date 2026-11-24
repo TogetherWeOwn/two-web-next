@@ -8,14 +8,29 @@ import { createServer } from "node:net";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
+import { STAGING_STATIC_DOCUMENT_READY } from "../src/kit-staging-static.ts";
+import { assertKitAdminServing, prepareAdminFixture } from "./fixtures/kit-admin-serving.mjs";
+import { assertStaticFeedParity } from "./fixtures/kit-static-feed-parity.mjs";
+import { expectedMarkerFor, kitHomeHeadingText } from "./kit-parity-gates.mjs";
+import { STAGING_ORIGIN } from "./operator-constants.mjs";
+import { FIXTURE_SECRETS } from "./parity/fixture.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const web = join(repo, "web");
-const worker = join(web, ".svelte-kit/cloudflare/_worker.js");
-const assets = join(web, ".svelte-kit/cloudflare");
 const databaseUrl = process.env.KIT_WORKER_TEST_DATABASE_URL;
+
+async function workerOutput(args) {
+  if (args.length === 0) {
+    const assets = join(web, ".svelte-kit/cloudflare");
+    return { worker: join(assets, "_worker.js"), assets };
+  }
+  assert.deepEqual(args, ["--installed-output"], "unexpected Kit Worker fixture arguments");
+  const { prepareInstalledKitWorker } = await import("./kit-worker-installed-output.mjs");
+  return prepareInstalledKitWorker(repo);
+}
 
 function requireDisposableDatabase(value) {
   if (!value)
@@ -40,6 +55,7 @@ function tail(value, limit = 4000) {
 
 function listen(child, origin, getLog, timeoutMs = 60_000) {
   const started = Date.now();
+  let lastStatus = "no response";
   return new Promise((resolveReady, reject) => {
     const attempt = async () => {
       if (child.exitCode !== null) {
@@ -52,8 +68,11 @@ function listen(child, origin, getLog, timeoutMs = 60_000) {
       }
       try {
         const response = await fetch(`${origin}/favicon.ico`, {
+          redirect: "manual",
           signal: AbortSignal.timeout(1_000),
         });
+        lastStatus = `HTTP ${response.status}`;
+        await response.body?.cancel();
         if (response.ok) {
           resolveReady();
           return;
@@ -64,7 +83,7 @@ function listen(child, origin, getLog, timeoutMs = 60_000) {
       if (Date.now() - started >= timeoutMs) {
         reject(
           new Error(
-            `Timed out waiting for the generated Kit Worker. Worker output:\n${tail(getLog())}`,
+            `Timed out waiting for ${origin}/favicon.ico (${lastStatus}). Worker output:\n${tail(getLog())}`,
           ),
         );
         return;
@@ -89,15 +108,20 @@ async function unusedPort() {
 }
 
 requireDisposableDatabase(databaseUrl);
+const args = process.argv.slice(2);
+const publicVoiceBrowser = args[0] === "--installed-output" && args[1] === "--public-voice-browser";
+if (publicVoiceBrowser) args.splice(1, 1);
+const { worker, assets } = await workerOutput(args);
 const scratch = await mkdtemp(
   join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "kit-worker-e2e-"),
 );
 const wrangler = join(web, "node_modules/.bin/wrangler");
+const workers = [];
 
 // Start one loopback Worker. The generated Kit Worker and the direct Hono
 // Worker (src/worker.ts, the same app Kit's catch-all forwards to) share the
-// fixture database and vars; only main, assets and the self origin differ.
-async function startWorker(name, main, assetsDirectory) {
+// fixture database and vars within each pair.
+async function startWorker(name, main, assetsDirectory, sessionSecret, vars, liveHub = false) {
   const port = await unusedPort();
   const origin = `http://127.0.0.1:${port}`;
   const config = join(scratch, `${name}.wrangler.jsonc`);
@@ -107,9 +131,16 @@ async function startWorker(name, main, assetsDirectory) {
     compatibility_date: "2026-09-29",
     compatibility_flags: ["nodejs_compat"],
     assets: { directory: assetsDirectory, binding: "ASSETS", run_worker_first: true },
+    ...(liveHub
+      ? {
+          durable_objects: { bindings: [{ name: "DISCORD_LIVE_HUB", class_name: "LiveGuildHub" }] },
+          migrations: [{ tag: "live-v1", new_sqlite_classes: ["LiveGuildHub"] }],
+        }
+      : {}),
     vars: {
       APP_URL: origin,
       DATABASE_URL: databaseUrl,
+      ...(sessionSecret ? { SESSION_SECRET: sessionSecret } : {}),
       FEATURED_IMAGE_HOSTS: "",
       DISCORD_CLIENT_ID: "ci-fixture-client",
       DISCORD_CLIENT_SECRET: "ci-fixture-secret",
@@ -118,9 +149,11 @@ async function startWorker(name, main, assetsDirectory) {
       DISCORD_MODERATOR_ROLE_IDS: "",
       DISCORD_INVITE_URL: "https://example.invalid/invite",
       AGENT_EVENTS_ENABLED: "false",
+      ...vars,
     },
   };
   await writeFile(config, JSON.stringify(configBody));
+  if (args.length) console.log(`Launching loopback ${name} Worker`);
   const child = spawn(
     wrangler,
     [
@@ -150,7 +183,14 @@ async function startWorker(name, main, assetsDirectory) {
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
-  const worker = { child, origin, log: "" };
+  const worker = { name, child, origin, log: "", stopped: false };
+  worker.closed = new Promise((done) => {
+    child.once("close", () => {
+      worker.stopped = true;
+      done();
+    });
+  });
+  workers.push(worker);
   child.on("error", (error) => {
     worker.log += `\n${error.message}`;
   });
@@ -164,16 +204,92 @@ async function startWorker(name, main, assetsDirectory) {
 
 // Buffer Worker output and print it only on failure: --log-level error keeps
 // success quiet while a red check still shows the cause.
-const kit = await startWorker("kit", worker, assets);
-const hono = await startWorker("hono", join(repo, "src/worker.ts"), join(repo, "public"));
-const origin = kit.origin;
-const workerLog = () => `Kit Worker:\n${kit.log}\nDirect Hono Worker:\n${hono.log}`;
 let failed = false;
 try {
+  const kit = await startWorker("kit", worker, assets, undefined, undefined, args.length > 0);
+  const hono = await startWorker("hono", join(repo, "src/worker.ts"), join(repo, "public"));
+  const origin = kit.origin;
   await Promise.all([
     listen(kit.child, kit.origin, () => kit.log),
     listen(hono.child, hono.origin, () => hono.log),
   ]);
+
+  if (args.length) {
+    const disabled = await fetch(`${origin}/internal/discord-live/v1/ingest`, {
+      method: "POST",
+      redirect: "manual",
+    });
+    assert.equal(disabled.status, 503, "the installed live route defaults off");
+    assert.equal(disabled.headers.get("cache-control"), "no-store");
+    assert.equal(await disabled.text(), "");
+    const disabledSocket = await fetch(`${origin}/api/discord-live/v1`);
+    assert.equal(disabledSocket.status, 503, "the installed socket route defaults off");
+    await disabledSocket.body?.cancel();
+
+    const entry = join(scratch, "kit-live.mjs");
+    await writeFile(
+      entry,
+      `import { withEnv } from "cloudflare:workers";
+import worker, { LiveGuildHub as InstalledHub } from ${JSON.stringify(worker)};
+import { fixtureHub, controlledFetch } from ${JSON.stringify(fileURLToPath(new URL("./fixtures/kit-live-source.mjs", import.meta.url)))};
+export const LiveGuildHub = fixtureHub(InstalledHub);
+export default { fetch: controlledFetch(fetch) };
+function fetch(request, env, context) {
+  const incoming = new URL(request.url);
+  if (env.KIT_PARITY_FIXTURE_EVENT_DETAIL === "true" && incoming.pathname.startsWith("/e/")) {
+    // Event document ownership requires loopback. Socket and ingest requests
+    // still use the separate HTTPS origin required by the installed live hub.
+    const bindings = { ...env, APP_URL: incoming.origin };
+    return withEnv(bindings, () => worker.fetch(request, bindings, context));
+  }
+  const url = new URL(incoming.pathname + incoming.search, env.APP_URL);
+  const secure = new Request(url, request);
+  secure.headers.set("host", url.host);
+  // Map the browser's loopback origin to the synthetic HTTPS origin only.
+  if (secure.headers.get("origin") === incoming.origin) secure.headers.set("origin", url.origin);
+  return worker.fetch(secure, env, context);
+}\n`,
+    );
+    const { LIVE_FIXTURE_GUILD, verifyPublicFanout } = await import(
+      "./fixtures/kit-live-fanout.mjs"
+    );
+    const secret = FIXTURE_SECRETS.SESSION_SECRET;
+    const liveVars = {
+      APP_URL: "https://kit-live.invalid",
+      BOT_ENDPOINT_URL: "https://bot-live.invalid",
+      DISCORD_GUILD_ID: LIVE_FIXTURE_GUILD,
+      DISCORD_LIVE_INGEST_ENABLED: "true",
+      DISCORD_LIVE_SOCKET_ENABLED: "true",
+      DISCORD_LIVE_PUBLIC_VOICE_ROOM_IDS: "10,11",
+      DISCORD_LIVE_INGEST_KEY_ID: "fixture-ingest",
+      DISCORD_LIVE_INGEST_SECRET: "fixture-ingest-value",
+      DISCORD_LIVE_SNAPSHOT_KEY_ID: "fixture-snapshot",
+      DISCORD_LIVE_SNAPSHOT_SECRET: "fixture-snapshot-value",
+    };
+    if (publicVoiceBrowser) {
+      // Run the documents against separate persisted Workers so the hub starts
+      // cold and the disabled fixture has a working session bridge.
+      const browserVars = { ...liveVars, KIT_PARITY_FIXTURE_EVENT_DETAIL: "true" };
+      const off = await startWorker(
+        "kit-voice-off",
+        entry,
+        assets,
+        secret,
+        { ...browserVars, DISCORD_LIVE_SOCKET_ENABLED: undefined },
+        true,
+      );
+      await listen(off.child, off.origin, () => off.log);
+      const enabled = await startWorker("kit-voice", entry, assets, secret, browserVars, true);
+      await listen(enabled.child, enabled.origin, () => enabled.log);
+      const { verifyKitPublicVoice } = await import("./fixtures/kit-public-voice.mjs");
+      await verifyKitPublicVoice(off.origin, enabled.origin, databaseUrl, secret);
+    }
+    const live = await startWorker("kit-live", entry, assets, secret, liveVars, true);
+    await listen(live.child, live.origin, () => live.log);
+    const { verifyKitLiveSocket } = await import("./kit-live-socket.mjs");
+    await verifyKitLiveSocket(live.origin, "https://kit-live.invalid", databaseUrl, secret);
+    await verifyPublicFanout(live.origin, "https://kit-live.invalid", databaseUrl, secret);
+  }
 
   const archive = await fetch(`${origin}/events/past`);
   const archiveHtml = await archive.text();
@@ -195,18 +311,37 @@ try {
   );
   console.log("PASS generated Worker archive request");
 
+  const manifest = await readFile(join(repo, "src/route-ownership.ts"), "utf8");
+  const homeMarker = expectedMarkerFor(manifest, "/");
+  const home = await fetch(`${origin}/`);
+  const homeHtml = await home.text();
+  assert.equal(home.status, 200, "guest home GET renders");
+  assert.equal(home.headers.get("x-two-renderer"), homeMarker, "home GET follows the manifest");
+  assert.equal(home.headers.get("cache-control"), "private, no-store");
+  if (homeMarker === "kit") assert.equal(kitHomeHeadingText(homeHtml), "The lobby is open.");
+  else assert.match(homeHtml, /<h1 id="home-heading">The lobby is open\.<\/h1>/);
+  // No session-secret binding: a guest still gets the safe invite fallback.
+  assert.match(homeHtml, /href="\/discord"[^>]*data-testid="discord-join"/);
+  assert.doesNotMatch(homeHtml, /data-testid="join"/);
+  assert.doesNotMatch(homeHtml, /data-testid="(?:home-standing|home-event-own-rsvp)"/);
+  const headHome = await fetch(`${origin}/`, { method: "HEAD" });
+  assert.equal(headHome.status, home.status);
+  assert.equal(headHome.headers.get("x-two-renderer"), homeMarker, "home HEAD follows GET");
+  assert.equal(headHome.headers.get("cache-control"), "private, no-store");
+  assert.equal(await headHome.text(), "", "HEAD has no response body");
+  console.log("PASS generated Worker guest home GET and HEAD");
+
   // Content leaves keep #808's zero-stylesheet contract on the served
   // worker. The unit parity harness renders pages without +layout.svelte,
   // so it passes while the served page carries the layout asset link —
-  // this is the built-worker pin: both Kit-owned leaves answer from Kit
+  // this is the built-worker pin: the content leaves answer from Kit
   // with the exact inlined leaf block (its sha256 equals the
   // CSP-allowlisted hash), zero stylesheet links, and the Hono body class
   // so the leaf block owns the canvas.
   const leafModule = await readFile(join(repo, "src", "leaf-critical-css.ts"), "utf8");
   const leafHash = leafModule.match(/LEAF_CRITICAL_CSS_SHA256: string = "([^"]+)"/)?.[1];
   assert.ok(leafHash, "leaf CSS hash is generated");
-  for (const leaf of ["/about", "/faq"]) {
-    const page = await fetch(`${origin}${leaf}`);
+  async function assertContentLeaf(page, leaf) {
     const html = await page.text();
     assert.equal(page.status, 200, `generated Worker serves ${leaf} (got ${page.status})`);
     assert.equal(page.headers.get("x-two-renderer"), "kit", `${leaf} is Kit-owned`);
@@ -231,8 +366,64 @@ try {
     assert.equal(styleBlocks.length, 1, `${leaf} inlines exactly one style block`);
     const servedHash = createHash("sha256").update(styleBlocks[0][1], "utf8").digest("base64");
     assert.equal(servedHash, leafHash, `${leaf} style block matches the CSP hash`);
+    return html;
+  }
+  for (const leaf of ["/about", "/faq"]) {
+    await assertContentLeaf(await fetch(`${origin}${leaf}`), leaf);
   }
   console.log("PASS generated Worker content-leaf zero-stylesheet contract");
+
+  // The host check requires the Request URL and Host header to agree with
+  // APP_URL. Rewrite both inside the fixture, then call the generated Worker
+  // directly so the HTTP connection never leaves loopback.
+  const stagingEntry = join(scratch, "kit-static.mjs");
+  await writeFile(
+    stagingEntry,
+    `import worker from ${JSON.stringify(worker)};
+export default {
+  fetch(request, env, context) {
+    const local = new URL(request.url);
+    const url = new URL(env.APP_URL);
+    url.pathname = local.pathname;
+    url.search = local.search;
+    const stagedRequest = new Request(url, request);
+    stagedRequest.headers.set("host", url.host);
+    return worker.fetch(stagedRequest, env, context);
+  },
+};\n`,
+  );
+  const staging = await startWorker("kit-static", stagingEntry, assets, undefined, {
+    APP_URL: STAGING_ORIGIN,
+    DATABASE_URL: undefined,
+    KIT_ROUTE_ARCHIVE: "true",
+    KIT_ROUTE_STATIC: "true",
+  });
+  await listen(staging.child, staging.origin, () => staging.log);
+  for (const [leaf, marker] of [
+    ["/about", 'data-testid="about-facts"'],
+    ["/faq", 'data-testid="faq-list"'],
+    ["/privacy", 'data-testid="privacy-policy"'],
+    ["/rules", 'data-testid="rules-list"'],
+  ]) {
+    const page = await fetch(`${staging.origin}${leaf}`, { redirect: "manual" });
+    if (STAGING_STATIC_DOCUMENT_READY.get(leaf) === false) {
+      assert.equal(page.status, 200, `${leaf} still serves a document after rollback`);
+      assert.equal(page.headers.get("x-two-renderer"), null, `${leaf} rolls back to Hono`);
+      assert.ok((await page.text()).includes(marker), `${leaf} retains its content on Hono`);
+      continue;
+    }
+    const html = await assertContentLeaf(page, leaf);
+    assert.ok(html.includes(marker), `${leaf} has server-rendered content`);
+    assert.doesNotMatch(html, /<script\b/i, `${leaf} ships no JavaScript`);
+    assert.equal(page.headers.get("set-cookie"), null, `${leaf} does not set a session cookie`);
+    const csp = page.headers.get("content-security-policy")?.split("; ") ?? [];
+    assert.ok(csp.includes("script-src 'self'"), `${leaf} retains strict script CSP`);
+    assert.ok(
+      csp.includes(`style-src 'self' 'sha256-${leafHash}'`),
+      `${leaf} retains strict style CSP`,
+    );
+  }
+  console.log("PASS generated Worker archive-static SSR without database, session, or JavaScript");
 
   // Exercise the post-hook Kit ETag rewrite in the built Worker, not only the
   // framework-free dispatch. Every security header must survive revalidation.
@@ -332,6 +523,14 @@ try {
   assert.ok((await asset.arrayBuffer()).byteLength > 0, "favicon response has a body");
   console.log("PASS generated Worker public asset response");
 
+  // Ordinary CI exercises the stock build here. The installed-output mode
+  // also runs in cutover qualification and has its own fixture contract.
+  if (args.length === 0) {
+    const { assertPublicAssetParity } = await import("./fixtures/kit-public-asset-parity.mjs");
+    await assertPublicAssetParity({ honoOrigin: hono.origin, kitOrigin: origin });
+    console.log("PASS public stylesheet, pinned font and missing font response parity");
+  }
+
   // These files are generated by Kit and have no Hono representation. Compare
   // only the security headers against Hono's response at the same URL, not
   // their status or body. The existing kit-header-parity test pins this block
@@ -426,6 +625,7 @@ try {
     "cross-origin-opener-policy",
     "cross-origin-resource-policy",
     "x-two-origin",
+    "x-two-renderer",
   ];
   const normalize = (value, worker, requestId) => {
     let out = value.split(worker.origin).join("ORIGIN");
@@ -493,6 +693,87 @@ try {
     return fromHono;
   }
 
+  const secret = FIXTURE_SECRETS.SESSION_SECRET;
+  const honoWithSession = await startWorker(
+    "hono-session",
+    join(repo, "src/worker.ts"),
+    join(repo, "public"),
+    secret,
+  );
+  const kitWithSession = await startWorker("kit-session", worker, assets, secret);
+  await Promise.all(
+    [honoWithSession, kitWithSession].map((instance) =>
+      listen(instance.child, instance.origin, () => instance.log),
+    ),
+  );
+
+  if (!args.length) {
+    const profile = await startWorker("kit-profile-write", worker, assets, secret, {
+      KIT_ROUTE_PROFILE_WRITES: "true",
+    });
+    await listen(profile.child, profile.origin, () => profile.log);
+    const { assertKitProfileWriteParity } = await import("./fixtures/kit-profile-write-parity.mjs");
+    await assertKitProfileWriteParity({
+      kit: profile.origin,
+      off: kitWithSession.origin,
+      hono: honoWithSession.origin,
+      databaseUrl,
+      secret,
+    });
+  }
+
+  if (args.length) {
+    const entry = join(scratch, "kit-admin.mjs");
+    const vars = await prepareAdminFixture(worker, entry);
+    const admin = await startWorker("kit-admin", entry, assets, secret, vars);
+    await listen(admin.child, admin.origin, () => admin.log);
+    await assertKitAdminServing({
+      kit: admin,
+      off: kitWithSession,
+      hono: honoWithSession,
+      databaseUrl,
+    });
+
+    async function observeDataRedirect(worker, path) {
+      const response = await fetch(`${worker.origin}${path}`, { redirect: "manual" });
+      assert.equal(response.status, 302, `${path}: Hono guest redirect`);
+      assert.equal(response.headers.get("location"), "/auth/discord", `${path}: login location`);
+      const cookies = response.headers.getSetCookie();
+      assert.equal(cookies.length, 1, `${path}: one intended-login cookie`);
+      assert.ok(
+        cookies[0].startsWith(`__Host-two_login_intended=${encodeURIComponent(path)}.`),
+        `${path}: cookie carries the original path and query`,
+      );
+      assert.equal(response.headers.get("x-two-renderer"), null, `${path}: not a Kit render`);
+      const requestId = response.headers.get("x-request-id");
+      assert.ok(requestId, `${path}: request correlation survives`);
+      const headers = [...SECURITY_HEADERS, "vary"].map((name) =>
+        normalize(response.headers.get(name) ?? "", worker, requestId),
+      );
+      return { headers, cookies, body: await response.text() };
+    }
+
+    for (const path of ["/admin/__data.json?tab=events", "/members/__data.json"]) {
+      const [direct, installed] = await Promise.all([
+        observeDataRedirect(honoWithSession, path),
+        observeDataRedirect(kitWithSession, path),
+      ]);
+      assert.deepEqual(installed, direct, `${path}: installed facade preserves Hono response`);
+    }
+    console.log("PASS installed Worker preserves Hono data redirects");
+
+    const kitData = await fetch(`${kitWithSession.origin}/admin/join-attempts/__data.json`, {
+      redirect: "manual",
+    });
+    assert.equal(kitData.status, 200, "Kit-owned data redirect remains a JSON response");
+    assert.deepEqual(await kitData.json(), {
+      type: "redirect",
+      status: 302,
+      location: "/auth/discord?next=%2Fadmin%2Fjoin-attempts",
+    });
+    console.log("PASS installed Worker preserves Kit-owned data redirects");
+  }
+
   // GET and HEAD, with and without a query, across slash variants. /members/
   // and /up/ are non-page paths; the rest are enabled page variants.
   const pagePaths = [
@@ -538,6 +819,11 @@ try {
     }
     await assertParity(`OPTIONS ${path}`, path, { method: "OPTIONS" });
   }
+  await assertParity("POST / stays with Hono", "/", {
+    method: "POST",
+    headers: jsonHeaders,
+    body: "{}",
+  });
   const postApiX = await assertParity("POST /api/x/", "/api/x/", {
     method: "POST",
     headers: jsonHeaders,
@@ -594,22 +880,152 @@ try {
     assert.notEqual(viaKit.headers.get("x-two-renderer"), "kit", `${path} is never Kit-rendered`);
   }
   console.log("PASS generated Worker canonical/API boundary parity");
+
+  // With the feed binding absent, the reserved version read and its method,
+  // slash and data variants still reach the direct Hono owner.
+  for (const [method, path, expected] of [
+    ["GET", "/version?probe=admission", 200],
+    ["HEAD", "/version", 200],
+    ["POST", "/version", 404],
+    ["GET", "/version/", 404],
+    ["GET", "/version/__data.json", 404],
+  ]) {
+    const label = `API families off: ${method} ${path}`;
+    const result = await assertParity(label, path, { method });
+    assert.equal(result.status, expected, label);
+    assert.equal(result.headers["x-two-renderer"], undefined, `${label}: Hono owns the response`);
+  }
+  console.log("PASS generated Worker reserved method/path parity with API families off");
+
+  await assertStaticFeedParity({
+    hono: honoWithSession,
+    kit: kitWithSession,
+    databaseUrl,
+    startKit: async (name, vars) => {
+      const instance = await startWorker(
+        name,
+        worker,
+        assets,
+        FIXTURE_SECRETS.SESSION_SECRET,
+        vars,
+      );
+      await listen(instance.child, instance.origin, () => instance.log);
+      return instance;
+    },
+    startSecurityTxtPair: async () => {
+      const appUrl = "https://policy.example.test";
+      const [direct, enabled] = await Promise.all(
+        [
+          ["hono-policy", join(repo, "src/worker.ts"), join(repo, "public"), undefined],
+          ["kit-policy", worker, assets, "true"],
+        ].map(async ([name, main, assetsDirectory, flag]) => {
+          // Present synthetic HTTPS authorities without leaving loopback.
+          const entry = join(scratch, `${name}.mjs`);
+          await writeFile(
+            entry,
+            `import worker from ${JSON.stringify(main)};
+export default {
+  fetch(request, env, context) {
+    const original = new URL(request.url);
+    const url = new URL(env.APP_URL);
+    const canonicalHost = url.host;
+    url.host = request.headers.get("x-fixture-url-host") ?? canonicalHost;
+    url.pathname = original.pathname;
+    url.search = original.search;
+    const rewritten = new Request(url, request);
+    rewritten.headers.set("host", request.headers.get("x-fixture-host") ?? canonicalHost);
+    rewritten.headers.delete("x-fixture-url-host");
+    rewritten.headers.delete("x-fixture-host");
+    return worker.fetch(rewritten, env, context);
+  },
+};\n`,
+          );
+          const instance = await startWorker(name, entry, assetsDirectory, undefined, {
+            APP_URL: appUrl,
+            DATABASE_URL: undefined,
+            KIT_ROUTE_SECURITY_TXT: flag,
+          });
+          await listen(instance.child, instance.origin, () => instance.log);
+          return instance;
+        }),
+      );
+      return { appUrl, direct, enabled };
+    },
+  });
+
+  const authEntry = join(scratch, "kit-auth.mjs");
+  const authFixture = fileURLToPath(new URL("./fixtures/kit-auth-worker.mjs", import.meta.url));
+  await writeFile(
+    authEntry,
+    `import inner from ${JSON.stringify(worker)};
+import { authFixtureWorker } from ${JSON.stringify(authFixture)};
+export default authFixtureWorker(inner);\n`,
+  );
+  const authSecret = FIXTURE_SECRETS.SESSION_SECRET;
+  const auth = await startWorker("kit-auth", authEntry, assets, authSecret, {
+    DATABASE_URL: undefined,
+  });
+  await listen(auth.child, auth.origin, () => auth.log);
+  const { assertAuthParity } = await import("./fixtures/kit-auth-parity.mjs");
+  await assertAuthParity(auth.origin, authSecret, !args.length || publicVoiceBrowser);
+
+  if (args.length) {
+    const probePath = "/__fixture/machine-parity";
+    const fixture = fileURLToPath(new URL("./fixtures/kit-machine-parity.mjs", import.meta.url));
+    for (const { name, main, assetsDirectory } of [
+      {
+        name: "hono-machine",
+        main: join(repo, "src/worker.ts"),
+        assetsDirectory: join(repo, "public"),
+      },
+      { name: "kit-machine", main: worker, assetsDirectory: assets },
+    ]) {
+      const entry = join(scratch, `${name}.mjs`);
+      await writeFile(
+        entry,
+        `import inner from ${JSON.stringify(main)};
+import { machineParityWorker } from ${JSON.stringify(fixture)};
+export default machineParityWorker(inner, ${JSON.stringify(probePath)});\n`,
+      );
+      const instance = await startWorker(name, entry, assetsDirectory, undefined, {
+        DATABASE_URL: undefined,
+      });
+      await listen(instance.child, instance.origin, () => instance.log);
+      const response = await fetch(`${instance.origin}${probePath}`, {
+        signal: AbortSignal.timeout(20_000),
+      });
+      assert.equal(response.status, 200, `${name}: machine parity probes passed`);
+      assert.deepEqual(await response.json(), {
+        agentCreate: 201,
+        mcpComplete: "eof",
+        mcpReaderCancel: "cancelled",
+      });
+      console.log(`PASS ${name} agent JSON success, MCP SSE EOF and in-Worker reader cancellation`);
+    }
+    const { verifyKitMachineDisconnect } = await import("./fixtures/kit-machine-disconnect.mjs");
+    await verifyKitMachineDisconnect(worker, scratch);
+  }
 } catch (error) {
   failed = true;
   throw error;
 } finally {
-  for (const { child: proc } of [kit, hono]) proc.kill("SIGTERM");
   await Promise.all(
-    [kit, hono].map(async ({ child: proc }) => {
-      await Promise.race([
-        new Promise((resolveExit) => proc.once("exit", resolveExit)),
-        new Promise((resolveExit) => setTimeout(resolveExit, 5_000)),
-      ]);
-      if (proc.exitCode === null && proc.signalCode === null) proc.kill("SIGKILL");
+    workers.map(async (worker) => {
+      if (!worker.stopped) worker.child.kill("SIGTERM");
+      await Promise.race([worker.closed, delay(5_000, undefined, { ref: false })]);
+      if (!worker.stopped) worker.child.kill("SIGKILL");
+      await Promise.race([worker.closed, delay(5_000, undefined, { ref: false })]);
     }),
   );
-  // Print after the children have exited so the Workers' own error logs have
-  // flushed into the buffers; printing in catch races the log.
-  if (failed) process.stderr.write(`Generated Kit Worker output:\n${tail(workerLog())}\n`);
+  // Print after the children close so their output has flushed.
+  if (failed) {
+    for (const { name, log } of workers)
+      process.stderr.write(`${name} Worker output:\n${tail(log)}\n`);
+  }
+  assert.ok(
+    workers.every(({ stopped }) => stopped),
+    "loopback Workers did not stop",
+  );
   await rm(scratch, { recursive: true, force: true });
+  if (args.length) console.log("PASS loopback Workers and scratch cleaned up");
 }

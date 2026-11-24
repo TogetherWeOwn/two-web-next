@@ -1,8 +1,16 @@
 import type postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { pgReconciliationReads } from "../src/admin/reconciliation-reads";
+import {
+  reconciliationService,
+  reconciliationServiceFor,
+} from "../src/admin/reconciliation-service";
+import { CALL_INTERNAL_ACTION } from "../src/jobs/constants";
 import { pgPruneStores, pgSingleFlight, pgUniqueLock } from "../src/jobs/postgres";
+import { pgReconciliationStore } from "../src/jobs/reconciliation";
 import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
 import { registerJobsServerTimeoutsAcceptance } from "./helpers/jobs-server-timeouts-acceptance";
+import { env } from "./helpers/member-data";
 
 // Real Postgres, guarded before driver construction: agent-testdb or the CI
 // service only. Each fixture migrates and drops only its disposable schema.
@@ -10,12 +18,323 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
   let fixture: JobsFixture | undefined;
   let sql: postgres.Sql;
   const own = (prefix: string) => `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  const unavailable = { kind: "unavailable" };
   beforeAll(async () => {
     fixture = await createJobsFixture(process.env.DATABASE_URL!, { max: 4 });
     sql = fixture.client;
   });
   afterAll(async () => {
     await fixture?.dispose();
+  });
+
+  it("serializes concurrent announcement claims and counts only acquired sends", async () => {
+    const store = pgReconciliationStore(sql);
+    const key = crypto.randomUUID();
+    const queuedAt = new Date();
+    const claim = () => store.claimAnnouncement(key, "fixture-channel", queuedAt);
+    for (let attempts = 1; attempts <= CALL_INTERNAL_ACTION.tries; attempts++) {
+      const claims = await Promise.all([claim(), claim()]);
+      expect(claims.map((claim) => claim.kind).sort()).toEqual(["claimed", "sending"]);
+      expect(claims[0]).toMatchObject({ attempts, claimUntil: expect.any(Date) });
+      expect(claims[1]).toMatchObject({ attempts });
+      if (attempts > 1)
+        expect(await store.finishAnnouncement(key, attempts - 1, "closed")).toBe(false);
+      if (attempts < CALL_INTERNAL_ACTION.tries) {
+        expect(await store.finishAnnouncement(key, attempts, "retryable")).toBe(true);
+        // A different alias cannot acquire even an otherwise eligible slot.
+        expect(await store.claimAnnouncement(key, "other-channel", queuedAt)).toEqual(unavailable);
+      }
+    }
+    const attempts = CALL_INTERNAL_ACTION.tries;
+    await expect(store.finishAnnouncement(key, attempts, "retryable")).rejects.toThrow(
+      "Invalid announcement claim settlement",
+    );
+    expect(await claim()).toMatchObject({ kind: "sending", attempts });
+    expect(await store.finishAnnouncement(key, attempts, "closed")).toBe(true);
+    expect(await claim()).toMatchObject({ kind: "closed", attempts });
+    expect(await store.finishAnnouncement(key, attempts - 1, "retryable")).toBe(false);
+  });
+
+  it("does not count a rejected database reservation", async () => {
+    const key = crypto.randomUUID();
+    const store = pgReconciliationStore(sql);
+    const queuedAt = new Date();
+    const claim = () => store.claimAnnouncement(key, "fixture-channel", queuedAt);
+    expect(await claim()).toMatchObject({ kind: "claimed", attempts: 1 });
+    expect(await store.finishAnnouncement(key, 1, "retryable")).toBe(true);
+    await sql`alter table announcement_send_claims add constraint fixture_reject_second_send
+      check (send_attempts <> 2) not valid`;
+    try {
+      await expect(claim()).rejects.toMatchObject({ code: "23514" });
+    } finally {
+      await sql`alter table announcement_send_claims drop constraint fixture_reject_second_send`;
+    }
+    expect(await claim()).toMatchObject({ kind: "claimed", attempts: 2 });
+  });
+
+  it("does not reopen an announcement whose lease expires behind a lock-only holder", async () => {
+    const key = crypto.randomUUID();
+    const store = pgReconciliationStore(sql);
+    await sql`insert into announcement_send_claims (idempotency_key, channel_alias, send_attempts, state, claim_until)
+      values (${key}, 'fixture-channel', 1, 'sending', clock_timestamp() + interval '1 second')`;
+    let markLocked!: () => void;
+    const locked = new Promise<void>((resolve) => {
+      markLocked = resolve;
+    });
+    const settling = locked.then(() => store.finishAnnouncement(key, 1, "retryable"));
+    const holding = sql.begin(async (tx) => {
+      const [holder] = await tx<{ pid: number; claim_until: Date }[]>`
+        select pg_backend_pid() as pid, claim_until
+        from announcement_send_claims where idempotency_key = ${key} for update`;
+      if (!holder) throw new Error("Missing fixture claim to lock");
+      const { pid, claim_until } = holder;
+      markLocked();
+      await expect
+        .poll(
+          async () => {
+            const rows =
+              await sql`select 1 from pg_stat_activity where ${pid} = any(pg_blocking_pids(pid))
+          and clock_timestamp() < ${claim_until}::timestamptz`;
+            return rows.length;
+          },
+          { timeout: 750, interval: 10 },
+        )
+        .toBe(1);
+      await tx`select pg_sleep_until(${claim_until}::timestamptz + interval '5 milliseconds')`;
+    });
+    const [settled] = await Promise.all([settling, holding]);
+    expect(settled).toBe(false);
+    expect(await store.claimAnnouncement(key, "fixture-channel", new Date())).toMatchObject({
+      kind: "abandoned",
+      attempts: 1,
+    });
+  });
+
+  it("keeps a failed hard stop fenced and recovers an abandoned claim without wire diagnostics", async () => {
+    const key = crypto.randomUUID();
+    const store = pgReconciliationStore(sql);
+    const queuedAt = new Date();
+    const claim = () => store.claimAnnouncement(key, "fixture-channel", queuedAt);
+    const evidence = { lastCode: "needs_reconciliation", lastStatus: 409 };
+    expect(await claim()).toMatchObject({ kind: "claimed", attempts: 1 });
+    await expect(store.recordAnnouncement(key, 1, null)).rejects.toThrow("claim changed");
+    await sql`insert into bot_reconciliation_intents (idempotency_key, verb, subject, attempts)
+      values (${key}, 'event.upsert', 'fixture-event', 1)`;
+    await expect(store.recordAnnouncement(key, 1, evidence)).rejects.toThrow(
+      "not an open matching intent",
+    );
+    expect(await claim()).toMatchObject({ kind: "sending", attempts: 1 });
+    await sql`delete from bot_reconciliation_intents where idempotency_key = ${key}`;
+    await sql`update announcement_send_claims set claim_until = now() - interval '31 days'
+      where idempotency_key = ${key}`;
+    expect(await claim()).toMatchObject({ kind: "abandoned", attempts: 1 });
+    expect(await store.finishAnnouncement(key, 1, "retryable")).toBe(false);
+    await expect(store.recordAnnouncement(key, 1, evidence)).rejects.toThrow("claim changed");
+    await store.recordAnnouncement(key, 1, null);
+    expect(await claim()).toMatchObject({ kind: "closed", attempts: 1 });
+    const [saved] = await sql`select verb, subject, attempts, last_code, last_status
+      from bot_reconciliation_intents where idempotency_key = ${key}`;
+    expect(saved).toEqual({
+      verb: "announcement.post",
+      subject: "fixture-channel",
+      attempts: 1,
+      last_code: null,
+      last_status: null,
+    });
+    expect(await store.pruneClosedAnnouncements()).toBe(0);
+    expect(await store.resolve(key, "123", "not_applied", async () => {})).toBe(true);
+    expect(await store.pruneClosedAnnouncements()).toBe(1);
+    expect(await claim()).toEqual(unavailable); // Resolved key remains suppressed.
+  });
+
+  it("commits hard-stop diagnostics and never reacquires a pruned original carrier", async () => {
+    const key = crypto.randomUUID();
+    const retired = crypto.randomUUID();
+    const store = pgReconciliationStore(sql);
+    expect(await store.claimAnnouncement(key, "fixture-channel", new Date())).toMatchObject({
+      kind: "claimed",
+    });
+    await store.recordAnnouncement(key, 1, { lastCode: "needs_reconciliation", lastStatus: 409 });
+    const [saved] =
+      await sql`select last_code, last_status from bot_reconciliation_intents where idempotency_key = ${key}`;
+    expect(saved).toEqual({ last_code: "needs_reconciliation", last_status: 409 });
+    const sending = crypto.randomUUID();
+    const retryable = crypto.randomUUID();
+    await sql`insert into announcement_send_claims (idempotency_key, channel_alias, send_attempts, state, claim_until)
+      values (${retired}, 'fixture-channel', 1, 'closed', now() - interval '31 days'),
+        (${sending}, 'fixture-channel', 1, 'sending', now() - interval '31 days'),
+        (${retryable}, 'fixture-channel', 1, 'retryable', now() - interval '31 days')`;
+    await sql`insert into announcement_send_claims (idempotency_key, channel_alias, send_attempts, state, claim_until)
+      select gen_random_uuid(), 'fixture-channel', 1, 'closed', now() - interval '32 days'
+      from generate_series(1, 1000)`;
+    expect(await store.pruneClosedAnnouncements()).toBe(1000);
+    await sql.begin(async (tx) => {
+      const [clock] = await tx<{ expiry: Date; enqueued: Date }[]>`
+        select now() + interval '750 milliseconds' as expiry,
+        now() + interval '750 milliseconds' - interval '720 hours' as enqueued`;
+      if (!clock) throw new Error("Missing fixture transaction time");
+      await tx`select pg_sleep_until(${clock.expiry}::timestamptz + interval '5 milliseconds')`;
+      expect(await store.pruneClosedAnnouncements()).toBe(1);
+      // Run admission in a savepoint so it inherits the pre-expiry transaction timestamp.
+      const { claimAnnouncement } = pgReconciliationStore(tx as unknown as postgres.Sql);
+      expect(await claimAnnouncement(retired, "fixture-channel", clock.enqueued)).toEqual(
+        unavailable,
+      );
+    });
+    expect(
+      await sql`select state from announcement_send_claims
+      where idempotency_key in (${sending}, ${retryable}) order by state`,
+    ).toEqual([{ state: "retryable" }, { state: "sending" }]);
+  });
+
+  it("never admits a pruned original carrier after the fall clock change", async () => {
+    await sql.begin(async (tx) => {
+      const key = crypto.randomUUID();
+      // Freeze only the statement clock in this disposable schema and transaction.
+      await tx`select set_config('search_path', quote_ident(current_schema()) || ', pg_catalog', true)`;
+      await tx`set local time zone 'America/New_York'`;
+      await tx`create function statement_timestamp() returns timestamptz stable language sql
+        as $$ select current_setting('fixture.clock')::timestamptz $$`;
+      await tx`insert into announcement_send_claims values (${key}, 'fixture-channel', 1, 'closed', '2026-10-02 01:58:30-04')`;
+      const dst = pgReconciliationStore(tx as unknown as postgres.Sql);
+      await tx`set local fixture.clock = '2026-11-01 01:59:50-04'`;
+      expect(await dst.pruneClosedAnnouncements()).toBe(1);
+      await tx`set local fixture.clock = '2026-11-01 01:00:10-05'`;
+      const queuedAt = new Date("2026-10-02T01:58:00-04:00");
+      expect(await dst.claimAnnouncement(key, "fixture-channel", queuedAt)).toEqual(unavailable);
+      await tx`drop function statement_timestamp()`;
+    });
+  });
+
+  it("returns filtered, ordered reconciliation windows at both limits", async ({
+    onTestFinished,
+  }) => {
+    const windowFixture = await createJobsFixture(process.env.DATABASE_URL!);
+    onTestFinished(() => windowFixture.dispose());
+    const sql = windowFixture.client;
+    const reads = pgReconciliationReads(sql);
+    const key = (n: number) => `00000000-0000-0000-0000-${n.toString().padStart(12, "0")}`;
+    const keys = (start: number, count: number) =>
+      Array.from({ length: count }, (_, i) => key(start + i));
+    const resultKeys = (rows: Awaited<ReturnType<typeof reads.listOpen>>) =>
+      rows.map((row) => row.idempotencyKey);
+
+    expect(await reads.listOpen()).toEqual([]);
+    expect(await reads.listResolved()).toEqual([]);
+    await sql`insert into bot_reconciliation_intents
+      (idempotency_key, verb, subject, first_seen_at, resolved_at, attempts)
+      select ('00000000-0000-0000-0000-' || lpad(n::text, 12, '0'))::uuid,
+        'event.upsert', 'event:42', '2026-01-02'::timestamptz, null, 1
+      from generate_series(1, 100) as n`;
+    await sql`insert into bot_reconciliation_intents
+      (idempotency_key, verb, subject, first_seen_at, resolved_at, attempts)
+      select ('00000000-0000-0000-0000-' || lpad(n::text, 12, '0'))::uuid,
+        'event.upsert', 'event:42', '2026-01-02'::timestamptz, '2026-01-02'::timestamptz, 1
+      from generate_series(201, 250) as n`;
+    expect(resultKeys(await reads.listOpen())).toEqual(keys(1, 100));
+    expect(resultKeys(await reads.listResolved())).toEqual(keys(201, 50));
+
+    await sql`insert into bot_reconciliation_intents
+      (idempotency_key, verb, subject, first_seen_at, resolved_at, attempts) values
+      (${key(101)}::uuid, 'event.upsert', 'event:42', '2026-01-01'::timestamptz, null, 1),
+      (${key(251)}::uuid, 'event.upsert', 'event:42', '2026-01-02'::timestamptz, '2026-01-03'::timestamptz, 1)`;
+    expect(resultKeys(await reads.listOpen())).toEqual([key(101), ...keys(1, 99)]);
+    expect(resultKeys(await reads.listResolved())).toEqual([key(251), ...keys(201, 49)]);
+  });
+
+  it("returns exact Dates from both reconciliation clients regardless of DateStyle", async ({
+    onTestFinished,
+  }) => {
+    // Both pools have one connection, so the setting reaches every read transaction.
+    const dateFixture = await createJobsFixture(process.env.DATABASE_URL!);
+    onTestFinished(() => dateFixture.dispose());
+    const sql = dateFixture.client;
+    const openKey = "00000000-0000-0000-0002-000000000001";
+    const resolvedKey = "00000000-0000-0000-0002-000000000002";
+    const firstSeenAt = "2026-12-17T09:10:11.123+02:00";
+    const lastAttemptAt = "2026-12-18T10:11:12.456+02:00";
+    const resolvedAt = "2026-12-19T11:12:13.789999+02:00";
+    await sql`insert into bot_reconciliation_intents
+      (idempotency_key, verb, subject, attempts, first_seen_at, last_attempt_at, resolved_at) values
+      (${openKey}::uuid, 'event.upsert', 'event:42', 1, ${firstSeenAt}, ${lastAttemptAt}, null),
+      (${resolvedKey}::uuid, 'event.upsert', 'event:43', 1, ${firstSeenAt}, ${lastAttemptAt}, ${resolvedAt})`;
+
+    const actor = "100000000000000112";
+    const injected = await reconciliationServiceFor({ ...env, ADMIN_DB: dateFixture.db }, actor);
+    const timestamps = {
+      firstSeenAt: new Date("2026-12-17T07:10:11.123Z"),
+      lastAttemptAt: new Date("2026-12-18T08:11:12.456Z"),
+    };
+    const open = { ...timestamps, idempotencyKey: openKey, resolvedAt: null };
+    const resolved = {
+      ...timestamps,
+      idempotencyKey: resolvedKey,
+      resolvedAt: new Date("2026-12-19T09:12:13.789Z"),
+    };
+    for (const [client, service] of [
+      [sql, reconciliationService(sql, actor)],
+      [dateFixture.db.$client, injected!],
+    ] as const) {
+      for (const dateStyle of ["ISO, MDY", "SQL, DMY"]) {
+        await client`select set_config('DateStyle', ${dateStyle}, false)`;
+        expect(await service.get(openKey)).toMatchObject(open);
+        expect(await service.get(resolvedKey)).toMatchObject(resolved);
+        expect(await service.listOpen()).toEqual([expect.objectContaining(open)]);
+        expect(await service.listResolved()).toEqual([expect.objectContaining(resolved)]);
+        expect(await client`show DateStyle`).toEqual([{ DateStyle: dateStyle }]);
+      }
+    }
+  });
+
+  it("records moderator access, resolves once under contention, and refuses failed receipts", async () => {
+    const key = (n: number) => `00000000-0000-0000-0001-${n.toString().padStart(12, "0")}`;
+    const actor = "100000000000000111";
+    const service = reconciliationService(sql, actor);
+    await sql`insert into bot_reconciliation_intents (idempotency_key, verb, subject, attempts)
+      values (${key(1)}::uuid, 'event.upsert', 'event:42', 1),
+        (${key(2)}::uuid, 'event.upsert', 'event:43', 1)`;
+
+    expect(await service.get(key(1))).toMatchObject({ idempotencyKey: key(1), resolvedAt: null });
+    expect(await service.get(key(3))).toBeNull();
+    expect(
+      (
+        await Promise.all([
+          service.resolve(key(1), "confirmed"),
+          service.resolve(key(1), "confirmed"),
+        ])
+      ).sort(),
+    ).toEqual(["resolved", "unchanged"]);
+    expect(await service.get(key(1))).toMatchObject({
+      idempotencyKey: key(1),
+      resolution: "confirmed",
+    });
+    const receipts = await sql`select subject_id, description from activity_log
+      where causer_id = ${actor} and subject_type = 'bot_reconciliation_intents'`;
+    expect(receipts.filter((row) => row.description === "bot-reconciliation.read")).toEqual(
+      expect.arrayContaining([{ description: "bot-reconciliation.read", subject_id: null }]),
+    );
+    expect(receipts.filter((row) => row.description === "bot-reconciliation.resolve")).toEqual([
+      { description: "bot-reconciliation.resolve", subject_id: key(1) },
+    ]);
+
+    // Refuse new receipts in this disposable schema, leaving existing evidence intact.
+    await sql`alter table activity_log add constraint test_refuse_reconciliation_receipt
+      check (subject_type <> 'bot_reconciliation_intents') not valid`;
+    try {
+      const receiptViolation = {
+        code: "23514",
+        constraint_name: "test_refuse_reconciliation_receipt",
+      };
+      await expect(service.get(key(2))).rejects.toMatchObject(receiptViolation);
+      await expect(service.resolve(key(2), "not_applied")).rejects.toMatchObject(receiptViolation);
+      expect(await pgReconciliationReads(sql).get(key(2))).toMatchObject({
+        idempotencyKey: key(2),
+        resolvedAt: null,
+        resolution: null,
+      });
+    } finally {
+      await sql`alter table activity_log drop constraint test_refuse_reconciliation_receipt`;
+    }
   });
 
   // Observe the holder instead of guessing with a sleep: pg_try_advisory_xact_lock

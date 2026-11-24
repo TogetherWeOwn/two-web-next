@@ -150,7 +150,8 @@ npx --no-install wrangler queues pause-delivery two-internal-action
 npm ci --prefix web --include=dev --no-audit --no-fund
 npm run build --prefix web
 npx wrangler deploy --config web/wrangler.staging.jsonc --tag "$DEPLOY_SHA" \
-  --var "KIT_ROUTE_ARCHIVE:false" --var "KIT_ROUTE_STATIC:false"
+  --var "KIT_ROUTE_ARCHIVE:false" --var "KIT_ROUTE_STATIC:false" --var "KIT_ROUTE_EVENTS:false" \
+  --var "KIT_ROUTE_HOME:false" --var "KIT_ROUTE_JOIN:false"
 for q in two-sync-event two-internal-action; do
   # Capture before grepping: a failed list piped into grep reads as "no
   # consumer" without pipefail, and the attach then collides with the

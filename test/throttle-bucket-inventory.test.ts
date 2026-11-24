@@ -315,11 +315,13 @@ describe("throttle bucket inventory", () => {
   it("pins in-handler guard buckets to their call sites", () => {
     const found = guardBuckets();
     expect([...found.keys()].sort()).toEqual([
+      "admin-write",
       "events-read",
       "login-callback",
       "login-recover",
       "login-redirect",
     ]);
+    expect(found.get("admin-write")).toEqual(["src/admin/kit-reconciliation-write.ts"]);
     expect(found.get("login-redirect")).toEqual(["src/auth/routes.ts"]);
     expect(found.get("login-callback")).toEqual(["src/auth/routes.ts"]);
     expect(found.get("login-recover")).toEqual(["src/write-recovery.tsx"]);
@@ -327,13 +329,12 @@ describe("throttle bucket inventory", () => {
   });
 
   it("fails loudly on non-literal throttle registrations", () => {
-    // src/profiles/routes-admission.ts holds the only two: the local admitWrite
-    // helper call throttle(c, `profile-write:${viewer.id}`) and the
-    // deps.throttle(bucket) seam delegation. Neither is the src/throttle.ts
-    // middleware; the profile-write bucket itself is pinned by the dedicated
-    // assertion below. Any new entry here is a bucket escaping the literal
-    // inventory: hand-pin it and cover it, or make it literal.
+    // Hono admission and the shared Kit write core use the same per-viewer
+    // bucket. Pin every dynamic call here and verify the bucket below so a
+    // new registration cannot escape the literal inventory.
     expect(Object.fromEntries(nonLiteralThrottleSites())).toEqual({
+      "src/profiles/kit-write.tsx": 1,
+      "src/profiles/patch-core.ts": 1,
       "src/profiles/routes-admission.ts": 2,
     });
     expect(Object.fromEntries(nonLiteralGuardSites())).toEqual({});
@@ -350,6 +351,14 @@ describe("throttle bucket inventory", () => {
       readFileSync(resolve(root, "src/profiles/routes-admission.ts"), "utf8"),
     );
     expect(admission).toContain("profile-write:${viewer.id}");
+    const profilePatch = stripComments(
+      readFileSync(resolve(root, "src/profiles/patch-core.ts"), "utf8"),
+    );
+    expect(profilePatch).toContain("deps.throttle(`profile-write:${viewer.id}`)");
+    const kitWrite = stripComments(
+      readFileSync(resolve(root, "src/profiles/kit-write.tsx"), "utf8"),
+    );
+    expect(kitWrite).toContain("profileWriteThrottleFor(env, bucket)");
     const rsvp = stripComments(readFileSync(resolve(root, "src/events/rsvp.ts"), "utf8"));
     expect(rsvp.match(/rsvp-write:/g)?.length).toBe(3);
   });
@@ -408,6 +417,7 @@ describe("throttle bucket inventory", () => {
     expect(throttlingDoc).toContain("POST /admin/featured");
     expect(throttlingDoc).toContain("POST /admin/events");
     expect(throttlingDoc).toContain("POST /admin/queue/failed/:id/redispatch");
+    expect(throttlingDoc).toContain("POST /admin/reconciliation/:key");
   });
 
   it("pins each bucket to its registration file in its own table row", () => {
@@ -428,7 +438,7 @@ describe("throttle bucket inventory", () => {
       );
     }
     for (const [bucket, files] of guardBuckets()) {
-      bucketFiles.set(bucket, files);
+      bucketFiles.set(bucket, [...(bucketFiles.get(bucket) ?? []), ...files]);
     }
     const rows = throttlingDoc.split("\n").filter((line) => line.startsWith("|"));
     for (const [bucket, files] of bucketFiles) {

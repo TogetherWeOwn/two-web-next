@@ -152,7 +152,16 @@
     }
   }
 
+  function revealSeatCount(nodes) {
+    nodes.forEach(function (node) {
+      if (node.getAttribute("data-seat-refresh") === "refreshing") {
+        node.setAttribute("data-seat-refresh", "ready");
+      }
+    });
+  }
+
   function showStale(key, nodes) {
+    revealSeatCount(nodes);
     try {
       if (document.querySelector('[data-testid="' + STALE_TESTID + '"]')) return;
     } catch (_guardLookupIgnored) {
@@ -206,6 +215,13 @@
   }
 
   function refresh(nodes, key, state) {
+    // Once an inline write lands, the Kit C5/B4 snapshot stays retired.
+    // Wait for this first read (or its stale notice) before showing the badge.
+    nodes.forEach(function (node) {
+      if (node.getAttribute("data-seat-refresh") === "initial") {
+        node.setAttribute("data-seat-refresh", "refreshing");
+      }
+    });
     // A new broadcast owns both the read and its announcement, even if it
     // fails. An older completion must never replace the last good state.
     // A newer broadcast for the same key aborts the older fetch outright.
@@ -304,7 +320,12 @@
             if (capacity === undefined) return;
             node.setAttribute("data-capacity", capacity === null ? "" : String(capacity));
             var count = node.querySelector("[data-count]");
-            if (count) count.textContent = countText(row.going_count, capacity);
+            var signedUp = node.getAttribute("data-signed-up") !== null;
+            if (count) {
+              count.textContent = signedUp
+                ? row.going_count + " listed sign-up" + (row.going_count === 1 ? "" : "s")
+                : countText(row.going_count, capacity);
+            }
             var spots = node.querySelector("[data-spots]");
             if (capacity === null) {
               // A lifted cap leaves no seats to count: hide the stale line
@@ -315,14 +336,16 @@
               // nodes in place, never invents markup.
               if (spots) {
                 spots.hidden = true;
-                if (typeof spots.remove === "function") spots.remove();
+                // Kit keeps its target so a later refresh can restore a cap.
+                if (!node.getAttribute("data-seat-refresh") && typeof spots.remove === "function")
+                  spots.remove();
               }
             } else if (spots) {
               spots.hidden = false;
               spots.textContent = spotsLeftText(occupancy, capacity);
             }
             var ann = node.querySelector("[data-announcement]");
-            if (ann && state) {
+            if (ann && state && !signedUp) {
               var t = announcementText(state);
               ann.textContent = t ? t + " " : "";
             }
@@ -342,6 +365,7 @@
           // Authoritative success: the numbers are current again, so the stale
           // qualification (if any) clears. A focused retry hands to <main>;
           // focus that moved away is never stolen.
+          revealSeatCount(nodes);
           clearStale();
           document.dispatchEvent(
             new CustomEvent(REFRESHED, {

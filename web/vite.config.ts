@@ -2,6 +2,10 @@ import adapter from "@sveltejs/adapter-cloudflare";
 import { sveltekit } from "@sveltejs/kit/vite";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
+import { kitRetirementBuild } from "./scripts/kit-retirement-build.mjs";
+
+const cloudflare = adapter();
+const retirement = kitRetirementBuild(cloudflare, process.env.KIT_RETIREMENT_GUARD);
 
 // Kit 3 takes its config here; svelte.config.js is gone. Static files are not
 // Kit's: public/ is copied into the asset directory after the build
@@ -19,8 +23,9 @@ import { defineConfig } from "vite";
 export default defineConfig({
   plugins: [
     tailwindcss(),
+    ...(retirement ? [retirement.plugin] : []),
     sveltekit({
-      adapter: adapter(),
+      adapter: retirement?.adapter ?? cloudflare,
       csrf: { trustedOrigins: ["*"] },
       experimental: { remoteFunctions: false },
     }),
@@ -32,10 +37,17 @@ export default defineConfig({
         rolldownOptions: {
           // Normal artifacts omit capture-only code. Local builds retain the
           // identifier for the generated loopback Wrangler config to define.
-          transform:
-            process.env.SSR_CAPTURE_FIXTURE === "true"
-              ? {}
-              : { define: { __TWO_LOCAL_CAPTURE__: "false" } },
+          transform: {
+            define: {
+              ...(process.env.SSR_CAPTURE_FIXTURE === "true"
+                ? {}
+                : { __TWO_LOCAL_CAPTURE__: "false" }),
+              // Only the explicitly selected cutover build admits the 1033 ledger.
+              ...(process.env.TWO_WEB_1033_COMPAT === "true"
+                ? { __TWO_WEB_1033_COMPAT__: "true" }
+                : {}),
+            },
+          },
           output: {
             // Compact server output without rewrites or name mangling; error
             // diagnostics depend on constructor names. Keep licenses and maps.

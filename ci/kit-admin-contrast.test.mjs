@@ -11,18 +11,122 @@ import AxeBuilder from "@axe-core/playwright";
 import { build } from "esbuild";
 import { chromium } from "playwright";
 import { eventRow, featuredRow } from "../test/helpers/admin-validation-correction.ts";
+import { parseEventListQuery } from "../src/admin/event-list.ts";
+import { featuredListUrl, parseFeaturedListQuery } from "../src/admin/featured-list-query.ts";
 import { buildEventCreateView } from "../src/admin/kit-event-create.ts";
 import { resolveKitEventEdit } from "../src/admin/kit-event-edit.ts";
+import { buildEventListView } from "../src/admin/kit-events.ts";
 import { resolveKitFeaturedEdit } from "../src/admin/kit-featured-edit.ts";
 import { EventFormPage, FeaturedFormPage } from "../src/admin/pages.tsx";
+import { EventEditableFields } from "../src/admin/pages/event-editable-fields.tsx";
+import { parseRecurrenceForm } from "../src/admin/recurrence.ts";
+import { parseJoinAttemptsQuery } from "../src/admin/table-list.ts";
+import { parseHumanEventForm, ValidationError } from "../src/admin/validation.ts";
 
 const output = resolve("web/.svelte-kit/output");
 const evidence = process.env.KIT_ADMIN_CONTRAST_EVIDENCE_DIR;
 const origin = "http://kit-admin.test";
+const createDetails = {
+  organizer_name: "Riley & friends",
+  join_url: "https://example.com/lobby",
+  join_instructions: "Use the public lobby.\nAsk the host for the next game.",
+};
+// Rejected submissions: the shipped parsers decide the errors, so the
+// invalid fixtures render what a moderator sees after a real 422.
+const createRejected = {
+  title: "Game night",
+  starts_at: "2026-11-04 20:00",
+  ends_at: "2026-11-04 22:00",
+  timezone: "Europe/London",
+  accessibility_notes: "Step-free entrance. ".repeat(55).trim(),
+  organizer_name: "Riley & friends ".repeat(35).trim(),
+  join_url: "lobby.example.com/join",
+  join_instructions: "Use the public lobby. ".repeat(240).trim(),
+  recurrence_frequency: "weekly",
+  recurrence_count: "53",
+};
+const editRejectedTitle = "Game night moved to the big room ".repeat(4).trim();
+
+/** Field errors from the shipped parsers, merged as the create route does. */
+function rejectedFields(values, ...parsers) {
+  const fields = {};
+  for (const parse of parsers) {
+    try {
+      parse(values);
+    } catch (err) {
+      if (!(err instanceof ValidationError)) throw err;
+      Object.assign(fields, err.fields);
+    }
+  }
+  return fields;
+}
+const createErrors = rejectedFields(createRejected, parseHumanEventForm, parseRecurrenceForm);
+assert.deepEqual(
+  Object.keys(createErrors).sort(),
+  ["accessibility_notes", "join_instructions", "join_url", "organizer_name", "recurrence_count"],
+  "the rejected create submission fails exactly the fields the fixture exercises",
+);
 let scratch;
 let browser;
 let server;
 let fixtures;
+
+async function assertAdminNavigation(page, currentHref) {
+  const nav = page.getByRole("navigation", { name: "Administration", exact: true });
+  const destinations = [
+    ["Events", "/admin/events"],
+    ["Featured", "/admin/featured"],
+    ["Join attempts", "/admin/join-attempts"],
+    ["Activity log", "/admin/activity-log"],
+    ["Site", "/"],
+  ];
+  assert.deepEqual(
+    await nav
+      .getByRole("link")
+      .evaluateAll((links) =>
+        links.map((link) => [
+          link.textContent.trim(),
+          link.getAttribute("href"),
+          link.getAttribute("aria-current"),
+        ]),
+      ),
+    destinations.map(([name, href]) => [name, href, href === currentHref ? "page" : null]),
+    page.url(),
+  );
+  return nav;
+}
+
+async function focusOutlineColor(locator) {
+  const outline = await locator.evaluate((el) => {
+    const style = getComputedStyle(el);
+    return {
+      focused: el === document.activeElement && el.matches(":focus-visible"),
+      style: style.outlineStyle,
+      width: Number.parseFloat(style.outlineWidth),
+      color: style.outlineColor,
+    };
+  });
+  assert.ok(outline.focused, `${locator} has visible keyboard focus`);
+  assert.equal(outline.style, "solid", `${locator} has a solid outline`);
+  assert.ok(outline.width > 0, `${locator} has a nonzero outline`);
+  return outline.color;
+}
+
+async function assertSingleServerError(page, id, message) {
+  const control = page.locator(`#${id}`);
+  assert.deepEqual(
+    (await control.getAttribute("aria-describedby"))
+      .split(/\s+/)
+      .filter((id) => id.endsWith("-error")),
+    [`${id}-error`],
+  );
+  const errors = await page.locator(`.field:has(#${id}) .error:visible`).allTextContents();
+  assert.deepEqual(
+    errors.map((text) => text.trim()),
+    [message],
+  );
+  assert.equal(await control.evaluate((el) => el.validationMessage), message);
+}
 
 before(async () => {
   scratch = await mkdtemp(
@@ -61,8 +165,23 @@ before(async () => {
     },
   );
   assert.equal(populatedEvent.kind, "ok");
+  // The rejected edit keeps the saved heading; the form echoes the submission.
+  const editRejected = { ...event.view.values, title: editRejectedTitle };
+  const editErrors = rejectedFields(editRejected, parseHumanEventForm);
+  assert.deepEqual(Object.keys(editErrors), ["title"], "only the title is rejected");
+  const featuredQuery = parseFeaturedListQuery({});
   fixtures = [
     { name: "event-new", path: "/admin/events/new", data: buildEventCreateView() },
+    {
+      name: "event-new-populated",
+      path: "/admin/events/new",
+      data: buildEventCreateView({ accessibility_notes: "Step-free entrance.", ...createDetails }),
+    },
+    {
+      name: "event-new-invalid",
+      path: "/admin/events/new",
+      data: buildEventCreateView(createRejected, createErrors),
+    },
     {
       name: "event-edit-populated",
       path: `/admin/events/${eventRow.eventKey}`,
@@ -84,6 +203,19 @@ before(async () => {
         },
       },
     },
+    {
+      name: "event-edit-invalid",
+      path: `/admin/events/${eventRow.eventKey}`,
+      data: {
+        view: {
+          ...event.view,
+          values: editRejected,
+          errors: editErrors,
+          hasErrors: true,
+          fieldsHtml: String(EventEditableFields({ values: editRejected, errors: editErrors })),
+        },
+      },
+    },
     { name: "event-edit", path: `/admin/events/${eventRow.eventKey}`, data: { view: event.view } },
     { name: "featured-new", path: "/admin/featured/new", data: {} },
     { name: "featured-edit", path: "/admin/featured/7", data: { view: featured.view } },
@@ -99,6 +231,52 @@ before(async () => {
         zeroSearches: undefined,
         retentionDays: 30,
       },
+    },
+    {
+      name: "events-list",
+      path: "/admin/events",
+      currentHref: "/admin/events",
+      data: buildEventListView(parseEventListQuery({}), []),
+    },
+    {
+      name: "featured-list",
+      path: "/admin/featured",
+      currentHref: "/admin/featured",
+      data: {
+        query: featuredQuery,
+        rows: [],
+        emptyText: "No featured content yet.",
+        positionHeader: {
+          href: featuredListUrl(featuredQuery, { order: "desc" }),
+          ariaSort: "ascending",
+          ariaLabel: "Sort by position descending",
+          text: "Position ↑",
+        },
+        updatedHeader: {
+          href: featuredListUrl(featuredQuery, { sort: "updated_at" }),
+          ariaSort: "none",
+          ariaLabel: "Sort by last changed ascending",
+          text: "Last changed",
+        },
+      },
+    },
+    {
+      name: "join-attempts-list",
+      path: "/admin/join-attempts",
+      currentHref: "/admin/join-attempts",
+      data: { query: parseJoinAttemptsQuery({}), outcomes: [], rows: [], retentionDays: 30 },
+    },
+    {
+      name: "activity-log",
+      path: "/admin/activity-log",
+      currentHref: "/admin/activity-log",
+      data: { rows: [], query: { subject: "", causer: "", page: 1 }, hasNext: false },
+    },
+    {
+      name: "activity-log-filtered",
+      path: "/admin/activity-log?subject=event&page=2",
+      currentHref: "/admin/activity-log",
+      data: { rows: [], query: { subject: "event", causer: "", page: 2 }, hasNext: false },
     },
   ];
   const entry = join(scratch, "server.mjs");
@@ -151,6 +329,9 @@ before(async () => {
     f.html = await response.text();
     assert.match(f.html, /_app\/immutable\/assets\/0\.[^\"]+\.css/, "real root stylesheet linked");
     assert.doesNotMatch(f.html, /type="module"[^>]*>\s*import/, "admin stays server rendered");
+    if (f.currentHref) {
+      assert.ok(f.html.includes(`<a href="${f.currentHref}" aria-current="page">`), f.path);
+    }
   }
   browser = await chromium.launch({ headless: true });
   if (evidence) await mkdir(evidence, { recursive: true });
@@ -166,30 +347,39 @@ describe("Kit admin contrast", () => {
   for (const width of [1280, 390]) {
     for (const name of [
       "event-new",
+      "event-new-populated",
+      "event-new-invalid",
+      "event-new-text-limit",
       "event-edit",
       "event-edit-populated",
       "event-edit-errors",
+      "event-edit-invalid",
       "featured-new",
       "featured-edit",
       "dashboard",
     ]) {
       test(`Kit admin contrast: ${name} at ${width}`, async () => {
-        const f = fixtures.find((fixture) => fixture.name === name);
+        const isTextLimit = name === "event-new-text-limit";
+        const f = fixtures.find((fixture) => fixture.name === (isTextLimit ? "event-new" : name));
         const isDashboard = name === "dashboard";
-        const context = await browser.newContext({
-          viewport: { width, height: width === 390 ? 844 : 800 },
-        });
+        const isInvalid = name.endsWith("-invalid");
+        const navigationPages = isDashboard
+          ? fixtures.filter(({ currentHref }) => currentHref)
+          : [];
+        const documents = [f, ...navigationPages];
+        const viewport = { width, height: width === 390 ? 844 : 800 };
+        const context = await browser.newContext({ viewport });
         const unexpected = [];
         const errors = [];
         try {
-          await context.route("**/*", async (route) => {
+          const fulfillFixture = async (route) => {
             const url = new URL(route.request().url());
             if (url.origin !== origin || route.request().method() !== "GET") {
               unexpected.push(url.pathname);
               return route.abort();
             }
-            if (url.pathname === f.path)
-              return route.fulfill({ contentType: "text/html", body: f.html });
+            const document = documents.find(({ path }) => path === url.pathname + url.search);
+            if (document) return route.fulfill({ contentType: "text/html", body: document.html });
             const directory = url.pathname.startsWith("/_app/")
               ? join(output, "client")
               : resolve("public");
@@ -206,10 +396,12 @@ describe("Kit admin contrast", () => {
             }
             unexpected.push(url.pathname);
             return route.abort();
-          });
+          };
+          await context.route("**/*", fulfillFixture);
           const page = await context.newPage();
           page.on("pageerror", (error) => errors.push(error.message));
           await page.goto(origin + f.path);
+          await assertAdminNavigation(page, null);
           if (isDashboard) {
             await page.locator('[data-testid="admin-actor"]').first().waitFor();
           } else {
@@ -228,7 +420,120 @@ describe("Kit admin contrast", () => {
               "help text is actually present",
             );
           }
-          if (name === "event-new") assert.equal(await page.locator("fieldset label").count(), 3);
+          if (name.startsWith("event-new")) {
+            assert.equal(await page.locator("fieldset label").count(), 3);
+            const notes = page.locator("#f-accessibility-notes");
+            assert.equal(await notes.count(), 1);
+            const submitted = name === "event-new-invalid" ? createRejected : createDetails;
+            assert.equal(
+              await notes.inputValue(),
+              name === "event-new" || isTextLimit
+                ? ""
+                : name === "event-new-invalid"
+                  ? createRejected.accessibility_notes
+                  : "Step-free entrance.",
+            );
+            if (isTextLimit) {
+              const error = page.locator("#f-accessibility-notes-limit-error");
+              await error.waitFor({ state: "attached" });
+              assert.equal(await error.isVisible(), false);
+              await notes.fill("🎮".repeat(1001));
+              await page.keyboard.press("Shift+Tab");
+              await page.keyboard.press("Tab");
+              assert.equal(await focusOutlineColor(notes), "rgb(255, 156, 54)");
+              assert.equal(await error.isVisible(), true);
+              assert.equal(await notes.getAttribute("aria-invalid"), "true");
+            }
+            for (const field of Object.keys(createDetails)) {
+              const id = `f-${field.replaceAll("_", "-")}`;
+              const control = page.locator(`#${id}`);
+              assert.equal(
+                await control.inputValue(),
+                name === "event-new" || isTextLimit ? "" : submitted[field],
+              );
+              if (isTextLimit) {
+                await control.press("Shift+Tab");
+                await page.keyboard.press("Tab");
+                assert.equal(await focusOutlineColor(control), "rgb(255, 156, 54)");
+              }
+              if (name === "event-new-invalid") {
+                assert.equal(await control.getAttribute("aria-invalid"), "true");
+                assert.equal(
+                  await page.locator(`[data-admin-validation-summary] a[href="#${id}"]`).count(),
+                  1,
+                );
+                assert.equal(
+                  (await page.locator(`#${id}-error`).textContent()).trim(),
+                  createErrors[field],
+                );
+              }
+            }
+            if (name === "event-new-invalid") {
+              assert.equal(await notes.getAttribute("aria-invalid"), "true");
+              assert.equal(
+                await page
+                  .locator('[data-testid="form-errors"] a[href="#f-accessibility-notes"]')
+                  .count(),
+                1,
+              );
+              assert.equal(
+                (await page.locator("#f-accessibility-notes-error").textContent()).trim(),
+                createErrors.accessibility_notes,
+              );
+              assert.equal(
+                await page.locator("#f-recurrence-count").inputValue(),
+                createRejected.recurrence_count,
+              );
+              assert.equal(await page.locator("fieldset #f-recurrence-count-error").count(), 1);
+              for (const field of ["accessibility_notes", "organizer_name", "join_instructions"]) {
+                await assertSingleServerError(
+                  page,
+                  `f-${field.replaceAll("_", "-")}`,
+                  createErrors[field],
+                );
+              }
+            }
+          }
+          const summary = page.locator("[data-admin-validation-summary]");
+          const summaryLink = summary.locator("a").first();
+          if (name === "event-edit-invalid") {
+            assert.equal(await page.locator("#f-title-error").count(), 1);
+            await assertSingleServerError(page, "f-title", "Keep the title to 100 characters.");
+            assert.equal(await summary.locator('a[href="#f-title"]').count(), 1);
+            assert.equal(await page.locator("#f-title").inputValue(), editRejectedTitle);
+            assert.equal(
+              (await page.locator("#f-title-error").textContent()).trim(),
+              "Keep the title to 100 characters.",
+            );
+            assert.equal(
+              await page.getByRole("heading", { level: 1, name: "Edit Saved game night" }).count(),
+              1,
+              "the heading keeps the saved title",
+            );
+          }
+          if (isInvalid) {
+            assert.equal(await summary.evaluate((el) => el === document.activeElement), true);
+            assert.equal(await focusOutlineColor(summary), "rgb(255, 156, 54)");
+            if (evidence) {
+              await page.screenshot({
+                path: join(evidence, `${name}-${width}-summary-focus.png`),
+                fullPage: true,
+              });
+            }
+            await page.keyboard.press("Tab");
+            assert.deepEqual(
+              await summaryLink.evaluate((el) => {
+                const style = getComputedStyle(el);
+                return [el.matches(":focus-visible"), style.outlineStyle, style.outlineColor];
+              }),
+              [true, "solid", "rgb(255, 156, 54)"],
+              "the focused summary link uses the lobby focus token, not the light-theme outline",
+            );
+            assert.match(
+              await summaryLink.evaluate((el) => getComputedStyle(el).textDecorationLine),
+              /underline/,
+            );
+          }
           const axe = new AxeBuilder({ page });
           if (isDashboard) {
             // Card descriptions and footer only: the card heading links carry
@@ -240,10 +545,16 @@ describe("Kit admin contrast", () => {
           } else {
             axe.include(".hint").include("footer").include("fieldset");
           }
+          const summarySelector = "[data-admin-validation-summary]";
+          const fieldErrorSelector = ".field .error";
+          if (isInvalid) axe.include(summarySelector);
+          if (isInvalid || isTextLimit) axe.include(fieldErrorSelector);
           const result = await axe.withRules(["color-contrast"]).analyze();
           const measured = await page
             .locator(
-              isDashboard ? ".card p, footer" : ".hint, footer, fieldset label, fieldset legend",
+              isDashboard
+                ? ".card p, footer"
+                : `.hint, footer, fieldset label, fieldset legend, ${summarySelector} p, ${summarySelector} a, ${fieldErrorSelector}`,
             )
             .evaluateAll(
               (elements, cardContainer) =>
@@ -253,8 +564,22 @@ describe("Kit admin contrast", () => {
                   background: getComputedStyle(el.closest(cardContainer) ?? document.body)
                     .backgroundColor,
                 })),
-              isDashboard ? ".card" : "fieldset",
+              isDashboard ? ".card" : ".notice, fieldset",
             );
+          if (isTextLimit) {
+            assert.ok(
+              measured.some(({ text }) => text === "Keep accessibility notes to 1000 characters."),
+            );
+          }
+          if (isInvalid) {
+            const texts = measured.map((item) => item.text);
+            assert.ok(texts.includes("Check the highlighted fields and try again."));
+            for (const message of name === "event-new-invalid"
+              ? Object.values(createErrors)
+              : ["Keep the title to 100 characters."]) {
+              assert.ok(texts.includes(message), `${message} is included in the contrast evidence`);
+            }
+          }
           if (evidence) {
             await page.screenshot({ path: join(evidence, `${name}-${width}.png`), fullPage: true });
             await writeFile(
@@ -266,8 +591,6 @@ describe("Kit admin contrast", () => {
               ),
             );
           }
-          assert.deepEqual(unexpected, [], "no live or mutating requests");
-          assert.deepEqual(errors, [], "shipped islands execute without errors");
           assert.deepEqual(
             result.incomplete,
             [],
@@ -280,6 +603,109 @@ describe("Kit admin contrast", () => {
             })),
             [],
           );
+          if (isTextLimit) {
+            const notes = page.locator("#f-accessibility-notes");
+            await notes.fill("🎮".repeat(1000));
+            assert.equal(
+              await page.locator("#f-accessibility-notes-limit-error").isVisible(),
+              false,
+            );
+            assert.equal(await notes.getAttribute("aria-invalid"), null);
+          }
+          if (isInvalid) {
+            for (const token of ["--color-danger", "--color-lobby-accent"]) {
+              assert.notEqual(
+                await page.evaluate(
+                  (property) =>
+                    getComputedStyle(document.documentElement).getPropertyValue(property).trim(),
+                  token,
+                ),
+                "",
+                `${token} is emitted by the built stylesheet`,
+              );
+            }
+            await page.emulateMedia({ forcedColors: "active" });
+            const rule = await summary.evaluate((el) => ({
+              width: getComputedStyle(el).borderLeftWidth,
+              style: getComputedStyle(el).borderLeftStyle,
+              color: getComputedStyle(el).borderLeftColor,
+              background: getComputedStyle(el).backgroundColor,
+            }));
+            assert.notEqual(rule.width, "0px");
+            assert.notEqual(rule.style, "none");
+            assert.notEqual(rule.color, rule.background);
+            assert.notEqual(await focusOutlineColor(summaryLink), rule.background);
+            assert.match(
+              await summaryLink.evaluate((el) => getComputedStyle(el).textDecorationLine),
+              /underline/,
+            );
+            if (evidence) {
+              await page.screenshot({
+                path: join(evidence, `${name}-${width}-forced-colors.png`),
+                fullPage: true,
+              });
+            }
+          }
+          if (name === "event-edit-invalid") {
+            // Save moves focus, so exercise submission after checking the summary link.
+            await page.emulateMedia({ forcedColors: "none" });
+            const form = page.locator("form[data-event-editor]");
+            await form.evaluate((el) => {
+              el.addEventListener("submit", (event) => {
+                // Observe a real submit event without sending a POST.
+                event.preventDefault();
+                el.setAttribute("data-submitted-title", new FormData(el).get("title"));
+              });
+            });
+            const save = page.getByTestId("save-event");
+            await save.click();
+            assert.equal(await form.getAttribute("data-submitted-title"), null);
+
+            const title = page.locator("#f-title");
+            await title.fill("Corrected game night");
+            assert.equal(await title.evaluate((el) => el.validity.valid), true);
+            assert.equal(
+              (await page.locator("#f-title-error").textContent()).trim(),
+              "Keep the title to 100 characters.",
+            );
+            assert.equal(await summary.isVisible(), true);
+            await save.click();
+            assert.equal(await form.getAttribute("data-submitted-title"), "Corrected game night");
+          }
+          if (isDashboard) {
+            const navigationContext = await browser.newContext({
+              viewport,
+              javaScriptEnabled: false,
+            });
+            try {
+              await navigationContext.route("**/*", fulfillFixture);
+              const navigationPage = await navigationContext.newPage();
+              for (const fixture of navigationPages) {
+                await navigationPage.goto(origin + fixture.path);
+                const nav = await assertAdminNavigation(navigationPage, fixture.currentHref);
+                if (evidence) {
+                  const capture = (state) =>
+                    navigationPage.screenshot({
+                      path: join(evidence, `${fixture.name}-${width}-${state}.png`),
+                    });
+                  const after = await capture("after");
+                  // Removing the sole markup change recreates the previous pixels.
+                  await nav.locator('[aria-current="page"]').evaluate((link) => {
+                    link.removeAttribute("aria-current");
+                  });
+                  const before = await capture("before");
+                  assert.ok(
+                    before.equals(after),
+                    `${fixture.path} at ${width}px keeps its appearance`,
+                  );
+                }
+              }
+            } finally {
+              await navigationContext.close();
+            }
+          }
+          assert.deepEqual(unexpected, [], "no live or mutating requests");
+          assert.deepEqual(errors, [], "shipped islands execute without errors");
         } finally {
           await context.close();
         }

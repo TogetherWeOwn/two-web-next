@@ -2,11 +2,20 @@ import { assertRouteEvidenceRunMetadata } from "./route-evidence-run-metadata.mj
 
 // All arguments are trusted workflow outputs or GitHub API responses, never
 // values taken from the artifact. This is not an artifact download or admission.
-export function selectRouteEvidenceArtifact(expected, run, attempt, job, liveHead, artifacts) {
+// Artifact metadata and timestamps alone do not authenticate its upload job or attempt.
+export function selectRouteEvidenceArtifact(
+  expected,
+  run,
+  attempt,
+  job,
+  liveHead,
+  artifacts,
+  pullRequest,
+) {
   const refuse = () => {
     throw new Error("route evidence refused: inconsistent artifact metadata");
   };
-  assertRouteEvidenceRunMetadata(expected, run, attempt, job, liveHead);
+  assertRouteEvidenceRunMetadata(expected, run, attempt, job, liveHead, pullRequest);
   if (
     !Number.isSafeInteger(expected.artifactId) ||
     expected.artifactId <= 0 ||
@@ -35,7 +44,7 @@ export function selectRouteEvidenceArtifact(expected, run, attempt, job, liveHea
     artifact.size_in_bytes <= 0 ||
     artifact.size_in_bytes > 10 * 1024 * 1024 ||
     artifact.workflow_run?.id !== expected.runId ||
-    artifact.workflow_run?.head_sha !== expected.sourceSha
+    artifact.workflow_run?.head_sha !== run.head_sha
   )
     refuse();
   return artifact.id;

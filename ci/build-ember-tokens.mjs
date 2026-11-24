@@ -25,6 +25,7 @@ export const HONO_CONSUMERS = [
   "public/event-theme.css",
   "public/profile-theme.css",
   "public/schedule-theme.css",
+  "public/kit-events-controls.css",
   "web/src/app.css",
 ];
 
@@ -194,12 +195,17 @@ export function generate(root = ROOT) {
   const consumers = new Map(
     HONO_CONSUMERS.map((path) => [path, readFileSync(join(root, path), "utf8")]),
   );
-  const consumed = new Set(
-    [...consumers.values()].flatMap((css) =>
-      [...css.matchAll(/var\(\s*--([\w-]+)/g)].map((match) => match[1]),
-    ),
+  const roleReads = (css) => [...css.matchAll(/var\(\s*--([\w-]+)/g)].map((match) => match[1]);
+  const controlsPath = "public/kit-events-controls.css";
+  const scheduleReads = new Set(roleReads(consumers.get(controlsPath)));
+  const sharedReads = new Set(
+    [...consumers].flatMap(([path, css]) => (path === controlsPath ? [] : roleReads(css))),
   );
-  const honoRoles = roles.filter(([alias]) => consumed.has(alias));
+  // Keep media-overridden aliases in the shared base/reduced-motion rules.
+  const isSharedRole = ([alias, source]) =>
+    sharedReads.has(alias) || (scheduleReads.has(alias) && kit.reduced.has(`--two-${source}`));
+  const honoRoles = roles.filter(isSharedRole);
+  const scheduleRoles = roles.filter((role) => scheduleReads.has(role[0]) && !isSharedRole(role));
   const get = (name) => {
     const value = kit.base.get(`--two-${name}`);
     if (value === undefined) throw new Error(`missing kit role --two-${name}`);
@@ -233,7 +239,7 @@ export function generate(root = ROOT) {
   const brand = ["ember", "magenta", "violet"]
     .map((name) => `--color-brand-${name}:${get(`color-grad-${name}`)};`)
     .join("");
-  const facade = `.base-theme{${hooks("")}${aliases}${brand}color-scheme:dark;${declarations(honoRoles.filter(foundation))}}${schedule}{${hooks("schedule-")}${aliases}}`;
+  const facade = `.base-theme{${hooks("")}${aliases}${brand}color-scheme:dark;${declarations(honoRoles.filter(foundation))}}${schedule}{${hooks("schedule-")}${aliases}${declarations(scheduleRoles)}}`;
   const reduced = honoRoles
     .filter(([, source]) => kit.reduced.has(`--two-${source}`))
     .map(([alias, source]) => `--${alias}:${kit.reduced.get(`--two-${source}`)};`)
@@ -302,7 +308,10 @@ export function generate(root = ROOT) {
   if (usedHeroAliases.size !== heroAliases.size) throw new Error("unused hero alias");
   // Component styles can read theme variables without using Tailwind utilities.
   // Retain those variables even when Tailwind's utility scanner cannot see them.
-  const kitCss = `/* GENERATED from two-design-kit ${version}; run node ci/build-ember-tokens.mjs. */\n@theme static{${kitColors.map(([alias, source]) => `--color-lobby-${alias}:${get(source)};`).join("")}${roles.map(([alias, , value]) => `--${utility(alias)}:${value};`).join("")}--font-sans:var(--font-ui);}\n.base-theme{${hooks("", true)}${aliases}${declarations(roles.filter(foundation))}}\n${schedule}{${hooks("schedule-", true)}}\n`;
+  const rankColors = [1, 2, 3, 4, 5, "off"]
+    .map((arc) => `--two-color-rank-arc-${arc}:${get(`color-rank-arc-${arc}`)};`)
+    .join("");
+  const kitCss = `/* GENERATED from two-design-kit ${version}; run node ci/build-ember-tokens.mjs. */\n@theme static{${kitColors.map(([alias, source]) => `--color-lobby-${alias}:${get(source)};`).join("")}${roles.map(([alias, , value]) => `--${utility(alias)}:${value};`).join("")}${rankColors}--font-sans:var(--font-ui);}\n.base-theme{${hooks("", true)}${aliases}${declarations(roles.filter(foundation))}}\n${schedule}{${hooks("schedule-", true)}}\n`;
   const validation = transformSync(kitCss, { loader: "css", logLevel: "silent" });
   if (validation.warnings.length) throw new Error("invalid generated Kit stylesheet");
   // The catastrophic fallback must render without fonts or stylesheet fetches.

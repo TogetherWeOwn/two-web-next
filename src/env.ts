@@ -94,14 +94,32 @@ export type Env = AgentEventsEnv & {
   KIT_PARITY_FIXTURE_EVENT_DETAIL?: string;
   // Loopback Kit parity fixture only; the shipped join entry stays disabled.
   KIT_PARITY_FIXTURE_JOIN?: string;
+  // Loopback Kit parity fixture only; serves GET /admin for dashboard captures.
+  KIT_PARITY_FIXTURE_ADMIN_DASHBOARD?: string;
   // Generated local capture build only; no deployed config defines the build gate.
   SSR_CAPTURE_FIXTURE?: string;
-  // Staging Kit rollout controls (web/wrangler.staging.jsonc only). The exact
-  // staging APP_URL activates a fail-closed route manifest: unset or malformed
-  // values keep archive and static families on Hono. Preview fixture workers
-  // and production do not set these flags.
+  // Archive and static are default-off Kit rollout controls for the canonical
+  // staging and production origins. Only the literal string "true" opts in.
   KIT_ROUTE_ARCHIVE?: string;
   KIT_ROUTE_STATIC?: string;
+  // These rollout controls remain staging-only.
+  KIT_ROUTE_EVENTS?: string;
+  KIT_ROUTE_HOME?: string;
+  KIT_ROUTE_JOIN?: string;
+  KIT_ROUTE_EMBER_PAGES?: string;
+  DISCORD_LIVE_SOCKET_ENABLED?: string;
+  // Browser auth endpoints. Only the literal string "true" opts in.
+  KIT_ROUTE_AUTH?: string;
+  // ICS and RSS reads. Only the literal string "true" opts in.
+  KIT_ROUTE_FEEDS?: string;
+  // Robots and sitemap reads. Only the literal string "true" opts in.
+  KIT_ROUTE_SEO?: string;
+  // RFC 9116 disclosure file. Only the literal string "true" opts in.
+  KIT_ROUTE_SECURITY_TXT?: string;
+  // Admin serving integration is accepted only on canonical staging or loopback.
+  KIT_ROUTE_ADMIN?: string;
+  // Owner-only profile PATCH and native form POST. Only "true" opts in.
+  KIT_ROUTE_PROFILE_WRITES?: string;
   // B1 read-only WebMCP pilot: only the exact strings "true"/"1" inject the
   // model-context island on the four pilot pages; unset or anything else
   // leaves pages byte-identical. No session, cookie or database read.

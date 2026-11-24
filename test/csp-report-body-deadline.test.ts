@@ -1,9 +1,9 @@
 // route-inventory: POST /csp-reports
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import app from "./app";
 import { CSP_REPORT_BODY_DEADLINE_MS, readCappedBody } from "../src/csp-report-body";
 import { extractCspReport } from "../src/csp-reports";
 import type { Env } from "../src/env";
+import { requestApp } from "./helpers/fetch-app";
 
 const DEADLINE_MS = CSP_REPORT_BODY_DEADLINE_MS;
 const encode = (text: string) => new TextEncoder().encode(text);
@@ -13,7 +13,7 @@ const report = JSON.stringify({
 
 const env = { APP_URL: "https://next.example.test" } as Env;
 const post = async (req: Request): Promise<Response> => {
-  const response = await app.request(req, undefined, env);
+  const response = await requestApp(req, undefined, env);
   return response;
 };
 

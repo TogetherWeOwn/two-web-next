@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +14,7 @@ import {
 
 const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
 const ledger = "drizzle.__drizzle_migrations";
-const lockKey = 11161001;
+export const webMigrationLockKey = 11161001;
 
 // PlanetScale Postgres identity pins (infrastructure identifiers, not secrets).
 // Usernames carry the branch as <role-credential>.<branch_id>, so the username
@@ -58,6 +59,13 @@ export function migrationConfig(env, { testDatabase = false } = {}) {
     refuse(error instanceof Error ? error.message : "Migration admission refused.");
   }
   const target = env.MIGRATION_TARGET;
+  const identity = target === "production" ? env.PRODUCTION_MIGRATION_IDENTITY_SHA256 : undefined;
+  return migrationConnectionConfig(env, target, identity, { testDatabase });
+}
+
+export function migrationConnectionConfig(env, target, identity, { testDatabase = false } = {}) {
+  if (target === "production" && !/^[a-f0-9]{64}$/.test(identity ?? ""))
+    refuse("Production migration identity setting is missing or malformed.");
   const secret =
     target === "staging" ? "PLANETSCALE_STAGING_DATABASE_URL" : "PRODUCTION_DATABASE_URL";
   if (!env[secret]) refuse(`Missing ${secret} Environment secret; no fallback is permitted.`);
@@ -93,13 +101,10 @@ export function migrationConfig(env, { testDatabase = false } = {}) {
     refuse("Migrations require the pinned staging endpoint with TLS; value withheld.");
   } else if (
     target === "production" &&
-    // PlanetScale Postgres direct endpoint: <id>.pg.psdb.cloud:5432.
-    // The pooled 6432 port and -pooler hosts are refused: DDL and the
-    // transaction advisory lock must bypass transaction pooling.
-    (!/^[a-z0-9-]+\.pg\.psdb\.cloud$/.test(url.hostname) ||
-      url.hostname.split(".")[0].endsWith("-pooler"))
+    (url.hostname !== PLANETSCALE_PRODUCTION_HOST ||
+      branchIdOf(url.username) !== PLANETSCALE_PRODUCTION_BRANCH_ID)
   ) {
-    refuse("Production migrations require a direct PlanetScale endpoint with TLS; value withheld.");
+    refuse("Migrations require the pinned direct production PlanetScale endpoint; value withheld.");
   }
   // Disposable test databases carry no TLS params or password; their strict
   // hostname/principal check above is the whole gate. Live targets always
@@ -122,7 +127,26 @@ export function migrationConfig(env, { testDatabase = false } = {}) {
   // sslmode=require|verify-full + rejectUnauthorized:true in migrationClient.
   url.searchParams.delete("channel_binding");
   url.port = "5432";
-  return { target, url, testDatabase };
+  return { target, url, testDatabase, identity };
+}
+
+export async function assertProductionIdentity(connection, config, summary = () => {}) {
+  if (config.target !== "production") return;
+  const [actual] = await connection`select pg_catalog.current_database()::text as database,
+    session_user::text as authenticated, current_user::text as effective`;
+  // Fingerprint the approved database and role, rather than putting either
+  // name in Actions step metadata. PostgreSQL identifiers cannot contain NUL.
+  if (
+    !actual ||
+    actual.database !== config.url.pathname.slice(1) ||
+    !actual.authenticated ||
+    actual.authenticated !== actual.effective ||
+    createHash("sha256").update(`${actual.database}\0${actual.authenticated}`).digest("hex") !==
+      config.identity
+  ) {
+    refuse("Production migration database or role identity did not match; values withheld.");
+  }
+  await summary("Production migration database and role identity matched.");
 }
 
 function journal() {
@@ -157,6 +181,10 @@ async function pendingMigrations(client, migrations) {
   const applied = exists.ledger
     ? await client`select hash, created_at from drizzle.__drizzle_migrations order by created_at, id`
     : [];
+  return pendingAfterPrefix(applied, migrations);
+}
+
+function pendingAfterPrefix(applied, migrations) {
   // Drizzle uses a timestamp high-water mark. Require an exact checksum prefix so
   // edited SQL, missing history, bot entries, or a newer release cannot hide work.
   for (const [index, row] of applied.entries()) {
@@ -172,6 +200,17 @@ async function pendingMigrations(client, migrations) {
     }
   }
   return migrations.slice(applied.length);
+}
+
+// The readiness installer calls this under the web migration and ledger locks.
+export async function assertMigrationPrefix(client, tag) {
+  const migrations = journal();
+  const rows = await client`select hash, created_at from drizzle.__drizzle_migrations
+    order by created_at, id limit ${migrations.length + 1}`;
+  const pending = pendingAfterPrefix(rows, migrations);
+  const applied = migrations.slice(0, migrations.length - pending.length);
+  if (applied.at(-1)?.tag !== tag) refuse("Unexpected web migration ledger end.");
+  return applied.map(({ folderMillis }) => folderMillis);
 }
 
 export function safeMigrationError(error) {
@@ -230,7 +269,7 @@ export function captureDriverRaceCrashes() {
   return { crashes, release: restore };
 }
 
-export function migrationClient(config, hooks = {}) {
+export function migrationClient(config, { onclose, readOnly = false } = {}) {
   return postgres(config.url.href, {
     port: 5432,
     max: 1,
@@ -239,6 +278,7 @@ export function migrationClient(config, hooks = {}) {
     connect_timeout: 10,
     password: () => decodeURIComponent(config.url.password),
     ssl: config.testDatabase ? false : { rejectUnauthorized: true },
+    ...(readOnly && { fetch_types: false }),
     // Canonical migration SQL uses unqualified identifiers intending `public`.
     // postgres.js merges `connection` into the startup packet (see StartupMessage
     // in node_modules/postgres/src/connection.js), so pin per-connection GUCs
@@ -247,25 +287,70 @@ export function migrationClient(config, hooks = {}) {
     // must stay on because the runtime-rights guard lexes plain strings
     // without backslash escapes. Never ALTER ROLE/DATABASE defaults.
     connection: {
-      statement_timeout: 120000,
+      statement_timeout: readOnly ? 10000 : 120000,
       lock_timeout: 10000,
       search_path: "public",
       datestyle: "ISO, YMD",
       standard_conforming_strings: "on",
+      ...(readOnly && { default_transaction_read_only: "on" }),
     },
     onnotice: () => {},
-    onclose: () => hooks.onclose?.(),
+    onclose: () => onclose?.(),
   });
 }
 
+function approvedRange(migrations, pin) {
+  const tags = typeof pin === "string" ? pin.split(",") : [];
+  const start = migrations.findIndex((entry) => entry.tag === tags[0]);
+  const end = start + tags.length;
+  if (start < 0 || tags.some((tag, index) => migrations[start + index]?.tag !== tag)) {
+    refuse(
+      "Production migration scope must pin an exact contiguous segment of the release journal.",
+    );
+  }
+  return { start, end };
+}
+
 export async function runMigration(mode, env = process.env, options = {}) {
-  if (!["plan", "apply", "verify"].includes(mode)) refuse("Mode must be plan, apply or verify.");
+  if (!["plan", "apply", "verify", "verify-scope"].includes(mode))
+    refuse("Mode must be plan, apply, verify or verify-scope.");
   const config = migrationConfig(env, options);
   const migrations = journal();
+  const scope =
+    config.target === "production"
+      ? approvedRange(migrations, env.PRODUCTION_MIGRATION_APPROVED_PENDING_TAGS)
+      : undefined;
+  if (mode === "verify-scope" && !scope) refuse("Scoped readback is production-only.");
   const report = options.report ?? console.log;
   const summary = async (text) => {
     await report(text);
     if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `${text}\n`);
+  };
+  const postCheck = (remaining, approvedEnd) => {
+    if (approvedEnd === undefined) {
+      if (remaining.length) refuse("Post-check failed: web migrations remain pending.");
+      return;
+    }
+    // pendingMigrations validated every row against the full canonical journal.
+    // Its tail length identifies the exact prefix, not just tag membership.
+    const prefix = migrations.length - remaining.length;
+    if (prefix < approvedEnd)
+      refuse("Scoped post-check failed: ledger has not reached the approved end.");
+    if (prefix > approvedEnd)
+      refuse("Scoped post-check failed: ledger has advanced past the approved end.");
+  };
+  const reportPostCheck = async (remaining) => {
+    if (!scope) {
+      await summary("Post-check: zero pending web migrations.");
+      return;
+    }
+    const endTag = migrations[scope.end - 1].tag;
+    await summary(
+      `Scoped ${mode === "apply" ? "apply" : "readback"}: ledger matches the approved end (${endTag}).`,
+    );
+    const deferred = remaining.map((entry) => entry.tag).join(", ");
+    await summary(`Deferred web migrations: ${deferred || "none"}.`);
+    if (remaining.length) await summary("This is not full-release migration verification.");
   };
   let connectionLost = false;
   const client = migrationClient(config, {
@@ -297,23 +382,42 @@ export async function runMigration(mode, env = process.env, options = {}) {
       throw error;
     }
     const pending = await pendingMigrations(connection, migrations);
+    if (mode === "verify-scope") return pending;
+    let selected = pending;
+    if (scope && mode !== "verify") {
+      if (migrations.length - pending.length !== scope.start) {
+        refuse("Production migration pending tags do not match the approved scope.");
+      }
+      selected = pending.slice(0, scope.end - scope.start);
+    }
+    const tags = selected.map((entry) => entry.tag);
+    const label = selected === pending ? "Pending" : "Pending in approved scope";
     await summary(`### Web migrations: ${config.target} / ${mode}`);
-    await summary(
-      `Pending: ${pending.length}${pending.length ? ` (${pending.map((entry) => entry.tag).join(", ")})` : ""}`,
-    );
-    return pending;
+    await summary(`${label}: ${tags.length}${tags.length ? ` (${tags.join(", ")})` : ""}`);
+    return selected;
   };
   try {
     if (mode !== "apply") {
-      const pending = await plan(client);
-      if (mode === "verify" && pending.length)
-        refuse("Post-check failed: web migrations remain pending.");
+      // In production, a dropped connection must not resume on a new session
+      // after the identity check, even for a read-only plan or verification.
+      const pending =
+        config.target === "production"
+          ? await client.begin("read only", async (transaction) => {
+              await assertProductionIdentity(transaction, config, summary);
+              const pending = await plan(transaction);
+              if (mode === "verify-scope") postCheck(pending, scope.end);
+              return pending;
+            })
+          : await plan(client);
+      if (mode === "verify") postCheck(pending);
+      if (mode === "verify-scope") await reportPostCheck(pending);
       return pending;
     }
     // sql.begin pins one connection and rejects on loss: never resume unlocked.
     // Sources: https://github.com/porsager/postgres#transactions
     // https://www.postgresql.org/docs/17/explicit-locking.html#ADVISORY-LOCKS
-    const remaining = await client.begin(async (transaction) => {
+    const apply = async (transaction) => {
+      await assertProductionIdentity(transaction, config, summary);
       // Defense in depth with the startup pin in migrationClient: even when
       // the role/database default search_path or DateStyle is hostile, this
       // transaction applies canonical SQL to `public`. Never ALTER ROLE or
@@ -322,7 +426,8 @@ export async function runMigration(mode, env = process.env, options = {}) {
       await transaction.unsafe("SET LOCAL search_path = public");
       await transaction.unsafe("SET LOCAL datestyle = 'ISO, YMD'");
       await transaction.unsafe("SET LOCAL standard_conforming_strings = on");
-      const [lock] = await transaction`select pg_try_advisory_xact_lock(${lockKey}) as acquired`;
+      const [lock] =
+        await transaction`select pg_try_advisory_xact_lock(${webMigrationLockKey}) as acquired`;
       if (!lock.acquired)
         refuse("Another web migration holds the database lock; retry only after it finishes.");
       const pending = await plan(transaction);
@@ -368,10 +473,16 @@ export async function runMigration(mode, env = process.env, options = {}) {
           values (${migration.hash}, ${migration.folderMillis})`;
       }
       const remaining = await pendingMigrations(transaction, migrations);
-      if (remaining.length) refuse("Post-check failed: web migrations remain pending.");
+      postCheck(remaining, scope?.end);
       return remaining;
-    });
-    await summary("Post-check: zero pending web migrations.");
+    };
+    // The locked production scope check must see commits made after the
+    // identity read, even when the role or database defaults to a fixed snapshot.
+    const remaining =
+      config.target === "production"
+        ? await client.begin("isolation level read committed", apply)
+        : await client.begin(apply);
+    await reportPostCheck(remaining);
     return remaining;
   } finally {
     await client.end({ timeout: 5 });

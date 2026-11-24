@@ -21,11 +21,16 @@ PRs, logs or command arguments.
   without substitution.
 - **staging:** the reviewed Kit Worker configuration is
   [`web/wrangler.staging.jsonc`](../web/wrangler.staging.jsonc); it points at
-  `next.togetherweown.com` and defaults both Kit route families to Hono. The
-  `deploy.yml` workflow's automatic main-CI path resets both families to Hono;
-  a `workflow_dispatch` on `main` selects `hono`, `archive`, or cumulative
-  `archive-static`. The GitHub Environment `staging` supplies deployment-scoped
-  values; it is not a human approval gate or Wrangler named environment. Worker
+  `next.togetherweown.com` and defaults all Kit route families to Hono.
+  Automatic `workflow_run` deploys use `KIT_STAGING_ROUTE_FAMILY` from the
+  GitHub `staging` Environment and select Hono if the value is unset or
+  unrecognized. Manual `workflow_dispatch` on `main` uses only
+  `kit_route_family`, defaults to `hono`, and does not save its selection for
+  automatic deploys. The `events-join` family enables Kit for `/events` and
+  `/join` only. For the full list, see the
+  [runbook's route family options](./runbook.md#deploy-and-record-the-rollback-pointer).
+  The `staging` Environment supplies deployment-scoped values; it is not a
+  human approval gate or Wrangler named environment. Worker
   name is `two-web-next`; Hyperdrive's resource name is not a Worker selector
   or isolation guarantee. `wrangler.jsonc` remains the Hono config and the
   production config (never the staging target).
@@ -105,8 +110,9 @@ an actual code fallback or a checked-in Wrangler value, not a recommended value.
 | `FEATURED_IMAGE_HOSTS` | Optional public var (comma-separated exact DNS hosts) | dev/staging/prod | Main and Kit staging Wrangler: blank; Discord CDN always allowed | Additional approved HTTPS image hosts (e.g. `images.unsplash.com`), shared by admin validation, rendering and CSP. Invalid, IP/private/reserved names are ignored; server CSP construction warns once per setting per isolate about ignored nonblank entries (name/action only, never entries). Valid entries remain allowed; blank entries and unset/blank lists stay silent. No wildcard or subdomain expansion. Unapproved remote images are rejected on writes and suppressed on reads. See [image policy](../README.md#image-and-frame-policy). |
 | `FREEZE_BANNER_ENABLED` | Optional flag var | dev/staging/prod | Off | Only exact `true` or `1` renders the cutover freeze banner; unset or anything else leaves pages byte-identical. Needs `FREEZE_BANNER_DATES` too — the flag alone never renders. |
 | `FREEZE_BANNER_DATES` | Optional public var | dev/staging/prod | Unset; no banner | Human freeze window carried verbatim into the cutover freeze banner (e.g. `12–14 Oct UTC`). HTML-escaped before render; blank means no banner even when the flag is on. |
+| `KIT_PARITY_FIXTURE_ADMIN_DASHBOARD` | Optional flag var (runtime-only, never deployed Worker config) | local Kit parity fixture with disposable data only; leave unset in deployed dev/staging/prod | Unset; the shipped manifest keeps GET /admin on Hono | Only exact `true` with an HTTP loopback `APP_URL` enables GET `/admin`, GET `/admin/reconciliation`, GET `/admin/reconciliation/:key`, and the moderator-only audited POST `/admin/reconciliation/:key` on the generated fixture Worker. The POST records a resolution in the backing database. Deployed route ownership is unchanged. |
 | `KIT_PARITY_FIXTURE_EVENT_DETAIL` | Optional flag var (runtime-only, never Worker config) | local Kit parity fixture only; leave unset in dev/staging/prod | Unset; the shipped manifest keeps the live event detail (GET /e/:key) on Hono | Only exact `true` on a generated worker whose `APP_URL` is an http loopback enables the detail in the fixture manifest (`fixtureManifestFor`); any other value or a non-loopback/deployed `APP_URL` leaves the shipped manifest untouched. Enabling the shipped entry is the separate RSVP-companion rollout. |
-| `KIT_PARITY_FIXTURE_JOIN` | Optional flag var (runtime-only, never Worker config) | local Kit parity fixture only; leave unset in dev/staging/prod | Unset; the shipped manifest keeps GET /join on Hono | Only exact `true` with an HTTP loopback `APP_URL` enables the join entry in the fixture manifest; deployed route ownership is unchanged. |
+| `KIT_PARITY_FIXTURE_JOIN` | Optional flag var (runtime-only, never Worker config) | local Kit parity fixture only; leave unset in dev/staging/prod | Unset; the browser Worker uses the shipped read entries | Only exact `true` with an HTTP loopback `APP_URL` can override the GET `/join` and `/auth/recover` entries in the fixture manifest; deployed ownership is unchanged. |
 | `KIT_PARITY_FIXTURE_MEMBER_BOARD` | Optional flag var (runtime-only, never Worker config) | local Kit parity fixture only; leave unset in dev/staging/prod | Unset; the shipped manifest owns the member board on Kit (the fixture flag is redundant for this entry) | Only exact `true` on a generated worker whose `APP_URL` is an http loopback enables the board in the fixture manifest (`fixtureManifestFor`); any other value or a non-loopback/deployed `APP_URL` leaves the shipped manifest untouched. Returning the shipped entry to `enabled: false` restores Hono ownership as the rollback. |
 | `SSR_CAPTURE_FIXTURE` | Optional flag var (runtime-only, never Worker config) | generated local capture build only; leave unset in dev/staging/prod | Off | Only exact `true`, a local-only compile-time build gate, a canonical HTTP loopback `APP_URL`, and a matching request URL origin enable the fixed display snapshot. Deployed builds cannot activate it through bindings or request input. Unsupported capture rows fail qualification; auth, expiry, writes, jobs, database time and cache TTLs stay real. See [SSR capture clock](ssr-capture-clock.md). |
 | `WEBMCP_PILOT_ENABLED` | Optional flag var | dev/staging: opt-in; prod: keep disabled pending separate authorization | Off | Only exact `true` or `1` injects the model-context island on the four pilot pages (`/`, `/events`, `/e/:key`, `/join`); unset or anything else leaves pages byte-identical. Reads no session, cookie or database, so it adds no session-dependent markup of its own: every viewer gets the same island. |
@@ -120,9 +126,26 @@ an actual code fallback or a checked-in Wrangler value, not a recommended value.
 | `SYNC_EVENT_QUEUE` | Required Queue producer binding (`JobsEnv`) | dev: local Queue; staging/prod: provisioned Queue | Main Wrangler: `two-sync-event`; local config: `two-sync-event-local` | Admin/JSON event and RSVP writes plus reconciliation use tracked sends with a unique lock and 10-second debounce; no in-memory production fallback. Missing/failing queue prevents sends; committed dirty revisions remain recoverable. The jobs worker consumes these sends through the live bot HTTP client (`botClientFor` in `src/jobs/worker.ts`). |
 | `INTERNAL_ACTION_QUEUE` | Required Queue producer binding (`JobsEnv`) | dev: local Queue; staging/prod: provisioned Queue | Main Wrangler: `two-internal-action`; local config: `two-internal-action-local` | Declared/configured but no consumer reads this producer property in current source; both configured queue consumers share the Worker dispatch path. No application-side default. |
 | `HYPERDRIVE` | Optional Hyperdrive legacy alias (`JobsEnv`) | dev/staging/prod | Unbound in Wrangler | Jobs use this only when nonempty `DATABASE_URL` and `DB.connectionString` are both absent/empty. With no usable database source, job DB selection throws. No retry fallback after a connection error. |
-| `KIT_ROUTE_ARCHIVE` | Optional staging route-rollout var | staging only; leave unset in dev/prod | `web/wrangler.staging.jsonc`: `false`; missing or any other value defaults to Hono | Only exact `true` enables Kit for `GET /events/past`. All other routes and methods stay Hono-owned. Automatic main-CI deploys select Hono; a reviewed `workflow_dispatch` may opt into `archive`. |
-| `KIT_ROUTE_STATIC` | Optional staging route-rollout var | staging only; leave unset in dev/prod | `web/wrangler.staging.jsonc`: `false`; missing or any other value defaults to Hono | Only exact `true` together with `KIT_ROUTE_ARCHIVE=true` enables Kit for `GET /about` and `GET /faq`; static cannot precede archive. Automatic main-CI deploys select Hono; `archive-static` is cumulative. |
+| `KIT_ROUTE_ARCHIVE` | Optional Kit route-rollout var | staging; production selector is default-off | Kit staging and production configs: `false`; missing or malformed keeps Hono | Only exact `true` and an enabled manifest entry allow Kit at `/events/past`. Staging's `archive` and `archive-static` families set this flag. Production additionally requires the exact canonical `APP_URL` and request origin and admits only the document GET. This does not activate production routing. |
+| `KIT_ROUTE_STATIC` | Optional Kit route-rollout var | staging; production selector is default-off | Kit staging and production configs: `false`; missing or malformed keeps the static leaves on Hono | Requires exact `true` and `KIT_ROUTE_ARCHIVE=true`. On the exact staging origin, the `archive-static` family sets both flags for `/about`, `/faq`, and exact document GETs for `/privacy` and `/rules` (each gated by its staging readiness switch). The production selector admits only document GETs for `/about` and `/faq`, with the same origin and manifest checks as the archive. |
+| `KIT_ROUTE_EVENTS` | Optional staging route-rollout var | staging only; leave unset in dev/prod | `web/wrangler.staging.jsonc`: `false`; missing or any other value defaults to Hono | Only exact `true` on the exact staging origin enables the Kit events list at `/events` through its GET manifest entry. The `events`, `events-join`, `events-home`, and `ember-pages` dispatch choices set this flag. `events` selects only the list; `events-join` selects the list and `/join` only; `events-home` selects the list and `/` only. None enables the archive, static pages, or `/e/:key`. |
+| `KIT_ROUTE_HOME` | Optional staging route-rollout var | staging only; leave unset in dev/prod | `web/wrangler.staging.jsonc`: `false`; missing or any other value defaults to Hono | Only exact `true` with the exact staging `APP_URL` and an enabled `GET /` manifest entry selects Kit. The `home`, `events-home`, and `ember-pages` dispatch choices set this flag. |
+| `DISCORD_LIVE_SOCKET_ENABLED` | Optional live socket var | Unset in shipped Wrangler configs | Disabled unless exactly `true` | Controls the installed `/api/discord-live/v1` upgrade and the public count island on Kit home. Guests and signed-in non-members can also see the community count on published, upcoming or ongoing Kit event detail. The socket still requires valid ingress bindings, source and admission proof. The flag does not change route ownership or enable member rooms or self-move. |
+| `KIT_ROUTE_JOIN` | Optional staging route-rollout var | staging only; leave unset in dev/prod | `web/wrangler.staging.jsonc`: `false`; missing or any other value defaults to Hono | Only exact `true` with the exact staging `APP_URL` and an enabled `GET /join` manifest entry selects Kit. The `join`, `events-join`, and `ember-pages` dispatch choices set this flag; OAuth and recovery stay on Hono. |
+| `KIT_ROUTE_EMBER_PAGES` | Optional Kit route-rollout var | production apex and isolated cutover Worker | Kit production config: `false` | Exact `true` enables Home, Events and Join document GETs and the same-origin Events fragment. Dispatch XFS qualification on `main` with `qualify_cutover: true` and `cutover_profile: ember`. Pause automatic promotion and run `deploy-production` in `hono` mode, then in `ember` mode with the same SHA and pin and the serving Hono UUID as `cutover_undo_version`. Undo through `rollback-production` with Hono as `version_id` and Ember as `expected_current_version_id`. [Production release gate](../CONTRIBUTING.md#production-release-gate). |
+| `KIT_ROUTE_AUTH` | Optional Kit route-rollout var | Kit Worker | Unset in deployed configurations | Only `true` selects Kit for literal Discord sign-in, callback, legacy redirect and status GET/HEAD routes and the two logout POSTs. Other values leave Hono in charge. Both owners share the signed cookies and one-time login state. [Production activation requires separate approval](../CONTRIBUTING.md#production-release-gate). |
+| `KIT_ROUTE_FEEDS` | Optional Kit route-rollout var | Kit Worker | Unset in deployed configurations | Only `true` selects Kit for GET and HEAD on `/events.ics`, `/events.rss` and single-segment `/events/<key>.ics` paths. Missing or any other value sends these reads to Hono. Collections use `max-age=300, public`, and per-event downloads use `max-age=300, private`. Fresh cached responses can survive the flag being cleared for up to five minutes. [Production activation requires separate approval](../CONTRIBUTING.md#production-release-gate). |
+| `KIT_ROUTE_SEO` | Optional Kit route-rollout var | Kit Worker | Unset in deployed configurations | Only `true` selects Kit for GET and HEAD on `/robots.txt` and `/sitemap_index.xml`. Missing or any other value sends these reads to Hono. Successful responses keep `public, max-age=3600`. Fresh cached responses can survive the flag being cleared for up to an hour. [Production activation requires separate approval](../CONTRIBUTING.md#production-release-gate). |
+| `KIT_ROUTE_SECURITY_TXT` | Optional Kit route-rollout var | Kit Worker | Unset in deployed configurations | Only `true` selects Kit for trusted GET and HEAD on `/.well-known/security.txt`. Missing or any other value leaves Hono in charge. Successful responses keep `public, max-age=3600`. Fresh cached responses can survive clearing the flag for up to an hour. [Production activation requires separate approval](../CONTRIBUTING.md#production-release-gate). |
+| `KIT_ROUTE_ADMIN` | Optional Kit route-rollout var | Kit Worker | Unset in deployed configurations | Only `true` selects the admin routes on canonical staging or HTTP loopback. The production apex stays with Hono. [Production activation requires separate approval](../CONTRIBUTING.md#production-release-gate). |
+| `KIT_ROUTE_PROFILE_WRITES` | Optional Kit route-rollout var | Kit Worker | Unset in deployed configurations | Only `true` selects Kit for trusted PATCH and POST on a single-segment `/members/:user`. Clearing the flag restores Hono on the next write. [Production activation requires separate approval](../CONTRIBUTING.md#production-release-gate). |
 <!-- config-docs:end -->
+
+While the production archive and static page opt-ins are active, their responses use
+`Cache-Control: private, no-store` so a cached Kit document cannot outlast a
+flag rollback. A Hono response cached before opt-in can still be served until
+its existing freshness lifetime ends. With the opt-ins off, Hono retains its
+normal cache policy.
 
 ### `SESSION_SECRET` strength and rotation
 
@@ -135,11 +158,14 @@ Length is the floor for randomly generated secrets; no entropy estimator
 runs. Only secret **names** appear in this file, PRs, logs and command
 arguments; never paste a value.
 
-Rotate without downtime:
+Rehearse rotation on staging with a staging-only replacement:
 
-1. Generate the replacement secret on the operator machine.
-2. Install it with `wrangler secret put SESSION_SECRET` on the target
-   Worker (staging first, production only under its own authorization).
+1. Use `wrangler whoami` to verify the approved staging account and confirm the
+   [staging target](runbook.md#deploy-and-record-the-rollback-pointer). Generate
+   the replacement secret on the operator machine.
+2. From the repository root, run
+   `wrangler secret put SESSION_SECRET --config web/wrangler.staging.jsonc`.
+   The command deploys the staging Worker immediately.
    Both the old and the replacement satisfy the floor, so `/up` stays
    ready throughout the swap.
 3. Confirm `GET /up` answers 200 with no `config` key before and after.
@@ -149,6 +175,8 @@ Rotate without downtime:
    out of scope), so prefer low-traffic windows. No data migration runs.
 5. Confirm no log line carries a value: readiness diagnostics name the
    secret and the requirement, never the value.
+
+For production, follow the [secret rotation runbook](runbook.md#secret-rotation-pointer-procedure-only).
 
 ## Tail Worker inventory
 
@@ -257,6 +285,9 @@ These names are deliberately **not** extra rows in the marked inventory:
   `agent-testdb` control database, user `agent_test`, empty password. The probe
   is local-only, must not be remotely developed/deployed, and is **not** proof
   of real Hyperdrive pooling. It is not part of the main Worker configuration.
+- **Live Discord ingress fixture:** `POST /internal/discord-live/v1/ingest` returns 503 unless
+  `DISCORD_LIVE_INGEST_ENABLED=true` and the [ingress bindings](../src/live/ingress.ts) are valid.
+  Only the installed CI fixture binds `LiveGuildHub`. Keep the flag off: recovery lacks producer epochs.
 - **Injected test seams:** `SESSION_STORE`, `ROSTER_STORE`, `QUEUE_DEPTH_STORE`,
   `ADMIN_DB`, `AGENT_EVENT_SQL`, `THROTTLE_STORE`, `JOIN_DEPS`, `DISCORD_EVENTS` are in-process
   dependency/store objects, not Wrangler string vars or secrets. They are

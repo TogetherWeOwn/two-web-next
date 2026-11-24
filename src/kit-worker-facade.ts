@@ -1,10 +1,29 @@
-// Inactive runtime for the Kit Worker response facade. Nothing imports this
-// module yet: no installer, Vite or Wrangler wiring activates it.
+// Runtime for the installed Kit Worker response facade.
 // Design credit: Rick7C2, draft #2092 at eb1ba5d47e6d5a35a0a6deb2b7532b4c045865f3
 // (web/scripts/install-worker-facade.mjs and src/kit-worker-response.ts).
 import { protectKitWorkerResponse } from "./kit-worker-response";
 
 export const KIT_WORKER_FACADE = Symbol.for("two-web-next.kit-worker-facade");
+
+// The installed facade and the hook are bundled separately. Share only
+// in-flight slots keyed by the original Request, never by its URL or headers.
+const honoDataKey = Symbol.for("two-web-next.kit-hono-data");
+type HonoDataSlot = { result?: { original: Response; placeholder: Response } };
+const scope = globalThis as typeof globalThis & {
+  [honoDataKey]?: WeakMap<Request, HonoDataSlot>;
+};
+const honoDataSlots = (scope[honoDataKey] ??= new WeakMap<Request, HonoDataSlot>());
+
+export function preserveHonoDataResponse(request: Request, original: Response): Response {
+  const slot = honoDataSlots.get(request);
+  if (!slot) return original; // Stock adapter or Vite dev, without the facade.
+
+  // Kit can replace hook-returned redirects on data requests. Carry the raw
+  // Hono response out of band so Kit neither serializes it nor reads its body.
+  const placeholder = new Response(null, { status: 204 });
+  slot.result = { original, placeholder };
+  return placeholder;
+}
 
 type Env = { APP_URL: string; FEATURED_IMAGE_HOSTS?: string };
 export type KitWorkerProtector = (
@@ -24,12 +43,13 @@ type Facade<T> = {
 // Wraps a generated adapter default export. Own properties and the prototype are
 // copied as written. Every function handler, fetch included, runs with the real
 // adapter as receiver and unchanged arguments, so the adapter never sees the
-// facade. Only fetch's returned Response is protected. Accessors use the adapter
-// as receiver. The adapter is delegated to exactly once per call, a rejection
-// propagates without a replay, and the response body is never read here.
+// facade. Only fetch's returned Response is protected, except for a completed
+// Hono handoff. Accessors use the adapter as receiver. The adapter is delegated
+// to exactly once per call, and a rejection propagates without a replay.
 export function createKitWorkerFacade<T extends object>(
   adapter: T,
   protect: KitWorkerProtector = protectKitWorkerResponse,
+  intercept?: (request: Request, env: Env) => Promise<Response | null>,
 ): Facade<T> {
   if (adapter === null || typeof adapter !== "object") {
     throw new TypeError("kit worker facade: adapter must be an object");
@@ -81,13 +101,25 @@ export function createKitWorkerFacade<T extends object>(
       const [request, env] = args;
       if (!(request instanceof Request))
         throw new TypeError("kit worker facade: request must be a Request");
-      const response = await Reflect.apply(fetchHandler, adapter, args);
-      if (!(response instanceof Response))
-        throw new TypeError("kit worker facade: adapter must return a Response");
-      const appUrl = (env as { APP_URL?: unknown } | null | undefined)?.APP_URL;
-      if (typeof appUrl !== "string")
-        throw new TypeError("kit worker facade: env.APP_URL is required");
-      return protect(request, response, env as Env);
+      // Return machine-route responses without Kit or document response protection.
+      const intercepted = intercept && (await intercept(request, env as Env));
+      if (intercepted) return intercepted;
+      const slot: HonoDataSlot = {};
+      honoDataSlots.set(request, slot);
+      try {
+        const response = await Reflect.apply(fetchHandler, adapter, args);
+        if (!(response instanceof Response))
+          throw new TypeError("kit worker facade: adapter must return a Response");
+        const appUrl = (env as { APP_URL?: unknown } | null | undefined)?.APP_URL;
+        if (typeof appUrl !== "string")
+          throw new TypeError("kit worker facade: env.APP_URL is required");
+
+        // A Kit error or asset response never matches the placeholder.
+        if (slot.result?.placeholder === response) return slot.result.original;
+        return protect(request, response, env as Env);
+      } finally {
+        if (honoDataSlots.get(request) === slot) honoDataSlots.delete(request);
+      }
     },
   };
   descriptors[KIT_WORKER_FACADE as unknown as string] = { value: true };

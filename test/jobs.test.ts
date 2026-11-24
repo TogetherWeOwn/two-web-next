@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import { announcementStore } from "./helpers/announcement-store";
 import {
   CALL_INTERNAL_ACTION,
   PRUNE_CRON,
@@ -91,9 +92,10 @@ function store(over: Partial<EventStore> = {}): EventStore & { mirrored: (string
     ...over,
   };
 }
-function msg(body: unknown, attempts = 1) {
+function msg(body: unknown, attempts = 1, timestamp = new Date()) {
   const r = { body, attempts, acked: false, retried: undefined as number | undefined | "now" };
   return Object.assign(r, {
+    timestamp,
     ack() {
       r.acked = true;
     },
@@ -180,7 +182,7 @@ describe("SyncEventToDiscord", () => {
   });
 
   for (const exhausted of [false, true]) {
-    it(`retries a failed deadline write unchanged or reconciles an exhausted request (${exhausted})`, async () => {
+    it(`retries a failed explicit deadline write unchanged, including the exhausted null deadline (${exhausted})`, async () => {
       const start = 1_000_000;
       let clock = start;
       const error = new Error("retry deadline unavailable");
@@ -198,29 +200,21 @@ describe("SyncEventToDiscord", () => {
       const bot = {
         upsertEvent: vi.fn(async () => fail({ retryAfterSeconds: 42 })),
       } as unknown as BotClient;
-      const result = handleSyncEvent({ eventKey: "e1", idempotencyKey: "same-key" }, 1, {
-        bot,
-        events,
-        now: () => new Date(clock),
-      });
-      if (exhausted) {
-        await expect(result).resolves.toMatchObject({
-          reconciliation: { idempotencyKey: "same-key", attempts: 6 },
-        });
-        expect(deferSync).not.toHaveBeenCalled();
-      } else {
-        await expect(result).rejects.toBe(error);
-        expect(deferSync.mock.calls.map(([, at]) => at)).toEqual([
-          new Date(start + 42_000),
-          new Date(start + 42_000),
-        ]);
-      }
+      await expect(
+        handleSyncEvent({ eventKey: "e1", idempotencyKey: "same-key" }, 1, {
+          bot,
+          events,
+          now: () => new Date(clock),
+        }),
+      ).rejects.toBe(error);
+      const deadline = exhausted ? null : new Date(start + 42_000);
+      expect(deferSync.mock.calls.map(([, at]) => at)).toEqual([deadline, deadline]);
       expect(
         deferSync.mock.calls.map(([attempt]) => ({
           key: attempt.idempotencyKey,
           requests: attempt.requestAttempts,
         })),
-      ).toEqual(exhausted ? [] : Array(2).fill({ key: "same-key", requests: 1 }));
+      ).toEqual(Array(2).fill({ key: "same-key", requests: exhausted ? 6 : 1 }));
       expect(bot.upsertEvent).toHaveBeenCalledOnce();
       expect(events.mirrored).toEqual([]);
     });
@@ -253,27 +247,19 @@ describe("SyncEventToDiscord", () => {
         jobId: "job",
       });
       const ledger = memLedger();
-      const reconciliation = { recordSync: vi.fn(async () => {}) };
       await consume(
         { messages: [carrier] },
-        { bot, events, ledger, reconciliation, lock: memLock(), now: () => new Date(clock) },
+        { bot, events, ledger, lock: memLock(), now: () => new Date(clock) },
       );
       expect(deferSync.mock.calls.map(([, at]) => at)).toEqual(
-        exhausted ? [] : Array(2).fill(new Date(start + 42_000)),
+        Array(2).fill(exhausted ? null : new Date(start + 42_000)),
       );
-      if (exhausted) {
-        expect(reconciliation.recordSync).toHaveBeenCalledWith(
-          expect.objectContaining({ idempotencyKey: "same-key", attempts: 6 }),
-        );
-      } else {
-        expect(reconciliation.recordSync).not.toHaveBeenCalled();
-      }
       expect(
         deferSync.mock.calls.map(([attempt]) => ({
           key: attempt.idempotencyKey,
           requests: attempt.requestAttempts,
         })),
-      ).toEqual(exhausted ? [] : Array(2).fill({ key: "same-key", requests: 1 }));
+      ).toEqual(Array(2).fill({ key: "same-key", requests: exhausted ? 6 : 1 }));
       expect(carrier.retried).toBe(exhausted ? undefined : 32);
       expect(carrier.acked).toBe(exhausted);
       expect(ledger.rows.get("job")!.state).toBe(exhausted ? "failed" : "released");
@@ -333,27 +319,36 @@ describe("SyncEventToDiscord", () => {
 });
 
 describe("CallInternalAction", () => {
-  const ann = { kind: "announcement", idempotencyKey: "k", action: { channelKey: "c", body: "b" } };
+  const ann = {
+    kind: "announcement",
+    idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
+    action: { channelKey: "c", body: "b" },
+  };
   it("walks 5/15/60/180 then fails on attempt 5", async () => {
     const bot = { postAnnouncement: async () => fail({}) } as unknown as BotClient;
+    const events = store();
+    const lock = memLock();
+    const ledger = memLedger();
+    const depsFor = (attempt: number) => ({
+      bot,
+      events,
+      lock,
+      ledger,
+      announcementReconciliation: announcementStore(attempt),
+    });
+    const timestamp = new Date();
     for (const [attempt, delay] of [
       [1, 5],
       [2, 15],
       [3, 60],
       [4, 180],
     ] as const) {
-      const m = msg(ann, attempt);
-      await consume(
-        { messages: [m] },
-        { bot, events: store(), lock: memLock(), ledger: memLedger() },
-      );
+      const m = msg(ann, attempt, timestamp);
+      await consume({ messages: [m] }, depsFor(attempt));
       expect(m.retried).toBe(delay);
     }
-    const last = msg(ann, 5);
-    await consume(
-      { messages: [last] },
-      { bot, events: store(), lock: memLock(), ledger: memLedger() },
-    );
+    const last = msg(ann, 5, timestamp);
+    await consume({ messages: [last] }, depsFor(5));
     expect(last.acked).toBe(true);
     expect(last.retried).toBeUndefined();
   });
@@ -367,11 +362,16 @@ describe("CallInternalAction", () => {
         return { ok: true, requestId: null, messageId: "m1", replayed };
       },
     } as unknown as BotClient;
-    await consume(
-      { messages: [msg(ann), msg(ann, 2)] },
-      { bot, events: store(), lock: memLock(), ledger: memLedger() },
-    );
-    expect(seen.get("k")).toBe(2);
+    const deps = {
+      bot,
+      events: store(),
+      lock: memLock(),
+      ledger: memLedger(),
+      announcementReconciliation: announcementStore(),
+    };
+    const timestamp = new Date();
+    await consume({ messages: [msg(ann, 1, timestamp), msg(ann, 2, timestamp)] }, deps);
+    expect(seen.get(ann.idempotencyKey)).toBe(2);
   });
 
   it("role.assign sends no key", async () => {
@@ -410,18 +410,25 @@ describe("queue ledger (N3)", () => {
     } as unknown as BotClient;
     const ledger2 = memLedger();
     ledger2.rows.set("j2", { state: "pending" });
+    const deps = {
+      bot: bad,
+      events: store(),
+      lock: memLock(),
+      ledger: ledger2,
+      announcementReconciliation: announcementStore(),
+    };
     await consume(
       {
         messages: [
           msg({
             kind: "announcement",
-            idempotencyKey: "k",
+            idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
             action: { channelKey: "c", body: "b" },
             jobId: "j2",
           }),
         ],
       },
-      { bot: bad, events: store(), lock: memLock(), ledger: ledger2 },
+      deps,
     );
     expect(ledger2.rows.get("j2")?.state).toBe("failed");
     expect(ledger2.rows.get("j2")?.reason).toContain("announcement.post");

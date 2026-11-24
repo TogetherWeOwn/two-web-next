@@ -266,7 +266,7 @@ export async function memberReadBoundary(
 /** A fully read copy this boundary owns: the only bytes a Kit render can release. */
 async function bufferedCopy(response: Response): Promise<Response> {
   const bytes = await response.arrayBuffer();
-  return new Response(bytes.byteLength === 0 ? null : bytes, {
+  return new Response(bytes.byteLength ? bytes : null, {
     status: response.status,
     statusText: response.statusText,
     headers: new Headers(response.headers),

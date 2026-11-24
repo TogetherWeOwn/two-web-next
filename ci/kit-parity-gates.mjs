@@ -17,11 +17,15 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseSeasonParam } from "../src/hotzones/season.ts";
 import { stripEmberDelta } from "./kit-archive-delta.mjs";
 import { sectionOf } from "./kit-section-contract.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
+import { parseRenderedPage, renderedElements, renderedText } from "./rendered-page.mjs";
 
 export const PARITY_ROUTES = [
+  // Compare guest structure, not live viewer-specific content.
+  { path: "/", expectStatus: 200, expectMarker: "manifest", contract: "home" },
   {
     path: "/events/past",
     expectStatus: 200,
@@ -547,6 +551,24 @@ function countMatches(html, pattern) {
   return [...html.matchAll(pattern)].length;
 }
 
+export function kitHomeHeadingText(html) {
+  const [heading, duplicate] = renderedElements(parseRenderedPage(html), { id: "home-heading" });
+  if (heading?.tagName !== "h1" || duplicate) return "";
+  return renderedText(heading).replace(/\s+/g, " ").trim();
+}
+
+const kitHeader = /<header\b[^>]*\sdata-kit-site-header(?=[\s=>])[^>]*>[\s\S]*?<\/header>/;
+const discordSignIn =
+  /<a\b(?=[^>]*\shref="([^"]+)")[^>]*\saria-label="Sign in with Discord"[^>]*>\s*Sign in\s*<\/a>/;
+export function hasKitGuestChrome(html, href = "/auth/discord?next=%2Fevents") {
+  const header = kitHeader.exec(html)?.[0] ?? "";
+  return (
+    discordSignIn.exec(header)?.[1] === href &&
+    countMatches(header, /\saria-label="Sign in with Discord"/g) === 1 &&
+    !html.includes("Welcome, guest")
+  );
+}
+
 // One assertion set per route response. Returns an array of failure labels
 // (empty = pass). Pure: no I/O, no network.
 export function assertRouteContract({ label, html, headers, status, expected }) {
@@ -587,6 +609,23 @@ export function assertRouteContract({ label, html, headers, status, expected }) 
       failures.push(`${label}: archive never indexes`);
     if (!html.includes('<script src="/islands/past-events.js"'))
       failures.push(`${label}: shared island binder`);
+  } else if (contract === "home") {
+    const kitHeading = /^(?:The lobby is open\.|Next game night: .+\. Come play with us\.)$/;
+    const headingOk =
+      marker === "kit"
+        ? kitHeading.test(kitHomeHeadingText(html))
+        : /<h1\b[^>]*>\s*The lobby is open\.\s*<\/h1>/i.test(html);
+    if (!headingOk) failures.push(`${label}: home heading present`);
+    const oauthJoin =
+      /<a\b(?=[^>]*\shref="\/auth\/discord")(?=[^>]*\sdata-testid="join")[^>]*>\s*Join with Discord\s*<\/a>/i;
+    const inviteFallback =
+      /<a\b(?=[^>]*\shref="\/discord")(?=[^>]*\sdata-testid="discord-join")[^>]*>\s*Join with an invite link\s*<\/a>/i;
+    if (!oauthJoin.test(html) && !inviteFallback.test(html))
+      failures.push(`${label}: guest join action or session-unavailable invite fallback present`);
+    if (/data-testid="(?:home-standing|home-event-own-rsvp)"/.test(html))
+      failures.push(`${label}: guest home must not show member RSVP data`);
+    if ((get("cache-control") ?? "") !== "private, no-store")
+      failures.push(`${label}: home is private, no-store`);
   } else if (contract === "join") {
     failures.push(...assertJoinContract(label, html, get, expected));
   } else if (contract === "recovery") {
@@ -609,9 +648,13 @@ export function assertRouteContract({ label, html, headers, status, expected }) 
   }
   if (html.includes("Cross-site POST form submissions"))
     failures.push(`${label}: bare Kit CSRF text (must be the hardened gate)`);
-  // Account chrome: the public archive and the join landing are guest-only.
-  if (!html.includes("Welcome, guest")) failures.push(`${label}: guest account chrome`);
-  if (html.includes("Sign out")) failures.push(`${label}: guest page must not show Sign out`);
+  const emberHeader = expected.marker === "kit" && (contract === "join" || contract === "events");
+  const signInHref = contract === "events" ? "/auth/discord?next=%2Fevents" : "/auth/discord";
+  if (!(emberHeader ? hasKitGuestChrome(html, signInHref) : html.includes("Welcome, guest")))
+    failures.push(`${label}: guest account chrome`);
+  // Check the logout control, not copy that may appear in guest content.
+  if (/<form\b[^>]*\saction="\/logout(?:\/everywhere)?"/i.test(html))
+    failures.push(`${label}: guest page must not show Sign out`);
   const secretHits = scrubSecrets(html);
   if (secretHits.length)
     failures.push(`${label}: secret-shaped content in HTML (${secretHits.length} patterns)`);
@@ -708,8 +751,7 @@ function assertJoinContract(label, html, get, expected) {
   return failures;
 }
 
-// Events-list contract (src/events/pages-calendar-screen.tsx via
-// src/kit-events-html.tsx): the native endpoint renders the Hono calendar
+// Events-list contract: both routes render the calendar
 // screen, so the island identity, view toggles, search form, archive and
 // subscribe links and markdown alternate ride both renderers. Rows are live
 // reads (staging is often empty), so cards are never required here — the
@@ -952,6 +994,36 @@ function assertFaqContract(label, html, get, expected) {
   });
 }
 
+export function allowsEndedMemberBoardCopy(path) {
+  const season = parseSeasonParam(
+    new URL(path, "https://board.invalid").searchParams.get("season"),
+  );
+  return season?.kind === "window" && Date.now() >= season.end.getTime();
+}
+
+// The old open copy stays valid during rollout, including recovery text, but
+// cannot also claim the season ended. Only a completed window gets ended copy.
+export function memberBoardEmptyText(scope, allowEnded = false) {
+  const viewer = scope === "relative" ? "You are not" : "Nobody is";
+  const prefix = `${viewer} ranked for this season and game`.replaceAll(" ", String.raw`\s+`);
+  const ended = String.raw`This\s+season\s+has\s+ended\.`;
+  const open = String.raw`\s+yet\.(?![\s\S]*\b${ended})`;
+  const ending = allowEnded ? String.raw`(?:${open}|\.\s+${ended})` : open;
+  return new RegExp(String.raw`^\s*${prefix}${ending}(?=\s|$)`);
+}
+
+export function memberBoardStatus(html, allowEnded = false) {
+  const main = renderedElements(parseRenderedPage(html), { tag: "main" }).next().value;
+  if (!main) return null;
+  for (const node of renderedElements(main, { tag: "p", role: "status" })) {
+    const text = renderedText(node).replace(/\s+/g, " ").trim();
+    if (memberBoardEmptyText("overall", allowEnded).test(text)) return "overall-empty";
+    if (memberBoardEmptyText("relative", allowEnded).test(text)) return "relative-empty";
+    if (text === "Rankings are temporarily unavailable.") return "outage";
+  }
+  return null;
+}
+
 // Member-board contract (src/leaderboards/pages.tsx + Kit +page.svelte):
 // authenticated member view only — Hono memberGate then season/scope/activity
 // grammar (400 before any read), Kit load mirrors the order; both answer
@@ -996,11 +1068,8 @@ export function assertMembersContract({ label, html, headers, status, expected }
   if (!html.includes('name="season"') || !html.includes('name="activity"'))
     failures.push(`${label}: season + activity inputs present`);
   const hasTable = /<table[\s>]/.test(html);
-  const hasEmptyStatus =
-    html.includes("Nobody is ranked for this season and game yet.") ||
-    html.includes("You are not ranked for this season and game yet.") ||
-    html.includes("Rankings are temporarily unavailable.");
-  if (!hasTable && !hasEmptyStatus) failures.push(`${label}: board table or empty status present`);
+  if (!hasTable && !memberBoardStatus(html, expected.allowEnded))
+    failures.push(`${label}: board table or empty status present`);
   if (hasTable) {
     if (!html.includes('<th scope="col">Rank</th>')) failures.push(`${label}: rank column present`);
     if (!html.includes('<th scope="col">Member</th>'))
@@ -1261,7 +1330,10 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
       (html) => html.replace('class="skip-link" href="#main"', 'class="skip-link" href="#other"'),
     ],
     ["no-canonical", (html) => html.replace('<link rel="canonical"', '<link rel="alternate"')],
-    ["signed-in-chrome", (html) => html.replace("Welcome, guest", "Sign out")],
+    [
+      "signed-in-chrome",
+      (html) => `${html}<form method="post" action="/logout"><button>Sign out</button></form>`,
+    ],
     ["bare-csrf-text", (html) => `${html}Cross-site POST form submissions`],
     ["secret-leak", (html) => `${html}<meta name="x" content="Bearer abc.def.ghi">`],
   ];
@@ -1283,10 +1355,16 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
   // Join landing fixtures: one per widget state plus the one-shot flash view.
   // The flash view is the privacy pin: a consumed flash answers private, so a
   // guest can never read another member's banner from a shared cache.
+  const guestChrome = (marker, href) =>
+    marker === "kit"
+      ? `<a href="${href}" aria-label="Sign in with Discord">Sign in</a>`
+      : "Welcome, guest";
+  const kitJoinChrome = guestChrome("kit", "/auth/discord");
+  const joinChrome = joinMarker === "kit" ? kitJoinChrome : "Welcome, guest";
   const joinShell = (inner) =>
     `<html><head><link rel="canonical" href="https://next.togetherweown.com/join"></head>` +
     `<body><a class="skip-link" href="#main">Skip</a>` +
-    `<nav aria-label="Primary"><a href="/">Home</a></nav>` +
+    `<header data-kit-site-header><nav aria-label="Primary"><a href="/">Home</a></nav>${joinChrome}</header>` +
     `<main id="main"><section class="join-layout" aria-labelledby="join-heading">` +
     `<div class="join-panel"><h1 id="join-heading">Join Together We Own</h1>` +
     `<p class="join-actions"><a class="btn" href="/join/discord" data-testid="join-oneclick">` +
@@ -1294,7 +1372,7 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     `<a href="https://discord.gg/invite" data-testid="join-invite">` +
     `Join with an invite link instead</a></p></div>` +
     `<div class="join-preview">${inner}</div></section></main>` +
-    `<p><span class="account-caption">Welcome, guest</span></p></body></html>`;
+    "</body></html>";
   const joinFacade =
     `<div class="strap"><p>Discord's live server preview loads only when you ask for it.</p>` +
     `<a class="btn" href="https://discord.com/widget?id=326474832151838730&theme=dark" ` +
@@ -1365,6 +1443,12 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     ["both-zones", (html) => html.replace("</div></section>", `</div>${joinFallback}</section>`)],
     ["presence-without-facade", (html) => html.replace(joinFacade, "")],
     ["no-oneclick", (html) => html.replace('data-testid="join-oneclick"', 'data-testid="x"')],
+    ["no-guest-chrome", (html) => html.replace(joinChrome, "")],
+    [
+      "sign-in-outside-header",
+      (html) => html.replace(joinChrome, "").replace("</main>", `</main>${kitJoinChrome}`),
+    ],
+    ["logout-control", (html) => html.replace("</body>", '<form action="/logout"></form></body>')],
     [
       "hostile-next",
       (html) =>
@@ -1404,11 +1488,12 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
   // markdown alternate and the events canonical. Rows are live reads, so the
   // fixture carries no cards; seeded rows are pinned hermetically instead
   // (test/kit-events-calendar-parity.test.ts, acceptance journey).
+  const eventsChrome = guestChrome(eventsMarker, "/auth/discord?next=%2Fevents");
   const eventsShell = (inner) =>
     `<html><head><link rel="canonical" href="https://next.togetherweown.com/events">` +
     `<link rel="alternate" type="text/markdown" href="/events.md"></head>` +
     `<body><a class="skip-link" href="#main">Skip</a>` +
-    `<nav aria-label="Primary"><a href="/events" aria-current="page">Events</a></nav>` +
+    `<header data-kit-site-header><nav aria-label="Primary"><a href="/events" aria-current="page">Events</a></nav>${eventsChrome}</header>` +
     `<main id="main" class="events-page"><section data-testid="events-calendar" data-island="events-calendar">` +
     `<div data-testid="events-content"><div data-testid="events-list">${inner}</div></div>` +
     `<div role="group" aria-label="View"><button data-testid="events-view-list">List</button>` +
@@ -1417,17 +1502,17 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     `<button type="submit">Search</button></form>` +
     `<a href="/events/past" data-testid="events-past-archive-link">Past events</a>` +
     `<a href="webcal://next.togetherweown.com/events.ics" data-testid="events-subscribe">Subscribe</a>` +
-    `</section></main><p>Welcome, guest</p>` +
+    `</section></main>` +
     `<script src="/islands/events-calendar.js"></script></body></html>`;
-  const eventsFailures = assertRouteContract({
+  const eventsResponse = {
     label: "unit/events guest list",
     html: eventsShell(""),
-    headers: headerMap({
+    headers: {
       "content-type": "text/html",
       "x-two-renderer": eventsMarker,
       "cache-control": "public, max-age=60",
       vary: "Cookie, X-Two-Island",
-    }),
+    },
     status: 200,
     expected: {
       status: 200,
@@ -1435,18 +1520,32 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
       contract: "events",
       cachePattern: /^public, max-age=(?:[1-9]|[1-5]\d|60)$/,
     },
-  });
+  };
+  const eventsFailures = assertRouteContract(eventsResponse);
   push(
     "unit: events guest list passes",
     eventsFailures.length === 0 ? "passed" : "failed",
     eventsFailures.join("; ") || null,
   );
+  const kitSignIn = guestChrome("kit", "/auth/discord?next=%2Fevents");
+  const checkKitEvents = (signIn) =>
+    assertRouteContract({
+      ...eventsResponse,
+      html: eventsResponse.html.replace(eventsChrome, signIn),
+      headers: { ...eventsResponse.headers, "x-two-renderer": "kit" },
+      expected: { ...eventsResponse.expected, marker: "kit" },
+    });
+  const duplicateRejected =
+    checkKitEvents(kitSignIn).length === 0 &&
+    checkKitEvents(kitSignIn.repeat(2)).includes(`${eventsResponse.label}: guest account chrome`);
+  push("unit: Kit events duplicate sign-in fails", duplicateRejected ? "passed" : "failed");
   // Events forced-failure proof: a missing island binder, a GET form turned
   // into a POST, a dropped archive link, a canonical pointing at the archive
   // or the site root, a Vary missing either token and a flashed view served
   // shared-cacheable must all FAIL. A gate that cannot fail on a planted
   // break proves nothing.
   const eventsMutants = [
+    ["no-guest-chrome", (html) => html.replace(eventsChrome, "")],
     [
       "no-island-binder",
       (html) =>
@@ -2152,6 +2251,54 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     }
   }
 
+  // Exercise the home contract in CI even when preview credentials are absent.
+  if (parseManifestEntries(manifestSource).some((entry) => entry.path === "/")) {
+    const homeMarker = expectedMarkerFor(manifestSource, "/");
+    const join = '<a href="/auth/discord" data-testid="join">Join with Discord</a>';
+    const kitTitle = '<h1 id="home-heading">The lobby is <em>open</em>.</h1>';
+    const homeShell =
+      `<link rel="canonical" href="https://next.togetherweown.com/">` +
+      `<a class="skip-link" href="#main">Skip</a><nav aria-label="Primary"></nav>` +
+      `<main id="main">${homeMarker === "kit" ? kitTitle : "<h1>The lobby is open.</h1>"}${join}</main><p>Welcome, guest</p>`;
+    const checkHome = (html, cache = "private, no-store") =>
+      assertRouteContract({
+        label: "unit/home",
+        html,
+        headers: headerMap({
+          "content-type": "text/html",
+          "x-two-renderer": homeMarker,
+          "cache-control": cache,
+        }),
+        status: 200,
+        expected: { status: 200, marker: homeMarker, contract: "home" },
+      });
+    const invite = '<a href="/discord" data-testid="discord-join">Join with an invite link</a>';
+    const fallbackShell = homeShell.replace(join, invite);
+    const withHeading = (title) => homeShell.replace(/<h1.*?<\/h1>/, title);
+    const script = '<script type="application/json">The lobby is open.</script>';
+    for (const [name, html, mutant, cache] of [
+      ["good fixture", homeShell],
+      ["invite fallback", fallbackShell],
+      ["heading", homeShell.replace("The lobby is", "Welcome"), true],
+      ["inert heading", withHeading(`<template>${kitTitle}</template><!--${kitTitle}-->`), true],
+      ["script heading", withHeading(`<h1 id="home-heading">${script}</h1>`), true],
+      ["hidden heading", withHeading(kitTitle.replace("<h1", "<h1 hidden")), true],
+      ["hidden ancestor", withHeading(`<div hidden>${kitTitle}</div>`), true],
+      ["join", homeShell.replace('href="/auth/discord"', 'href="https://evil.test/"'), true],
+      ["invite fallback", fallbackShell.replace('href="/discord"', 'href="/join"'), true],
+      ["own RSVP", `${homeShell}<p data-testid="home-standing">Own RSVP</p>`, true],
+      ["shared-cache", homeShell, true, "public, max-age=60"],
+    ]) {
+      const failures = checkHome(html, cache);
+      const passed = Boolean(failures.length) === Boolean(mutant);
+      push(
+        `unit: home ${mutant ? `mutant ${name} fails` : `${name} passes`}`,
+        passed ? "passed" : "failed",
+        passed ? null : failures.join("; ") || "mutant was NOT detected",
+      );
+    }
+  }
+
   // Wrong-marker mutant: Hono-owned route carrying the Kit marker must fail.
   const markerFailures = assertRouteContract({
     label: "unit/mutant-marker",
@@ -2426,6 +2573,7 @@ async function runPreviewMode(
       contract: route.contract ?? "archive",
       cache: route.cache ?? null,
       cachePattern: route.cachePattern,
+      allowEnded: route.contract === "members" && allowsEndedMemberBoardCopy(route.path),
     };
     const assertContract =
       route.contract === "members"

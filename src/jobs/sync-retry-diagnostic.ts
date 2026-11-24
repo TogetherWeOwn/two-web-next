@@ -24,7 +24,7 @@ function record(value: unknown): value is Record<string, unknown> {
   }
 }
 
-export function dataField(value: unknown, key: string): unknown {
+function dataField(value: unknown, key: string): unknown {
   try {
     // Sample only own data: observation must not execute input accessors.
     return record(value) ? Object.getOwnPropertyDescriptor(value, key)?.value : undefined;

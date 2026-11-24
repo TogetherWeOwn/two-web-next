@@ -1,3 +1,8 @@
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { build, type OutputFile, type Plugin } from "esbuild";
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { Hono } from "hono";
@@ -6,8 +11,65 @@ import { events } from "../../src/db/admin-schema";
 import type { Env } from "../../src/env";
 import { registerEventRoutes } from "../../src/events/routes";
 import { loadEventsPage } from "../../src/kit-events";
-import { renderEventsHtml } from "../../src/kit-events-html";
 import { partialEvent } from "./calendar-discord-partial";
+
+type KitRender = typeof import("../../web/src/lib/server/render-events-html").renderEventsHtml;
+const root = fileURLToPath(new URL("../../", import.meta.url).href);
+const webRequire = createRequire(new URL("../../web/package.json", import.meta.url).href);
+let loaded: Promise<KitRender> | undefined;
+export const kitCalendarStyles = new Map<string, string>();
+
+export function retainKitCalendarStyles(outputFiles: OutputFile[]) {
+  for (const file of outputFiles) {
+    if (file.path.endsWith(".css")) kitCalendarStyles.set(`/${basename(file.path)}`, file.text);
+  }
+}
+
+// Like Vite's stylesheet URLs, emit one CSS asset with its imports resolved.
+export const kitCalendarCss: Plugin = {
+  name: "kit-calendar-css",
+  setup(plugin) {
+    plugin.onLoad({ filter: /\.css$/ }, async ({ path }) => {
+      const { outputFiles } = await build({ entryPoints: [path], bundle: true, write: false });
+      return { contents: outputFiles[0]!.contents, loader: "file" };
+    });
+  },
+};
+
+// Bundle the actual Kit SSR adapter once per test worker.
+export function renderKitEvents(...args: Parameters<KitRender>): ReturnType<KitRender> {
+  loaded ??= (async () => {
+    const { compile } = webRequire("svelte/compiler");
+    const { outputFiles } = await build({
+      entryPoints: [join(root, "web/src/lib/server/render-events-html.tsx")],
+      nodePaths: [join(root, "web/node_modules")],
+      bundle: true,
+      format: "esm",
+      platform: "node",
+      write: false,
+      outdir: ".",
+      tsconfigRaw: { compilerOptions: { jsx: "react-jsx", jsxImportSource: "hono/jsx" } },
+      plugins: [
+        kitCalendarCss,
+        {
+          name: "kit-events-renderer",
+          setup(plugin) {
+            plugin.onLoad({ filter: /\.svelte$/ }, ({ path }) => ({
+              contents: compile(readFileSync(path, "utf8"), { generate: "server", filename: path })
+                .js.code,
+              loader: "js",
+              resolveDir: dirname(path),
+            }));
+          },
+        },
+      ],
+    });
+    retainKitCalendarStyles(outputFiles);
+    const bundleUrl = `data:text/javascript;base64,${Buffer.from(outputFiles.find((file) => file.path.endsWith(".js"))!.text).toString("base64")}`;
+    return ((await import(bundleUrl)) as { renderEventsHtml: KitRender }).renderEventsHtml;
+  })();
+  return loaded.then((render) => render(...args));
+}
 
 export const GAME_ORIGIN = "https://calendar.example.test";
 export const GAME_ENTRY = "/events?view=list&month=2099-05&game=Chess";
@@ -151,7 +213,7 @@ export function gameRecoveryFixture(
         journeyForFn: async () => null,
         discordForFn: () => source,
       });
-      const rendered = await renderEventsHtml(data as never, collected);
+      const rendered = await renderKitEvents(data as never, collected);
       return new Response(rendered.body, { status: rendered.status, headers: rendered.headers });
     },
   };

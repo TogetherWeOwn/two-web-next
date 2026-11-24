@@ -23,16 +23,33 @@ import {
   withKitFallbackStyleCsp,
 } from "./headers";
 import { STAGING_APP_URL } from "./qa";
-import { newRequestId, safeRequestId } from "./request-log";
+import { newRequestId, safeRequestId, writeHttpRequestLog } from "./request-log";
+import { setReleaseMetadata } from "./release-tag";
 import { withStreamedBody } from "./html-stream";
+import { applySingleValidator } from "./http/conditional";
+import { PRODUCTION_APEX } from "./http/robots";
+import { EVENTS_CALENDAR_ISLAND } from "./islands/contracts-calendar";
 import { transformContentLeafChunk } from "./kit-content-chunk";
+import type { KitHomePanels } from "./kit-home-panels";
 import type { KitLocals } from "./kit-session";
+import type { RecoveryRender } from "./recovery-outcome";
 import { isKitNoticeDocument, readKitRestoredWrite } from "./kit-restored-write";
 import { EXPIRED_WRITE_COOKIE } from "./write-recovery";
 import { type MemberRead, memberReadResponse } from "./member-reads";
 import { JOIN_RESULT_COOKIE, deleteOpts } from "./return-journey";
-import { SAME_ORIGIN_EXEMPTIONS, UNSAFE_METHODS } from "./same-origin";
+import { SAME_ORIGIN_EXEMPTIONS, UNSAFE_METHODS, sameOrigin } from "./same-origin";
+import { STAGING_STATIC_DOCUMENT_READY } from "./kit-staging-static";
 import { isTrustedHost } from "./trust-hosts";
+import {
+  adminFormPath,
+  admitsKitAdmin,
+  kitAdminAdmission,
+  KIT_ADMIN_OPS_ROUTES,
+  privateAdminResponse,
+  usesKitDefaultAction,
+} from "./admin/kit-serving";
+import { fetchKitAdminForm } from "./admin/kit-form-fetch";
+import type { Env } from "./env";
 
 export type RouteOwner = "kit" | "hono";
 
@@ -49,6 +66,8 @@ export interface OwnedRoute {
   // Native rendering stays off until explicitly enabled.
   enabled: boolean;
   reads?: RouteReads;
+  // An exact-origin staging document opt-in; no implicit HEAD or Kit data route.
+  documentGetOnly?: true;
 }
 
 export interface RouteDecision {
@@ -57,9 +76,9 @@ export interface RouteDecision {
 }
 
 // The archive page, events list, hot-zone heatmaps, member board and the
-// about/faq leaves render natively; privacy/rules/join/recovery/profile reads
-// and admin routes stay on Hono until their enablement is reviewed. Returning
-// an enabled entry to `enabled: false` restores Hono ownership as the rollback.
+// about/faq, join and recovery leaves render natively. Privacy and rules are
+// staging-only opt-ins; profile and the remaining admin routes stay on Hono.
+// Returning an entry to `enabled: false` restores Hono ownership for rollback.
 // Production (the Hono Worker) sees no traffic change for a
 // disabled path; the preview Worker moves a Kit-owned path back to Hono by
 // design — that is the rollback. Add one entry per migrated route, enabled
@@ -71,14 +90,20 @@ export interface RouteDecision {
 // shipped manifest instead of hard-coding "kit": flipping enabled flips the
 // gate for the right reason.
 export const ROUTE_MANIFEST: OwnedRoute[] = [
-  { method: "GET", path: "/", enabled: false, reads: "public" },
+  // GET also owns HEAD; disable this entry to restore Hono until retirement.
+  {
+    method: "GET",
+    path: "/",
+    enabled: true,
+    reads: { resource: "member", action: "list", route: "home" },
+  },
   { method: "GET", path: "/events/past", enabled: true, reads: "public" },
   { method: "GET", path: "/events", enabled: true, reads: "public" },
   { method: "GET", path: "/about", enabled: true, reads: "public" },
   { method: "GET", path: "/privacy", enabled: false, reads: "public" },
   { method: "GET", path: "/rules", enabled: false, reads: "public" },
   { method: "GET", path: "/faq", enabled: true, reads: "public" },
-  { method: "GET", path: "/join", enabled: false, reads: "public" },
+  { method: "GET", path: "/join", enabled: true, reads: "public" },
   // Moderator dashboard: member data, so the Kit branch renders
   // inside the member-read boundary with this declaration and the bridged
   // viewer. Off until the enablement review: the Hono panel answers meanwhile.
@@ -210,7 +235,7 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     enabled: true,
     reads: { resource: "join_attempts", action: "view", route: "admin.join-attempts.show" },
   },
-  { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
+  { method: "GET", path: "/auth/recover", enabled: true, reads: "public" },
   // Profile reads: one Svelte view/model behind both Hono handlers. Native
   // rendering stays off until edit parity reviews enablement; write siblings
   // and the retired /members directory have no entries and stay Hono-owned.
@@ -261,8 +286,8 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
 ];
 
 // Fixture-only manifest for executed parity journeys. The generated loopback
-// worker can enable the member board, live event detail, and join entries for
-// their Kit journeys. Flags are honoured only for an HTTP loopback APP_URL;
+// worker can enable specific routes for their Kit journeys and captures.
+// Flags are honoured only for an HTTP loopback APP_URL;
 // deployed Workers retain the shipped manifest. No flag mutates that manifest.
 // The fixture exercises the actual Kit dispatcher rather than a second render
 // implementation. Each override is restricted to its exact method and path;
@@ -273,11 +298,16 @@ export function fixtureManifestFor(env: {
   KIT_PARITY_FIXTURE_MEMBER_BOARD?: string;
   KIT_PARITY_FIXTURE_EVENT_DETAIL?: string;
   KIT_PARITY_FIXTURE_JOIN?: string;
+  KIT_PARITY_FIXTURE_ADMIN_DASHBOARD?: string;
+  includeReconciliation?: boolean;
 }): OwnedRoute[] | undefined {
   const wantBoard = env.KIT_PARITY_FIXTURE_MEMBER_BOARD === "true";
   const wantDetail = env.KIT_PARITY_FIXTURE_EVENT_DETAIL === "true";
   const wantJoin = env.KIT_PARITY_FIXTURE_JOIN === "true";
-  if (!wantBoard && !wantDetail && !wantJoin) return undefined;
+  const wantDashboard = env.KIT_PARITY_FIXTURE_ADMIN_DASHBOARD === "true";
+  const wantReconciliation = env.includeReconciliation === true;
+  if (!wantBoard && !wantDetail && !wantJoin && !wantDashboard && !wantReconciliation)
+    return undefined;
   let app: URL;
   try {
     app = new URL(env.APP_URL ?? "");
@@ -287,30 +317,60 @@ export function fixtureManifestFor(env: {
   if (app.protocol !== "http:") return undefined;
   // URL keeps the brackets on an IPv6 hostname ("[::1]").
   if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(app.hostname)) return undefined;
-  return ROUTE_MANIFEST.map((entry) => {
+  const routes = ROUTE_MANIFEST.map((entry) => {
     if (wantBoard && entry.method === "GET" && entry.path === "/leaderboards/members")
       return { ...entry, enabled: true };
     if (wantDetail && entry.method === "GET" && entry.path === "/e/:key")
       return { ...entry, enabled: true };
-    if (wantJoin && entry.method === "GET" && entry.path === "/join")
+    if (wantJoin && entry.method === "GET" && ["/join", "/auth/recover"].includes(entry.path))
+      return { ...entry, enabled: true };
+    if (wantDashboard && entry.method === "GET" && entry.path === "/admin")
       return { ...entry, enabled: true };
     return entry;
   });
+  // These Kit-only evidence routes have no Hono twin.
+  // Build them from fixture data, separate from the shipped manifest literals.
+  if (wantReconciliation) {
+    const detailPath = "/admin/reconciliation/:key";
+    const reads = [
+      ["/admin/reconciliation", "list", "admin.reconciliation.index"],
+      [detailPath, "view", "admin.reconciliation.show"],
+    ] as const;
+    for (const [path, action, route] of reads) {
+      routes.push({
+        method: "GET",
+        path,
+        enabled: true,
+        reads: { resource: "reconciliation", action, route },
+      });
+    }
+    routes.push({
+      method: "POST",
+      path: detailPath,
+      enabled: true,
+      // The service audits the submit; the detail boundary keeps its response private.
+      reads: { resource: "reconciliation", action: "view", route: "admin.reconciliation.show" },
+    });
+  }
+  return routes;
 }
 
-// Staging Kit starts with every route on Hono. The reviewed deploy workflow
-// may enable only the archive and static page families, while all other routes
-// stay Hono-owned even when the shared manifest enables them for preview/local
-// parity. The staging hostname or any rollout flag selects this restrictive
-// manifest, even with a misconfigured APP_URL. Only the exact staging APP_URL
-// can enable a family; absent, malformed and unknown flags keep it disabled.
+// Staging Kit starts with every route on Hono. The staging hostname or any
+// rollout flag selects this restrictive manifest, even with a misconfigured
+// APP_URL. Only the exact staging APP_URL can enable a family; absent or
+// malformed flags keep it off. Staging-only approvals do not change the
+// shared manifest used outside the rollout.
 export function stagingManifestFor(
   env: {
     APP_URL?: string;
     KIT_ROUTE_ARCHIVE?: string;
     KIT_ROUTE_STATIC?: string;
+    KIT_ROUTE_EVENTS?: string;
+    KIT_ROUTE_HOME?: string;
+    KIT_ROUTE_JOIN?: string;
   },
   routes: OwnedRoute[] = ROUTE_MANIFEST,
+  staticDocumentReady = STAGING_STATIC_DOCUMENT_READY,
 ): OwnedRoute[] | undefined {
   let app: URL | undefined;
   try {
@@ -319,21 +379,125 @@ export function stagingManifestFor(
     // With rollout flags present an invalid URL must not select the preview manifest.
     app = undefined;
   }
-  const hasRolloutFlags = env.KIT_ROUTE_ARCHIVE !== undefined || env.KIT_ROUTE_STATIC !== undefined;
+  const hasRolloutFlags =
+    env.KIT_ROUTE_ARCHIVE !== undefined ||
+    env.KIT_ROUTE_STATIC !== undefined ||
+    env.KIT_ROUTE_EVENTS !== undefined ||
+    env.KIT_ROUTE_HOME !== undefined ||
+    env.KIT_ROUTE_JOIN !== undefined;
   if (app?.hostname !== new URL(STAGING_APP_URL).hostname && !hasRolloutFlags) return undefined;
 
   const archiveEnabled = env.APP_URL === STAGING_APP_URL && env.KIT_ROUTE_ARCHIVE === "true";
   // Static pages are the second cumulative rollout stage; they cannot precede
   // the archive family even if a Worker variable is set out of band.
   const staticEnabled = archiveEnabled && env.KIT_ROUTE_STATIC === "true";
+  const eventsEnabled = env.APP_URL === STAGING_APP_URL && env.KIT_ROUTE_EVENTS === "true";
+  const homeEnabled = env.APP_URL === STAGING_APP_URL && env.KIT_ROUTE_HOME === "true";
+  const joinEnabled = env.APP_URL === STAGING_APP_URL && env.KIT_ROUTE_JOIN === "true";
   return routes.map((entry) => {
+    const documentReady = staticDocumentReady.get(entry.path);
+    if (entry.method === "GET" && documentReady !== undefined) {
+      return {
+        ...entry,
+        enabled: staticEnabled && entry.reads === "public" && documentReady,
+        documentGetOnly: true,
+      };
+    }
     const familyEnabled =
-      (entry.method === "GET" && entry.path === "/events/past" && archiveEnabled) ||
-      (entry.method === "GET" &&
-        (entry.path === "/about" || entry.path === "/faq") &&
-        staticEnabled);
+      entry.method === "GET" &&
+      ((entry.path === "/events" && eventsEnabled) ||
+        (entry.path === "/" && homeEnabled) ||
+        (entry.path === "/join" && joinEnabled) ||
+        (entry.path === "/events/past" && archiveEnabled) ||
+        ((entry.path === "/about" || entry.path === "/faq") && staticEnabled));
     return { ...entry, enabled: entry.enabled && familyEnabled };
   });
+}
+
+const PRODUCTION_APP_URL = `https://${PRODUCTION_APEX}`;
+const ISOLATED_CUTOVER_ORIGIN =
+  /^https:\/\/two-web-kit-cutover-proof-[1-9]\d{0,14}-[1-9]\d{0,14}\.[a-z0-9][a-z0-9-]{0,62}\.workers\.dev$/;
+const PRODUCTION_DOCUMENT_VARY = [
+  "X-Two-Island",
+  "Sec-Fetch-Dest",
+  "Sec-Fetch-Mode",
+  "Sec-Fetch-Site",
+  "Purpose",
+  "Sec-Purpose",
+  "X-Moz",
+];
+type ProductionRollout = Pick<
+  HookDispatchDeps,
+  "appUrl" | "kitRouteArchive" | "kitRouteStatic" | "kitRouteEmberPages"
+>;
+
+function emberDocumentPath(url: URL, deps: ProductionRollout): boolean {
+  return (
+    deps.kitRouteEmberPages === "true" &&
+    deps.appUrl === url.origin &&
+    (url.origin === PRODUCTION_APP_URL || ISOLATED_CUTOVER_ORIGIN.test(url.origin)) &&
+    (url.pathname === "/" || url.pathname === "/events" || url.pathname === "/join")
+  );
+}
+
+function isProductionRolloutPath(url: URL, deps: ProductionRollout): boolean {
+  if (emberDocumentPath(url, deps)) return true;
+  return (
+    deps.appUrl === PRODUCTION_APP_URL &&
+    url.origin === PRODUCTION_APP_URL &&
+    deps.kitRouteArchive === "true" &&
+    (url.pathname === "/events/past" ||
+      (deps.kitRouteStatic === "true" && (url.pathname === "/about" || url.pathname === "/faq")))
+  );
+}
+
+// The production apex and the isolated cutover Worker never fall through to
+// the preview manifest. Canonical document and Ember calendar GETs can opt in here.
+export function productionManifestFor(
+  event: Pick<HookEventLike, "request" | "url" | "isDataRequest">,
+  deps: ProductionRollout,
+  routes: OwnedRoute[] = ROUTE_MANIFEST,
+): OwnedRoute[] | undefined {
+  const requestUrl = new URL(event.request.url);
+  const onApex = requestUrl.hostname === PRODUCTION_APEX || event.url.hostname === PRODUCTION_APEX;
+  const cutoverProof = [requestUrl.origin, event.url.origin, deps.appUrl ?? ""].some((origin) =>
+    ISOLATED_CUTOVER_ORIGIN.test(origin),
+  );
+  if (!onApex && !cutoverProof) {
+    return undefined;
+  }
+  const fetchSite = event.request.headers.get("sec-fetch-site");
+  const calendarFragment =
+    requestUrl.pathname === "/events" &&
+    emberDocumentPath(requestUrl, deps) &&
+    event.request.method === "GET" &&
+    !event.isDataRequest &&
+    (fetchSite === null || fetchSite === "same-origin") &&
+    event.request.headers.get("x-two-island") === EVENTS_CALENDAR_ISLAND;
+  if (
+    (onApex && requestUrl.origin !== PRODUCTION_APP_URL) ||
+    !isProductionRolloutPath(requestUrl, deps) ||
+    event.url.origin !== requestUrl.origin ||
+    event.url.pathname !== requestUrl.pathname ||
+    (!calendarFragment && !isKitNoticeDocument(event.request, event.isDataRequest)) ||
+    // Older Firefox sends X-Moz: prefetch without Fetch Metadata.
+    /(?:^|,)\s*prefetch\s*(?:,|$)/i.test(event.request.headers.get("x-moz") ?? "")
+  ) {
+    return [];
+  }
+  return routes
+    .filter((entry) => entry.method === "GET" && entry.path === requestUrl.pathname)
+    .map((entry) => ({
+      ...entry,
+      enabled:
+        entry.enabled &&
+        (entry.path === "/"
+          ? entry.reads !== "public" &&
+            entry.reads?.resource === "member" &&
+            entry.reads.action === "list" &&
+            entry.reads.route === "home"
+          : entry.reads === "public"),
+    }));
 }
 
 // Response header set only on the Kit-rendered branch of the hook, so the
@@ -342,15 +506,12 @@ export function stagingManifestFor(
 export const KIT_RENDERER_HEADER = "x-two-renderer";
 export const KIT_RENDERER_VALUE = "kit";
 
-// Paths Kit must never shadow, whatever the manifest claims. The machine API
-// prefix plus the operational endpoints the Hono app owns. /_app/* is the
-// adapter-owned immutable asset prefix: it is served by the adapter before
-// hooks run (web/wrangler.jsonc run_worker_first still bypasses handle for
-// /_app/immutable/*), so reserving it here guarantees that any request that
-// DOES reach the hook (dev, future adapter change) falls through to Hono's
-// host-guarded ASSETS branch with full headers, never to Kit resolve.
-const RESERVED_PREFIXES = ["/api/", "/_app/"];
+// Hono owns the API namespace and operational endpoints by default.
+const RESERVED_API_ROOT = "/api";
 const RESERVED_EXACT = new Set(["/up", "/version", "/csp-reports"]);
+// Adapter assets normally bypass the hook. Keep any that reach it on Hono's
+// host-guarded ASSETS branch, even when a caller opts into reservation release.
+const KIT_ASSET_ROOT = "/_app";
 
 // Kit data requests carry the page path with this suffix; ownership follows
 // the underlying page, with or without CSR.
@@ -381,12 +542,12 @@ function normalizePath(path: string, stripData = true): string | null {
   return base || "/";
 }
 
-function isReserved(path: string): boolean {
-  if (RESERVED_EXACT.has(path)) return true;
-  // The bare prefix counts too: "/api" must not escape the reservation.
-  return RESERVED_PREFIXES.some(
-    (prefix) => path === prefix.slice(0, -1) || path.startsWith(prefix),
-  );
+function isInNamespace(path: string, root: string): boolean {
+  return path === root || path.startsWith(`${root}/`);
+}
+
+function isReservedPath(path: string): boolean {
+  return RESERVED_EXACT.has(path) || isInNamespace(path, RESERVED_API_ROOT);
 }
 
 function matchPattern(pattern: string, path: string): boolean {
@@ -427,34 +588,63 @@ function bestMatch(path: string, manifest: OwnedRoute[]): OwnedRoute | undefined
 function enabledRouteFor(
   decision: RouteDecision,
   manifest: OwnedRoute[],
-  stripData = true,
+  {
+    stripData = true,
+    originalUrl,
+    reservedReleases,
+  }: {
+    stripData?: boolean;
+    originalUrl?: string;
+    reservedReleases?: readonly RouteDecision[];
+  } = {},
 ): OwnedRoute | undefined {
   const normalized = normalizePath(decision.path, stripData);
-  if (normalized === null) return undefined;
-  if (isReserved(normalized)) return undefined;
+  if (normalized === null || isInNamespace(normalized, KIT_ASSET_ROOT)) return undefined;
+  const reserved = isReservedPath(normalized);
   const upper = decision.method.toUpperCase();
   const lookup = upper === "HEAD" ? "GET" : upper;
+  // The reservation applies after decoding, but its release applies only to
+  // the concrete pathname. Encoded aliases and Kit data suffixes stay on Hono.
+  if (
+    reserved &&
+    (decision.path !== normalized ||
+      !reservedReleases?.some(
+        (release) => release.method === lookup && release.path === normalized,
+      ))
+  ) {
+    return undefined;
+  }
   const candidates = manifest.filter((entry) => entry.method.toUpperCase() === lookup);
   const best = bestMatch(normalized, candidates);
-  return best?.enabled ? best : undefined;
+  if (!best?.enabled) return undefined;
+  if (reserved && (best.path !== normalized || best.path.includes(":"))) return undefined;
+  if (best.documentGetOnly) {
+    const documentUrl = originalUrl ? new URL(originalUrl) : undefined;
+    if (documentUrl && documentUrl.origin !== STAGING_APP_URL) return undefined;
+    if (upper !== "GET" || (documentUrl?.pathname ?? decision.path) !== best.path) return undefined;
+  }
+  return best;
 }
 
+// A future family can supply concrete releases with its enabled manifest.
+// List uppercase methods and literal pathnames. GET includes HEAD as usual.
 export function resolveRouteOwner(
   decision: RouteDecision,
   manifest: OwnedRoute[] = ROUTE_MANIFEST,
+  reservedReleases?: readonly RouteDecision[],
 ): RouteOwner {
-  return enabledRouteFor(decision, manifest) ? "kit" : "hono";
+  return enabledRouteFor(decision, manifest, { reservedReleases }) ? "kit" : "hono";
 }
 
-// Hook entry point: pure function of method + path. Reads nothing else, so the
-// body is still unread and the URL (query included) is intact for the owner.
+// Hook entry point: checks the method and URL, leaving the body unread and
+// the original URL (query included) intact for the owner.
 export function decideRoute(request: Request, manifest: OwnedRoute[] = ROUTE_MANIFEST, url?: URL) {
   // Kit has already stripped a literal data suffix from event.url. Do not
   // strip again: an encoded suffix is not a Kit data request.
   return enabledRouteFor(
     { method: request.method, path: (url ?? new URL(request.url)).pathname },
     manifest,
-    !url,
+    { stripData: !url, originalUrl: request.url },
   );
 }
 
@@ -508,13 +698,17 @@ export interface KitResolveOptions {
 
 export interface HookDispatchDeps {
   appUrl: string;
+  admin?: { env: Env; completeForm: () => never };
   // Signature-only notice peek, independent of the public route's session store.
   sessionSecret?: string;
-  // Staging-only rollout controls. The staging APP_URL selects a fail-closed
-  // manifest that admits only these reviewed families; unset or malformed
-  // values keep every route on Hono. Preview/local parity stays unchanged.
+  // Archive and static opt-ins are shared by the separate staging and
+  // production selectors. Events, home and join are staging-only.
   kitRouteArchive?: string;
   kitRouteStatic?: string;
+  kitRouteEvents?: string;
+  kitRouteHome?: string;
+  kitRouteJoin?: string;
+  kitRouteEmberPages?: string;
   featuredImageHosts?: string;
   honoFetch: (request: Request) => Promise<Response>;
   resolve: (event: HookEventLike, opts?: KitResolveOptions) => Promise<Response>;
@@ -532,16 +726,22 @@ export interface HookDispatchDeps {
   fixtureEventDetail?: boolean;
   // Join remains Hono-owned outside the loopback parity fixture.
   fixtureJoin?: boolean;
+  // Recovery retains Hono middleware and controller; only SSR is delegated.
+  recoveryPage?: (request: Request, render: RecoveryRender) => Promise<Response>;
+  fixtureAdminDashboard?: boolean;
   // Optional read-only session bridge. Runs only after a Kit
   // ownership decision and merges its decision into event.locals before
   // resolve, so Kit loads share one session decision. Absent by default:
   // without it the dispatch behaves exactly as before.
   sessionFor?: (event: HookEventLike) => Promise<KitLocals>;
-  // The member-document proof is supplied only after audit release and full-HTML
+  // Fixed, viewer-invariant home panels. No session or resolve callback.
+  homePanelsFor?: (request: Request) => Promise<KitHomePanels>;
+  homeRenewalFor?: (event: HookEventLike) => Promise<string | null>;
+  // The account-document proof is supplied only after audit release and full-HTML
   // classification below; callers without it retain the moderator admin scope.
   authStatusCookieFor?: (
     event: HookEventLike,
-    releasedMemberDocument?: boolean,
+    releasedAccountDocument?: boolean,
   ) => Promise<string | null>;
   // Optional sliding-session renewal for the native Kit event detail. Runs
   // only after the member-read boundary releases a successful GET (see
@@ -605,6 +805,8 @@ export interface HookDispatchDeps {
     render: () => Promise<Response>,
     requestId?: string,
   ) => Promise<Response>;
+  apiFamilies?: readonly KitApiFamily[];
+  versionMetadata?: { tag?: unknown };
 }
 
 // Production Kit decoration, owned by the core so the tested path is the
@@ -869,15 +1071,28 @@ export async function dispatchHookRequest(
   event: HookEventLike,
   deps: HookDispatchDeps,
 ): Promise<Response> {
-  const response = await dispatchOwnedRequest(event, deps);
-  // Match Kit's post-hook ETag check before it can discard response headers.
-  const etag = response.headers.get("etag");
-  let validator = event.request.headers.get("if-none-match");
-  if (validator?.startsWith('W/"')) validator = validator.slice(2);
-  if (response.status === 200 && etag !== null && validator === etag) {
-    return new Response(null, { status: 304, headers: response.headers });
+  let response = await dispatchOwnedRequest(event, deps);
+  // Keep opted-in responses out of HTTP caches so a rollback reaches the
+  // Worker. The renderer-scoped in-memory archive cache is unaffected.
+  if (
+    (event.request.method === "GET" || event.request.method === "HEAD") &&
+    isProductionRolloutPath(new URL(event.request.url), deps)
+  ) {
+    const headers = new Headers(response.headers);
+    headers.set("cache-control", "private, no-store");
+    const vary = headers.get("vary")?.toLowerCase().split(/,\s*/) ?? [];
+    if (!vary.includes("*")) {
+      for (const name of PRODUCTION_DOCUMENT_VARY) {
+        if (!vary.includes(name.toLowerCase())) headers.append("vary", name);
+      }
+    }
+    response = new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
   }
-  return response;
+  return applySingleValidator(event.request, response);
 }
 
 async function dispatchOwnedRequest(
@@ -887,29 +1102,180 @@ async function dispatchOwnedRequest(
   if (!isTrustedHost(deps.appUrl, [event.request.headers.get("host"), event.url.host])) {
     return deps.honoFetch(event.request);
   }
-  // Single Request-to-decision path: decideOwner is the production call, so
-  // its method/path/query/decode coverage guards the dispatch too. Inlining
-  // resolveRouteOwner here once left mutants (hard-coded GET, hard-coded
-  // path, path+search) green against 32 dispatch tests.
-  const route = decideRoute(
-    event.request,
+  const admin = deps.admin;
+  if (
+    admin &&
+    admitsKitAdmin(
+      event.request,
+      event.url,
+      event.isDataRequest,
+      deps.appUrl,
+      admin.env.KIT_ROUTE_ADMIN,
+    )
+  ) {
+    const response = await dispatchKitAdminRequest(event, deps, admin);
+    if (response) return response;
+  }
+  return dispatchFromManifest(
+    event,
+    deps,
     deps.manifest ??
+      productionManifestFor(event, deps) ??
       fixtureManifestFor({
         APP_URL: deps.appUrl,
         KIT_PARITY_FIXTURE_MEMBER_BOARD: deps.fixtureMemberBoard ? "true" : undefined,
         KIT_PARITY_FIXTURE_EVENT_DETAIL: deps.fixtureEventDetail ? "true" : undefined,
         KIT_PARITY_FIXTURE_JOIN: deps.fixtureJoin ? "true" : undefined,
+        includeReconciliation: deps.fixtureAdminDashboard,
+        // Use the original URL: Kit strips the data suffix from event.url.
+        KIT_PARITY_FIXTURE_ADMIN_DASHBOARD:
+          deps.fixtureAdminDashboard &&
+          event.request.method === "GET" &&
+          new URL(event.request.url).pathname === "/admin"
+            ? "true"
+            : undefined,
       }) ??
       stagingManifestFor({
         APP_URL: deps.appUrl,
         KIT_ROUTE_ARCHIVE: deps.kitRouteArchive,
         KIT_ROUTE_STATIC: deps.kitRouteStatic,
+        KIT_ROUTE_EVENTS: deps.kitRouteEvents,
+        KIT_ROUTE_HOME: deps.kitRouteHome,
+        KIT_ROUTE_JOIN: deps.kitRouteJoin,
       }) ??
       ROUTE_MANIFEST,
-    event.url,
   );
-  if (!route) {
-    return deps.honoFetch(event.request);
+}
+
+// Open the existing admin GET entries that declare an audited read. Static
+// aliases carry no read declaration and still win over parameter matches.
+const KIT_ADMIN_READS = ROUTE_MANIFEST.filter(({ path }) => isInNamespace(path, "/admin")).map(
+  (entry) => ({ ...entry, enabled: entry.method === "GET" && typeof entry.reads === "object" }),
+);
+
+async function dispatchKitAdminRequest(
+  event: HookEventLike,
+  deps: HookDispatchDeps,
+  { env, completeForm }: NonNullable<HookDispatchDeps["admin"]>,
+): Promise<Response | null> {
+  const { request, url } = event;
+  const operator = familyRouteFor(event, ROUTE_MANIFEST, [
+    { flag: env.KIT_ROUTE_ADMIN, routes: KIT_ADMIN_OPS_ROUTES },
+  ]);
+  const formPath =
+    request.method === "POST" && adminFormPath(url.pathname, event.route?.id ?? null);
+  const page = decideRoute(request, KIT_ADMIN_READS, url);
+  const read = page && event.route?.id === page.path.replace(/:(\w+)/g, "[$1]") ? page : undefined;
+  const route = operator?.route.path ?? (formPath || read?.path);
+  // Keep fixture-only reconciliation in its manifest and pass the other
+  // unowned routes to their existing Hono guards.
+  if (!route) return null;
+
+  const started = performance.now();
+  const requestId = safeRequestId(request.headers.get("cf-ray")) ?? newRequestId();
+  setReleaseMetadata(deps.versionMetadata);
+  const context = new Context<{ Bindings: Env }>(request, { env, path: url.pathname });
+  context.set("requestId", requestId);
+  const finish = async (response: Response) => {
+    const referrerPolicy = response.headers.get("referrer-policy");
+    const result = await finishKitResponse(
+      privateAdminResponse(request, response),
+      event,
+      deps,
+      requestId,
+    );
+    if (referrerPolicy) result.headers.set("referrer-policy", referrerPolicy);
+    writeHttpRequestLog(request, requestId, route, result.status, started);
+    return result;
+  };
+  const originRefused = await sameOrigin(context, async () => {});
+  if (originRefused) return finish(originRefused);
+  if (operator) return finish(await deps.resolve(event));
+
+  const admission = await kitAdminAdmission(context, () => deps.sessionFor?.(event));
+  if (admission.kind === "refused") return finish(admission.response);
+  event.locals = { ...(event.locals as object), ...admission.locals, requestId };
+  if (read) {
+    const result = await dispatchKitRequest(
+      event,
+      { ...deps, sessionFor: undefined },
+      read,
+      undefined,
+      requestId,
+    );
+    writeHttpRequestLog(request, requestId, route, result.status, started);
+    return privateAdminResponse(request, result);
+  }
+
+  const submit = () => fetchKitAdminForm(request, env, admission.actor, requestId);
+  if (!usesKitDefaultAction(request)) return finish(await submit());
+  let outcome: Promise<Response> | undefined;
+  Object.assign(event.locals as object, {
+    runAdminForm: async () => {
+      outcome ??= submit();
+      await outcome;
+      return completeForm();
+    },
+  });
+  const kit = await deps.resolve(event);
+  if (!outcome) return finish(kit);
+  await kit.body?.cancel();
+  return finish(await outcome);
+}
+
+async function dispatchFromManifest(
+  event: HookEventLike,
+  deps: HookDispatchDeps,
+  manifest: OwnedRoute[],
+): Promise<Response> {
+  // Use the tested Request-to-decision path for both the method and URL.
+  const route = decideRoute(event.request, manifest, event.url);
+  if (route) return dispatchKitRequest(event, deps, route);
+  const selection = familyRouteFor(event, manifest, deps.apiFamilies);
+  if (!selection) return deps.honoFetch(event.request);
+  const { route: apiRoute, family } = selection;
+  const started = performance.now();
+  setReleaseMetadata(deps.versionMetadata);
+  const response = await dispatchKitRequest(event, deps, apiRoute, family);
+  const requestId = kitRequestId(event.locals);
+  if (requestId)
+    writeHttpRequestLog(event.request, requestId, apiRoute.path, response.status, started);
+  return response;
+}
+
+async function finishKitResponse(
+  response: Response,
+  event: HookEventLike,
+  deps: HookDispatchDeps,
+  requestId: string,
+): Promise<Response> {
+  response.headers.set("x-request-id", requestId);
+  const decorated = decorateKitResponse(response, event, deps.appUrl, deps.featuredImageHosts);
+  await allowlistKitFallbackStyle(decorated);
+  return decorated;
+}
+
+async function dispatchKitRequest(
+  event: HookEventLike,
+  deps: HookDispatchDeps,
+  route: OwnedRoute,
+  api?: KitApiFamily,
+  assignedRequestId?: string,
+): Promise<Response> {
+  if (route.path === "/auth/recover") {
+    // The no-JS recovery page has no Kit data representation. Never mint
+    // journey state from a data request or run the generic session bridge.
+    if (event.isDataRequest || event.route?.id !== route.path || !deps.recoveryPage) {
+      return deps.honoFetch(event.request);
+    }
+    return deps.recoveryPage(event.request, async (recovery, requestId) => {
+      event.locals = { ...(event.locals as Record<string, unknown>), recovery, requestId };
+      const response = await deps.resolve(event);
+      if (response.status === 200 && response.headers.get("content-type")?.includes("text/html")) {
+        response.headers.set(KIT_RENDERER_HEADER, KIT_RENDERER_VALUE);
+      }
+      return response;
+    });
   }
   // Kit request correlation (Hono requestLog parity): admit the validated
   // edge id (cf-ray) or mint a ULID, ignoring any client-sent x-request-id.
@@ -917,7 +1283,8 @@ async function dispatchOwnedRequest(
   // boundaries read the same id the response header carries; every
   // Kit-branch return below sets it, while Hono-owned responses stay
   // untouched (their middleware sets the header in production).
-  const requestId = safeRequestId(event.request.headers.get("cf-ray")) ?? newRequestId();
+  const requestId =
+    assignedRequestId ?? safeRequestId(event.request.headers.get("cf-ray")) ?? newRequestId();
   const priorLocals = (event.locals as Record<string, unknown> | undefined) ?? {};
   event.locals = { ...priorLocals, requestId };
   // Kit same-origin gate (Hono sameOrigin parity): unsafe methods need an
@@ -925,9 +1292,18 @@ async function dispatchOwnedRequest(
   // absent), with only the documented machine exemptions. Refused before the
   // session bridge and before resolve, body unread, hardened like Hono.
   if (!isSameOriginAllowed(event.request, deps.appUrl, event.url)) {
+    if (api?.crossOriginRefusal) {
+      const refused = await api.crossOriginRefusal(event.request, requestId);
+      return finishKitResponse(refused, event, deps, requestId);
+    }
     const refused = sameOriginRefusal(event, deps.appUrl, deps.featuredImageHosts);
     refused.headers.set("x-request-id", requestId);
     return refused;
+  }
+  // These API handlers own route-level admission, including any conditional
+  // session work. The dispatcher supplies correlation and global headers.
+  if (api && route.reads === "public") {
+    return finishKitResponse(await deps.resolve(event), event, deps, requestId);
   }
   // The notice has no session authority: public renders must not wait for a
   // session store just to verify it. Keep the verified bit outside mutable
@@ -989,7 +1365,11 @@ async function dispatchOwnedRequest(
         requestId,
       );
     } else {
-      await bridgeSession();
+      const [, homePanels] = await Promise.all([
+        bridgeSession(),
+        route.path === "/" ? deps.homePanelsFor?.(event.request) : undefined,
+      ]);
+      if (homePanels) event.locals = { ...(event.locals as object), homePanels };
       response = await renderMemberRead(event, reads, deps, (released) => {
         releasedMemberResponse = released;
       });
@@ -1015,6 +1395,15 @@ async function dispatchOwnedRequest(
   }
   if (event.route?.id === HONO_FALLBACK_ROUTE_ID) return response;
   const locals = event.locals as Partial<KitLocals> | undefined;
+  // Capture the audit release before the auth-status controller rewrites the body.
+  const renewHome =
+    route.path === "/" &&
+    response === releasedMemberResponse &&
+    event.request.method === "GET" &&
+    !event.isDataRequest &&
+    response.status === 200 &&
+    response.headers.get("content-type")?.includes("text/html") &&
+    locals?.status === "authenticated";
   if (
     deps.authStatusCookieFor &&
     event.request.method === "GET" &&
@@ -1024,16 +1413,17 @@ async function dispatchOwnedRequest(
   ) {
     // Match the owned manifest entry, not an arbitrary member-looking URL.
     // Only the exact buffered response released by the audit boundary qualifies.
-    let memberDocument = false;
+    let accountDocument = false;
     if (
-      response === releasedMemberResponse &&
-      locals.session?.member === true &&
-      ["/leaderboards/members", "/profile", "/members/:user"].includes(route.path)
+      renewHome ||
+      (response === releasedMemberResponse &&
+        locals.session?.member === true &&
+        ["/leaderboards/members", "/profile", "/members/:user"].includes(route.path))
     ) {
       const html = await response.clone().text();
-      memberDocument =
+      accountDocument =
         /<!doctype html>/i.test(html) && /<html[\s>]/i.test(html) && html.includes("</body>");
-      if (memberDocument) {
+      if (accountDocument) {
         const headers = new Headers(response.headers);
         headers.delete("content-length");
         response = new Response(
@@ -1052,8 +1442,8 @@ async function dispatchOwnedRequest(
     const adminDocument = /^\/admin(?:\/|$)/.test(event.url.pathname) && locals.session?.moderator;
     try {
       const cookie =
-        memberDocument || adminDocument
-          ? await deps.authStatusCookieFor(event, memberDocument)
+        accountDocument || adminDocument
+          ? await deps.authStatusCookieFor(event, accountDocument)
           : null;
       if (cookie) {
         const headers = new Headers(response.headers);
@@ -1070,15 +1460,20 @@ async function dispatchOwnedRequest(
       });
     }
   }
-  // Sliding renewal for the released Kit event detail, at the same
+  // Sliding renewal for the released Kit home and event detail, at the same
   // post-response position as the probe append above. A rotation that loses
   // its race resolves to no cookie (the next read retries with a live
   // bearer); a rotation store failure warns and likewise renews nothing —
   // the already-rendered member page still stands, and the old row stays
   // live because rotate is one atomic statement.
-  if (deps.eventDetailRotationFor && releasedEventDetailRenewsSession(route, event, response)) {
+  const documentRotationFor = renewHome
+    ? deps.homeRenewalFor
+    : releasedEventDetailRenewsSession(route, event, response)
+      ? deps.eventDetailRotationFor
+      : undefined;
+  if (documentRotationFor) {
     try {
-      const cookie = await deps.eventDetailRotationFor(event);
+      const cookie = await documentRotationFor(event);
       if (cookie) {
         const headers = new Headers(response.headers);
         headers.append("set-cookie", cookie);
@@ -1089,7 +1484,7 @@ async function dispatchOwnedRequest(
         });
       }
     } catch (err) {
-      console.warn("kit event-detail rotation unavailable; rendering without renewal.", {
+      console.warn("kit document rotation unavailable; rendering without renewal.", {
         exception: (err as Error)?.constructor?.name ?? "unknown",
       });
     }
@@ -1171,8 +1566,74 @@ async function dispatchOwnedRequest(
   // id the boundaries render and the error.alert lines log. Guard-built
   // refusals never reach a boundary, so the wrappers above received this same
   // id and their 429 pages render it as the Hono support reference.
-  response.headers.set("x-request-id", requestId);
-  response = decorateKitResponse(response, event, deps.appUrl, deps.featuredImageHosts);
-  await allowlistKitFallbackStyle(response);
-  return response;
+  return finishKitResponse(response, event, deps, requestId);
+}
+
+interface KitApiFamily {
+  flag: string | undefined;
+  routes: readonly KitApiRoute[];
+  crossOriginRefusal?: (request: Request, requestId: string) => Response | Promise<Response>;
+}
+
+interface KitApiRoute extends OwnedRoute {
+  reads: RouteReads;
+  // A dynamic family uses a mounted route ID plus an explicit path predicate.
+  // Its registered path remains the trusted route label for logging.
+  dynamic?: { id: string; matches: (raw: string, decoded: string) => boolean };
+}
+
+function familyRouteFor(
+  event: HookEventLike,
+  manifest: OwnedRoute[],
+  families: readonly KitApiFamily[] | undefined,
+): { route: KitApiRoute; family: KitApiFamily } | undefined {
+  const id = event.route?.id;
+  if (!id || event.isDataRequest || !families?.some(({ flag }) => flag === "true"))
+    return undefined;
+  // Kit may strip the data suffix from event.url. Match the original request.
+  const { pathname } = new URL(event.request.url);
+  const decoded = normalizePath(pathname, false);
+  if (!decoded || decoded.endsWith(DATA_SUFFIX) || isInNamespace(decoded, KIT_ASSET_ROOT))
+    return undefined;
+
+  const method = event.request.method === "HEAD" ? "GET" : event.request.method;
+  let selected: { route: KitApiRoute; family: KitApiFamily } | undefined;
+  for (const family of families) {
+    if (family.flag !== "true") continue;
+    for (const route of family.routes) {
+      if (route.method !== method) continue;
+      if (route.dynamic) {
+        if (
+          id !== route.dynamic.id ||
+          isReservedPath(decoded) ||
+          !route.dynamic.matches(pathname, decoded)
+        )
+          continue;
+      } else if (
+        id !== pathname ||
+        route.path !== pathname ||
+        decoded !== pathname ||
+        pathname.includes("[") ||
+        pathname.includes(":") ||
+        pathname.includes("%")
+      )
+        continue;
+      if (selected) return undefined;
+      selected = { route, family };
+    }
+  }
+  if (!selected) return undefined;
+  // A disabled page entry still reserves its pair for rollback. Check the
+  // shipped entries too, since a rollout manifest can omit them entirely.
+  const overlaps = (entry: OwnedRoute) =>
+    entry.method.toUpperCase() === method && matchPattern(entry.path, decoded);
+  if (manifest.some(overlaps) || ROUTE_MANIFEST.some(overlaps)) return undefined;
+  const { route } = selected;
+  if (route.dynamic) return route.enabled && !route.documentGetOnly ? selected : undefined;
+  return enabledRouteFor({ method: event.request.method, path: pathname }, [route], {
+    originalUrl: event.request.url,
+    reservedReleases: [route],
+  })
+    ? selected
+    : undefined;
 }

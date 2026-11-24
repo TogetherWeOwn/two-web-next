@@ -21,9 +21,9 @@
 # These examples are illustrative, not an exhaustive pattern matcher. When in
 # doubt, route to sensitive review.
 #
-# Review per tier: low -> QA. ordinary -> QA. sensitive/unclassified ->
-# Security, then QA. QA verifies the author's `risk_tier` attestation and may
-# escalate any pull request. This file itself is always sensitive.
+# Use this map to identify sensitive changes. CONTRIBUTING.md defines the
+# independent review required by the attested risk tier. This file itself is
+# always sensitive.
 #
 # When in doubt, leave a path unlisted (= sensitive). Do not broaden
 # low/ordinary to look productive; a small correct map beats a big wrong one.
@@ -179,6 +179,7 @@ tiers:
     # editing it redirects vulnerability reports, a trust-boundary effect.
     - "src/security-txt.ts"
     - "src/headers.ts"
+    - "src/http/secure-headers.ts"
     - "src/csp-report-body.ts"
     - "src/csp-report-uri.ts"
     - "src/csp-reports.ts"
