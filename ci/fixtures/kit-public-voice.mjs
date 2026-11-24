@@ -355,6 +355,18 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
         '2099-01-01T20:00:00Z', 'UTC', 'published', 10, true)`;
     try {
       await verifyEventVoice(browser, offOrigin, liveOrigin, source, mintSession);
+
+      // Keep the status published to exercise the elapsed time boundary.
+      await sql`update events set starts_at = '2020-01-01T18:00:00Z',
+        ends_at = '2020-01-01T20:00:00Z' where event_key = ${eventKey}`;
+      const ended = await browser.newPage();
+      const endedSockets = observe(ended);
+      assert.ok(!(await openDocument(ended, `${liveOrigin}/e/${eventKey}`)).includes(scriptPath));
+      await expect(ended.getByTestId("event-past")).toBeVisible();
+      await expect(ended.locator("[data-public-voice-panel]")).toHaveCount(0);
+      await capture(ended, "event-ended");
+      assert.deepEqual(endedSockets, []);
+      await ended.close();
     } finally {
       await sql`delete from events where event_key = ${eventKey}`;
     }
