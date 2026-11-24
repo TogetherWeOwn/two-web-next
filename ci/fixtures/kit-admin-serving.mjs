@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
+import { writeFile } from "node:fs/promises";
 import { generateSignedCookie } from "hono/cookie";
 import postgres from "postgres";
 import { FIXTURE_SECRETS, SESSION_COOKIE } from "../parity/fixture.mjs";
@@ -9,6 +10,40 @@ const operator = "/admin/ops-overrides";
 const html = { accept: "text/html" };
 const moderatorId = "900000000000009574";
 const memberId = "900000000000009575";
+
+export async function prepareAdminFixture(worker, entry) {
+  const bot = "https://fixture-operator-bot.invalid";
+  await writeFile(
+    entry,
+    `
+import worker from ${JSON.stringify(worker)};
+import { env } from "cloudflare:workers";
+const transport = globalThis.fetch;
+globalThis.fetch = async (input, init) => {
+  if (input !== ${JSON.stringify(`${bot}/ops/config`)}) return transport(input, init);
+  if (init?.method !== "GET" || init.redirect !== "manual" ||
+      new Headers(init.headers).get("authorization") !== "Bearer " + env.OPS_CONTROL_TOKEN) {
+    return new Response(null, { status: 403 });
+  }
+  return Response.json({ epoch: 42, overrides: { label: "Fixture operator value" },
+    baseline: {}, enforcement: "fixture" });
+};
+export default worker;
+`,
+  );
+  return {
+    KIT_ROUTE_ADMIN: "true",
+    KIT_PARITY_FIXTURE_ADMIN_DASHBOARD: "true",
+    BOT_ENDPOINT_URL: bot,
+    OPS_CONTROL_TOKEN: FIXTURE_SECRETS.OPS_CONTROL_TOKEN,
+  };
+}
+
+function renewedModerator(headers) {
+  const cookie = headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`));
+  assert.ok(cookie, "Kit refreshes the shared moderator bearer");
+  return cookie.split(";", 1)[0];
+}
 
 async function session(sql, userId, moderator) {
   const token = `two_${randomBytes(32).toString("base64url")}`;
@@ -66,6 +101,11 @@ export async function assertKitAdminServing({ kit, off, hono, databaseUrl }) {
       assert.equal(guest.headers.get("location"), "/auth/discord");
       assert.equal(guest.headers.getSetCookie().length, 1, "one intended-page cookie");
     }
+    const reconciliation = await visit(kit, "/admin/reconciliation", 302);
+    assert.equal(
+      reconciliation.headers.get("location"),
+      "/auth/discord?next=%2Fadmin%2Freconciliation",
+    );
     await visit(kit, editor, 403, { headers: { ...html, cookie: member } });
     await visit(kit, editor, 200, { method: "HEAD", headers: { cookie: moderator } });
 
@@ -75,10 +115,10 @@ export async function assertKitAdminServing({ kit, off, hono, databaseUrl }) {
     assert.equal(refused.headers.get("referrer-policy"), "no-referrer");
     const head = await visit(kit, operator, 401, { method: "HEAD" });
     assert.equal(head.headers.get("www-authenticate"), "Bearer");
-    const admitted = await visit(kit, operator, 503, { headers: operatorAuth });
-    assert.match(admitted.text, /Operator record unavailable/);
+    const admitted = await visit(kit, operator, 200, { headers: operatorAuth });
+    assert.match(admitted.text, /Fixture operator value/);
     assert.equal(admitted.headers.getSetCookie().length, 0);
-    const allowed = await visit(kit, operator, 503, { method: "HEAD", headers: operatorAuth });
+    const allowed = await visit(kit, operator, 200, { method: "HEAD", headers: operatorAuth });
     assert.equal(allowed.headers.get("referrer-policy"), "no-referrer");
     for (const method of ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
       const rejected = await visit(kit, operator, 405, { method, headers: operatorAuth });
@@ -99,7 +139,7 @@ export async function assertKitAdminServing({ kit, off, hono, databaseUrl }) {
     await visit(kit, "/admin/events", 403, {
       ...form,
       headers: { ...form.headers, origin: "https://other.example" },
-      body: new URLSearchParams(),
+      body: "x".repeat(65537),
     });
     await visit(kit, "/admin/events", 403, {
       ...form,
@@ -146,27 +186,36 @@ export async function assertKitAdminServing({ kit, off, hono, databaseUrl }) {
     });
     const featuredPath = saved.headers.get("location");
     assert.match(featuredPath ?? "", /^\/admin\/featured\/\d+$/);
-    const stale = await visit(kit, featuredPath, 400, {
+    const edit = await visit(kit, featuredPath, 200, { headers: { cookie: moderator } });
+    moderator = renewedModerator(edit.headers);
+    form.headers.cookie = moderator;
+    const baseline = edit.text.match(/name="saved_baseline" value="([0-9a-f]{64})"/)?.[1];
+    assert.ok(baseline, "Kit renders the saved version in the native form");
+    await visit(hono, featuredPath, 303, {
       ...form,
-      body: new URLSearchParams({ title: "Keep this unsaved headline" }),
+      owned: false,
+      body: new URLSearchParams({ saved_baseline: baseline, title: "Competing fixture edit" }),
+    });
+    const stale = await visit(kit, featuredPath, 409, {
+      ...form,
+      body: new URLSearchParams({ saved_baseline: baseline, title: "Keep this unsaved headline" }),
     });
     assert.match(stale.text, /Keep this unsaved headline/);
     assert.equal(stale.headers.getSetCookie().length, 0);
+    const [{ title }] =
+      await sql`select title from featured_contents where created_by = ${moderatorId}`;
+    assert.equal(title, "Competing fixture edit");
     await visit(kit, `${featuredPath}/delete`, 303, { ...form, body: new URLSearchParams() });
     const [{ count: events }] =
       await sql`select count(*)::int from events where created_by = ${moderatorId}`;
     const [{ count: writes }] =
       await sql`select count(*)::int from activity_log where causer_id = ${moderatorId}`;
     assert.equal(events, 2, "event create and duplicate each persist once");
-    assert.equal(writes, 4, "four accepted actions each audit once; refusals do not write");
+    assert.equal(writes, 5, "five accepted actions each audit once; refusals do not write");
 
     const doc = await visit(kit, editor, 200, { headers: { cookie: moderator } });
     assert.match(doc.text, /<form[^>]+method="post"[^>]+action="\/admin\/events"/);
-    const renewed = doc.headers
-      .getSetCookie()
-      .find((value) => value.startsWith(`${SESSION_COOKIE}=`));
-    assert.ok(renewed, "Kit refreshes the shared moderator bearer");
-    moderator = renewed.split(";", 1)[0];
+    moderator = renewedModerator(doc.headers);
     const legacy = await visit(kit, "/admin/events/create?ignored=1", 301, {
       owned: false,
       headers: { cookie: moderator },

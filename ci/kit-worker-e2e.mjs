@@ -12,7 +12,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 import { STAGING_STATIC_DOCUMENT_READY } from "../src/kit-staging-static.ts";
-import { assertKitAdminServing } from "./fixtures/kit-admin-serving.mjs";
+import { assertKitAdminServing, prepareAdminFixture } from "./fixtures/kit-admin-serving.mjs";
 import { assertStaticFeedParity } from "./fixtures/kit-static-feed-parity.mjs";
 import { expectedMarkerFor, kitHomeHeadingText } from "./kit-parity-gates.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
@@ -700,10 +700,9 @@ export default {
   );
 
   if (args.length) {
-    const admin = await startWorker("kit-admin", worker, assets, secret, {
-      KIT_ROUTE_ADMIN: "true",
-      OPS_CONTROL_TOKEN: FIXTURE_SECRETS.OPS_CONTROL_TOKEN,
-    });
+    const entry = join(scratch, "kit-admin.mjs");
+    const vars = await prepareAdminFixture(worker, entry);
+    const admin = await startWorker("kit-admin", entry, assets, secret, vars);
     await listen(admin.child, admin.origin, () => admin.log);
     await assertKitAdminServing({
       kit: admin,

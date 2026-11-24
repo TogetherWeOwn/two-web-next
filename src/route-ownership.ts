@@ -36,15 +36,13 @@ import { isKitNoticeDocument, readKitRestoredWrite } from "./kit-restored-write"
 import { EXPIRED_WRITE_COOKIE } from "./write-recovery";
 import { type MemberRead, memberReadResponse } from "./member-reads";
 import { JOIN_RESULT_COOKIE, deleteOpts } from "./return-journey";
-import { SAME_ORIGIN_EXEMPTIONS, UNSAFE_METHODS } from "./same-origin";
+import { SAME_ORIGIN_EXEMPTIONS, UNSAFE_METHODS, sameOrigin } from "./same-origin";
 import { STAGING_STATIC_DOCUMENT_READY } from "./kit-staging-static";
 import { isTrustedHost } from "./trust-hosts";
 import {
-  adminContext,
   adminFormPath,
   admitsKitAdmin,
   kitAdminAdmission,
-  kitAdminOriginRefusal,
   KIT_ADMIN_OPS_ROUTES,
   privateAdminResponse,
   usesKitDefaultAction,
@@ -1074,7 +1072,8 @@ async function dispatchOwnedRequest(
       adminEnv.KIT_ROUTE_ADMIN,
     )
   ) {
-    return dispatchKitAdminRequest(event, deps, adminEnv);
+    const response = await dispatchKitAdminRequest(event, deps, adminEnv);
+    if (response) return response;
   }
   return dispatchFromManifest(
     event,
@@ -1107,29 +1106,17 @@ async function dispatchOwnedRequest(
   );
 }
 
-// Keep the shipped/default manifest intact. Disable every admin read beyond
-// this list, including static aliases that must win over parameter matches.
-const KIT_ADMIN_READ_PATHS = new Set([
-  "/admin",
-  "/admin/activity-log",
-  "/admin/events",
-  "/admin/events/new",
-  "/admin/events/:key",
-  "/admin/featured",
-  "/admin/featured/new",
-  "/admin/featured/:id",
-  "/admin/join-attempts",
-  "/admin/join-attempts/:id",
-]);
+// Open the existing admin GET entries that declare an audited read. Static
+// aliases carry no read declaration and still win over parameter matches.
 const KIT_ADMIN_READS = ROUTE_MANIFEST.filter(({ path }) => isInNamespace(path, "/admin")).map(
-  (entry) => ({ ...entry, enabled: KIT_ADMIN_READ_PATHS.has(entry.path) }),
+  (entry) => ({ ...entry, enabled: entry.method === "GET" && typeof entry.reads === "object" }),
 );
 
 async function dispatchKitAdminRequest(
   event: HookEventLike,
   deps: HookDispatchDeps,
   env: Env,
-): Promise<Response> {
+): Promise<Response | null> {
   const { request, url } = event;
   const operator = familyRouteFor(event, ROUTE_MANIFEST, [
     { flag: env.KIT_ROUTE_ADMIN, routes: KIT_ADMIN_OPS_ROUTES },
@@ -1139,15 +1126,15 @@ async function dispatchKitAdminRequest(
   const page = decideRoute(request, KIT_ADMIN_READS, url);
   const read = page && event.route?.id === page.path.replace(/:(\w+)/g, "[$1]") ? page : undefined;
   const route = operator?.path ?? (formPath || read?.path);
-  // Legacy bookmarks, incident/queue tools, and unknown paths pass through the
-  // shipped Hono guard on the original request. The source-evidence route gets
-  // its existing independent bearer admission there.
-  if (!route) return deps.honoFetch(request);
+  // Keep fixture-only reconciliation in its manifest and pass the other
+  // unowned routes to their existing Hono guards.
+  if (!route) return null;
 
   const started = performance.now();
   const requestId = safeRequestId(request.headers.get("cf-ray")) ?? newRequestId();
   setReleaseMetadata(deps.versionMetadata);
-  const context = adminContext(request, env, requestId);
+  const context = new Context<{ Bindings: Env }>(request, { env, path: url.pathname });
+  context.set("requestId", requestId);
   const finish = async (response: Response) => {
     const referrerPolicy = response.headers.get("referrer-policy");
     const result = await finishKitResponse(
@@ -1160,7 +1147,7 @@ async function dispatchKitAdminRequest(
     writeHttpRequestLog(request, requestId, route, result.status, started);
     return result;
   };
-  const originRefused = await kitAdminOriginRefusal(context);
+  const originRefused = await sameOrigin(context, async () => {});
   if (originRefused) return finish(originRefused);
   if (operator) return finish(await deps.resolve(event));
 

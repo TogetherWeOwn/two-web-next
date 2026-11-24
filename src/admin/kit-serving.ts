@@ -1,15 +1,13 @@
-import { Context } from "hono";
+import type { Context } from "hono";
 import type { Env } from "../env";
 import { databaseUnavailable, forbidden } from "../errors";
 import type { KitLocals } from "../kit-session";
 import { STAGING_APP_URL } from "../qa";
 import { bounceToLogin } from "../return-journey";
-import { sameOrigin } from "../same-origin";
 import { decideKitAdminGuard } from "./kit-guard";
 
-export const OPS_OVERRIDES_PATH = "/admin/ops-overrides";
 export const KIT_ADMIN_OPS_ROUTES = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"].map(
-  (method) => ({ method, path: OPS_OVERRIDES_PATH, enabled: true, reads: "public" as const }),
+  (method) => ({ method, path: "/admin/ops-overrides", enabled: true, reads: "public" as const }),
 );
 
 const formPaths = [
@@ -65,21 +63,8 @@ export function admitsKitAdmin(
   );
 }
 
-export function adminContext(request: Request, env: Env, requestId: string) {
-  const context = new Context<{ Bindings: Env }>(request, {
-    env,
-    path: new URL(request.url).pathname,
-  });
-  context.set("requestId", requestId);
-  return context;
-}
-
-export function kitAdminOriginRefusal(context: ReturnType<typeof adminContext>) {
-  return sameOrigin(context, async () => {});
-}
-
 export async function kitAdminAdmission(
-  context: ReturnType<typeof adminContext>,
+  context: Context<{ Bindings: Env }>,
   locals: Partial<KitLocals> | undefined,
 ) {
   const decision = decideKitAdminGuard(
