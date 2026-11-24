@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { signedAttendanceReader } from "../src/bot/attendance-read";
 import { projectPublicEcho } from "../src/events/echo-public";
 import { buildFrozenEcho } from "../src/events/echoes";
@@ -15,6 +15,8 @@ const attendance = {
   ],
 };
 
+afterEach(() => vi.restoreAllMocks());
+
 async function projectObservation(response: Response) {
   const secret = randomBytes(32).toString("hex");
   const keyId = "echo-fixture";
@@ -23,6 +25,7 @@ async function projectObservation(response: Response) {
     { baseUrl: "https://bot.example.test", keyId, secret },
     fetcher,
   );
+  vi.spyOn(Date, "now").mockReturnValue(1_794_087_000_123);
   const result = await read(event.eventKey);
 
   // Assert outside the reader so a signing regression cannot pass a refusal case.
@@ -34,7 +37,7 @@ async function projectObservation(response: Response) {
   const headers = new Headers(fetcher.mock.calls[0]?.[1]?.headers);
   const timestamp = headers.get("X-TWO-Timestamp");
   const nonce = headers.get("X-TWO-Nonce");
-  expect(timestamp).toMatch(/^\d+$/);
+  expect(timestamp).toBe("1794087000");
   expect(nonce).toMatch(/^[0-9a-f]{32}$/);
   const digest = createHash("sha256").update(body).digest("hex");
   const signed = ["POST", "/internal/actions", timestamp, nonce, digest].join("\n");
@@ -44,15 +47,15 @@ async function projectObservation(response: Response) {
   expect(headers.has("Idempotency-Key")).toBe(false);
 
   const snapshot = buildFrozenEcho(event, result);
-  if (!snapshot) return null;
+  if (!snapshot) return { result, publicEcho: null };
   const internalEcho = { ...snapshot.echo, members: snapshot.members, headline: null };
-  return projectPublicEcho(internalEcho);
+  return { result, publicEcho: projectPublicEcho(internalEcho) };
 }
 
 it("publishes only frozen attendance counts and room names from a finalized Bot observation", async () => {
-  await expect(
-    projectObservation(Response.json({ ok: true, result: attendance })),
-  ).resolves.toStrictEqual({
+  const response = Response.json({ ok: true, result: attendance });
+  const { publicEcho } = await projectObservation(response);
+  expect(publicEcho).toStrictEqual({
     eventId: 7,
     eventKey: "test-raid-night-1",
     label: "attendance record",
@@ -67,7 +70,9 @@ it("publishes only frozen attendance counts and room names from a finalized Bot 
 
 it("publishes no Echo for a provisional observation even with populated member and room rows", async () => {
   const response = Response.json({ ok: true, result: { ...attendance, final: false } });
-  await expect(projectObservation(response)).resolves.toBeNull();
+  const { result, publicEcho } = await projectObservation(response);
+  expect(result).toMatchObject({ ok: true, attendance: { final: false } });
+  expect(publicEcho).toBeNull();
 });
 
 it("publishes no Echo when the Bot suppresses the record", async () => {
@@ -76,5 +81,7 @@ it("publishes no Echo when the Bot suppresses the record", async () => {
     { ok: false, error: { code: results.not_found.outcome, message: "Not found" } },
     { status: 404 },
   );
-  await expect(projectObservation(response)).resolves.toBeNull();
+  const { result, publicEcho } = await projectObservation(response);
+  expect(result).toStrictEqual({ ok: false, code: "not_found" });
+  expect(publicEcho).toBeNull();
 });
