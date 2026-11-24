@@ -49,7 +49,11 @@ function signed(
   return new Request(url, { method: "POST", body, headers });
 }
 
-function fixture(hubEnv: LiveSocketEnv = config, sockets: WebSocket[] = []) {
+function fixture(
+  hubEnv: LiveSocketEnv = config,
+  sockets: WebSocket[] = [],
+  fetchSnapshot?: typeof fetch,
+) {
   const storage = new Map();
   const kv = { get: storage.get.bind(storage), put: vi.fn(storage.set.bind(storage)) };
   const setAlarm = vi.fn<(until: number | Date) => Promise<void>>().mockResolvedValue(undefined);
@@ -62,7 +66,7 @@ function fixture(hubEnv: LiveSocketEnv = config, sockets: WebSocket[] = []) {
     blockConcurrencyWhile: <T>(run: () => Promise<T>) => run(),
     waitUntil,
   } as unknown as DurableObjectState;
-  let hub = new LiveGuildHub(ctx, hubEnv);
+  let hub = new LiveGuildHub(ctx, hubEnv, fetchSnapshot);
   const getByName = vi.fn(() => ({
     fetch: (url: string, init: RequestInit) => hub.fetch(new Request(url, init)),
   }));
@@ -78,7 +82,7 @@ function fixture(hubEnv: LiveSocketEnv = config, sockets: WebSocket[] = []) {
       hub.webSocketMessage(socket, JSON.stringify({ v: 1, type, topics: ["voice"] })),
     alarm: () => hub.alarm(),
     evict: () => {
-      hub = new LiveGuildHub(ctx, hubEnv);
+      hub = new LiveGuildHub(ctx, hubEnv, fetchSnapshot);
     },
   };
 }
@@ -98,6 +102,14 @@ function snapshot(seq: number, observedAt = new Date().toISOString()) {
       events: [],
     },
   });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 function guestSocket(until: number): WebSocket {
@@ -198,6 +210,66 @@ it("rejects a signed loader result without an observation deadline at the guild 
     );
   } finally {
     loader.mockRestore();
+  }
+});
+
+it("counts ingress snapshot pulls across an expired observation and producer outage", async () => {
+  const observation = Date.parse(occurredAt);
+  const deadline = observation + 30_000;
+  const pullStarted = deferred<void>();
+  const overlappingDeltaSeen = deferred<void>();
+  const outageReply = deferred<Response>();
+  const unavailable = () => new Response(null, { status: 503 });
+  const pull = vi
+    .fn(async () => unavailable())
+    .mockResolvedValueOnce(snapshot(1, occurredAt))
+    .mockImplementationOnce(() => {
+      pullStarted.resolve();
+      return outageReply.promise;
+    });
+  const { env, put, storage } = fixture(config, [], pull);
+  const send = async (seq: number) => (await handleLiveIngress(signed(seq), env))?.status;
+
+  // Keep the transport timeout from racing the deliberately held producer reply.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const clock = vi.spyOn(Date, "now").mockReturnValue(observation);
+  try {
+    expect(await send(1)).toBe(204);
+    clock.mockReturnValue(deadline - 1);
+    expect(await send(2)).toBe(204);
+    expect(pull).toHaveBeenCalledTimes(1);
+
+    clock.mockReturnValue(deadline + 1);
+    put.mockImplementation((key, watermarks) => {
+      const result = storage.set(key, watermarks);
+      if (watermarks.minimum === 4) overlappingDeltaSeen.resolve();
+      return result;
+    });
+    // Checkpointing the newer gap proves both deltas reached the hub before the reply.
+    const first = send(3);
+    expect(await Promise.race([pullStarted.promise, first])).toBeUndefined();
+    const second = send(4);
+    expect(await Promise.race([overlappingDeltaSeen.promise, second])).toBeUndefined();
+    outageReply.resolve(unavailable());
+    expect(await Promise.all([first, second])).toEqual([409, 409]);
+    expect(pull).toHaveBeenCalledTimes(2);
+
+    expect(await send(5)).toBe(409);
+    expect(pull).toHaveBeenCalledTimes(3);
+    expect(await send(6)).toBe(409);
+    expect(pull).toHaveBeenCalledTimes(4);
+    expect([...storage.values()]).toEqual([{ applied: 2, minimum: 6 }]);
+
+    pull.mockResolvedValueOnce(snapshot(6, new Date(Date.now()).toISOString()));
+    expect(await send(6)).toBe(204);
+    expect(pull).toHaveBeenCalledTimes(5);
+    expect(await send(7)).toBe(204);
+    expect(pull).toHaveBeenCalledTimes(5);
+    expect([...storage.values()]).toEqual([{ applied: 7, minimum: 7 }]);
+  } finally {
+    outageReply.resolve(unavailable());
+    clock.mockRestore();
+    vi.useRealTimers();
   }
 });
 
