@@ -2128,7 +2128,7 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
       expect(submitted.request().postData()).toBe("status=going");
       expect(submitted.status()).toBe(303);
       expect(submitted.headers().location).toBe(`/e/${openKey}`);
-      expect(submitted.headers()["x-two-renderer"]).toBeUndefined();
+      expect(submitted.headers()["x-two-renderer"]).toBe("kit");
       await expect(card.getByTestId("rsvp-confirmed")).toBeVisible();
       if (!compact) {
         await withSessionDb(async (sql) => {
@@ -4025,6 +4025,13 @@ test("Kit event writes preserve RSVP admission, scoped rank and native refusals"
   const audience = [member, nonMember, moderator];
   const fixtureTitle = "Kit write parity lifecycle fixture";
   const clientIp = "192.0.2.71";
+  const persistedEvent = (eventKey: string) =>
+    withSessionDb(async (sql) => {
+      const [row] = await sql`
+        select event_key, title, status, rsvp_open, location, created_by
+        from events where event_key = ${eventKey}`;
+      return row;
+    });
   const send = async (
     method: string,
     path: string,
@@ -4137,6 +4144,7 @@ test("Kit event writes preserve RSVP admission, scoped rank and native refusals"
       error: "forbidden",
       request_id: forbidden.headers()["x-request-id"],
     });
+    expect(await persistedEvent(key)).toMatchObject({ title: "Kit write parity event" });
 
     const create = await send("POST", "/events", {
       cookie: moderator.cookie,
@@ -4150,6 +4158,11 @@ test("Kit event writes preserve RSVP admission, scoped rank and native refusals"
     expect(create.status()).toBe(201);
     const { data: draft } = await create.json();
     expect(draft).toMatchObject({ title: fixtureTitle, status: "draft" });
+    expect(await persistedEvent(draft.event_key)).toMatchObject({
+      title: fixtureTitle,
+      status: "draft",
+      created_by: moderator.userId,
+    });
     const lifecycle = `/events/${draft.event_key}`;
     const patched = await send("PATCH", lifecycle, {
       cookie: moderator.cookie,
@@ -4157,6 +4170,7 @@ test("Kit event writes preserve RSVP admission, scoped rank and native refusals"
     });
     expect(patched.status()).toBe(200);
     expect((await patched.json()).data.location).toBe("Fixture voice");
+    expect(await persistedEvent(draft.event_key)).toMatchObject({ location: "Fixture voice" });
     for (const [action, status, expected] of [
       ["duplicate", 201, { status: "draft" }],
       ["publish", 200, { status: "published" }],
@@ -4166,7 +4180,17 @@ test("Kit event writes preserve RSVP admission, scoped rank and native refusals"
     ] as const) {
       const response = await send("POST", `${lifecycle}/${action}`, { cookie: moderator.cookie });
       expect(response.status()).toBe(status);
-      expect((await response.json()).data).toMatchObject(expected);
+      const { data: result } = await response.json();
+      expect(result).toMatchObject(expected);
+      if (action === "duplicate") {
+        expect(result.event_key).not.toBe(draft.event_key);
+      } else {
+        expect(result.event_key).toBe(draft.event_key);
+      }
+      expect(await persistedEvent(result.event_key)).toMatchObject({
+        ...expected,
+        created_by: moderator.userId,
+      });
     }
   } finally {
     await withSessionDb(async (sql) => {
