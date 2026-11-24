@@ -9,6 +9,8 @@ import { sha256 } from "./worker-bundle-evidence.mjs";
 // bytes. Wrangler receives an explicit Hono compile-time readiness profile.
 export async function packageCutover(dir, repo, installed, identity, context) {
   const inputs = await sourceInputs(repo);
+  const tool = JSON.parse(await readFile(join(repo, "node_modules/wrangler/package.json"), "utf8"));
+  assert.equal(tool.version, inputs.honoBuild.wrangler, "Hono Wrangler lock mismatch");
   await mkdir(dir);
   for (const profile of ["hono", "kit"]) {
     await mkdir(join(dir, profile, "modules"), { recursive: true });
@@ -45,7 +47,7 @@ export async function packageCutover(dir, repo, installed, identity, context) {
         "--outdir",
         scratch,
         "--define",
-        "__TWO_WEB_1033_COMPAT__:true",
+        inputs.honoBuild.define,
         "--upload-source-maps=false",
       ],
       { cwd: repo, stdio: "inherit", timeout: 120_000 },
@@ -64,4 +66,8 @@ export async function packageCutover(dir, repo, installed, identity, context) {
   const digest = await writeManifest(dir, context, inputs);
   await verifyPackage(dir, { ...context, digest }, inputs);
   await appendFile(process.env.GITHUB_OUTPUT, `digest=${digest}\n`);
+  await appendFile(
+    process.env.GITHUB_STEP_SUMMARY,
+    `Cutover packet manifest SHA-256: \`${digest}\`\n`,
+  );
 }

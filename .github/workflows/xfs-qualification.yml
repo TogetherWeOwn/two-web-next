@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       qualify_cutover:
-        description: "Retain the exact qualified Hono and all-off Kit packet"
+        description: "Retain the parity-tested all-off Kit and compatible Hono build packet"
         type: boolean
         default: false
 

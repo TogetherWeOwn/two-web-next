@@ -33,7 +33,14 @@ export async function sourceInputs(root = ".") {
   }
   assert.equal(kit.main, ".svelte-kit/cloudflare/_worker.js");
   assert.equal(production.main, "src/worker.ts");
+  const lock = JSON.parse(await readFile(path("package-lock.json"), "utf8"));
+  const honoBuild = {
+    define: "__TWO_WEB_1033_COMPAT__:true",
+    wrangler: lock.packages["node_modules/wrangler"].version,
+  };
+  assert.match(honoBuild.wrangler, /^\d+\.\d+\.\d+$/);
   return {
+    honoBuild,
     root: rootConfig,
     kit,
     journal: JSON.parse(journalBytes).entries,
@@ -76,7 +83,13 @@ export async function writeManifest(dir, context, inputs) {
       PROFILES.map(async (profile) => [profile, await inventory(join(dir, profile))]),
     ),
   );
-  const manifest = { schema: 1, ...context, configs: inputs.digests, files };
+  const manifest = {
+    schema: 1,
+    ...context,
+    configs: inputs.digests,
+    honoBuild: inputs.honoBuild,
+    files,
+  };
   const bytes = JSON.stringify(manifest);
   await writeFile(join(dir, "manifest.json"), bytes, { flag: "wx" });
   return sha256(bytes);
@@ -103,6 +116,7 @@ export async function verifyPackage(dir, pin, inputs) {
     inputs.digests,
     "cutover source config or journal digest mismatch",
   );
+  assert.deepEqual(manifest.honoBuild, inputs.honoBuild, "cutover Hono build profile mismatch");
   for (const profile of PROFILES) {
     const files = await inventory(join(dir, profile));
     assert.ok(

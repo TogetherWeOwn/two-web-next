@@ -41,6 +41,13 @@ test("cutover packet refuses wrong bytes, package identity, or source config", a
     }),
     /config or journal digest/,
   );
+  await assert.rejects(
+    verifyPackage(scratch, pin, {
+      ...inputs,
+      honoBuild: { ...inputs.honoBuild, define: "__TWO_WEB_1033_COMPAT__:false" },
+    }),
+    /Hono build profile/,
+  );
   await writeFile(join(scratch, "kit/modules/kit-adapter.js"), "changed");
   await assert.rejects(verifyPackage(scratch, pin, inputs), /kit bytes mismatch/);
   await writeFile(join(scratch, "kit/modules/kit-adapter.js"), "Kit adapter");
