@@ -1,14 +1,6 @@
 import { env } from "cloudflare:workers";
+import type { RequestHandler } from "@sveltejs/kit";
 import { fetchKitEventWrite } from "../../../../src/events/kit-event-write-fetch";
 
-export async function serveEventWrite({
-  request,
-  locals,
-}: {
-  request: Request;
-  locals: App.Locals;
-}) {
-  const response = await fetchKitEventWrite(request, env, locals.requestId);
-  if (!response) return new Response(null, { status: 404 });
-  return response;
-}
+export const serveEventWrite: RequestHandler = ({ request, locals }) =>
+  fetchKitEventWrite(request, env, locals.requestId);

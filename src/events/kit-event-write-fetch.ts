@@ -39,7 +39,7 @@ export async function fetchKitEventWrite(
   env: Env,
   requestId?: string,
   readSession: SessionReader = (c) => readContextSession(c, false),
-): Promise<Response | null> {
+): Promise<Response> {
   const rawPath = new URL(request.url).pathname;
   const c = eventWriteContext(request, env, requestId);
   const method = request.method;
@@ -48,7 +48,7 @@ export async function fetchKitEventWrite(
       (route.method === method || route.method === "*") &&
       ("dynamic" in route ? route.dynamic.matches(rawPath, c.req.path) : route.path === rawPath),
   );
-  if (!route) return null;
+  if (!route) return new Response(null, { status: 404 });
   // Hono routes on getPath and decodes the parameter separately. Kit has
   // already decoded its own params, so use the original request here.
   const [, mount, segment = "", action] = c.req.path.split("/");

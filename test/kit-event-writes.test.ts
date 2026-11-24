@@ -47,11 +47,9 @@ function fixture(flag: string | null = "true") {
   hono.use("*", sameOrigin);
   registerRsvpRoutes(hono, session);
   const honoFetch = vi.fn(async (request: Request) => hono.fetch(request, env));
-  const resolve = vi.fn(async (event: HookEventLike) => {
+  const resolve = vi.fn((event: HookEventLike) => {
     const locals = event.locals as { requestId?: string };
-    const response = await fetchKitEventWrite(event.request, env, locals.requestId, session);
-    if (!response) throw new Error("Kit selected an unimplemented event write");
-    return response;
+    return fetchKitEventWrite(event.request, env, locals.requestId, session);
   });
   const readKitPageSession = vi.fn(async () => {
     throw new Error("write unexpectedly invoked the page session bridge");

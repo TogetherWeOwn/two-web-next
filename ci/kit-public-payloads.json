@@ -166,6 +166,26 @@
   ],
   "sessionRequired": [
     {
+      "route": "POST /e/:key/rsvp",
+      "binding": "web/src/routes/e/[key]/rsvp/+server.ts",
+      "reads": "nonrotating member admission for an RSVP or withdrawal"
+    },
+    {
+      "route": "PATCH /events/:key",
+      "binding": "web/src/routes/events/[key]/+server.ts",
+      "reads": "moderator session and event row for a bounded patch"
+    },
+    {
+      "route": "POST /events/:key/{publish,cancel,duplicate,rsvp-pause,rsvp-reopen}",
+      "binding": "web/src/routes/events/[key]/[action]/+server.ts",
+      "reads": "moderator session and event row for a bounded action"
+    },
+    {
+      "route": "PUT/DELETE /events/:key/rsvp",
+      "binding": "web/src/routes/events/[key]/rsvp/+server.ts",
+      "reads": "nonrotating member admission and the caller's RSVP and rank"
+    },
+    {
       "route": "POST /admin/*",
       "binding": "web/src/routes/admin/[...action]/+page.server.ts",
       "reads": "exact moderator form actions admitted by the hook before controller dispatch"

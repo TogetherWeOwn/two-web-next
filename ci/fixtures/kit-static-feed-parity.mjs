@@ -176,7 +176,8 @@ export async function assertStaticFeedParity({
   ]);
   const modes = [hono, kit, seoOn, feedOn];
   const sql = postgres(databaseUrl, { max: 1 });
-  const buckets = [`events-read:${fixtureIp}`, `event-write:${fixtureIp}`];
+  const writeBucket = `event-write:${fixtureIp}`;
+  const buckets = [`events-read:${fixtureIp}`, writeBucket];
   const sessionLineages = [];
   let seeded = false;
 
@@ -365,22 +366,32 @@ export async function assertStaticFeedParity({
 
   try {
     const eventPath = `/events/${eventKeys[0]}`;
-    for (const [method, path, status] of [
-      ["POST", "/events", 401],
-      ["PATCH", eventPath, 401],
-      ["POST", `${eventPath}/publish`, 401],
-      ["PUT", `${eventPath}/rsvp`, 401],
-      ["DELETE", `${eventPath}/rsvp`, 401],
-      ["OPTIONS", `${eventPath}/rsvp`, 405],
-      ["POST", `/e/${eventKeys[0]}/rsvp`, 303],
+    const writeHits = async () => {
+      const [{ count }] =
+        await sql`select count(*)::int from web_throttle_hits where bucket = ${writeBucket}`;
+      return count;
+    };
+    let expectedHits = await writeHits();
+    for (const [method, path, status, hits] of [
+      ["POST", "/events", 401, 1],
+      ["PATCH", eventPath, 401, 1],
+      ["POST", `${eventPath}/publish`, 401, 1],
+      ["PUT", `${eventPath}/rsvp`, 401, 0],
+      ["DELETE", `${eventPath}/rsvp`, 401, 0],
+      ["OPTIONS", `${eventPath}/rsvp`, 405, 0],
+      ["POST", `/e/${eventKeys[0]}/rsvp`, 303, 0],
     ]) {
       await request(kit, path, { method, status, headers: { origin: kit.origin } });
+      expectedHits += hits;
+      assert.equal(await writeHits(), expectedHits, `Hono ${method} ${path}: event-write hits`);
       const result = await request(seoOn, path, {
         method,
         status,
         headers: { origin: hono.origin },
         renderer: "kit",
       });
+      expectedHits += hits;
+      assert.equal(await writeHits(), expectedHits, `Kit ${method} ${path}: event-write hits`);
       if (method === "OPTIONS") assert.equal(result.headers.get("allow"), "PUT, DELETE");
     }
     console.log("PASS installed Kit event write mounts with the flag absent and enabled");
