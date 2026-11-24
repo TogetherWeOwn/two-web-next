@@ -9,10 +9,20 @@ const REPORT = JSON.stringify({ "csp-report": { "script-sample": SYNTHETIC } });
 const MALFORMED = `{${SYNTHETIC}`;
 const MALFORMED_BYTES = new TextEncoder().encode(MALFORMED).length;
 const OVERSIZE_BYTES = 8_193;
+const MODES = ["Hono", "Kit enabled", "Kit disabled"] as const;
+const QUIET = {
+  violation: 0,
+  malformed: 0,
+  oversize: 0,
+  invalid: 0,
+  shed: 0,
+  http: 1,
+  unexpected: 0,
+};
 
 // Validate the emitted shape in memory. Keep only counts, including on failure.
 function countDiagnostics() {
-  const counts = { violation: 0, malformed: 0, oversize: 0, invalid: 0, http: 0, unexpected: 0 };
+  const counts = { ...QUIET, http: 0 };
   const unexpected = () => {
     counts.unexpected++;
   };
@@ -41,6 +51,8 @@ function countDiagnostics() {
         isDeepStrictEqual(fields, { bytes: OVERSIZE_BYTES })
       ) {
         counts.oversize++;
+      } else if (event === "csp.report.shed" && isDeepStrictEqual(fields, { dropped: 1 })) {
+        counts.shed++;
       } else if (
         event === "operator.config.invalid" &&
         isDeepStrictEqual(fields, {
@@ -107,109 +119,123 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it.each(["Hono", "Kit enabled", "Kit disabled"])(
-  "pins CSP report sampling through %s",
-  async (mode) => {
-    // Each leg gets a fresh isolate budget and a fresh once-per-setting warning.
-    vi.resetModules();
-    const { fetchApp } = await import("./helpers/fetch-app");
-    const { dispatchHookRequest, KIT_RENDERER_HEADER, KIT_RENDERER_VALUE } = await import(
-      "../src/route-ownership"
-    );
-    const { fetchKitCspReports } = await import("../src/kit-csp-reports-fetch");
+async function samplingFixture() {
+  // Each fixture gets a fresh isolate budget and a fresh once-per-setting warning.
+  vi.resetModules();
+  const { fetchApp } = await import("./helpers/fetch-app");
+  const { dispatchHookRequest, KIT_RENDERER_HEADER, KIT_RENDERER_VALUE } = await import(
+    "../src/route-ownership"
+  );
+  const { fetchKitCspReports } = await import("../src/kit-csp-reports-fetch");
+  let ioReads = 0;
+  function unexpectedIO(): never {
+    ioReads++;
+    throw new Error("Unexpected IO in the CSP sampling fixture");
+  }
+  vi.stubGlobal("fetch", unexpectedIO);
+  const random = vi.spyOn(Math, "random");
+
+  return async (
+    mode: (typeof MODES)[number],
+    body: string | null,
+    rate: string | undefined,
+    draw: number,
+  ) => {
     const enabled = mode === "Kit enabled";
-    let ioReads = 0;
-    function unexpectedIO(): never {
-      ioReads++;
-      throw new Error("Unexpected IO in the CSP sampling fixture");
-    }
-    vi.stubGlobal("fetch", unexpectedIO);
-    const random = vi.spyOn(Math, "random");
-
-    async function send(body: string | null, rate: string | undefined, draw: number) {
-      const counts = countDiagnostics();
-      random.mockReset().mockReturnValue(draw);
-      const env = {
-        ...baseEnv,
-        CSP_REPORT_SAMPLE_RATE: rate,
-        get DB() {
-          return unexpectedIO();
-        },
-        get SESSION_STORE() {
-          return unexpectedIO();
-        },
-      };
-      const url = new URL(PATH, env.APP_URL);
-      const request = new Request(url, {
-        method: "POST",
-        headers: {
-          "cf-ray": REQUEST_ID,
-          "content-type": "application/csp-report",
-          origin: "https://reporter.example.test",
-        },
-        body,
-      });
-      let kitCalls = 0;
-      let fallbackCalls = 0;
-      const response =
-        mode === "Hono"
-          ? await fetchApp(request, env)
-          : await dispatchHookRequest(
-              { request, url, route: { id: PATH } },
-              {
-                appUrl: env.APP_URL,
-                honoFetch(req) {
-                  fallbackCalls++;
-                  return fetchApp(req, env);
-                },
-                async resolve(event) {
-                  kitCalls++;
-                  const resolved = await fetchKitCspReports(event.request, env);
-                  if (!resolved) throw new Error("The CSP adapter declined the fixture request");
-                  return resolved;
-                },
-                sessionFor: unexpectedIO,
-                apiFamilies: [
-                  {
-                    flag: enabled ? "true" : "false",
-                    routes: [{ method: "POST", path: PATH, enabled: true, reads: "public" }],
-                  },
-                ],
-              },
-            );
-      expect(kitCalls).toBe(enabled ? 1 : 0);
-      expect(fallbackCalls).toBe(mode === "Kit disabled" ? 1 : 0);
-      expect(ioReads).toBe(0);
-      expect(response.headers.get(KIT_RENDERER_HEADER)).toBe(enabled ? KIT_RENDERER_VALUE : null);
-      expect(response.status).toBe(204);
-      expect(response.headers.get("cache-control")).toBe("no-store");
-      expect(response.body === null).toBe(true);
-      expect(response.headers.has("set-cookie")).toBe(false);
-      return { ...counts, draws: random.mock.calls.length };
-    }
-
-    const quiet = { violation: 0, malformed: 0, oversize: 0, invalid: 0, http: 1, unexpected: 0 };
-    for (const [name, rate, draw, admitted, draws, invalid] of CASES) {
-      expect(await send(REPORT, rate, draw), `${name}, valid report`).toEqual({
-        ...quiet,
-        violation: admitted,
-        invalid,
-        draws,
-      });
-      expect(await send(MALFORMED, rate, draw), `${name}, malformed report`).toEqual({
-        ...quiet,
-        malformed: admitted,
-        draws,
-      });
-    }
-    expect(await send(null, "1", 0.5)).toEqual({ ...quiet, draws: 0 });
-    expect(await send("x".repeat(OVERSIZE_BYTES), "0", 0.5)).toEqual({
-      ...quiet,
-      oversize: 1,
-      draws: 0,
+    const counts = countDiagnostics();
+    random.mockReset().mockReturnValue(draw);
+    const env = {
+      ...baseEnv,
+      CSP_REPORT_SAMPLE_RATE: rate,
+      get DB() {
+        return unexpectedIO();
+      },
+      get SESSION_STORE() {
+        return unexpectedIO();
+      },
+    };
+    const url = new URL(PATH, env.APP_URL);
+    const request = new Request(url, {
+      method: "POST",
+      headers: {
+        "cf-ray": REQUEST_ID,
+        "content-type": "application/csp-report",
+        origin: "https://reporter.example.test",
+      },
+      body,
     });
-  },
-);
+    let kitCalls = 0;
+    let fallbackCalls = 0;
+    const response =
+      mode === "Hono"
+        ? await fetchApp(request, env)
+        : await dispatchHookRequest(
+            { request, url, route: { id: PATH } },
+            {
+              appUrl: env.APP_URL,
+              honoFetch(req) {
+                fallbackCalls++;
+                return fetchApp(req, env);
+              },
+              async resolve(event) {
+                kitCalls++;
+                const resolved = await fetchKitCspReports(event.request, env);
+                if (!resolved) throw new Error("The CSP adapter declined the fixture request");
+                return resolved;
+              },
+              sessionFor: unexpectedIO,
+              apiFamilies: [
+                {
+                  flag: enabled ? "true" : "false",
+                  routes: [{ method: "POST", path: PATH, enabled: true, reads: "public" }],
+                },
+              ],
+            },
+          );
+    expect(kitCalls).toBe(enabled ? 1 : 0);
+    expect(fallbackCalls).toBe(mode === "Kit disabled" ? 1 : 0);
+    expect(ioReads).toBe(0);
+    expect(response.headers.get(KIT_RENDERER_HEADER)).toBe(enabled ? KIT_RENDERER_VALUE : null);
+    expect(response.status).toBe(204);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.body === null).toBe(true);
+    expect(response.headers.has("set-cookie")).toBe(false);
+    return { ...counts, draws: random.mock.calls.length };
+  };
+}
+
+it.each(MODES)("pins CSP report sampling through %s", async (mode) => {
+  const send = await samplingFixture();
+  for (const [name, rate, draw, admitted, draws, invalid] of CASES) {
+    expect(await send(mode, REPORT, rate, draw), `${name}, valid report`).toEqual({
+      ...QUIET,
+      violation: admitted,
+      invalid,
+      draws,
+    });
+    expect(await send(mode, MALFORMED, rate, draw), `${name}, malformed report`).toEqual({
+      ...QUIET,
+      malformed: admitted,
+      draws,
+    });
+  }
+  expect(await send(mode, null, "1", 0.5)).toEqual({ ...QUIET, draws: 0 });
+  expect(await send(mode, "x".repeat(OVERSIZE_BYTES), "0", 0.5)).toEqual({
+    ...QUIET,
+    oversize: 1,
+    draws: 0,
+  });
+});
+
+it("shares the CSP warning budget between Hono and the admitted Kit adapter", async () => {
+  const send = await samplingFixture();
+  vi.spyOn(Date, "now").mockReturnValue(60_000);
+  for (let i = 0; i < 20; i++) {
+    expect(await send("Hono", REPORT, "1", 0.5)).toEqual({ ...QUIET, violation: 1, draws: 0 });
+  }
+  expect(await send("Kit enabled", REPORT, "0", 0)).toEqual({ ...QUIET, draws: 0 });
+  expect(await send("Kit enabled", REPORT, "1", 0.5)).toEqual({ ...QUIET, shed: 1, draws: 0 });
+});
 
 it("declines other methods and nonliteral paths at the detached CSP boundary", async () => {
   const { fetchKitCspReports } = await import("../src/kit-csp-reports-fetch");
