@@ -1,29 +1,24 @@
 const POLL_INTERVAL = 10_000;
-const RESPONSE_DEADLINE = 5_000;
+const IO_TIMEOUT = 5_000;
+const COMMAND_TIMEOUT = 15_000;
+const RESYNC_COOLDOWN = 2_000;
+const INITIAL_RETRY = 1_000;
 const MAX_RETRY = 30_000;
-// Conservative fixture lease until the hub defines an upstream health signal.
-const LIVE_LEASE = 30_000;
 
 type Timer = ReturnType<typeof setTimeout>;
-
 export type TopicFrame<T> =
   | { kind: "snapshot" | "patch"; seq: number; value: T }
   | { kind: "unavailable" };
 
 type TopicState<T> = { value: T | null; source: "ssr" | "live" | "poll" | "stale" };
-type Socket = EventTarget & { close(): void; send(data: string): void };
-
 interface TopicTransport<T> {
-  open(): Socket;
-  // Throw on invalid frames; only validated, viewer-projected data reaches the store.
+  open(): WebSocket;
   decode(data: unknown): TopicFrame<T>;
-  resync(socket: Socket): void;
+  command(socket: WebSocket, type: "subscribe" | "resync"): void;
   poll?(signal: AbortSignal): Promise<T | null>;
 }
 
-/** A per-view Svelte readable. Subscribe during SSR; start it from onMount.
- *  Source describes the transport, not the age of Discord's underlying data.
- */
+/** Subscribe during SSR and start from onMount. Poll values may be out of date. */
 export function createLiveTopic<T>(initial: T | null, transport: TopicTransport<T>) {
   let state: TopicState<T> = { value: initial, source: "ssr" };
   const subscribers = new Set<(state: TopicState<T>) => void>();
@@ -39,53 +34,54 @@ export function createLiveTopic<T>(initial: T | null, transport: TopicTransport<
     if (mounted) throw new Error("Live topic already started");
     mounted = true;
     let stopped = false;
-    let socket: Socket | undefined;
+    let socket: WebSocket | undefined;
     let retry: Timer | undefined;
-    let frameDeadline: Timer | undefined;
+    let socketTimer: Timer | undefined;
+    let retryDelay = INITIAL_RETRY;
     let pollTick: Timer | undefined;
     let pollDeadline: Timer | undefined;
     let pollRequest: AbortController | undefined;
-    let retryDelay = 1_000;
+
+    function cancelPoll() {
+      clearTimeout(pollDeadline);
+      const request = pollRequest;
+      pollRequest = undefined;
+      request?.abort();
+    }
 
     function stopPolling() {
       clearTimeout(pollTick);
-      clearTimeout(pollDeadline);
       pollTick = undefined;
-      const pending = pollRequest;
-      pollRequest = undefined;
-      pending?.abort();
+      cancelPoll();
     }
 
     function poll(read: NonNullable<TopicTransport<T>["poll"]>) {
+      cancelPoll();
       pollTick = setTimeout(() => poll(read), POLL_INTERVAL);
       const request = new AbortController();
       pollRequest = request;
       function finish(value: T | null) {
         if (pollRequest !== request) return;
-        pollRequest = undefined;
-        clearTimeout(pollDeadline);
-        request.abort();
+        cancelPoll();
         publish(value, value === null ? "stale" : "poll");
       }
-      pollDeadline = setTimeout(() => finish(null), RESPONSE_DEADLINE);
+      pollDeadline = setTimeout(() => finish(null), IO_TIMEOUT);
       void Promise.resolve()
         .then(() => (request.signal.aborted ? null : read(request.signal)))
         .then(finish, () => finish(null));
     }
 
     function disconnect() {
-      clearTimeout(frameDeadline);
+      clearTimeout(socketTimer);
       const previous = socket;
       socket = undefined;
       previous?.close();
     }
 
     function fallback() {
-      if (pollTick !== undefined) return;
-      // Without continuity we can no longer confirm room access or consent.
-      // Drop that projection; the same-origin poll must authorize its own.
-      publish(null, "stale");
-      if (!stopped && transport.poll) poll(transport.poll);
+      cancelPoll();
+      if (state.source !== "poll") publish(null, "stale");
+      if (!stopped && pollTick === undefined && transport.poll) poll(transport.poll);
     }
 
     function recover() {
@@ -97,7 +93,8 @@ export function createLiveTopic<T>(initial: T | null, transport: TopicTransport<
     }
 
     function connect() {
-      let connection: Socket;
+      if (stopped) return;
+      let connection: WebSocket;
       try {
         connection = transport.open();
       } catch {
@@ -106,54 +103,77 @@ export function createLiveTopic<T>(initial: T | null, transport: TopicTransport<
       }
       socket = connection;
       let seq = 0;
-      let gap: number | undefined;
-      let expiresAt = 0;
-
+      let gap = 0;
+      let mode: "live" | "gap" | "withdrawn" = "withdrawn";
+      let resyncAfter = 0;
+      let deadline = performance.now() + IO_TIMEOUT;
       function lost() {
         if (socket === connection) recover();
       }
-      function arm(ms: number) {
-        clearTimeout(frameDeadline);
-        expiresAt = performance.now() + ms;
-        frameDeadline = setTimeout(lost, ms);
-      }
-      arm(RESPONSE_DEADLINE);
-      for (const event of ["close", "error"]) connection.addEventListener(event, lost);
-      connection.addEventListener("message", (event) => {
-        if (socket !== connection || !(event instanceof MessageEvent)) return;
-        // A queued frame must not renew an already expired lease after suspension.
-        if (performance.now() >= expiresAt) return lost();
-        let frame: TopicFrame<T> | null;
+      function send(type: "subscribe" | "resync") {
+        if (socket !== connection) return;
+        deadline = performance.now() + COMMAND_TIMEOUT;
+        socketTimer = setTimeout(lost, COMMAND_TIMEOUT);
         try {
-          frame = transport.decode(event.data);
-          if (frame.kind === "unavailable") {
-            // Invalidate even a fallback request started before this notice.
-            stopPolling();
-            return lost();
-          }
-          if (!Number.isSafeInteger(frame.seq) || frame.seq < 1) return lost();
-          if (frame.seq <= seq) return;
-          if (frame.kind === "snapshot") {
-            if (gap === undefined ? seq !== 0 || frame.seq !== 1 : frame.seq < gap) return;
-            gap = undefined;
-            stopPolling();
-            retryDelay = 1_000;
-          } else if (gap !== undefined) {
-            return;
-          } else if (seq === 0 || frame.seq !== seq + 1) {
-            gap = frame.seq;
-            fallback();
-            if (stopped) return;
-            arm(RESPONSE_DEADLINE);
-            transport.resync(connection);
-            return;
-          }
+          transport.command(connection, type);
         } catch {
           lost();
-          return;
+        }
+      }
+      socketTimer = setTimeout(lost, IO_TIMEOUT);
+      connection.addEventListener("open", opened, { once: true });
+      for (const event of ["close", "error"] as const) connection.addEventListener(event, lost);
+      function opened() {
+        if (socket !== connection) return;
+        if (performance.now() >= deadline) return lost();
+        clearTimeout(socketTimer);
+        send("subscribe");
+      }
+
+      function withdraw(reason: "gap" | "withdrawn") {
+        mode = reason;
+        fallback();
+        if (socket !== connection || socketTimer !== undefined) return;
+        socketTimer = setTimeout(
+          () => send("resync"),
+          Math.max(0, resyncAfter - performance.now()) + Math.random() * 400,
+        );
+      }
+
+      connection.addEventListener("message", (event) => {
+        if (socket !== connection) return;
+        const now = performance.now();
+        if (deadline !== 0 && now >= deadline) return lost();
+        let frame: TopicFrame<T>;
+        try {
+          frame = transport.decode(event.data);
+        } catch {
+          return lost();
+        }
+        if (frame.kind === "unavailable") return withdraw("withdrawn");
+        if (frame.seq <= seq) return;
+        if (frame.kind === "snapshot") {
+          if (mode === "live" || (seq === 0 ? frame.seq !== 1 : frame.seq < gap)) return;
+          clearTimeout(socketTimer);
+          socketTimer = undefined;
+          deadline = 0;
+          gap = 0;
+          mode = "live";
+          resyncAfter = now + RESYNC_COOLDOWN;
+          retryDelay = INITIAL_RETRY;
+          stopPolling();
+        } else {
+          if (mode === "withdrawn") return;
+          if (mode === "gap") {
+            gap = Math.max(gap, frame.seq);
+            return;
+          }
+          if (frame.seq !== seq + 1) {
+            gap = frame.seq;
+            return withdraw("gap");
+          }
         }
         seq = frame.seq;
-        arm(LIVE_LEASE);
         publish(frame.value, "live");
       });
     }

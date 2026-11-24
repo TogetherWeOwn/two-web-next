@@ -6,6 +6,7 @@ import { generateSignedCookie } from "hono/cookie";
 import postgres from "postgres";
 import { WebSocket } from "undici";
 import { SESSION_COOKIE } from "../parity/fixture.mjs";
+import frames from "./kit-live-frames.json" with { type: "json" };
 
 const ingestPath = "/internal/discord-live/v1/ingest";
 const guild = "326474832151838730";
@@ -134,7 +135,7 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
   try {
     await guest.ready;
     guest.subscribe(["voice", "channels", "members", "events"]);
-    await guest.frame(projected("snapshot", 1, null));
+    await guest.frame(frames.initial);
     for (const topic of ["channels", "members", "events"]) await guest.frame(unavailable(topic));
 
     await sql`insert into web_sessions (token_hash, user_id, username, member, expires_at)
@@ -142,11 +143,11 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
     member = connect(url, { ...headers, Cookie: signed.split(";", 1)[0] });
     await member.ready;
     member.subscribe(["voice"]);
-    await member.frame(projected("snapshot", 1, null));
+    await member.frame(frames.initial);
     await sql`update web_sessions set revoked_at = clock_timestamp() where token_hash = ${ref}`;
     const [status, , [closed]] = await Promise.all([
       ingest(origin, 41, join("105", "10")),
-      guest.frame(projected("patch", 2, 5)),
+      guest.frame(frames.five),
       once(member.socket, "close", deadline()),
     ]);
     assert.equal(status, 204);
@@ -157,16 +158,16 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
     assert.equal(await ingest(origin, 43, join("107", "12")), 204);
     assert.equal(await ingest(origin, 44, leave("105")), 204);
     // No extra revision from either the restricted allowlisted room or the unlisted room.
-    await guest.frame(projected("patch", 3, null));
+    await guest.frame(frames.suppressed);
 
     assert.equal(await ingest(origin, 46, leave("106")), 409, "reject a behind snapshot");
-    await guest.frame(unavailable("voice"));
+    await guest.frame(frames.withdrawal);
     await source(snapshot(46, 5, new Date(Date.now() - 60_000).toISOString()));
     assert.equal(await ingest(origin, 46, leave("106")), 409, "reject a stale covering snapshot");
     const covering = snapshot(46, 5);
     const generation = await source(covering);
     assert.equal(await ingest(origin, 46, leave("106")), 204, "recover with a fresh observation");
-    await guest.frame(projected("snapshot", 4, 5));
+    await guest.frame(frames.covering);
     const roomPolicy = (restricted) => ({
       topic: "channels",
       op: "upsert",
@@ -190,10 +191,7 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
         }
       }
     };
-    const [withdrawnAt] = await Promise.all([
-      guest.frame(unavailable("voice"), 35_000),
-      keepWarm(),
-    ]);
+    const [withdrawnAt] = await Promise.all([guest.frame(frames.withdrawal, 35_000), keepWarm()]);
     assert.ok(withdrawnAt >= sourceUntil, "the source alarm must not clear the baseline early");
     assert.ok(withdrawnAt < sourceUntil + 4_000, "restricted ingress must not renew the lease");
     assert.equal(await source(), generation, "lease alarm ran without a hibernation wake");
@@ -205,8 +203,8 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
     assert.equal(await source(snapshot(49, 5)), generation);
     const warmResyncAt = performance.now();
     guest.resyncVoice();
-    await guest.frame(unavailable("voice"));
-    await guest.frame(projected("snapshot", 7, 5));
+    await guest.frame(frames.withdrawal);
+    await guest.frame(frames.warm);
     assert.equal(await source(), generation, "the socket resynced on the same hub without ingress");
     console.log(
       "PASS installed Kit public scope, wire shape, exact-row fan-out revocation, gap recovery, lease expiry, and socket resync",
@@ -220,9 +218,9 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
     assert.equal(guest.socket.readyState, WebSocket.OPEN);
     assert.deepEqual(guest.frames, [], "the warm baseline stayed quiet before resync");
     guest.resyncVoice();
-    await guest.frame(unavailable("voice")); // Reconstructed hub clears the previous baseline.
-    await guest.frame(unavailable("voice")); // The resync starts without an in-memory snapshot.
-    await guest.frame(projected("snapshot", 8, 6));
+    await guest.frame(frames.withdrawal); // Reconstructed hub clears the previous baseline.
+    await guest.frame(frames.withdrawal); // The resync starts without an in-memory snapshot.
+    await guest.frame(frames.cold);
     assert.ok(performance.now() - warmResyncAt < 25_000, "the source alarm was not due yet");
     assert.equal(await source(), generation + 1, "resync woke a new hub on the original socket");
     console.log("PASS installed Kit same-socket hibernation wake and snapshot recovery");

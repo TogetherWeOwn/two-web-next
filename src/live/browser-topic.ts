@@ -1,51 +1,53 @@
 import { createLiveTopic, type TopicFrame } from "./client-topic";
 
-type Topic = "voice" | "channels" | "members" | "events";
-const MAX_FRAME_CHARS = 1024 * 1024;
+type PublicVoiceCount = { count: number | null };
 
-function decode<T>(raw: unknown, topic: Topic, parseValue: (value: unknown) => T): TopicFrame<T> {
-  const invalid = () => new Error("Invalid realtime frame");
-  if (typeof raw !== "string" || raw.length > MAX_FRAME_CHARS) throw invalid();
-  const msg: unknown = JSON.parse(raw);
-  if (!msg || typeof msg !== "object" || !("topic" in msg) || msg.topic !== topic) throw invalid();
-  if (!("v" in msg) || msg.v !== 1 || !("type" in msg)) throw invalid();
-  if (msg.type === "unavailable" && Object.keys(msg).length === 3) return { kind: "unavailable" };
-  if (
-    (msg.type !== "snapshot" && msg.type !== "patch") ||
-    Object.keys(msg).length !== 5 ||
-    !("seq" in msg) ||
-    typeof msg.seq !== "number" ||
-    !("value" in msg)
-  ) {
-    throw invalid();
+function parseCount(value: unknown): PublicVoiceCount {
+  if (value && typeof value === "object" && Object.keys(value).length === 1 && "count" in value) {
+    const { count } = value;
+    if (
+      count === null ||
+      (typeof count === "number" && Number.isSafeInteger(count) && count >= 5)
+    ) {
+      return { count };
+    }
   }
-  return { kind: msg.type, seq: msg.seq, value: parseValue(msg.value) };
+  throw new Error("Invalid public voice count");
 }
 
-/** Starts no I/O in SSR. The caller supplies its own audience-safe poll and DTO validator. */
-export function createBrowserLiveTopic<T>(
-  topic: Topic,
-  initial: T | null,
-  parseValue: (value: unknown) => T,
-  poll?: (signal: AbortSignal) => Promise<T | null>,
+function decode(raw: unknown): TopicFrame<PublicVoiceCount> {
+  const invalid = () => new Error("Invalid public voice frame");
+  if (typeof raw !== "string" || raw.length > 128) throw invalid();
+  const msg = JSON.parse(raw) as Record<string, unknown> | null;
+  if (msg?.v !== 1 || msg.topic !== "voice") throw invalid();
+  const { type, seq, value } = msg;
+  const fields = Object.keys(msg).length;
+  if (type === "unavailable" && fields === 3) return { kind: type };
+  if ((type !== "snapshot" && type !== "patch") || fields !== 5 || value === undefined)
+    throw invalid();
+  if (typeof seq !== "number" || !Number.isSafeInteger(seq) || seq < 1 || seq > 1024)
+    throw invalid();
+  return { kind: type, seq, value: parseCount(value) };
+}
+
+/** The caller supplies an independently authorized, projected same-origin fallback. */
+export function createBrowserLiveTopic(
+  initial: PublicVoiceCount | null,
+  poll?: (signal: AbortSignal) => Promise<unknown>,
 ) {
-  const request = (type: "subscribe" | "resync") => JSON.stringify({ v: 1, type, topics: [topic] });
+  async function read(signal: AbortSignal) {
+    const value = await poll?.(signal);
+    return value === null ? null : parseCount(value);
+  }
   return createLiveTopic(initial, {
     open() {
-      // Read the browsing context only on mount, not on import or SSR subscription.
       const browser = globalThis as { location?: { origin: string } };
       const url = new URL("/api/discord-live/v1", browser.location?.origin);
       url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-      const socket = new WebSocket(url);
-      socket.addEventListener("open", () => {
-        if (socket.readyState === WebSocket.OPEN) {
-          socket.send(request("subscribe"));
-        }
-      });
-      return socket;
+      return new WebSocket(url.href);
     },
-    decode: (raw) => decode(raw, topic, parseValue),
-    resync: (socket) => socket.send(request("resync")),
-    poll,
+    command: (socket, type) => socket.send(JSON.stringify({ v: 1, type, topics: ["voice"] })),
+    decode,
+    poll: poll && read,
   });
 }
