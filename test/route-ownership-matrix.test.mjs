@@ -132,7 +132,10 @@ describe("route ownership preparation matrix (not runtime dispatch)", () => {
     expect(probes.every((pair) => resolveRouteOwner(pair) === "hono")).toBe(true);
     // The current resolver reserves these paths even with an enabled manifest entry.
     // Keep the release expectation as a fixture for the dispatcher that can opt in.
-    const manifest = [{ method: registered, path, enabled: true }];
+    const manifest = [
+      { method: registered, path, enabled: true },
+      { method: "GET", path: sibling, enabled: true },
+    ];
     for (const pair of probes) {
       expect(resolveRouteOwner(pair, manifest), routeKey(pair)).toBe("hono");
     }
