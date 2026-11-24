@@ -31,10 +31,10 @@
 // member to logged-out). The auth-status probe cookie is deliberately never
 // accepted here: it proves liveness only and is not a login token.
 import { exceptionClass } from "./alerts";
-import { AUTH_STATUS_COOKIE } from "./auth-status";
 import type { Env } from "./env";
+import { AUTH_STATUS_COOKIE } from "./http/auth-status";
 import { storeForEnv } from "./http/session";
-import { signedCookieHeader, verifySignedCookie } from "./http/signed-cookie";
+import { signedCookieHeader, signedCookiePairs, verifySignedCookie } from "./http/signed-cookie";
 import type { KitEventsSession } from "./kit-events";
 import { safeNext } from "./join/service";
 import {
@@ -110,18 +110,7 @@ async function verifiedCookies(
   sessionSecret: string,
 ): Promise<Record<string, string | null> | null> {
   if (!sessionSecret) return null;
-  const encoded = new Map<string, string>();
-  for (const pair of (request.headers.get("cookie") ?? "").split(";")) {
-    const separator = pair.indexOf("=");
-    if (separator < 0) continue;
-    const name = pair.slice(0, separator).replace(/^[ \t]+|[ \t]+$/g, "");
-    if (!KIT_COOKIE_NAMES.has(name) || encoded.has(name)) continue;
-    const raw = pair.slice(separator + 1).replace(/^[ \t]+|[ \t]+$/g, "");
-    const value = raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw;
-    // Hono permits printable ASCII except quote, semicolon, and backslash.
-    // A syntactically valid pair claims the name even when its MAC fails.
-    if (/^[\x20-\x21\x23-\x3a\x3c-\x5b\x5d-\x7e]*$/.test(value)) encoded.set(name, value);
-  }
+  const encoded = signedCookiePairs(request.headers.get("cookie"), KIT_COOKIE_NAMES);
   try {
     return Object.fromEntries(
       await Promise.all(
