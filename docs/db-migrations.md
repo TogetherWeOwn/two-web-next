@@ -260,14 +260,20 @@ absence never appears as an applied migration. Ordinary builds require the
 full journal.
 
 The fixture exercises the live event sync store before the expansion and
-after the login can read only the timestamp view. The protected deploy
-still requires the full candidate journal and uploads Hono. Qualification
-of a cutover build requires protected admission for its reviewed runtime
-requirements, an all-Hono Kit artifact with the existing queue and scheduled
-handlers, and a separately qualified Hono rollback version. Install and
-verify the timestamp view and its serving grants before revoking direct
-ledger access. A legacy Hono artifact that reads the ledger directly will
-fail readiness after that revocation.
+after the login can read only the timestamp view. The hosted all-off parity
+job builds the Kit server with `TWO_WEB_1033_COMPAT=true` and installs the
+production cutover facade, which attaches the same queue and scheduled
+handlers as the Hono Worker. It compares the installed artifact at the
+production origin using disposable fixtures and verifies the serialized
+module digests in a Wrangler upload dry run.
+
+The protected deploy still requires the full candidate journal and uploads
+Hono. Cutover qualification needs protected admission of the exact
+all-off Kit artifact on the approved ledger, staging checks for the same
+artifact, and a compatible Hono version qualified through protected
+rollback. Install and verify the timestamp view and its serving grants
+before revoking direct ledger access. A legacy Hono artifact that reads
+the ledger directly will fail readiness after that revocation.
 
 The member-erasure CLI reads `event_echo_members` in its dry run and erase
 transaction. The current CLI requires `1034`; verify the erasure path for

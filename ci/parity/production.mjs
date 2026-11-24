@@ -175,7 +175,7 @@ async function main() {
     readWranglerConfig(kitText),
   );
   const context = rehearsalContext(head);
-  const installed = await prepareInstalledKitWorker(repo);
+  const installed = await prepareInstalledKitWorker(repo, { productionCutover: true });
   const files = await outputIdentity(installed);
   const candidate = kit(installed.worker, installed.assets);
   const identity = {

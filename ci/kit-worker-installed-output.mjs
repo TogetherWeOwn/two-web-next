@@ -15,7 +15,7 @@ async function regularBuildPath(path) {
 
 // This tree has one producer and one consumer. The hosted fixture owns it
 // until both Workers stop; nothing publishes or reuses it outside that job.
-export async function prepareInstalledKitWorker(repo) {
+export async function prepareInstalledKitWorker(repo, { productionCutover = false } = {}) {
   const root = process.env.XFS_FIXTURE_ROOT;
   assert.ok(
     process.env.GITHUB_ACTIONS === "true" &&
@@ -65,7 +65,7 @@ export async function prepareInstalledKitWorker(repo) {
     const assets = join(kitBuild, "cloudflare");
     const worker = join(assets, ENTRY_NAME);
     admission.recheck();
-    const installed = await installWorkerFacade({ dir: assets });
+    const installed = await installWorkerFacade({ dir: assets, productionCutover });
     const adapter = await readFile(join(assets, COMPANION_NAME));
     const facade = await readFile(worker);
     const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
