@@ -18,6 +18,13 @@ const html = [
   ["/join", /id="join-heading"/],
 ];
 const emberPages = new Set(["/", "/events", "/join"]);
+const eventsFragment = {
+  path: "/events?view=calendar",
+  statuses: [200],
+  type: "text/html",
+  body: /data-island="events-calendar"/,
+  headers: { "x-two-island": "events-calendar" },
+};
 // HTML leaves that stay non-indexable even on the indexable apex: the archive
 // and the branded 404s carry their noindex in <meta>, so the deploy smoke
 // asserts the X-Robots-Tag header only on the indexable leaves.
@@ -301,7 +308,9 @@ export async function smoke(
       ? {}
       : { "Cloudflare-Workers-Version-Overrides": versionOverride };
   let failures = 0;
-  for (const route of routes) {
+  for (const route of expectedCutoverRenderer === undefined
+    ? routes
+    : [...routes, eventsFragment]) {
     let routeFailures = 0;
     const check = (valid, expected, actual) => {
       if (!valid) {
@@ -316,7 +325,7 @@ export async function smoke(
       const response = await fetch(new URL(route.path, base), {
         redirect: "manual",
         signal: AbortSignal.timeout(timeoutMs),
-        headers: overrideHeaders,
+        headers: { ...overrideHeaders, ...route.headers },
       });
       check(
         route.statuses.includes(response.status),
@@ -739,7 +748,8 @@ export async function smoke(
       }
       let expectedRenderer = route.path === "/join" ? expectedJoinRenderer : undefined;
       if (expectedCutoverRenderer !== undefined) {
-        expectedRenderer = emberPages.has(route.path) ? expectedCutoverRenderer : "hono";
+        expectedRenderer =
+          emberPages.has(route.path) || route === eventsFragment ? expectedCutoverRenderer : "hono";
       }
       if (expectedRenderer !== undefined) {
         const renderer = headers.get("x-two-renderer");

@@ -23,8 +23,9 @@ To retry, select **Re-run all jobs** so staging uses a packet from that attempt.
 For the Ember release set `cutover_profile: ember` with `qualify_cutover: true`.
 The regular all-off parity job still verifies the packaged bytes. The isolated
 run uploads those bytes with the Ember flag on and checks that document GETs to
-Home, Events and Join use Kit. It checks Hono on the remaining smoke routes and
-at each undo. APIs, Join OAuth, member and admin routes keep their Hono ownership.
+Home, Events and Join use Kit, including the Events calendar fragment GET. It
+checks Hono on the remaining smoke routes and at each undo. APIs, Join OAuth,
+member and admin routes keep their Hono ownership.
 
 ## Protected release and recovery
 

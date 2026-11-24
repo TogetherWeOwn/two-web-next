@@ -581,6 +581,20 @@ describe("Kit production route selection", () => {
     }
   });
 
+  it("keeps the Ember Events calendar fragment on the same renderer", async () => {
+    const event = productionEvent("/events?view=calendar");
+    const headers = { "x-two-island": "events-calendar", "sec-fetch-site": "same-origin" };
+    event.request = new Request(event.request, { headers });
+    const response = await expectOwner(event, "kit", ember);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("vary")?.toLowerCase()).toContain("sec-fetch-site");
+    await expectOwner(event, "hono", {});
+    event.request = new Request(event.request, {
+      headers: { ...headers, "sec-fetch-site": "cross-site" },
+    });
+    await expectOwner(event, "hono", ember);
+  });
+
   it.each([
     "",
     "not a URL",

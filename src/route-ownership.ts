@@ -28,6 +28,7 @@ import { setReleaseMetadata } from "./release-tag";
 import { withStreamedBody } from "./html-stream";
 import { applySingleValidator } from "./http/conditional";
 import { PRODUCTION_APEX } from "./http/robots";
+import { EVENTS_CALENDAR_ISLAND } from "./islands/contracts-calendar";
 import { transformContentLeafChunk } from "./kit-content-chunk";
 import type { KitHomePanels } from "./kit-home-panels";
 import type { KitLocals } from "./kit-session";
@@ -410,6 +411,7 @@ const PRODUCTION_DOCUMENT_VARY = [
   "X-Two-Island",
   "Sec-Fetch-Dest",
   "Sec-Fetch-Mode",
+  "Sec-Fetch-Site",
   "Purpose",
   "Sec-Purpose",
   "X-Moz",
@@ -440,7 +442,7 @@ function isProductionRolloutPath(url: URL, deps: ProductionRollout): boolean {
 }
 
 // The production apex and the isolated cutover Worker never fall through to
-// the preview manifest. Only canonical document GETs can opt in here.
+// the preview manifest. Canonical document and Ember calendar GETs can opt in here.
 export function productionManifestFor(
   event: Pick<HookEventLike, "request" | "url" | "isDataRequest">,
   deps: ProductionRollout,
@@ -452,12 +454,20 @@ export function productionManifestFor(
   if (!onApex && !cutoverProof) {
     return undefined;
   }
+  const fetchSite = event.request.headers.get("sec-fetch-site");
+  const calendarFragment =
+    requestUrl.pathname === "/events" &&
+    emberDocumentPath(requestUrl, deps) &&
+    event.request.method === "GET" &&
+    !event.isDataRequest &&
+    (fetchSite === null || fetchSite === "same-origin") &&
+    event.request.headers.get("x-two-island") === EVENTS_CALENDAR_ISLAND;
   if (
     (onApex && requestUrl.origin !== PRODUCTION_APP_URL) ||
     !isProductionRolloutPath(requestUrl, deps) ||
     event.url.origin !== requestUrl.origin ||
     event.url.pathname !== requestUrl.pathname ||
-    !isKitNoticeDocument(event.request, event.isDataRequest) ||
+    (!calendarFragment && !isKitNoticeDocument(event.request, event.isDataRequest)) ||
     // Older Firefox sends X-Moz: prefetch without Fetch Metadata.
     /(?:^|,)\s*prefetch\s*(?:,|$)/i.test(event.request.headers.get("x-moz") ?? "")
   ) {
