@@ -15,7 +15,7 @@ import {
   newSessionToken,
   type SessionStore,
 } from "../src/sessions";
-import app from "./app";
+import { fetchAppPath } from "./helpers/fetch-app";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
 const APP_URL = "https://next.example.test";
@@ -92,7 +92,7 @@ describe.skipIf(!process.env.DATABASE_URL)("rss moderator parity (agent-testdb)"
       SESSION_STORE: store,
       ADMIN_DB: fixture.db,
     }) as unknown as Env;
-  const req = (path: string, init: RequestInit = {}) => app.request(path, init, bindings());
+  const req = (path: string, init: RequestInit = {}) => fetchAppPath(path, init, bindings());
 
   async function cookieFor(store: SessionStore, moderator: boolean): Promise<string> {
     const token = newSessionToken();

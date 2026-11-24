@@ -2,7 +2,6 @@
 // Synthetic rows only, in an owned schema on the guarded test container.
 import type postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import app from "./app";
 import { parseEventForm, ValidationError } from "../src/admin/validation";
 import { DEFAULT_CONFIG, validateFields } from "../src/agent-events/service";
 import { sha256Hex } from "../src/bot/signer";
@@ -12,6 +11,7 @@ import {
   type MemberDataFixture,
 } from "./helpers/member-data-db";
 import { clearAuditRows } from "./helpers/audit-rows";
+import { requestApp } from "./helpers/fetch-app";
 
 const state = vi.hoisted(() => ({
   schema: "",
@@ -230,7 +230,7 @@ describe.skipIf(!process.env.DATABASE_URL)("machine input bounds (mounted route 
   async function call(body: Record<string, unknown>) {
     const pending: Promise<unknown>[] = [];
     try {
-      const response = await app.request(
+      const response = await requestApp(
         "/api/agent-events",
         {
           method: "POST",
@@ -264,6 +264,7 @@ describe.skipIf(!process.env.DATABASE_URL)("machine input bounds (mounted route 
     });
     expect(result.status).toBe(201);
     expect(result.body.event_key).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+    expect(result.body).toMatchObject({ status: "draft", agent_version: 1 });
     return result.body.event_key as string;
   }
 
@@ -301,6 +302,7 @@ describe.skipIf(!process.env.DATABASE_URL)("machine input bounds (mounted route 
         fields: { ...FIELDS, capacity },
       });
       expect(updated.status).toBe(200);
+      expect(updated.body).toMatchObject({ event_key: eventKey, agent_version: 2 });
       expect(
         (await sql`SELECT capacity, agent_version FROM events WHERE event_key = ${eventKey}`)[0],
       ).toMatchObject({ capacity, agent_version: 2 });

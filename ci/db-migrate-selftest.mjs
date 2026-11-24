@@ -22,6 +22,9 @@ import {
   runMigration,
   safeMigrationError,
 } from "./db-migrate.mjs";
+import { runRepair } from "./db-permissions-repair.mjs";
+import { runExecutorAuthority } from "./db-repair-executor.mjs";
+import { rehearseProjection } from "./fixtures/web-readiness-projection.mjs";
 import { OwnershipRefusal, assertMigratorOwnership } from "./migration-ownership.mjs";
 import {
   DefaultAclRefusal,
@@ -31,6 +34,7 @@ import {
   assertServingLedgerIsolation,
   validateMigrationSql,
 } from "./migration-runtime-rights.mjs";
+import { checkProductionIdentity } from "./production-db-identity.mjs";
 import { rehearseWebReadiness } from "./web-readiness-rehearsal.mjs";
 
 const mainEnv = {
@@ -52,6 +56,244 @@ const productionEnv = {
 };
 const identityHash = (database, role) =>
   createHash("sha256").update(database).update(Buffer.of(0)).update(role).digest("hex");
+
+test("permissions repair rejects an unpinned plan before opening a client", async () => {
+  await assert.rejects(
+    runRepair("forward", { PRODUCTION_DB_REPAIR_PLAN: "{}" }, () => {
+      assert.fail("unexpected connection");
+    }),
+    /raw && raw.length/,
+  );
+});
+
+test("executor authority rejects malformed, oversized and mismatched plans before connecting", async () => {
+  const plan = { operation: "revoke", identity: "a".repeat(64), executor: "repair_legacy" };
+  for (const [raw, expected] of [
+    ["{", SyntaxError],
+    [JSON.stringify(plan).padEnd(1025), /Executor plan exceeds/],
+    [JSON.stringify(plan), /Executor plan operation does not match/],
+  ]) {
+    await assert.rejects(
+      runExecutorAuthority(
+        "provision",
+        {
+          PRODUCTION_DB_EXECUTOR_PLAN: raw,
+          PRODUCTION_DB_EXECUTOR_PLAN_SHA256: createHash("sha256").update(raw).digest("hex"),
+          PRODUCTION_DB_EXECUTOR_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:fixture-password@${PLANETSCALE_PRODUCTION_HOST}:5432/postgres?sslmode=verify-full`,
+        },
+        () => assert.fail("unexpected connection"),
+      ),
+      expected,
+    );
+  }
+});
+
+test("permissions repair pins the catalog, preserves the ledger and reverses the exact changes", async () => {
+  await fixture(async ({ client, url }) => {
+    const inventory = JSON.parse(
+      readFileSync(new URL("db-permissions-repair-inventory.json", import.meta.url), "utf8"),
+    );
+    const snapshot = readFileSync(
+      new URL("db-permissions-repair-state.sql", import.meta.url),
+      "utf8",
+    );
+    const createdApp = await ensureRuntimeRole(client);
+    const roles = [
+      "two_web_migrate",
+      "two_web_backup",
+      "repair_legacy",
+      "repair_other",
+      "repair-provisioner",
+    ];
+    const createdRoles = [];
+    const executor = postgres(url.href, { username: "repair_legacy", max: 1 });
+    const provisioner = postgres(url.href, { username: "repair-provisioner", max: 1 });
+    try {
+      for (const role of roles) {
+        await client.unsafe(`create role "${role}" nologin`);
+        createdRoles.push(role);
+      }
+      await client
+        .unsafe(`
+        alter role repair_legacy login password 'ci';
+        alter role "repair-provisioner" login password 'ci';
+        grant two_web_migrate to "repair-provisioner" with admin true, inherit false, set false;
+        grant repair_other, pg_maintain, pg_read_all_stats to repair_legacy;
+        create schema drizzle authorization repair_legacy;
+        grant create on database "${url.pathname.slice(1)}" to two_web_migrate;
+        grant usage, create on schema public to repair_legacy, repair_other, two_web_migrate;
+        grant usage on schema drizzle to two_web_app;
+        create table public.web_session_grace (id int);
+        create table drizzle.__drizzle_migrations (id serial primary key, hash text, created_at bigint);
+        alter table drizzle.__drizzle_migrations owner to repair_legacy;
+        grant select on drizzle.__drizzle_migrations to two_web_app;
+        alter default privileges for role two_web_migrate in schema public
+          grant select, insert, update, delete on tables to two_web_app;
+        alter default privileges for role two_web_migrate in schema public
+          grant select, usage on sequences to two_web_app;
+        alter default privileges for role two_web_migrate in schema public
+          grant select on tables to two_web_backup;
+        alter default privileges for role two_web_migrate in schema public
+          grant select, usage on sequences to two_web_backup;
+      `)
+        .simple();
+      const owners = [];
+      for (const [name, kind] of inventory) {
+        const owner = name.includes("grants") ? "repair_other" : "repair_legacy";
+        owners.push(owner);
+        if (name.startsWith("drizzle.") || kind !== "TABLE") continue;
+        const serial = inventory.some(([, , coupling]) => coupling === name);
+        await client.unsafe(`create table ${name} (id ${serial ? "serial" : "int"} primary key)`);
+        await client.unsafe(`alter table ${name} owner to ${owner}`);
+      }
+      await client
+        .unsafe(`
+        create function public.repair_audit() returns trigger language plpgsql
+          as $$begin return new; end$$;
+        create trigger repair_audit before update on public.activity_log
+          for each row execute function public.repair_audit();
+      `)
+        .simple();
+      const ledger = journal.entries.slice(0, 34).map(({ tag, when }) => ({
+        created_at: when,
+        hash: createHash("sha256")
+          .update(readFileSync(join(source, `${tag}.sql`)))
+          .digest("hex"),
+      }));
+      await client`insert into drizzle.__drizzle_migrations ${client(ledger, "hash", "created_at")}`;
+
+      const observe = async (tx) => (await tx.unsafe(snapshot))[0].digest;
+      const readState = () =>
+        executor.begin(async (tx) => {
+          await tx`set local search_path = pg_catalog`;
+          return observe(tx);
+        });
+      const dsn = `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:fixture-password@${PLANETSCALE_PRODUCTION_HOST}:5432/postgres?sslmode=verify-full`;
+      const authority = (operation, member = "repair_legacy") => {
+        const raw = JSON.stringify({
+          operation,
+          executor: member,
+          identity: identityHash(url.pathname.slice(1), "repair-provisioner"),
+        });
+        return runExecutorAuthority(
+          operation,
+          {
+            PRODUCTION_DB_EXECUTOR_PLAN: raw,
+            PRODUCTION_DB_EXECUTOR_PLAN_SHA256: createHash("sha256").update(raw).digest("hex"),
+            PRODUCTION_DB_EXECUTOR_DATABASE_URL: dsn,
+          },
+          (config) => {
+            config.url.pathname = url.pathname;
+            return { begin: provisioner.begin, end: async () => {} };
+          },
+        );
+      };
+      const unprovisioned = await readState();
+      await assert.rejects(authority("provision", "repair_other"), /approved scope/);
+      await client`grant two_web_migrate to repair_legacy with admin false, inherit true, set true`;
+      await assert.rejects(authority("revoke"), /Expected values to be strictly deep-equal/);
+      await client`revoke two_web_migrate from repair_legacy`;
+      assert.equal(await readState(), unprovisioned);
+      await authority("provision");
+      await authority("provision");
+      const before = await readState();
+      // Derive the independent expected post-state in a transaction that aborts.
+      const rollback = new Error("discard fixture setup");
+      let after;
+      await assert.rejects(
+        executor.begin(async (tx) => {
+          await tx`set local search_path = pg_catalog`;
+          await tx
+            .unsafe(`
+          grant usage, create on schema drizzle to two_web_migrate;
+          alter default privileges for role two_web_migrate in schema public
+            revoke select, insert, update, delete on tables from two_web_app;
+          alter default privileges for role two_web_migrate in schema public
+            revoke select on tables from two_web_backup;
+          alter default privileges for role two_web_migrate in schema public
+            revoke select, usage on sequences from two_web_backup;
+        `)
+            .simple();
+          for (const [name, kind, parent] of inventory) {
+            if (!parent) await tx.unsafe(`alter ${kind} ${name} owner to two_web_migrate`);
+          }
+          after = await observe(tx);
+          throw rollback;
+        }),
+        (error) => error === rollback,
+      );
+
+      const plan = {
+        before,
+        after,
+        identity: identityHash(url.pathname.slice(1), "repair_legacy"),
+        owners,
+      };
+      const run = (direction, overrides = {}, planDigest) => {
+        const raw = JSON.stringify({ ...plan, ...overrides });
+        return runRepair(
+          direction,
+          {
+            PRODUCTION_DB_REPAIR_PLAN: raw,
+            PRODUCTION_DB_REPAIR_PLAN_SHA256:
+              planDigest ?? createHash("sha256").update(raw).digest("hex"),
+            PRODUCTION_DB_REPAIR_DATABASE_URL: dsn,
+          },
+          (config) => {
+            assert.equal(planDigest, undefined, "unexpected connection");
+            config.url.pathname = url.pathname;
+            return { begin: executor.begin, end: async () => {} };
+          },
+        );
+      };
+      await assert.rejects(run("forward", {}, "0".repeat(64)), /raw && raw.length/);
+      await assert.rejects(run("forward", { after: "0".repeat(64) }));
+      assert.equal(await run("readback"), "before");
+      assert.equal(await run("forward"), "committed");
+      assert.equal(await run("readback"), "after");
+      await assert.rejects(run("forward"));
+      assert.equal(await run("undo"), "committed");
+      assert.equal(await run("readback"), "before");
+      await authority("revoke");
+      await authority("revoke");
+      assert.equal(await readState(), unprovisioned);
+      await authority("provision");
+      for (const privilege of ["select", "update (id)", "select (ctid)"]) {
+        await client.unsafe(`grant ${privilege} on public.users to two_web_migrate`);
+        await assert.rejects(
+          run("forward", { before: await readState() }),
+          /Migrator ACL overlaps/,
+        );
+        await client.unsafe(`revoke ${privilege} on public.users from two_web_migrate`);
+      }
+      const beforeWriter = await readState();
+      const writer = postgres(url.href, { max: 1, connect_timeout: 5 });
+      try {
+        await assert.rejects(
+          writer.begin(async (tx) => {
+            await tx`grant select (ctid) on public.users to two_web_migrate`;
+            await assert.rejects(
+              run("forward", { before: beforeWriter }),
+              /A database writer is active/,
+            );
+            throw rollback;
+          }),
+          (error) => error === rollback,
+        );
+      } finally {
+        await writer.end({ timeout: 5 });
+      }
+      await authority("revoke");
+    } finally {
+      await executor.end({ timeout: 5 });
+      await provisioner.end({ timeout: 5 });
+      for (const role of createdRoles.reverse()) {
+        await client.unsafe(`drop owned by "${role}"; drop role "${role}"`).simple();
+      }
+      await dropRuntimeRoleIfCreated(client, createdApp);
+    }
+  });
+});
 
 function testAdminUrl() {
   const raw =
@@ -433,6 +675,32 @@ test("driver configuration strips channel binding and pins the port despite PGPO
     if (priorPort === undefined) delete process.env.PGPORT;
     else process.env.PGPORT = priorPort;
   }
+});
+
+test("identity probe uses the real driver in a read-only transaction on disposable Postgres", async () => {
+  await fixture(async ({ client, env, url }) => {
+    const database = url.pathname.slice(1);
+    const [{ login }] = await client`select session_user::text as login`;
+    const matched = await checkProductionIdentity(
+      {
+        PRODUCTION_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:fixture@${PLANETSCALE_PRODUCTION_HOST}/${database}?sslmode=verify-full`,
+        PRODUCTION_DB_IDENTITY_SHA256: identityHash(database, login),
+      },
+      (_, options) => {
+        const sql = migrationClient(migrationConfig(env, { testDatabase: true }), options);
+        return {
+          begin: (mode, compare) =>
+            sql.begin(mode, async (transaction) => {
+              const [{ transaction_read_only }] = await transaction`show transaction_read_only`;
+              assert.equal(transaction_read_only, "on");
+              return compare(transaction);
+            }),
+          end: (options) => sql.end(options),
+        };
+      },
+    );
+    assert.equal(matched, true);
+  });
 });
 
 test("fresh database: plan is read-only, apply includes bootstraps, zero-pending and idempotent", async () => {
@@ -1086,6 +1354,10 @@ test("web readiness bridge rehearsal: locked expansion and scoped runtime cutove
       await dropRuntimeRoleIfCreated(client, created);
     }
   });
+});
+
+test("protected readiness projection installs, scopes access and undoes both ledger states", async () => {
+  await fixture(rehearseProjection);
 });
 
 test("implicit ledger rights refuse; object grants preserve runtime and audit operations", async () => {

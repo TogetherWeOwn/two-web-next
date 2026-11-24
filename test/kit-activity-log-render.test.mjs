@@ -8,6 +8,7 @@ import { build } from "esbuild";
 import { beforeAll, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
+const activityLogPage = join(root, "web/src/routes/admin/activity-log/+page.svelte");
 const webRequire = createRequire(join(root, "web/package.json"));
 const { compile } = webRequire("svelte/compiler");
 let renderPage;
@@ -89,6 +90,19 @@ function pageData(overrides = {}) {
 }
 
 describe("Kit activity-log rendered output", () => {
+  it("pins the Who header and data cells during horizontal scrolling", () => {
+    const { css } = compile(readFileSync(activityLogPage, "utf8"), {
+      generate: "client",
+      css: "external",
+      filename: activityLogPage,
+    });
+    const firstColumnRule = css?.code.match(
+      /\.admin-table\s+:is\(th:first-child,\s*td:first-child:not\(\[colspan\]\)\)\s*\{([^}]*)\}/,
+    )?.[1];
+    expect(firstColumnRule).toMatch(/position:\s*sticky\s*;/);
+    expect(firstColumnRule).toMatch(/inset-inline-start:\s*0\s*;/);
+  });
+
   it("renders snowflake, legacy, and null causers while keeping subject-free rows anonymous", () => {
     const html = renderPage(pageData());
     expect(html).toContain("<td>100000000000000111</td>");

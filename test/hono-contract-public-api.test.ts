@@ -13,8 +13,9 @@ import { readCounts } from "../src/counts";
 import type { Env } from "../src/env";
 import { getPublicApiEvent, listPublicApiEvents, type PublicApiEvent } from "../src/events/reads";
 import { publicReadGuard } from "../src/events/routes-shared";
-import app from "../src/index";
 import { __resetApiPublicCacheForTests } from "../src/public-data/cache";
+import { getOpenApiDocument } from "../src/public-data/openapi";
+import { fetchAppPath } from "./helpers/fetch-app";
 import { validatePublicSchema } from "./helpers/public-api-schema";
 
 vi.mock("../src/admin/db", () => ({ dbFor: vi.fn() }));
@@ -80,7 +81,7 @@ const row: PublicApiEvent = {
 };
 
 function request(path: string, method = "GET", headers: HeadersInit = {}, bindings = env) {
-  return app.request(`${ORIGIN}${path}`, { method, headers }, bindings);
+  return fetchAppPath(`${ORIGIN}${path}`, { method, headers }, bindings);
 }
 
 function noReads() {
@@ -398,8 +399,8 @@ describe("mounted public API: literal paths and decoded event keys", () => {
 
   it("retains staging robots and security headers on OpenAPI HEAD/304 without admission", async () => {
     const staging = { ...env, APP_URL: "https://staging.example.test", APP_ENV: "staging" };
-    const get = await app.request(`${staging.APP_URL}/openapi.json`, {}, staging);
-    const head = await app.request(
+    const get = await fetchAppPath(`${staging.APP_URL}/openapi.json`, {}, staging);
+    const head = await fetchAppPath(
       `${staging.APP_URL}/openapi.json`,
       {
         method: "HEAD",
@@ -408,6 +409,9 @@ describe("mounted public API: literal paths and decoded event keys", () => {
       staging,
     );
     expect(get.status).toBe(200);
+    expect(new Uint8Array(await get.arrayBuffer())).toEqual(
+      new TextEncoder().encode(JSON.stringify(getOpenApiDocument(staging.APP_URL))),
+    );
     expect(head.status).toBe(304);
     expect(head.headers.get("x-robots-tag")).toBe("noindex, nofollow");
     expect(head.headers.get("content-security-policy")).toBe(

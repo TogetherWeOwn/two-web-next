@@ -1,7 +1,6 @@
 <script lang="ts">
 import { page } from "$app/state";
-import AdminShell from "#lib/AdminShell.svelte";
-import { adminReadRetryHref } from "#lib/admin-read-retry.ts";
+import AdminShell, { adminReadRetryHref } from "#lib/AdminShell.svelte";
 
 // Route-level error page for GET /admin/join-attempts and
 // GET /admin/join-attempts/:id: the list and detail loads throw the branded

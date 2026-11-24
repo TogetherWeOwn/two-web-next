@@ -6,10 +6,10 @@
 //
 // DB-free: mounted app with the in-memory fake agent-event store, no
 // DATABASE_URL, no Discord, no network. Follows the route-refusal nightly
-// contract: drive only through the mounted app (`test/app.ts`).
+// contract: drive only through the mounted app via `fetchApp`.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type postgres from "postgres";
-import app from "./app";
+import { requestApp } from "./helpers/fetch-app";
 import type { Env } from "../src/env";
 import { DEFAULT_CONFIG } from "../src/agent-events/service";
 import { makeFakeAgentDb } from "./helpers/fake-agent-ingress-db";
@@ -112,7 +112,7 @@ describe("agent-events ingress error alerts", () => {
       AGENT_EVENT_SQL: sabotageGrantLookup(fake.sql, new HandlerBoomError("boom")),
     } as unknown as Env;
 
-    const res = await app.request(
+    const res = await requestApp(
       "/api/agent-events",
       {
         method: "POST",
@@ -162,7 +162,7 @@ describe("agent-events ingress error alerts", () => {
       AGENT_EVENT_SQL: sabotageGrantLookup(fake.sql, new OutageBoomError("conn refused")),
     } as unknown as Env;
 
-    const res = await app.request(
+    const res = await requestApp(
       "/api/agent-events",
       {
         method: "POST",
@@ -212,7 +212,7 @@ describe("agent-events ingress error alerts", () => {
     }
     const env = { ...baseEnv, AGENT_EVENT_SQL: outageSql } as unknown as Env;
 
-    const res = await app.request(
+    const res = await requestApp(
       "/api/agent-events",
       {
         method: "POST",
@@ -251,7 +251,7 @@ describe("agent-events ingress error alerts", () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const env = await grantEnv();
 
-    const unauthenticated = await app.request(
+    const unauthenticated = await requestApp(
       "/api/agent-events",
       {
         method: "POST",
@@ -263,7 +263,7 @@ describe("agent-events ingress error alerts", () => {
     );
     expect(unauthenticated.status).toBe(401);
 
-    const forbidden = await app.request(
+    const forbidden = await requestApp(
       "/api/agent-events",
       {
         method: "POST",

@@ -1,7 +1,7 @@
 // route-inventory: POST /csp-reports
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import app from "./app";
 import type { Env } from "../src/env";
+import { requestApp } from "./helpers/fetch-app";
 
 const MARKER = "csp-shed-probe-9b4e21";
 const FORGED_COOKIE = "__Host-two_session=two_forged.bad";
@@ -52,7 +52,7 @@ const validBody = () =>
   });
 
 async function post(body: BodyInit | null | undefined, env: Env = makeEnv()) {
-  return app.request(
+  return requestApp(
     "/csp-reports",
     { method: "POST", body, headers: { cookie: FORGED_COOKIE } },
     env,

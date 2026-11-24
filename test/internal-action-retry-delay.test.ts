@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { announcementStore } from "./helpers/announcement-store";
 import { handleCallInternalAction } from "../src/jobs/call-internal-action";
 import { CALL_INTERNAL_ACTION } from "../src/jobs/constants";
 import { consume } from "../src/jobs/consumer";
@@ -27,7 +28,7 @@ const fail = (retryAfterSeconds: unknown): BotFailure => ({
 
 const ann = {
   kind: "announcement",
-  idempotencyKey: "k",
+  idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
   action: { channelKey: "c", body: "b" },
 } as const;
 
@@ -57,6 +58,7 @@ function msg(body: unknown, attempts = 1, jobId?: string) {
   const r = {
     body: jobId ? { ...(body as object), jobId } : body,
     attempts,
+    timestamp: new Date(),
     acked: false,
     retried: undefined as number | undefined,
   };
@@ -150,10 +152,14 @@ describe("handleCallInternalAction retry admission", () => {
     const { ledger, rows } = memLedger();
     const m = msg(ann, 1, "j1");
     const before = Date.now();
-    await consume(
-      { messages: [m] },
-      { bot: botWith(NaN), events: store(), lock: memLock(), ledger },
-    );
+    const deps = {
+      bot: botWith(NaN),
+      events: store(),
+      lock: memLock(),
+      ledger,
+      announcementReconciliation: announcementStore(),
+    };
+    await consume({ messages: [m] }, deps);
     // Same admitted fallback in both sinks: consumer retries with it and the
     // ledger availability Date is built from it.
     expect(m.retried).toBe(FALLBACK);

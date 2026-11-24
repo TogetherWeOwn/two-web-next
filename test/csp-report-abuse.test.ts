@@ -1,8 +1,8 @@
 // route-inventory: POST /csp-reports
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import app from "./app";
 import type { Env } from "../src/env";
 import { MAX_CSP_REPORT_BYTES } from "../src/csp-reports";
+import { requestApp } from "./helpers/fetch-app";
 
 const CAP = MAX_CSP_REPORT_BYTES;
 const MARKER = "csp-abuse-probe-7f3a9d";
@@ -60,7 +60,7 @@ async function post(
   env: Env = makeEnv("1"),
   headers: HeadersInit = {},
 ) {
-  return app.request(
+  return requestApp(
     "/csp-reports",
     { method: "POST", body, headers: { cookie: FORGED_COOKIE, ...headers } },
     env,

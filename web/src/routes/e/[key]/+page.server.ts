@@ -9,6 +9,7 @@ import {
   resolveKitEventDetail,
 } from "../../../../../src/events/kit-detail";
 import { JOIN_RESULT_COOKIE } from "../../../../../src/return-journey";
+import { composeLifeline } from "#lib/lifeline.ts";
 
 // Server-rendered only: the Hono page ships no Svelte hydration bundle (its
 // interactivity is the existing /islands/*.js), so the Kit page carries none
@@ -32,12 +33,13 @@ export const load: PageServerLoad = async ({
   cookies,
   setHeaders,
 }) => {
+  const now =
+    typeof __TWO_LOCAL_CAPTURE__ !== "undefined" && __TWO_LOCAL_CAPTURE__ === true
+      ? renderDate(request, env)
+      : new Date();
   const outcome = await resolveKitEventDetail({
     key: params.key ?? "",
-    now:
-      typeof __TWO_LOCAL_CAPTURE__ !== "undefined" && __TWO_LOCAL_CAPTURE__ === true
-        ? renderDate(request, env)
-        : undefined,
+    now,
     search: url.search,
     path: url.pathname,
     env,
@@ -66,5 +68,20 @@ export const load: PageServerLoad = async ({
       sameSite: "lax",
     });
   }
-  return { model: outcome.model };
+  const { model } = outcome;
+  if (!model.viewerMember || model.review || (model.status !== "published" && !model.isEnded)) {
+    return { model };
+  }
+  const startsAt = Date.parse(model.timeDatetime);
+  const endsAt = Date.parse(model.endsAt);
+  if (!(startsAt < endsAt)) return { model };
+
+  // The counting window follows from the schedule. Other steps need
+  // lifecycle facts this detail read does not supply.
+  return {
+    model,
+    lifeline: composeLifeline({ eventKey: model.eventKey, startsAt, endsAt }, {}, now.getTime(), [
+      "counting",
+    ]),
+  };
 };

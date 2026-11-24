@@ -13,6 +13,8 @@ import { dirname, join } from "node:path";
 import { URL, fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { parseActivityParam } from "../src/leaderboards/members";
+import { prepareSeasonBoardFixtures, renderMemberBoard } from "./fixtures/member-board-viewer";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
@@ -84,6 +86,43 @@ export function renderPage(data) {
   });
   ({ renderPage } = (await import(pathToFileURL(outfile).href)) as {
     renderPage: (data: BoardData) => string;
+  });
+});
+
+describe("Isolated Kit season board render", () => {
+  beforeAll(prepareSeasonBoardFixtures);
+
+  it("describes Going sign-ups, keeps tied positions and offers a privacy opt-out link", () => {
+    const html = renderMemberBoard("season", "overall", true, false, {
+      rows: [
+        { username: "Vic", count: 3, rank: 1, isViewer: true },
+        { username: "Mira", count: 3, rank: 2, isViewer: false },
+      ],
+    });
+    expect(html).toContain('<td>1</td><th scope="row">Vic (you)</th><td>3 · Tied</td>');
+    expect(html).toContain('<td>2</td><th scope="row">Mira</th><td>3 · Tied</td>');
+    expect(html).toContain("current Going sign-ups for published or past events");
+    expect(html).toContain(
+      'opt out of leaderboards in your <a href="/profile">profile settings</a>',
+    );
+  });
+
+  it("round-trips an accepted game spelling whose lowercase exceeds the limit", () => {
+    const activityInput = `${"A".repeat(99)}İ`;
+    const activity = activityInput.toLowerCase();
+    expect(parseActivityParam(activity)).toMatchObject({ ok: false });
+    const html = renderMemberBoard("season", "relative", true, false, { activity, activityInput });
+    const links = [...html.matchAll(/href="(\/leaderboards\/members\?[^" ]+)"/g)];
+    const games = links
+      .map(
+        ([, href]) => new URL(href!.replaceAll("&amp;", "&"), "https://example.test").searchParams,
+      )
+      .filter((params) => params.has("activity"));
+    expect(games).toHaveLength(6);
+    for (const game of games) {
+      expect(parseActivityParam(game.get("activity"))).toEqual({ ok: true, game: activity });
+    }
+    expect(html).toContain(`name="activity" type="text" value="${activityInput}"`);
   });
 });
 

@@ -5,6 +5,7 @@
 // needs to open and repair. These pins drive the admin read seams directly:
 // the Hono EventsPage render, the Kit list serializer, the Kit edit read
 // model, and the PATCH merge that saves a corrected time.
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -250,12 +251,45 @@ export function renderList(data) { return render(Page, { props: { data } }).body
       ]);
     }
 
-    it("renders the finite row with its exact time bytes and no placeholder", () => {
-      const html = renderList(mixedView());
+    it("renders the exact instant and UTC label in a non-UTC server timezone", () => {
+      const bundle = pathToFileURL(join(scratch, "bundle.mjs")).href;
+      const html = execFileSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { renderList } from ${JSON.stringify(bundle)};
+assert.notEqual(new Date("2026-11-01T18:00:00.000Z").getTimezoneOffset(), 0);
+process.stdout.write(renderList(JSON.parse(readFileSync(0, "utf8"))));`,
+        ],
+        {
+          env: { TZ: "America/Los_Angeles" },
+          input: JSON.stringify(mixedView()),
+          encoding: "utf8",
+          timeout: 5_000,
+        },
+      );
       expect(html).toContain(
-        '<time datetime="2026-11-01T18:00:00.000Z">2026-11-01T18:00:00.000Z</time>',
+        '<time datetime="2026-11-01T18:00:00.000Z">2026-11-01 18:00:00.000 UTC</time>',
       );
       expect(html).not.toContain("event-unrenderable-time-EVTNORMAL1");
+    });
+
+    it("renders legacy ISO years with a time element only when HTML can encode the year", () => {
+      const html = renderList(
+        buildEventListView(parseEventListQuery({}), [
+          listRow({ eventKey: "EVTNEGATIVE", startsAt: new Date("-000001-01-01T00:00:00.000Z") }),
+          listRow({ eventKey: "EVTZERO", startsAt: new Date("0000-01-01T00:00:00.000Z") }),
+          listRow({ eventKey: "EVTEXPANDED", startsAt: new Date("+010000-01-01T00:00:00.000Z") }),
+        ]),
+      );
+      expect(html).toMatch(/>\s*-000001-01-01 00:00:00\.000 UTC\s*</);
+      expect(html).toMatch(/>\s*0000-01-01 00:00:00\.000 UTC\s*</);
+      expect(html.match(/<time\b[^>]*>[^<]*<\/time>/g)).toEqual([
+        '<time datetime="010000-01-01T00:00:00.000Z">+010000-01-01 00:00:00.000 UTC</time>',
+      ]);
     });
 
     it("flags the broken-start row with the exact start marker, row intact", () => {
@@ -269,7 +303,7 @@ export function renderList(data) { return render(Page, { props: { data } }).body
     it("keeps the renderable start and flags the broken end with the exact end marker", () => {
       const html = renderList(mixedView());
       expect(html).toContain(
-        '<time datetime="2026-11-02T18:00:00.000Z">2026-11-02T18:00:00.000Z</time>',
+        '<time datetime="2026-11-02T18:00:00.000Z">2026-11-02 18:00:00.000 UTC</time>',
       );
       expect(html).toContain('data-testid="event-unrenderable-time-EVTBADEND1"');
       expect(html).toContain("(unrenderable end time)");
