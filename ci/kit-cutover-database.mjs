@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import postgres from "postgres";
+import { productionUploadConfig } from "./kit-cutover-evidence.mjs";
 
 export function fixtureDatabase(value, host) {
   assert.match(host ?? "", /^ep-[a-z0-9-]+\.[a-z0-9.-]+\.neon\.tech$/);
@@ -127,4 +128,30 @@ export async function advanceFixture(owner, expected, runtimeLogin) {
     rows.map(({ created_at }) => Number(created_at)),
     expected,
   );
+}
+
+export function stagingConfig(profile, inputs, worker, origin) {
+  const config = productionUploadConfig(profile, inputs);
+  return {
+    name: worker,
+    main: config.main,
+    base_dir: config.base_dir,
+    ...(config.rules ? { rules: config.rules } : {}),
+    compatibility_date: config.compatibility_date,
+    compatibility_flags: config.compatibility_flags,
+    assets: config.assets,
+    version_metadata: config.version_metadata,
+    workers_dev: true,
+    preview_urls: false,
+    vars: {
+      ...Object.fromEntries(
+        Object.entries(config.vars).filter(([name]) => name.startsWith("KIT_ROUTE_")),
+      ),
+      APP_URL: origin,
+      FEATURED_IMAGE_HOSTS: "",
+      DISCORD_CLIENT_ID: "100000000000000001",
+      DISCORD_GUILD_ID: "100000000000000002",
+      DISCORD_INVITE_URL: "https://discord.gg/cutover-fixture",
+    },
+  };
 }
