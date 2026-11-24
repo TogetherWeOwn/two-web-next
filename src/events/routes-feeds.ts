@@ -1,5 +1,4 @@
-// Feeds/sitemap event routes: GET /events.rss, GET /events.ics and
-// GET /events/:file.ics. Split out of src/events/routes.tsx; unchanged.
+// Shared calendar and RSS handlers plus their existing Hono registrations.
 import { dbFor } from "../admin/db";
 import { isDatabaseUnavailable } from "../db/errors";
 import { databaseUnavailable, notFoundHandler } from "../errors";
@@ -54,8 +53,8 @@ async function calendarFeedResponse(
   }
 }
 
-export function registerFeedRoutes(app: App, readSession: SessionReader): void {
-  app.get("/events.rss", async (c) => {
+export const feedHandlers = {
+  async rss(c: Ctx): Promise<Response> {
     const limited = await publicReadGuard(c);
     if (limited) return limited;
     const db = await dbFor(c);
@@ -75,9 +74,9 @@ export function registerFeedRoutes(app: App, readSession: SessionReader): void {
       "content-type": "application/rss+xml; charset=utf-8",
       "cache-control": "max-age=300, public",
     });
-  });
+  },
 
-  app.get("/events.ics", async (c) => {
+  async calendar(c: Ctx): Promise<Response> {
     const limited = await publicReadGuard(c);
     if (limited) return limited;
     // Scope validation precedes any read and any conditional success: a
@@ -94,14 +93,18 @@ export function registerFeedRoutes(app: App, readSession: SessionReader): void {
       "content-disposition": 'inline; filename="events.ics"',
       "cache-control": "max-age=300, public",
     });
-  });
+  },
 
   // Same view policy as /e/:key: drafts are moderator-only; cancelled/past download fine.
   // Missing keys use the branded 404 (suggestions + noindex), never bare plaintext.
-  app.get("/events/:file{.+\\.ics}", async (c) => {
+  async eventCalendar(
+    c: Ctx,
+    readKey: () => string,
+    readSession: SessionReader,
+  ): Promise<Response> {
     const limited = await publicReadGuard(c);
     if (limited) return limited;
-    const key = c.req.param("file").slice(0, -4);
+    const key = readKey();
     // One canonical key form per event, mirroring /e/:key: a valid key in
     // another letter case 301s to the canonical URL before any read.
     // Seed/demo keys and unparsable keys keep their current path (forged
@@ -149,5 +152,13 @@ export function registerFeedRoutes(app: App, readSession: SessionReader): void {
       "content-disposition": `attachment; filename="${e.eventKey}.ics"`,
       "cache-control": "max-age=300, private",
     });
-  });
+  },
+};
+
+export function registerFeedRoutes(app: App, readSession: SessionReader): void {
+  app.get("/events.rss", feedHandlers.rss);
+  app.get("/events.ics", feedHandlers.calendar);
+  app.get("/events/:file{.+\\.ics}", (c) =>
+    feedHandlers.eventCalendar(c, () => c.req.param("file").slice(0, -4), readSession),
+  );
 }
