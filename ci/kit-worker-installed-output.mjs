@@ -1,8 +1,20 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { copyFile, cp, lstat, mkdir, mkdtemp, readFile, readdir, symlink } from "node:fs/promises";
+import {
+  copyFile,
+  cp,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { admitKitLockRoot } from "../web/scripts/kit-lock-admission.mjs";
+import { withKitLock } from "../web/scripts/kit-lock.mjs";
+import { bundleCutoverAdapter } from "./kit-cutover-adapter.mjs";
 
 async function regularBuildPath(path) {
   const stat = await lstat(path);
@@ -72,16 +84,25 @@ export async function prepareInstalledKitWorker(repo, { productionCutover = fals
     assert.ok(adapter.equals(await readFile(join(stockBuild, "cloudflare", ENTRY_NAME))));
     assert.equal(hash(adapter), installed.adapterSha256);
     assert.equal(hash(facade), installed.facadeSha256);
-    assert.ok(
-      facade
-        .toString()
-        .startsWith(
-          `${FACADE_MARKER} companion=${COMPANION_NAME} sha256=${installed.adapterSha256}\n`,
-        ),
-    );
+    const marker = (digest) => `${FACADE_MARKER} companion=${COMPANION_NAME} sha256=${digest}\n`;
+    assert.ok(facade.toString().startsWith(marker(installed.adapterSha256)));
+    let facadeSha256 = installed.facadeSha256;
+    if (productionCutover) {
+      // This admitted clone has no consumer until both files are materialized.
+      // The installer continues to preserve the stock adapter on all other paths.
+      facadeSha256 = await withKitLock(assets, async () => {
+        const companion = join(assets, COMPANION_NAME);
+        const bundled = await bundleCutoverAdapter(companion);
+        const facadeEntry =
+          marker(hash(bundled)) + facade.toString().slice(marker(installed.adapterSha256).length);
+        await writeFile(companion, bundled);
+        await writeFile(worker, facadeEntry);
+        return hash(facadeEntry);
+      });
+    }
     assert.ok((await lstat(join(assets, "favicon.ico"))).isFile(), "missing installed Kit assets");
     admission.recheck();
-    console.log(`PASS admitted XFS Kit facade (sha256 ${installed.facadeSha256})`);
+    console.log(`PASS admitted XFS Kit facade (sha256 ${facadeSha256})`);
     return { worker, assets };
   } finally {
     admission.close();

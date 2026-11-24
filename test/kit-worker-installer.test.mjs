@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { bundleCutoverAdapter } from "../ci/kit-cutover-adapter.mjs";
 import { securityHeadersFor } from "../src/headers";
 import { RECONCILE_CRON } from "../src/jobs/constants";
 import {
@@ -363,4 +364,20 @@ describe("installed facade", () => {
       await rejectsUnchanged(scratch(source), /fetch/);
     }
   });
+});
+
+it("bundles the generated adapter's server import into the exact cutover companion", async () => {
+  const dir = scratch();
+  const modules = join(dir, "cloudflare");
+  fsReal.mkdirSync(modules);
+  writeFileSync(join(dir, "server.js"), 'export const render = () => new Response("fixture");');
+  const adapter = join(modules, COMPANION_NAME);
+  writeFileSync(
+    adapter,
+    'import { render } from "./../server.js"; export default { fetch: render };',
+  );
+  const output = await bundleCutoverAdapter(adapter);
+  const url = `data:text/javascript;base64,${Buffer.from(output).toString("base64")}`;
+  const { default: worker } = await import(/* @vite-ignore */ url);
+  expect(await worker.fetch().text()).toBe("fixture");
 });
