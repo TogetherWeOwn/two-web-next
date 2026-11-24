@@ -343,7 +343,11 @@ test("the exceptions table in docs/kit-parity-gates.md parses and starts empty",
 });
 
 test("signed-cookie vectors cover every cookie the card names", () => {
-  const names = [...signedCookieNames(repo).keys()];
+  const signed = signedCookieNames(repo);
+  const names = [...signed.keys()];
+  for (const name of ["__Host-two_session", "__Host-two_session_status"]) {
+    assert.ok(signed.get(name)?.has("src/kit-session.ts"), `${name} is signed by Kit`);
+  }
   for (const name of [
     "__Host-two_session",
     "__Host-two_oauth_state",

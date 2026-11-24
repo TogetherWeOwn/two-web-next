@@ -294,6 +294,12 @@ jobs:
         run: env -u DATABASE_URL -u BOT_DATABASE_URL npm --ignore-scripts run test:unit -- test/check-bootstrap.test.ts test/leaf-css-build-time.test.ts test/leaf-css-drift.test.ts
       - name: Incident staging observation selftests (fixtures, no network)
         run: node --test ci/incident-staging-observation.test.mjs
+      - name: Production database identity selftests (fixtures, no network)
+        run: |
+          node --test ci/production-db-identity.test.mjs
+          node --test --test-name-pattern 'reads a PRODUCTION_\* secret binds|(identity|executor) preflight never' ci/check-production-secrets.test.mjs
+      - name: Production permissions repair admission selftests
+        run: node --test ci/db-permissions-repair.test.mjs
       - name: Timeout ledger ratchet (HARD)
         run: npm run ledger:timeouts:selftest && npm run ledger:timeouts
 
@@ -766,6 +772,9 @@ jobs:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           APP_URL: http://127.0.0.1:8787
           CAPTURE_SEED_ID: ember-capture-v1
+      - name: Install Kit workspace dependencies
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Migration workflow selftest (isolated Postgres, no network APIs)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run db:migrate:selftest
@@ -802,9 +811,6 @@ jobs:
       - name: Test inventory (HARD)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run test:inventory:selftest && npm run test:inventory -- --strict
-      - name: Install Kit workspace dependencies
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Admin waitlist DB-free regression
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: env -u DATABASE_URL node node_modules/vitest/vitest.mjs run test/admin.test.ts test/admin-waitlist-order-postgres-acceptance.test.ts test/admin-waitlist-classifier.test.ts
@@ -1115,6 +1121,9 @@ jobs:
       - name: Production deploy gate selftest (fixtures, no secrets or network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/production-deploy-gate.test.mjs
+      - name: Protected Kit cutover admission selftest (fixtures, no credentials or network)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/kit-cutover-evidence.test.mjs ci/kit-cutover-deploy.test.mjs
       - name: Production ancestry admission selftest (stubbed GitHub API, no network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/production-ancestry.test.mjs

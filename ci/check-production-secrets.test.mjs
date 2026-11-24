@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { isScalar, parseDocument } from "yaml";
+import { probeProjectionDispatch } from "./fixtures/web-readiness-dispatch.mjs";
 import {
   REQUIRED_PRODUCTION_SECRETS,
   checkProductionSecrets,
@@ -662,6 +663,41 @@ function delegatesToRollback(lines, environment) {
   );
 }
 
+// Permit only the exact Boolean scope checks in the database preflights. Inspect the
+// exact YAML value and keep scanning the rest of the job for secret references.
+function checksDatabaseSecretScope(file, lines) {
+  const source = lines.join("\n");
+  const document = parseDocument(source);
+  const presence = document.getIn(["steps", 0, "env", "BROADER_SCOPE_SECRETS"], true);
+  const expected =
+    "${{ secrets.PRODUCTION_DB_IDENTITY_APPROVED_SHA != '' || " +
+    "secrets.PRODUCTION_DB_IDENTITY_SHA256 != '' || secrets.PRODUCTION_DATABASE_URL != '' }}";
+  const repair =
+    "${{ secrets.PRODUCTION_DB_REPAIR_APPROVED_SHA != '' || " +
+    "secrets.PRODUCTION_DB_REPAIR_PLAN_SHA256 != '' || secrets.PRODUCTION_DB_REPAIR_PLAN != '' || " +
+    "secrets.PRODUCTION_DB_REPAIR_DATABASE_URL != '' }}";
+  const executor =
+    "${{ secrets.PRODUCTION_DB_EXECUTOR_APPROVED_SHA != '' || " +
+    "secrets.PRODUCTION_DB_EXECUTOR_PLAN_SHA256 != '' || secrets.PRODUCTION_DB_EXECUTOR_PLAN != '' || " +
+    "secrets.PRODUCTION_DB_EXECUTOR_DATABASE_URL != '' }}";
+  const readiness =
+    "${{ secrets.PRODUCTION_DB_READINESS_APPROVED_SHA != '' || " +
+    "secrets.PRODUCTION_DB_READINESS_PLAN_SHA256 != '' || secrets.PRODUCTION_DB_READINESS_PLAN != '' || " +
+    "secrets.PRODUCTION_DB_READINESS_DATABASE_URL != '' || " +
+    "secrets.PRODUCTION_DB_READINESS_CF_ACCOUNT_ID != '' || secrets.PRODUCTION_DB_READINESS_CF_READ_TOKEN != '' }}";
+  const expectedScope = new Map([
+    ["db-production-identity.yml", expected],
+    ["db-permissions-repair.yml", repair],
+    ["db-repair-executor.yml", executor],
+    ["db-readiness-projection.yml", readiness],
+  ]).get(file);
+  if (!expectedScope) return false;
+  if (document.errors.length || !isScalar(presence) || presence.value !== expectedScope)
+    return false;
+  const [start, end] = presence.range;
+  return !PRODUCTION_SECRET.test(source.slice(0, start) + source.slice(end));
+}
+
 export function productionSecretEnvironmentViolations(text, file) {
   const { outside, jobs } = splitWorkflow(text);
   const violations = [];
@@ -676,6 +712,7 @@ export function productionSecretEnvironmentViolations(text, file) {
     const environment = jobEnvironment(lines);
     if (environment === undefined) {
       if (delegatesToRollback(lines, "production")) continue;
+      if (id === "preflight" && checksDatabaseSecretScope(file, lines)) continue;
       violations.push(`${file}: job ${id} reads a PRODUCTION_* secret without an environment`);
     } else if (/^production$/i.test(environment)) {
       // Bound to the protected Environment on every run.
@@ -729,10 +766,71 @@ test("every job that reads a PRODUCTION_* secret binds the production environmen
     "rollback-production.yml",
     "db-migrate.yml",
     "db-backup.yml",
+    "db-production-identity.yml",
+    "db-permissions-repair.yml",
+    "db-repair-executor.yml",
+    "db-readiness-projection.yml",
   ]) {
     assert.ok(referencing.includes(expected), `expected ${expected} to reference PRODUCTION_*`);
   }
   assert.deepEqual(violations, []);
+});
+
+test("identity preflight never exempts direct production secret mappings", () => {
+  const file = "db-production-identity.yml";
+  const source = readFileSync(new URL(file, WORKFLOWS), "utf8");
+  assert.deepEqual(productionSecretEnvironmentViolations(source, file), []);
+  const direct = "${{ secrets.PRODUCTION_DATABASE_URL }}";
+  for (const widened of [
+    source.replace(
+      "          BROADER_SCOPE_SECRETS:",
+      `          RAW_URL: ${direct}\n          BROADER_SCOPE_SECRETS:`,
+    ),
+    source.replace(/\$\{\{ secrets.PRODUCTION_DB_IDENTITY_APPROVED_SHA[\s\S]*?\}\}/, direct),
+  ]) {
+    assert.deepEqual(productionSecretEnvironmentViolations(widened, file), [
+      `${file}: job preflight reads a PRODUCTION_* secret without an environment`,
+    ]);
+  }
+});
+
+test("executor preflight never exempts direct production secret mappings", () => {
+  const file = "db-repair-executor.yml";
+  const source = readFileSync(new URL(file, WORKFLOWS), "utf8");
+  assert.deepEqual(productionSecretEnvironmentViolations(source, file), []);
+  const widened = source.replace(
+    "          BROADER_SCOPE_SECRETS:",
+    "          RAW_URL: ${{ secrets.PRODUCTION_DB_EXECUTOR_DATABASE_URL }}\n          BROADER_SCOPE_SECRETS:",
+  );
+  assert.deepEqual(productionSecretEnvironmentViolations(widened, file), [
+    `${file}: job preflight reads a PRODUCTION_* secret without an environment`,
+  ]);
+});
+
+test("readiness identity preflight scopes credentials and requires protected dispatch", () => {
+  const file = "db-readiness-projection.yml";
+  const source = readFileSync(new URL(file, WORKFLOWS), "utf8");
+  assert.deepEqual(productionSecretEnvironmentViolations(source, file), []);
+  const dsn = "${{ secrets.PRODUCTION_DB_READINESS_DATABASE_URL }}";
+  const widened = source.replace(
+    "          BROADER_SCOPE_SECRETS:",
+    `          RAW_URL: ${dsn}\n          BROADER_SCOPE_SECRETS:`,
+  );
+  assert.deepEqual(productionSecretEnvironmentViolations(widened, file), [
+    `${file}: job preflight reads a PRODUCTION_* secret without an environment`,
+  ]);
+  const { on, jobs, concurrency } = parseDocument(source).toJS();
+  assert.deepEqual(Object.keys(on), ["workflow_dispatch"]);
+  assert.equal(concurrency.group, "web-migrate-production");
+  assert.equal(concurrency.queue, "max");
+  assert.equal(jobs.projection.concurrency.group, "production-worker-mutation");
+  assert.equal(jobs.projection.concurrency.queue, "max");
+  assert.equal(jobs.projection.needs, "preflight");
+  assert.equal(jobs.projection.environment, "production");
+  const run = jobs.projection.steps.at(-1);
+  assert.equal(run.env.PRODUCTION_DB_READINESS_DATABASE_URL, dsn);
+  assert.equal(source.split(dsn).length, 2);
+  probeProjectionDispatch(jobs);
 });
 
 test("db-backup selects its environment from the dispatch target, staging by default", () => {

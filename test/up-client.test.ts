@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
 import { QUEUE_READ_TIMEOUT_MS, WEB_MIGRATIONS } from "../src/up";
 import { healthSql } from "./helpers/up";
+import { requestApp } from "./helpers/fetch-app";
 
 const factory = vi.hoisted(() => vi.fn());
 vi.mock("postgres", () => ({ default: factory }));
-import app from "./app";
 
 const env: Env = {
   APP_URL: "https://next.example.test",
@@ -45,7 +45,7 @@ describe("/up database selection (offline)", () => {
       });
       const binding = clientWithEnd({ queue: [queueRow] });
       factory.mockImplementation((url) => (url === webUrl ? web : binding));
-      const res = await app.request("/up", {}, { ...env, DATABASE_URL: webUrl });
+      const res = await requestApp("/up", {}, { ...env, DATABASE_URL: webUrl });
       expect(res.status).toBe(webDown ? 503 : 200);
       expect(await res.json()).toMatchObject({
         db: webDown ? "error" : "ok",
@@ -77,7 +77,7 @@ describe("/up database selection (offline)", () => {
     });
     const binding = clientWithEnd({ queue: [queueRow] });
     factory.mockImplementation((url) => (url === webUrl ? web : binding));
-    const res = await app.request("/up", {}, { ...env, DATABASE_URL: webUrl });
+    const res = await requestApp("/up", {}, { ...env, DATABASE_URL: webUrl });
     expect(res.status).toBe(503);
     expect(await res.json()).toMatchObject({
       db: "ok",
@@ -92,7 +92,7 @@ describe("/up database selection (offline)", () => {
       if (url === "not a url") throw new Error("malformed web URL");
       return binding;
     });
-    const res = await app.request("/up", {}, { ...env, DATABASE_URL: "not a url" });
+    const res = await requestApp("/up", {}, { ...env, DATABASE_URL: "not a url" });
     expect(res.status).toBe(503);
     expect(await res.json()).toMatchObject({
       db: "error",
@@ -110,7 +110,7 @@ describe("/up database selection (offline)", () => {
     const waitUntil = vi.fn();
     factory.mockReturnValue(web);
     try {
-      const response = app.request(
+      const response = requestApp(
         "/up",
         {},
         { ...env, DATABASE_URL: webUrl },
@@ -141,7 +141,7 @@ describe("/up database selection (offline)", () => {
     async (url) => {
       const binding = clientWithEnd({ queue: [queueRow] });
       factory.mockReturnValue(binding);
-      const res = await app.request("/up", {}, { ...env, DATABASE_URL: url });
+      const res = await requestApp("/up", {}, { ...env, DATABASE_URL: url });
       expect(res.status).toBe(200);
       expect(await res.json()).toMatchObject({
         db: "ok",
@@ -169,7 +169,7 @@ describe("/up request-owned client lifecycle (offline)", () => {
       const client = Object.assign(healthSql({ [stage]: () => new Promise(() => {}) }), { end });
       factory.mockReturnValue(client);
       try {
-        const response = app.request("/up", {}, env, {
+        const response = requestApp("/up", {}, env, {
           waitUntil,
           passThroughOnException() {},
           props: {},

@@ -4,7 +4,7 @@
 // unavailable — never 0) and the join handoff (Discord only, no member
 // data). Real app + agent-testdb/CI Postgres only.
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import app from "./app";
+import { fetchAppPath } from "./helpers/fetch-app";
 import type { Env } from "../src/env";
 import {
   COMMUNITY_SNAPSHOT_FIELDS,
@@ -46,7 +46,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: community + join", 
   });
 
   const get = (path: string, init: RequestInit = {}) =>
-    app.request(
+    fetchAppPath(
       path,
       { ...init, headers: { "cf-connecting-ip": "192.0.2.73", ...init.headers } },
       env,
@@ -90,7 +90,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: community + join", 
 
   it("keeps join available when the database is down", async () => {
     const offline = { ...env, DATABASE_URL: undefined } as unknown as Env & EnvWithThrottle;
-    const res = await app.request(
+    const res = await fetchAppPath(
       "/api/public/join",
       { headers: { "cf-connecting-ip": "192.0.2.74" } },
       offline,
@@ -129,7 +129,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: community + join", 
       THROTTLE_STORE: async () => sql as unknown as Sql,
     } as unknown as Env & EnvWithThrottle;
     const limited = (path: string) =>
-      app.request(path, { headers: { "cf-connecting-ip": "192.0.2.75" } }, throttled);
+      fetchAppPath(path, { headers: { "cf-connecting-ip": "192.0.2.75" } }, throttled);
     for (let n = 0; n < 60; n++) {
       expect((await limited("/api/public/join")).status).not.toBe(429);
     }

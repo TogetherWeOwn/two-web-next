@@ -11,40 +11,15 @@
 // before the session-touching join/auth handlers).
 import type { Hono } from "hono";
 import type { Env } from "./env";
-import { dbFor } from "./admin/db";
-import { sitemapEvents } from "./events/reads";
-import { publicReadGuard } from "./events/routes-shared";
 import { cspReportsRoute } from "./csp-reports";
 import { Privacy } from "./pages";
 import { POLICY_VERSION, renderPolicyMarkdown } from "./privacy";
 import { POLICY_MARKDOWN } from "./privacy-content";
-import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
+import { robotsResponse, sitemapResponse } from "./seo-responses";
 
 // Pre-rendered once at module load, so the request path performs zero reads
 // of any kind (see the `/privacy` comment below).
 const PRIVACY_HTML = renderPolicyMarkdown(POLICY_MARKDOWN);
-
-async function readSitemapEvents(c: { env: Env }) {
-  let db;
-  try {
-    db = await dbFor(c);
-  } catch {
-    console.warn("Sitemap events read.", { outcome: "acquire_failed", exception: "ReadFailure" });
-    return [];
-  }
-  if (!db) {
-    console.info("Sitemap events read.", { outcome: "no_binding" });
-    return [];
-  }
-  try {
-    const rows = await sitemapEvents(db);
-    console.info("Sitemap events read.", { outcome: "ok", returned: rows.length });
-    return rows;
-  } catch {
-    console.warn("Sitemap events read.", { outcome: "query_failed", exception: "ReadFailure" });
-    return [];
-  }
-}
 
 export function registerSeoLeaves(app: Hono<{ Bindings: Env }>): void {
   // Versioned privacy policy (N1: TOG-9893 — ports two-web routes/funnel.php's
@@ -62,23 +37,11 @@ export function registerSeoLeaves(app: Hono<{ Bindings: Env }>): void {
   // Sitemap: published /e/{key} rows plus the static entries.
   // Drafts (403) and cancelled events (410) stay out of the index.
   // W6 adds /join (changefreq monthly, priority 0.9 — same as legacy).
-  app.get("/sitemap_index.xml", async (c) => {
-    const limited = await publicReadGuard(c);
-    if (limited) return limited;
-    c.header("content-type", "application/xml; charset=UTF-8");
-    c.header("cache-control", "public, max-age=3600");
-    // Published events only; a DB outage degrades to the static entries, never a 500.
-    const rows = await readSitemapEvents(c);
-    return c.body(renderSitemap(buildSitemapUrls(c.env.APP_URL, crawlableEvents(rows))));
-  });
+  app.get("/sitemap_index.xml", sitemapResponse);
 
   // robots.txt is dynamic, not a static file in public/ (TOG-7071): the Sitemap line names this
   // environment's APP_URL host, so each environment advertises itself.
-  app.get("/robots.txt", (c) => {
-    c.header("content-type", "text/plain; charset=UTF-8");
-    c.header("cache-control", "public, max-age=3600");
-    return c.body(buildRobots(c.env.APP_URL));
-  });
+  app.get("/robots.txt", robotsResponse);
 
   // CSP violation sink (TOG-10107 — ports two-web routes/funnel.php's
   // `POST /csp-reports`). Funnel posture by placement: registered before any

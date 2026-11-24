@@ -56,10 +56,15 @@ export async function notFoundHandler(c: Context): Promise<Response> {
   return notFoundResponse(c, await cachedNotFoundSuggestions(c.env, c.req.path));
 }
 
-export function internalErrorHandler(err: unknown, c: Context): Response | Promise<Response> {
+export function internalErrorHandler(
+  err: unknown,
+  c: Context,
+  // Detached handlers supply their registered label without consulting the request URL.
+  routeLabel = requestRoute(c),
+): Response | Promise<Response> {
   alertRequestError(err, {
     method: c.req.method,
-    route: requestRoute(c),
+    route: routeLabel,
     requestId: c.get("requestId"),
   });
   if (memberReadActive()) {

@@ -11,9 +11,32 @@ async function encodeSignedValue(value: string, secret: string): Promise<string>
   return encodeURIComponent(`${value}.${btoa(String.fromCharCode(...new Uint8Array(mac)))}`);
 }
 
-/** Verify an encoded wire value. Like Hono, the MAC covers the value, not the cookie name. */
-export async function verifySignedCookie(encoded: string, secret: string): Promise<string | null> {
-  if (!secret) return null;
+/** Select the first wire-valid pair for each requested name, before verifying any MAC. */
+export function signedCookiePairs(header: string | null, names: ReadonlySet<string>) {
+  const encoded = new Map<string, string>();
+  for (const pair of (header ?? "").split(";")) {
+    const separator = pair.indexOf("=");
+    if (separator < 0) continue;
+    const name = pair.slice(0, separator).replace(/^[ \t]+|[ \t]+$/g, "");
+    if (!names.has(name) || encoded.has(name)) continue;
+    const raw = pair.slice(separator + 1).replace(/^[ \t]+|[ \t]+$/g, "");
+    const value = raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw;
+    // Hono permits printable ASCII except quote, semicolon, and backslash.
+    if (/^[\x20-\x21\x23-\x3a\x3c-\x5b\x5d-\x7e]*$/.test(value)) encoded.set(name, value);
+  }
+  return encoded;
+}
+
+/** Verify an encoded wire value. The MAC covers the value, independent of the cookie name. */
+export async function verifySignedCookie(
+  encoded: string | undefined,
+  secret: string,
+  mode: "strict" | "hono" = "strict",
+): Promise<string | null> {
+  // Hono imports the key even when the requested pair is missing. An import
+  // failure propagates, while a failure to verify a signature invalidates the pair.
+  const honoKey = mode === "hono" ? await importKey(secret, "verify") : undefined;
+  if (encoded === undefined || !secret) return null;
   let value: string;
   let mac: Uint8Array<ArrayBuffer>;
   try {
@@ -27,8 +50,13 @@ export async function verifySignedCookie(encoded: string, secret: string): Promi
   } catch {
     return null;
   }
-  const key = await importKey(secret, "verify");
-  return (await crypto.subtle.verify(hmac.name, key, mac, utf8.encode(value))) ? value : null;
+  const key = honoKey ?? (await importKey(secret, "verify"));
+  try {
+    return (await crypto.subtle.verify(hmac.name, key, mac, utf8.encode(value))) ? value : null;
+  } catch (error) {
+    if (mode === "hono") return null;
+    throw error;
+  }
 }
 
 const scope = { path: "/", secure: true, httpOnly: true, sameSite: "lax" } as const;

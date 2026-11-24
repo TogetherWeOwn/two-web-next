@@ -63,6 +63,7 @@ The seal covers the plan, archive identity and digest, baseline and opaque snaps
 A fenced restore uses `load_plan` and `compare`. Publish only verdicts. Empty cohorts and infinite instants refuse.
 Reconcile output and scratch after interruption. Before live use, qualify direct TLS, role and full
 counts/read coverage, indexed plans, approval controls, private diagnostics, retention and disposition.
+The [hosted rehearsal](hosted-restore-rehearsal.md) exercises the fenced executor on synthetic input.
 
 ## Check outcomes and legacy compatibility
 

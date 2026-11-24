@@ -2,9 +2,9 @@
 // route-inventory: GET /community
 
 import { describe, expect, it, vi } from "vitest";
-import app from "../src/index";
 import type { Env } from "../src/env";
 import { createMemorySessionStore, type SessionStore } from "../src/sessions";
+import { requestApp } from "./helpers/fetch-app";
 
 const APP_URL = "https://next.example.test";
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
@@ -36,7 +36,7 @@ function fixture() {
 }
 
 const request = (path: string, env: Env, init: RequestInit = {}) =>
-  app.request(`${APP_URL}${path}`, init, env);
+  requestApp(`${APP_URL}${path}`, init, env);
 
 describe("vanity aliases (local fixtures, no DB)", () => {
   it.each(["GET", "HEAD"])("%s /login 302s to the OAuth start without cookies", async (method) => {

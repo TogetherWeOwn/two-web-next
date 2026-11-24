@@ -23,6 +23,8 @@
 @source not "./lib/Chip.svelte";
 @source not "./lib/SegmentedControl.svelte";
 @source not "./lib/StructuredTime.svelte";
+/* The unmounted season board uses scoped styles and must not emit shared utilities. */
+@source not "./lib/SeasonBoard.svelte";
 /* Prose, attributes, component CSS and the relative leaderboard scope produce
  * these false candidates, never classes. kit-tailwind-sources.test.ts guards that boundary. */
 @source not inline("visible relative static block hidden table inline outline flex flex-wrap");

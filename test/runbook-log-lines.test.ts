@@ -418,7 +418,7 @@ describe("kit session-store outage warning docs", () => {
 
   it("sources emit the warnings with class-only fields, request_id on the probe leg only", () => {
     const cases = [
-      { file: "src/auth-status.ts", message: AUTH_STATUS_DOWN, requestId: true },
+      { file: "src/http/auth-status.ts", message: AUTH_STATUS_DOWN, requestId: true },
       { file: "src/kit-session.ts", message: KIT_SESSION_DOWN, requestId: false },
       { file: "src/kit-session.ts", message: KIT_BRIDGE_DOWN, requestId: false },
       { file: "src/kit-session.ts", message: KIT_EVENTS_DOWN, requestId: false },
@@ -428,7 +428,7 @@ describe("kit session-store outage warning docs", () => {
       const call = `console.warn("${message}"`;
       const start = source.indexOf(call);
       expect(start, `missing ${call} in ${file}`).toBeGreaterThanOrEqual(0);
-      // The warn payload carries the exception class plus, on the Hono probe
+      // The warn payload carries the exception class plus, on the status probe
       // leg only, the validated request id: no message, token, cookie, or
       // member identity travels on any leg.
       const payload = source.slice(start, source.indexOf("});", start));
@@ -722,6 +722,8 @@ describe("kit session-bridge and auth-status probe runbook row cites", () => {
     viewerOf: () => span(ROUTE_OWNERSHIP, /^function viewerOf\(/, "}"),
     bridge: () => span(ROUTE_OWNERSHIP, /^ {2}const bridgeSession = async/, "  };"),
     probe: () => span(ROUTE_OWNERSHIP, /^ {4}deps\.authStatusCookieFor &&$/, "  }", 1),
+    homeRotationPredicate: () =>
+      span(ROUTE_OWNERSHIP, /^ {2}const renewHome =$/, '    locals?.status === "authenticated";'),
     rotationPredicate: () =>
       span(ROUTE_OWNERSHIP, /^function releasedEventDetailRenewsSession\(/, "}"),
     rotationAppend: () => span(ROUTE_OWNERSHIP, /^ {2}if \(documentRotationFor\)/, "  }"),
@@ -776,6 +778,7 @@ describe("kit session-bridge and auth-status probe runbook row cites", () => {
     expectContainsWarn(ownership.probe(), ROUTE_OWNERSHIP, PROBE);
 
     const rotation = rowFor(ROTATION);
+    expectCited(rotation, ownership.homeRotationPredicate());
     expectCited(rotation, ownership.rotationPredicate());
     expectCited(rotation, ownership.rotationAppend());
     expectCited(rotation, session.rotation());
@@ -792,7 +795,12 @@ describe("kit session-bridge and auth-status probe runbook row cites", () => {
     const allowed: Record<string, string[]> = {
       [BRIDGE]: [ownership.bridge(), ownership.viewerOf(), session.bridge()],
       [PROBE]: [ownership.probe(), session.signer()],
-      [ROTATION]: [ownership.rotationPredicate(), ownership.rotationAppend(), session.rotation()],
+      [ROTATION]: [
+        ownership.homeRotationPredicate(),
+        ownership.rotationPredicate(),
+        ownership.rotationAppend(),
+        session.rotation(),
+      ],
       [ADMIN]: [ownership.adminPredicate(), ownership.adminAppend(), session.adminRenewal()],
     };
     for (const [message, spans] of Object.entries(allowed)) {

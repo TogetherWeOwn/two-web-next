@@ -2,15 +2,24 @@
 import MembersDirectoryAvatar from "./MembersDirectoryAvatar.svelte";
 import { freshnessLabel, visibleCount, type VoiceView } from "./voice-view";
 
-let { view }: { view: VoiceView } = $props();
+let { view, eventDetail = false }: { view: VoiceView; eventDetail?: boolean } = $props();
 const heading = $props.id();
 let frozen = $derived(view.snapshot?.freshness === "frozen");
+let title = $derived(
+  eventDetail
+    ? view.audience === "guest"
+      ? "Community voice"
+      : "Event voice rooms"
+    : view.snapshot && !frozen
+      ? "In voice now"
+      : "Voice rooms",
+);
 </script>
 
 <aside aria-labelledby={heading} class:frozen>
   <div class="panel-head">
-    <h2 id={heading}>{view.snapshot && !frozen ? "In voice now" : "Voice rooms"}</h2>
-    {#if view.snapshot && frozen}<p>{freshnessLabel(view.snapshot)}</p>{/if}
+    <h2 id={heading}>{title}</h2>
+    {#if view.snapshot && (frozen || eventDetail)}<p>{freshnessLabel(view.snapshot)}</p>{/if}
   </div>
   {#if !view.snapshot}
     <p class="note">Voice numbers are not available right now.</p>

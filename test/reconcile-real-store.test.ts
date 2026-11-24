@@ -15,10 +15,14 @@
 // write transaction (the production shape in `src/jobs/worker.ts`) and
 // asserts the pre-pass `staleEventKeys` selection directly.
 import type postgres from "postgres";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { reconcileEvents } from "../src/jobs/cron";
+import { toQueueMessage } from "../src/jobs/envelope";
 import { pgEventStore } from "../src/jobs/events";
-import type { UniqueLock } from "../src/jobs/types";
+import { pgReconciliationStore, SYNC_RECONCILIATION_MARKER } from "../src/jobs/reconciliation";
+import { reconcileFailedJob } from "../src/jobs/replay";
+import { handleSyncEvent } from "../src/jobs/sync-event";
+import type { BotClient, UniqueLock } from "../src/jobs/types";
 import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
 
 const LEASE = "11111111-1111-4111-8111-111111111111";
@@ -209,5 +213,166 @@ describe.skipIf(!process.env.DATABASE_URL)(
       });
       expect(sent.map((b) => b.eventKey).sort()).toEqual(stale);
     });
+
+    it("replays in-progress requests with the original snapshot and caps sends across carriers", async () => {
+      const { id, eventKey } = await seedEvent({
+        tag: "in-progress",
+        endsAt: new Date("2026-10-02T14:00:00Z"),
+      });
+      const events = pgEventStore(sql);
+      const idempotencyKey = crypto.randomUUID();
+      const upsertEvent = vi.fn<BotClient["upsertEvent"]>().mockResolvedValue({
+        ok: false,
+        code: "in_progress",
+        status: 409,
+        requestId: null,
+        message: "Synthetic operation in progress",
+        retryable: true,
+        retryAfterSeconds: null,
+      });
+      const unexpectedBotCall = async () => {
+        throw new Error("Unexpected bot action in the upsert replay fixture");
+      };
+      const bot: BotClient = {
+        upsertEvent,
+        cancelEvent: unexpectedBotCall,
+        postAnnouncement: unexpectedBotCall,
+        assignRole: unexpectedBotCall,
+      };
+      let now = NOW;
+      const deps = { events, now: () => now, bot };
+      const failed = { kind: "sync-event", key: `sync-event:${eventKey}` };
+      const replay = () =>
+        reconcileFailedJob({ ...events, hasFailedSync: events.hasFailedSync! }, failed, deps.now);
+      const queue = { send: vi.fn(async (_body: unknown) => {}) };
+      // Model recovery after the previous carrier released its lease.
+      const reconcile = () => reconcileEvents({ ...deps, queue, lock: memLock() });
+
+      expect(await handleSyncEvent({ eventKey, idempotencyKey }, 1, deps)).toEqual({
+        retryInSeconds: 10,
+      });
+      const [originalPayload] = upsertEvent.mock.calls[0]!;
+      expect(originalPayload.name).toBe("event in-progress");
+      await sql`update events set title = 'Newer revision' where id = ${id}`;
+      expect(await reconcile()).toMatchObject({ resynced: 0 });
+      expect(queue.send).not.toHaveBeenCalled();
+      expect(await replay()).toMatchObject({ action: "keep", eventKey });
+
+      for (const [index, delay] of [10, 60, 300, 900, 3600].entries()) {
+        now = new Date(now.getTime() + delay * 1000);
+        expect(await replay()).toMatchObject({ action: "replay", eventKey, idempotencyKey });
+        expect(await reconcile()).toMatchObject({ resynced: 1 });
+        const carrier = toQueueMessage(queue.send.mock.calls[index]?.[0]);
+        if (carrier?.kind !== "sync-event") throw new Error("Missing recovery carrier");
+        expect(carrier.idempotencyKey).toBe(idempotencyKey);
+        // A new carrier starts at delivery one, but spends the original request's budget.
+        await handleSyncEvent(carrier, 1, deps);
+      }
+
+      expect(await reconcile()).toMatchObject({ resynced: 0 });
+      expect(queue.send).toHaveBeenCalledTimes(5);
+      expect(await replay()).toMatchObject({ action: "keep", eventKey });
+      const postCap = await handleSyncEvent({ eventKey, idempotencyKey }, 1, deps);
+      expect(postCap).not.toHaveProperty("retryInSeconds");
+      expect(postCap).not.toHaveProperty("definitive");
+      expect(await events.pendingSync(eventKey)).toMatchObject({
+        idempotencyKey,
+        state: "pending",
+        requestAttempts: 6,
+        nextAttemptAt: null,
+      });
+      expect(upsertEvent.mock.calls).toEqual(
+        Array.from({ length: 6 }, () => [originalPayload, idempotencyKey]),
+      );
+    });
+
+    it.each(["event.upsert", "event.cancel"] as const)(
+      "holds an uncertain %s on the original key through late settlement and a newer revision",
+      async (verb) => {
+        const { id, eventKey } = await seedEvent({
+          tag: "uncertain",
+          status: verb === "event.cancel" ? "cancelled" : "published",
+          discordEventId: "discord-original",
+          endsAt: new Date("2026-10-02T14:00:00Z"),
+        });
+        const idempotencyKey = crypto.randomUUID();
+        const otherKey = crypto.randomUUID();
+        const events = pgEventStore(sql);
+        const prepared = await events.prepareSync(eventKey, idempotencyKey, NOW);
+        if (!prepared || "waiting" in prepared) throw new Error("Missing sync snapshot");
+        const attempt = await events.claimSync(prepared, NOW);
+        if (!attempt) throw new Error("Missing sync claim");
+        const intent = {
+          idempotencyKey,
+          verb,
+          subject: eventKey,
+          attempts: 1,
+          lastCode: "needs_reconciliation",
+          lastStatus: 409,
+        };
+        const store = pgReconciliationStore(sql);
+        // Inject the uncertain result at the existing persistence boundary.
+        await expect(store.recordSync({ ...intent, idempotencyKey: otherKey })).rejects.toThrow(
+          "Sync claim changed before reconciliation",
+        );
+        await store.recordSync(intent);
+        await sql`update events set title = 'Newer revision' where id = ${id}`;
+        const later = new Date(NOW.getTime() + 3600_000);
+        await events.completeSync(attempt, "discord-late");
+        await events.failSync(idempotencyKey);
+        await events.deferSync(attempt, later);
+
+        const queue = { send: vi.fn(async (_body: unknown) => {}) };
+        expect(
+          await reconcileEvents({ events, queue, lock: memLock(), now: () => later }),
+        ).toMatchObject({ resynced: 0 });
+        expect(queue.send).not.toHaveBeenCalled();
+        const failed = { kind: "sync-event", key: `sync-event:${eventKey}` };
+        expect(
+          await reconcileFailedJob(
+            { ...events, hasFailedSync: events.hasFailedSync! },
+            failed,
+            () => later,
+          ),
+        ).toMatchObject({
+          action: "keep",
+          eventKey,
+          reason: expect.stringContaining("claim unsettled"),
+        });
+        expect(await events.prepareSync(eventKey, otherKey, later)).toBeNull();
+        expect(
+          await sql`select idempotency_key, state, request_attempts, next_attempt_at, terminal_reason
+          from event_sync_attempts where event_id = ${id}`,
+        ).toEqual([
+          {
+            idempotency_key: idempotencyKey,
+            state: "pending",
+            request_attempts: 1,
+            next_attempt_at: null,
+            terminal_reason: SYNC_RECONCILIATION_MARKER,
+          },
+        ]);
+        expect(
+          await sql`select idempotency_key, verb, attempts, last_code, last_status, resolved_at
+          from bot_reconciliation_intents where subject = ${eventKey}`,
+        ).toEqual([
+          {
+            idempotency_key: idempotencyKey,
+            verb,
+            attempts: 1,
+            last_code: "needs_reconciliation",
+            last_status: 409,
+            resolved_at: null,
+          },
+        ]);
+        expect(
+          await sql`select discord_event_id, synced_revision = 0 as unacknowledged,
+            sync_revision > ${attempt.revision} as revision_advanced
+          from events where id = ${id}`,
+        ).toEqual([
+          { discord_event_id: "discord-original", unacknowledged: true, revision_advanced: true },
+        ]);
+      },
+    );
   },
 );

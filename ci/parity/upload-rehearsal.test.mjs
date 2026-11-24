@@ -89,7 +89,18 @@ test("rehearsal and verification reject scratch drift and unclean parity", async
     installedOutputSha256: sha256(JSON.stringify(files)),
   };
   const identity = { ...binding, files };
-  const parity = { ...binding, failures: [], approved: [], assets: { failures: [] } };
+  const parity = {
+    ...binding,
+    failures: [],
+    approved: [],
+    assets: { failures: [] },
+    cutoverReadiness: [
+      { name: "prefix-1033", status: 200, pending: 0 },
+      { name: "transition-1037", status: 200, pending: 0 },
+      { name: "missing-1034", status: 503, pending: 1 },
+      { name: "malformed", status: 503, pending: null },
+    ],
+  };
   const execute = (drift) =>
     rehearseUpload(
       { repo, installed: { assets }, identity, context, outputIdentity: () => files },
@@ -111,6 +122,15 @@ test("rehearsal and verification reject scratch drift and unclean parity", async
     verifyUploadRehearsal(value, replay, identity, context, config);
   check(matched);
   assert.throws(() => check(matched, { ...parity, approved: [{}] }), /without exceptions/);
+  for (const cutoverReadiness of [undefined, [], parity.cutoverReadiness.slice(1)]) {
+    assert.throws(() => check(matched, { ...parity, cutoverReadiness }), /cutover readiness/);
+  }
+  for (const override of [{ status: 503 }, { pending: 1 }]) {
+    const cutoverReadiness = parity.cutoverReadiness.map((row, i) =>
+      i === 0 ? { ...row, ...override } : row,
+    );
+    assert.throws(() => check(matched, { ...parity, cutoverReadiness }), /cutover readiness/);
+  }
   for (const outcome of [undefined, "module-mismatch", "refused", "wrangler-failed"]) {
     assert.throws(() => check({ ...matched, outcome }), /rehearsal refused/);
   }

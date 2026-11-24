@@ -3,12 +3,12 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import postgres, { type Sql } from "postgres";
 import { describe, expect, it } from "vitest";
-import app from "./app";
 import type { Env } from "../src/env";
 import { databaseReadiness, upBody, WEB_MIGRATIONS, withHealthReadTimeout } from "../src/up";
 import { pgQueueDepth } from "../src/jobs/postgres";
 import { testDatabaseUrl } from "./helpers/member-data-db";
 import { healthSql } from "./helpers/up";
+import { requestApp } from "./helpers/fetch-app";
 
 const raw = process.env.DATABASE_URL;
 
@@ -92,7 +92,7 @@ describe.skipIf(!raw)("/up real read-only database readiness", () => {
         await admin`INSERT INTO ${admin(schema)}.__drizzle_migrations (hash, created_at) VALUES (${entry.tag}, ${entry.when})`;
       }
       await admin`INSERT INTO ${admin(schema)}.__drizzle_migrations (hash, created_at) VALUES ('bot-fixture', 9999999999999)`;
-      const pending = await app.request("/up", {}, envFor());
+      const pending = await requestApp("/up", {}, envFor());
       expect(pending.status).toBe(503);
       expect(await pending.json()).toMatchObject({
         db: "ok",
@@ -100,7 +100,7 @@ describe.skipIf(!raw)("/up real read-only database readiness", () => {
         queue: { status: "unknown" },
       });
       await admin`INSERT INTO ${admin(schema)}.__drizzle_migrations (hash, created_at) VALUES (${missing.tag}, ${missing.when})`;
-      const current = await app.request("/up", {}, envFor());
+      const current = await requestApp("/up", {}, envFor());
       expect(current.status).toBe(200);
       expect(await current.json()).toMatchObject({
         db: "ok",
@@ -110,7 +110,7 @@ describe.skipIf(!raw)("/up real read-only database readiness", () => {
       // A real blocked query consumes one connection, not the readiness slot.
       hangQueue = true;
       const started = Date.now();
-      const blockedQueue = await app.request("/up", {}, envFor());
+      const blockedQueue = await requestApp("/up", {}, envFor());
       expect(Date.now() - started).toBeLessThan(4000);
       expect(blockedQueue.status).toBe(200);
       expect(await blockedQueue.json()).toMatchObject({

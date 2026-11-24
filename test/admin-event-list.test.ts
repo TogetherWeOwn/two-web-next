@@ -286,8 +286,12 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(html).toContain(`value="${value}" selected`);
       expect(html).toContain('name="sort" value="title"');
       expect(html).toContain('name="order" value="asc"');
-      expect(html).toContain('aria-sort="ascending"');
+      expect(html).toContain('<th scope="col" aria-label="Title" aria-sort="ascending">');
+      expect(html).toContain('<th scope="col" aria-label="Status">');
+      expect(html).toContain('<th scope="col" aria-label="Starts (UTC)">');
+      expect(html.match(/ aria-sort=/g)).toHaveLength(1);
       expect(html).toContain('aria-label="Sort by title descending"');
+      expect(html).toContain('Title<span aria-hidden="true"> ↑</span>');
       expect(html).toContain(
         "q=List+fixture&amp;status=published&amp;series=parent&amp;fill=full&amp;sort=title&amp;order=desc",
       );
@@ -395,7 +399,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const html = await (await request("?q=missing&sort=constructor&order=invalid&page=0")).text();
       expect(html).toContain("No events match these filters.");
       expect(html).toContain("Page 1");
-      expect(html).toContain('aria-sort="descending"');
+      expect(html).toContain('<th scope="col" aria-label="Starts (UTC)" aria-sort="descending">');
       expect(html).toContain('name="sort" value="starts_at"');
       expect(link(html, "next")).toBeUndefined();
       expect(link(html, "prev")).toBeUndefined();
