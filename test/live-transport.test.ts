@@ -146,6 +146,42 @@ it("bounds leases by observation age and accepts at most two seconds of forward 
   }
 });
 
+it("keeps clock warning and shed counts independent by reason", async () => {
+  vi.resetModules();
+  const { signedLiveSnapshot: loadSignedSnapshot } = await import("../src/live/transport");
+  const now = Date.parse("2026-11-21T04:00:00Z");
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const load = (offset: number) =>
+      loadSignedSnapshot(config, decode, async () =>
+        Response.json(snapshot(new Date(Date.now() + offset).toISOString())),
+      );
+    const loadOld = load(-30_000);
+    const loadAhead = load(2_001);
+    for (let i = 0; i < 22; i++) expect(await loadOld()).toBeNull();
+    for (let i = 0; i < 21; i++) expect(await loadAhead()).toBeNull();
+
+    clock.mockReturnValue(now + 3_000);
+    expect(await loadOld()).toBeNull();
+    expect(await loadOld()).toBeNull();
+    expect(warn.mock.calls).toStrictEqual([
+      ...Array.from({ length: 20 }, () => ["live.snapshot.observation_too_old", { count: 1 }]),
+      ["live.snapshot.observation_too_old.shed", { dropped: 1 }],
+      ...Array.from({ length: 20 }, () => [
+        "live.snapshot.observation_too_far_ahead",
+        { count: 1 },
+      ]),
+      ["live.snapshot.observation_too_far_ahead.shed", { dropped: 1 }],
+      ["live.snapshot.observation_too_old", { count: 1 }],
+      ["live.snapshot.observation_too_old.shed", { dropped: 2 }],
+    ]);
+  } finally {
+    warn.mockRestore();
+    clock.mockRestore();
+  }
+});
+
 it("signs the actual pull bytes and only admits valid JSON within the snapshot limit", async () => {
   const doc = snapshot();
   const json = JSON.stringify(doc);

@@ -1106,14 +1106,17 @@ identity. The `code` is a fixed allowlisted class, not a message.
 
 ## Live source observation clock warnings
 
-In Workers Logs, filter for `live.snapshot.observation_too_old` when a signed
-snapshot pull returns an otherwise valid observation at least 30 seconds old,
-or `live.snapshot.observation_too_far_ahead` when it is more than two seconds
-ahead of the Worker clock. Each warning carries `{ count: 1 }` and each reason
-has an independent per-isolate budget. The corresponding `.shed` warning
-carries `{ dropped }`, the number of suppressed warnings for that reason since
-its preceding shed warning. Include reported drops when tallying a reason. The
-budget can still hold unreported drops, so a tally is a lower bound.
+These warnings require a bound live guild hub with signed snapshot pulls
+enabled. Currently only the installed CI fixture binds the hub. Treat silence
+before activation as an unavailable diagnostic. [Live configuration](config.md)
+
+In Workers Logs, `live.snapshot.observation_too_old` counts otherwise valid
+observations at least 30 seconds old and `live.snapshot.observation_too_far_ahead`
+counts those more than two seconds ahead of the Worker clock. Each warning
+carries `{ count: 1 }`. Each reason has an independent per-isolate budget. Its
+`.shed` warning carries `{ dropped }`, the number suppressed since the prior
+shed warning or isolate start. That count can span incident windows, and some
+drops may still be pending. Use shed warnings as a signal of suppression.
 
 These fields contain counts only. Check producer clock synchronization and
 snapshot freshness using the existing operator access.
