@@ -30,7 +30,12 @@ export interface LifelineStep {
   detail?: string;
 }
 
-export function composeLifeline(schedule: LifelineSchedule, facts: LifelineFacts, now: number) {
+export function composeLifeline(
+  schedule: LifelineSchedule,
+  facts: LifelineFacts,
+  now: number,
+  visibleSteps?: readonly LifelineStep["id"][],
+) {
   const { eventKey, startsAt, endsAt } = schedule;
   const cancelled =
     facts.cancelled?.eventKey === eventKey && facts.cancelled.at <= now
@@ -50,6 +55,7 @@ export function composeLifeline(schedule: LifelineSchedule, facts: LifelineFacts
     at?: number,
     detail?: string,
   ) {
+    if (visibleSteps && !visibleSteps.includes(id)) return;
     steps.push({ id, actor, title, state, at, detail });
   }
 
