@@ -382,6 +382,7 @@ exactly once.
 | `src/seo-slots.ts` | content |
 | `src/seo-leaves.tsx` | entry |
 | `src/session-cookie.ts` | auth |
+| `src/session-hono.ts` | auth |
 | `src/session-revocation.ts` | auth |
 | `src/session-role-refresh.ts` | auth |
 | `src/sessions.ts` | auth |
