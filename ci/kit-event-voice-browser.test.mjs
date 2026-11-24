@@ -11,6 +11,7 @@ const states = [
   "member",
   "suppressed",
   "unrelated",
+  "unlinkedOnly",
   "frozen",
 ];
 const search = (state) => `?state=${state}`;
@@ -24,7 +25,7 @@ async function assertRsvpAndPlacement(page, state, viewport) {
   const overview = page.locator(".event-overview");
   const seat = page.getByRole("region", { name: "Save a seat" });
   const voice = page.locator(".event-rail aside");
-  const member = ["beforeMember", "member", "unrelated", "frozen"].includes(state);
+  const member = ["beforeMember", "member", "unrelated", "unlinkedOnly", "frozen"].includes(state);
   const primary = member
     ? seat.getByRole("button", { name: "I'm in" })
     : seat.getByRole("link", { name: "Log in with Discord" });

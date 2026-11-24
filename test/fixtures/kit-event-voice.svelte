@@ -37,6 +37,7 @@ const cases: Record<string, Fixture> = {
     enabled: true,
     view: { ...memberView, snapshot: { ...memberView.snapshot, rooms: [otherEventRoom] } },
   },
+  unlinkedOnly: { member: true, enabled: true, view: voiceViews.quiet.view },
   frozen: { member: true, enabled: true, view: voiceViews.frozen.view },
 };
 const fixture = $derived(state && Object.hasOwn(cases, state) ? cases[state] ?? beforeGuest : beforeGuest);
