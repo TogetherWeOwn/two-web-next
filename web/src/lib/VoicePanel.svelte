@@ -2,26 +2,32 @@
 import MembersDirectoryAvatar from "./MembersDirectoryAvatar.svelte";
 import { freshnessLabel, visibleCount, type VoiceView } from "./voice-view";
 
-let { view, eventDetail = false }: { view: VoiceView; eventDetail?: boolean } = $props();
+type Props = { eventDetail?: boolean } & (
+  | { view: VoiceView; publicLive?: false }
+  | { view?: never; publicLive: true }
+);
+let { view, eventDetail = false, publicLive = false }: Props = $props();
 const heading = $props.id();
-let frozen = $derived(view.snapshot?.freshness === "frozen");
+let frozen = $derived(view?.snapshot?.freshness === "frozen");
 let title = $derived(
   eventDetail
-    ? view.audience === "guest"
-      ? "Community voice"
-      : "Event voice rooms"
-    : view.snapshot && !frozen
+    ? view?.audience === "member"
+      ? "Event voice rooms"
+      : "Community voice"
+    : view?.snapshot && !frozen
       ? "In voice now"
       : "Voice rooms",
 );
 </script>
 
-<aside aria-labelledby={heading} class:frozen>
+<aside aria-labelledby={heading} class:frozen hidden={publicLive} data-public-voice-panel={publicLive ? "" : undefined}>
   <div class="panel-head">
     <h2 id={heading}>{title}</h2>
-    {#if view.snapshot && (frozen || eventDetail)}<p>{freshnessLabel(view.snapshot)}</p>{/if}
+    {#if view?.snapshot && (frozen || eventDetail)}<p>{freshnessLabel(view.snapshot)}</p>{/if}
   </div>
-  {#if !view.snapshot}
+  {#if publicLive}
+    <p class="note count" data-public-voice-count></p>
+  {:else if !view?.snapshot}
     <p class="note">Voice numbers are not available right now.</p>
   {:else if view.audience === "guest"}
     <p class="note count">{view.snapshot.count} in voice{frozen ? " at last sync" : ""}</p>

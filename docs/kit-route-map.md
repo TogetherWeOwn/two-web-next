@@ -229,3 +229,23 @@ The remaining API-3 endpoints are the vanity redirects `/community`,
 `/faq.md`, `/join.md`, `/privacy.md`, `/rules.md`, and the event Markdown
 routes `/events.md` and `/e/:file{.+\\.md}`. Event Markdown still needs shared
 read-budget and suffix precedence proof, including paths with multiple segments.
+
+## Offline retirement guard
+
+The Kit archive parity job sets `KIT_RETIREMENT_GUARD=report` and requires the
+build's report. It lists Hono dependencies in the emitted SSR graph and legacy
+method/path pairs without native Kit coverage. The check reuses the mounted
+inventory, proposed targets, and synthetic parity samples, including multisegment paths.
+
+With locked dependencies installed, run `KIT_RETIREMENT_GUARD=strict npm run build --prefix web`
+to fail before generating new adapter output when either blocker remains.
+An ordinary build calls the stock adapter. The source baseline has 99 endpoints
+and 11 method fallbacks. Six middleware registrations, matcher behavior, assets,
+content negotiation and error handling need separate built-Worker parity evidence.
+
+Retirement follows the [all-off cutover and Hono undo](kit-cutover-release.md),
+M0 and production parity for every live page and API family. Record each
+registration's disposition and every cutover's post-release watch. Recheck the
+full installed candidate, including the adapter and jobs, for Hono dependencies.
+Measure bundle size and cold start again, then qualify the exact retirement
+candidate and rollback through the [production release gate](../CONTRIBUTING.md#production-release-gate).

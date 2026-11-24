@@ -69,6 +69,18 @@ export const load: PageServerLoad = async ({
     });
   }
   const { model } = outcome;
+  // The installed socket projects only the community count. A member event
+  // panel needs an independently authorized, event-linked room projection.
+  if (
+    env.DISCORD_LIVE_SOCKET_ENABLED === "true" &&
+    (locals.status === "guest" || locals.status === "authenticated") &&
+    !model.viewerMember &&
+    !model.review &&
+    !model.isEnded &&
+    model.status === "published"
+  ) {
+    return { model, publicVoiceEnabled: true };
+  }
   if (!model.viewerMember || model.review || (model.status !== "published" && !model.isEnded)) {
     return { model };
   }

@@ -2,6 +2,10 @@ import adapter from "@sveltejs/adapter-cloudflare";
 import { sveltekit } from "@sveltejs/kit/vite";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
+import { kitRetirementBuild } from "./scripts/kit-retirement-build.mjs";
+
+const cloudflare = adapter();
+const retirement = kitRetirementBuild(cloudflare, process.env.KIT_RETIREMENT_GUARD);
 
 // Kit 3 takes its config here; svelte.config.js is gone. Static files are not
 // Kit's: public/ is copied into the asset directory after the build
@@ -19,8 +23,9 @@ import { defineConfig } from "vite";
 export default defineConfig({
   plugins: [
     tailwindcss(),
+    ...(retirement ? [retirement.plugin] : []),
     sveltekit({
-      adapter: adapter(),
+      adapter: retirement?.adapter ?? cloudflare,
       csrf: { trustedOrigins: ["*"] },
       experimental: { remoteFunctions: false },
     }),
