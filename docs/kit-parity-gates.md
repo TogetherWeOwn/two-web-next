@@ -60,6 +60,27 @@ outside the member-read boundary; anything else is member data). The gates
 derive the expected `x-two-renderer` marker from the shipped manifest; a
 hard-coded `"kit"` expectation is a finding.
 
+### Dormant members directory
+
+The [published privacy terms](../src/privacy-content.ts) cover audited profile
+lookups by ID and the scoped member leaderboard. The saved leaderboard switch
+applies to boards. The web roster records guild membership at last sign-in.
+Neither establishes current directory membership or permission to list a profile.
+
+The [unmounted directory boundary](../web/src/lib/server/members-directory.ts)
+requires a member session and an injected source and audit sink. It projects
+only display name and a link to the existing profile for explicitly listed,
+current members. It makes one capped read and releases the response only after
+the audit of fetched subjects succeeds. The synthetic SvelteKit build exercises
+the boundary and the existing directory component. The serving Worker fixture
+checks that the scratch route and both retired `/members` forms return 404.
+
+Activation needs a separately authorized, current membership and directory
+eligibility source that applies visibility before a storage-side limit and
+deadline. The activation change also needs a distinct route and a view for the
+approved fields. The synthetic display rank, activity, counts and search in
+the fixture confer no data permissions.
+
 ## QA lane ordering
 
 In the `check` job, Kit gates run after shell/runtime basics and before any
