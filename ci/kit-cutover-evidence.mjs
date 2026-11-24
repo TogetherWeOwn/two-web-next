@@ -12,6 +12,13 @@ import { readWranglerConfig } from "./wrangler-config.mjs";
 export const STAGING_WORKER = "two-web-kit-cutover-proof";
 export const LEDGER_STATES = ["1033", "1037"];
 export const PROFILES = ["hono", "kit"];
+export const EMBER_CUTOVER_VARS = Object.freeze({
+  KIT_ROUTE_EMBER_PAGES: "true",
+  KIT_ROUTE_FEEDS: "false",
+  KIT_ROUTE_SEO: "false",
+  KIT_ROUTE_SECURITY_TXT: "false",
+  DISCORD_LIVE_SOCKET_ENABLED: "false",
+});
 const maxFileBytes = 32 * 1024 * 1024;
 const maxPacketBytes = 128 * 1024 * 1024;
 const hex = /^[a-f0-9]{64}$/;
@@ -224,7 +231,12 @@ export function verifyStagingProof(proof, pin) {
     Number.isSafeInteger(proof.routeCount) && proof.routeCount > 0,
     "empty staged route smoke",
   );
-  assert.equal(proof.bindingCheck, "isolated-and-all-off");
+  const bindingCheck = pin.mode === "ember" ? "isolated-and-ember" : "isolated-and-all-off";
+  assert.ok(
+    proof.bindingCheck === bindingCheck ||
+      (pin.mode === "hono" && proof.bindingCheck === "isolated-and-ember"),
+    "staged bindings do not match the requested cutover profile",
+  );
   assert.equal(proof.kitReadinessSamples, 6);
   assert.deepEqual(
     proof.checks,
@@ -237,14 +249,16 @@ export function verifyStagingProof(proof, pin) {
   );
 }
 
-export function productionUploadConfig(profile, { root, kit }) {
+export function productionUploadConfig(profile, { root, kit }, ember = false) {
   assert.ok(PROFILES.includes(profile));
+  assert.ok(!ember || profile === "kit", "Ember requires the Kit artifact");
   const { $schema, env, routes, triggers, ...hono } = { ...root, ...root.env.production };
   const config = profile === "hono" ? hono : { ...kit };
   delete config.$schema;
   delete config.triggers;
   return {
     ...config,
+    ...(ember ? { vars: { ...config.vars, ...EMBER_CUTOVER_VARS } } : {}),
     main: profile === "kit" ? "modules/_worker.js" : "modules/worker.js",
     base_dir: "modules",
     ...(profile === "kit" ? { rules: [{ type: "ESModule", globs: ["kit-adapter.js"] }] } : {}),

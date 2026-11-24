@@ -10,6 +10,11 @@ on:
         description: "Retain the parity-tested all-off Kit and compatible Hono build packet"
         type: boolean
         default: false
+      cutover_profile:
+        description: "Runtime profile to qualify on isolated staging when retaining a packet"
+        type: choice
+        options: [all-off, ember]
+        default: all-off
 
 permissions:
   contents: read
@@ -219,6 +224,7 @@ jobs:
         run: node ci/kit-cutover-staging.mjs "$RUNNER_TEMP/kit-cutover-packet" "$RUNNER_TEMP/proof.json"
         env:
           CUTOVER_PACKET_DIGEST: ${{ needs.kit-fatal-proof.outputs.cutover_digest }}
+          CUTOVER_PROFILE: ${{ inputs.cutover_profile }}
           KIT_CUTOVER_TEST_DATABASE_HOST: ${{ vars.KIT_CUTOVER_TEST_DATABASE_HOST }}
           KIT_CUTOVER_TEST_DATABASE_URL: ${{ secrets.KIT_CUTOVER_TEST_DATABASE_URL }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

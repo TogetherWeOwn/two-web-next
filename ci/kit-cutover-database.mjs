@@ -130,8 +130,8 @@ export async function advanceFixture(owner, expected, runtimeLogin) {
   );
 }
 
-export function stagingConfig(profile, inputs, worker, origin) {
-  const config = productionUploadConfig(profile, inputs);
+export function stagingConfig(profile, inputs, worker, origin, ember) {
+  const config = productionUploadConfig(profile, inputs, ember);
   return {
     name: worker,
     main: config.main,
@@ -145,7 +145,9 @@ export function stagingConfig(profile, inputs, worker, origin) {
     preview_urls: false,
     vars: {
       ...Object.fromEntries(
-        Object.entries(config.vars).filter(([name]) => name.startsWith("KIT_ROUTE_")),
+        Object.entries(config.vars).filter(
+          ([name]) => name.startsWith("KIT_ROUTE_") || name === "DISCORD_LIVE_SOCKET_ENABLED",
+        ),
       ),
       APP_URL: origin,
       FEATURED_IMAGE_HOSTS: "",

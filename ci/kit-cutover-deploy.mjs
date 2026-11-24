@@ -27,7 +27,7 @@ export function selection(env) {
     assert.ok(!pin && !undo, "cutover inputs require an explicit cutover mode");
     return { mode };
   }
-  assert.ok(mode === "kit" || mode === "hono", "unknown cutover mode");
+  assert.ok(["kit", "ember", "hono"].includes(mode), "unknown cutover mode");
   assert.equal(env.GITHUB_EVENT_NAME, "workflow_dispatch");
   assert.equal(env.GITHUB_REF, "refs/heads/main");
   assert.match(env.INPUT_SHA ?? "", /^[a-f0-9]{40}$/);
@@ -40,7 +40,7 @@ export function selection(env) {
   assert.notEqual(env.MIGRATIONS_APPLIED, "true", "cutover requires observed ledger evidence");
   const parsed = /^([1-9]\d{0,14}):([1-9]\d{0,14}):([a-f0-9]{64})$/.exec(pin);
   assert.ok(parsed, "expected cutover run:attempt:manifest SHA-256");
-  assert.ok(mode === "kit" ? uuid.test(undo) : undo === "", "invalid expected Hono undo version");
+  assert.ok(mode === "hono" ? undo === "" : uuid.test(undo), "invalid expected Hono undo version");
   const [, runId, runAttempt, digest] = parsed;
   return { mode, sourceSha: env.DEPLOY_SHA, runId, runAttempt, digest, undo };
 }
@@ -96,10 +96,11 @@ async function main() {
   }
   const version = process.env.ROLLBACK_VERSION_ID;
   assertRollbackVersionId(version);
-  if (pin.mode === "kit")
+  const profile = pin.mode === "hono" ? "hono" : "kit";
+  if (profile === "kit")
     assert.equal(version, pin.undo, "recorded rollback target is not the expected Hono UUID");
   const expected =
-    pin.mode === "kit" ? { version, commit: pin.sourceSha } : { version, allowDeferred: true };
+    profile === "kit" ? { version, commit: pin.sourceSha } : { version, allowDeferred: true };
   assert.equal(
     execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
     pin.sourceSha,
@@ -107,7 +108,7 @@ async function main() {
   await verifyPackage(dir, pin, inputs);
   const state = await readReady(PRODUCTION_ORIGIN, prefixes, expected);
   console.info(`Readiness verified at the canonical ${state} ledger`);
-  if (pin.mode === "kit") {
+  if (profile === "kit") {
     const view = wrangler("hono", [
       "versions",
       "view",
@@ -125,18 +126,18 @@ async function main() {
     return;
   }
   assert.equal(command, "upload");
-  const config = productionUploadConfig(pin.mode, inputs);
-  const directory = join(dir, pin.mode);
+  const config = productionUploadConfig(profile, inputs, pin.mode === "ember");
+  const directory = join(dir, profile);
   await writeFile(join(directory, "wrangler.json"), JSON.stringify(config), { flag: "wx" });
   const { GITHUB_RUN_ID: runId, GITHUB_RUN_ATTEMPT: attempt } = process.env;
   assert.match(`${runId}-${attempt}`, tagSuffix, "invalid deployment attempt");
   const uploaded = uploadVersion(
-    pin.mode,
+    profile,
     directory,
     config,
     `${pin.sourceSha}-${runId}-${attempt}`,
     {
-      message: pin.mode === "hono" ? undoMessage(pin.digest) : `two-web-cutover-kit:${pin.digest}`,
+      message: profile === "hono" ? undoMessage(pin.digest) : `two-web-cutover-kit:${pin.digest}`,
       output: process.env.WRANGLER_OUTPUT_FILE_PATH,
     },
   );

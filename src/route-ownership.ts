@@ -404,6 +404,8 @@ export function stagingManifestFor(
 }
 
 const PRODUCTION_APP_URL = `https://${PRODUCTION_APEX}`;
+const ISOLATED_CUTOVER_ORIGIN =
+  /^https:\/\/two-web-kit-cutover-proof-[1-9]\d{0,14}-[1-9]\d{0,14}\.[a-z0-9][a-z0-9-]{0,62}\.workers\.dev$/;
 const PRODUCTION_DOCUMENT_VARY = [
   "X-Two-Island",
   "Sec-Fetch-Dest",
@@ -412,9 +414,22 @@ const PRODUCTION_DOCUMENT_VARY = [
   "Sec-Purpose",
   "X-Moz",
 ];
-type ProductionRollout = Pick<HookDispatchDeps, "appUrl" | "kitRouteArchive" | "kitRouteStatic">;
+type ProductionRollout = Pick<
+  HookDispatchDeps,
+  "appUrl" | "kitRouteArchive" | "kitRouteStatic" | "kitRouteEmberPages"
+>;
+
+function emberDocumentPath(url: URL, deps: ProductionRollout): boolean {
+  return (
+    deps.kitRouteEmberPages === "true" &&
+    deps.appUrl === url.origin &&
+    (url.origin === PRODUCTION_APP_URL || ISOLATED_CUTOVER_ORIGIN.test(url.origin)) &&
+    (url.pathname === "/" || url.pathname === "/events" || url.pathname === "/join")
+  );
+}
 
 function isProductionRolloutPath(url: URL, deps: ProductionRollout): boolean {
+  if (emberDocumentPath(url, deps)) return true;
   return (
     deps.appUrl === PRODUCTION_APP_URL &&
     url.origin === PRODUCTION_APP_URL &&
@@ -424,20 +439,23 @@ function isProductionRolloutPath(url: URL, deps: ProductionRollout): boolean {
   );
 }
 
-// A request at the production apex must never fall through to the staging or
-// preview manifests. Only canonical public document GETs can opt in here.
+// The production apex and the isolated cutover Worker never fall through to
+// the preview manifest. Only canonical document GETs can opt in here.
 export function productionManifestFor(
   event: Pick<HookEventLike, "request" | "url" | "isDataRequest">,
   deps: ProductionRollout,
   routes: OwnedRoute[] = ROUTE_MANIFEST,
 ): OwnedRoute[] | undefined {
   const requestUrl = new URL(event.request.url);
-  if (requestUrl.hostname !== PRODUCTION_APEX && event.url.hostname !== PRODUCTION_APEX) {
+  const onApex = requestUrl.hostname === PRODUCTION_APEX || event.url.hostname === PRODUCTION_APEX;
+  const cutoverProof = ISOLATED_CUTOVER_ORIGIN.test(deps.appUrl ?? "");
+  if (!onApex && !cutoverProof) {
     return undefined;
   }
   if (
+    (onApex && requestUrl.origin !== PRODUCTION_APP_URL) ||
     !isProductionRolloutPath(requestUrl, deps) ||
-    event.url.origin !== PRODUCTION_APP_URL ||
+    event.url.origin !== requestUrl.origin ||
     event.url.pathname !== requestUrl.pathname ||
     !isKitNoticeDocument(event.request, event.isDataRequest) ||
     // Older Firefox sends X-Moz: prefetch without Fetch Metadata.
@@ -447,7 +465,17 @@ export function productionManifestFor(
   }
   return routes
     .filter((entry) => entry.method === "GET" && entry.path === requestUrl.pathname)
-    .map((entry) => ({ ...entry, enabled: entry.enabled && entry.reads === "public" }));
+    .map((entry) => ({
+      ...entry,
+      enabled:
+        entry.enabled &&
+        (entry.path === "/"
+          ? entry.reads !== "public" &&
+            entry.reads?.resource === "member" &&
+            entry.reads.action === "list" &&
+            entry.reads.route === "home"
+          : entry.reads === "public"),
+    }));
 }
 
 // Response header set only on the Kit-rendered branch of the hook, so the
@@ -657,6 +685,7 @@ export interface HookDispatchDeps {
   kitRouteEvents?: string;
   kitRouteHome?: string;
   kitRouteJoin?: string;
+  kitRouteEmberPages?: string;
   featuredImageHosts?: string;
   honoFetch: (request: Request) => Promise<Response>;
   resolve: (event: HookEventLike, opts?: KitResolveOptions) => Promise<Response>;

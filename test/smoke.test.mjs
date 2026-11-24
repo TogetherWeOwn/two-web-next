@@ -1120,6 +1120,30 @@ test("Home smoke accepts only the guest headings on Kit responses", async (t) =>
   }
 });
 
+test("Ember cutover smoke requires Kit documents and Hono fallback", async (t) => {
+  const render = (path, response) => {
+    if (["/", "/events", "/join"].includes(path)) response.headers["x-two-renderer"] = "kit";
+    if (path === "/") response.body = '<h1 id="home-heading">The lobby is open.</h1>';
+    if (path === "/join") {
+      response.body =
+        '<h2 id="join-card-heading">Join with one sign-in</h2>' +
+        '<a href="/join/discord" data-testid="join-oneclick">Join with Discord</a>';
+    }
+  };
+  const good = await stub(t, render);
+  const options = { expectedCutoverRenderer: "kit" };
+  assert.equal((await run(good.url, options)).ok, true);
+  const mixed = await stub(t, (path, response) => {
+    render(path, response);
+    if (path === "/events") delete response.headers["x-two-renderer"];
+    if (path === "/admin") response.headers["x-two-renderer"] = "kit";
+  });
+  const result = await run(mixed.url, options);
+  assert.equal(result.ok, false);
+  assert.match(result.output, /FAIL \/events: expected x-two-renderer: kit/);
+  assert.match(result.output, /FAIL \/admin: expected no x-two-renderer/);
+});
+
 test("CLI enforces the selected staging Join renderer and its public action", async (t) => {
   const action = '<a href="/join/discord" data-testid="join-oneclick">Join with Discord</a>';
   const hono = `${fixtures["/join"][2]}${action}`;

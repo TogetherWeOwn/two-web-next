@@ -281,6 +281,7 @@ test("the reviewed Kit candidate passes; drift in name, flags, crons or bindings
   const cases = [
     [(kit) => Object.assign(kit, { name: "two-web-next" }), /two-web-next-production/],
     ...KIT_ROUTE_FLAGS.map((flag) => [(kit) => (kit.vars[flag] = "true"), new RegExp(flag)]),
+    [(kit) => (kit.vars.KIT_ROUTE_EMBER_PAGES = "true"), /KIT_ROUTE_EMBER_PAGES/],
     [(kit) => (kit.vars.KIT_ROUTE_HOME = false), /KIT_ROUTE_HOME/],
     [(kit) => (kit.triggers.crons = ["*/10 * * * *"]), /empty crons/],
     [(kit) => (kit.routes = [{ pattern: "togetherweown.com" }]), /routes/],

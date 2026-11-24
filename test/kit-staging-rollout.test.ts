@@ -33,6 +33,7 @@ type RolloutFlags = {
   events?: string;
   home?: string;
   join?: string;
+  emberPages?: string;
 };
 
 function stagingDeps(flags: RolloutFlags = {}) {
@@ -43,6 +44,7 @@ function stagingDeps(flags: RolloutFlags = {}) {
     kitRouteEvents: flags.events,
     kitRouteHome: flags.home,
     kitRouteJoin: flags.join,
+    kitRouteEmberPages: flags.emberPages,
     featuredImageHosts: "",
     honoFetch: vi.fn(async () => new Response("hono", { status: 200 })),
     sessionFor: vi.fn(async () => ({
@@ -459,8 +461,11 @@ describe("Kit staging Wrangler config", () => {
 
 describe("Kit production route selection", () => {
   const apex = "https://togetherweown.com";
+  const cutover = "https://two-web-kit-cutover-proof-123-1.fixture.workers.dev";
   const archive = "/events/past";
   const archiveStatic = [archive, "/about", "/faq"];
+  const ember = { emberPages: "true" };
+  const emberPaths = ["/", "/events", "/join"];
   // Try even staging-only opt-ins, to catch accidental reuse of its admission rules.
   const allOn = { archive: "true", static: "true", events: "true", home: "true", join: "true" };
 
@@ -508,11 +513,12 @@ describe("Kit production route selection", () => {
     events: vars.KIT_ROUTE_EVENTS,
     home: vars.KIT_ROUTE_HOME,
     join: vars.KIT_ROUTE_JOIN,
+    emberPages: vars.KIT_ROUTE_EMBER_PAGES,
   };
 
   it("keeps the shipped production config inert", () => {
     expect(vars.APP_URL).toBe(apex);
-    expect(Object.values(shippedFlags)).toEqual(Array(5).fill("false"));
+    expect(Object.values(shippedFlags)).toEqual(Array(6).fill("false"));
   });
 
   it.each([
@@ -523,11 +529,55 @@ describe("Kit production route selection", () => {
     ["archive alone", { archive: "true" }, [archive]],
     ["malformed static", { archive: "true", static: "true " }, [archive]],
     ["cumulative opt-in", allOn, archiveStatic],
+    ["Ember opt-in", ember, emberPaths],
+    ["malformed Ember opt-in", { emberPages: "TRUE" }, []],
   ] as const)("selects only the expected routes with %s", async (_name, flags, kitPaths) => {
     for (const route of ROUTE_MANIFEST) {
       const path = route.path.replace(":id", "1").replace(":key", "event");
       const expected = (kitPaths as readonly string[]).includes(path) ? "kit" : "hono";
       await expectOwner(productionEvent(path, route.method), expected, flags);
+    }
+  });
+
+  it.each([apex, cutover])("keeps Ember limited to document GETs on %s", async (origin) => {
+    for (const path of emberPaths) {
+      const event = productionEvent(path, "GET", origin);
+      const rendered = await expectOwner(event, "kit", ember, origin);
+      expect(rendered.headers.get("cache-control")).toBe("private, no-store");
+      await expectOwner(event, "hono", {}, origin);
+      await expectOwner(productionEvent(path, "HEAD", origin), "hono", ember, origin);
+      await expectOwner(productionEvent(path, "POST", origin), "hono", ember, origin);
+      event.request = new Request(event.request, { headers: { "x-two-island": "fragment" } });
+      await expectOwner(event, "hono", ember, origin);
+      await expectOwner({ ...event, isDataRequest: true }, "hono", ember, origin);
+    }
+    for (const path of ["/admin", "/leaderboards/members", "/members", "/join/discord", "/up"]) {
+      await expectOwner(productionEvent(path, "GET", origin), "hono", ember, origin);
+    }
+  });
+
+  it("requires the exact proof or apex origin on both URLs", async () => {
+    for (const origin of ["https://preview.example.test", STAGING_APP_URL, cutover, apex]) {
+      const event = productionEvent("/join", "GET", origin);
+      expect(
+        productionManifestFor(
+          { ...event, url: new URL("/join", cutover) },
+          { appUrl: origin === cutover ? apex : cutover, kitRouteEmberPages: "true" },
+        ),
+      ).toEqual([]);
+    }
+  });
+
+  it("only admits Home with the declared member-read boundary", () => {
+    const event = productionEvent("/");
+    const deps = { appUrl: apex, kitRouteEmberPages: "true" };
+    const home = ROUTE_MANIFEST.find((route) => route.path === "/");
+    expect(home?.reads).toEqual({ resource: "member", action: "list", route: "home" });
+    for (const reads of [undefined, "public"] as const) {
+      const manifest = productionManifestFor(event, deps, [
+        { method: "GET", path: "/", enabled: true, reads },
+      ]);
+      expect(resolveRouteOwner({ method: "GET", path: "/" }, manifest ?? [])).toBe("hono");
     }
   });
 

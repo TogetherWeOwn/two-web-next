@@ -1018,6 +1018,10 @@ export function assertKitProductionCandidate(rootText, kitText) {
   for (const flag of KIT_ROUTE_FLAGS) {
     if (kit.vars?.[flag] !== "false") throw new Error(`Kit candidate ${flag} must be "false"`);
   }
+  // Older all-off packets predate Ember admission and have no such binding.
+  if (kit.vars?.KIT_ROUTE_EMBER_PAGES !== undefined && kit.vars.KIT_ROUTE_EMBER_PAGES !== "false") {
+    throw new Error('Kit candidate KIT_ROUTE_EMBER_PAGES must be "false"');
+  }
   if (!Array.isArray(kit.triggers?.crons) || kit.triggers.crons.length !== 0) {
     throw new Error("Kit candidate must declare empty crons");
   }
@@ -1045,7 +1049,11 @@ export function assertKitProductionCandidate(rootText, kitText) {
     }
   }
   for (const [name, value] of Object.entries(kit.vars)) {
-    if (!KIT_ROUTE_FLAGS.includes(name) && production.vars?.[name] !== value) {
+    if (
+      !KIT_ROUTE_FLAGS.includes(name) &&
+      name !== "KIT_ROUTE_EMBER_PAGES" &&
+      production.vars?.[name] !== value
+    ) {
       throw new Error(`Kit candidate var ${name} differs from root env.production`);
     }
   }

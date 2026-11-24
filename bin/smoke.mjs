@@ -17,6 +17,7 @@ const html = [
   ["/events/past", /id="past-events-heading"/],
   ["/join", /id="join-heading"/],
 ];
+const emberPages = new Set(["/", "/events", "/join"]);
 // HTML leaves that stay non-indexable even on the indexable apex: the archive
 // and the branded 404s carry their noindex in <meta>, so the deploy smoke
 // asserts the X-Robots-Tag header only on the indexable leaves.
@@ -267,6 +268,7 @@ export async function smoke(
     allowMissingBaseline = false,
     failOnReadyWaitCritical = false,
     expectedJoinRenderer,
+    expectedCutoverRenderer,
     onRoute,
   } = {},
 ) {
@@ -287,6 +289,9 @@ export async function smoke(
   if (expectedVersionId !== undefined) assertExpectedVersionId(expectedVersionId);
   if (expectedJoinRenderer !== undefined && !["hono", "kit"].includes(expectedJoinRenderer)) {
     throw new Error("SMOKE_EXPECT_JOIN_RENDERER must be hono or kit");
+  }
+  if (expectedCutoverRenderer !== undefined && !["hono", "kit"].includes(expectedCutoverRenderer)) {
+    throw new Error("SMOKE_EXPECT_CUTOVER_RENDERER must be hono or kit");
   }
   const baseline = failedBaseline === undefined ? undefined : assertFailedBaseline(failedBaseline);
   const overrideVersionId =
@@ -732,14 +737,20 @@ export async function smoke(
           check(false, "valid JSON object", "invalid JSON");
         }
       }
-      const kitJoin = route.path === "/join" && expectedJoinRenderer === "kit";
-      if (route.path === "/join" && expectedJoinRenderer !== undefined) {
+      let expectedRenderer = route.path === "/join" ? expectedJoinRenderer : undefined;
+      if (expectedCutoverRenderer !== undefined) {
+        expectedRenderer = emberPages.has(route.path) ? expectedCutoverRenderer : "hono";
+      }
+      if (expectedRenderer !== undefined) {
         const renderer = headers.get("x-two-renderer");
         check(
-          renderer === (expectedJoinRenderer === "kit" ? "kit" : null),
-          expectedJoinRenderer === "kit" ? "x-two-renderer: kit" : "no x-two-renderer (Hono)",
+          renderer === (expectedRenderer === "kit" ? "kit" : null),
+          expectedRenderer === "kit" ? "x-two-renderer: kit" : "no x-two-renderer (Hono)",
           renderer === null ? "header missing" : "unexpected renderer header",
         );
+      }
+      const kitJoin = route.path === "/join" && expectedRenderer === "kit";
+      if (route.path === "/join" && expectedRenderer !== undefined) {
         const { action, heading } = await readJoinMarkup(body);
         check(action, "join-oneclick link to /join/discord", "link did not match");
         if (kitJoin) {
@@ -934,6 +945,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
           failOnReadyWaitCritical,
           // Only callers with a route selection opt into an exact renderer check.
           expectedJoinRenderer: process.env.SMOKE_EXPECT_JOIN_RENDERER,
+          expectedCutoverRenderer: process.env.SMOKE_EXPECT_CUTOVER_RENDERER || undefined,
           onRoute:
             jsonVerdict || ledgerPath !== undefined
               ? (path, failedAssertions) => {
