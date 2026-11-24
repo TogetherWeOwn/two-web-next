@@ -8,7 +8,7 @@ import {
   PROFILE_MIN_FILL_MS,
   type ProfileWriteBody,
 } from "../src/islands/contracts-member-profile";
-import { patchProfileJson } from "../src/profiles/patch-core";
+import { patchProfileJson, profileDraftValues, saveProfilePatch } from "../src/profiles/patch-core";
 import { profilesApp } from "../src/profiles/routes";
 import { createMemoryProfileStore } from "../src/profiles/store";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
@@ -248,6 +248,41 @@ describe("dormant profile JSON PATCH core", () => {
     f.save.mockRejectedValueOnce(failure);
     await expect(patchProfileJson(OWNER, f.readJson, f.deps)).rejects.toBe(failure);
     expect(f.save).toHaveBeenCalledOnce();
+  });
+
+  it("lets an HTTP adapter distinguish a save failure from validation", async () => {
+    const f = fixture("owner");
+    const error = new Error("synthetic write failure");
+    f.save.mockRejectedValueOnce(error);
+    expect(await saveProfilePatch(OWNER, VALID, { save: f.save })).toEqual({
+      kind: "saveFailed",
+      error,
+    });
+    expect(f.save).toHaveBeenCalledOnce();
+  });
+
+  it("keeps an editable draft separate from the saved member", () => {
+    const member = {
+      id: OWNER,
+      username: "fixture",
+      bio: "saved",
+      avatar: null,
+      games: ["Chess"],
+      timezone: "UTC",
+      leaderboardOptOut: false,
+    };
+    expect(
+      profileDraftValues(
+        { bio: "draft", games: ["Go", "Chess"], timezone: "bad", leaderboard_opt_out: ["0", "1"] },
+        member,
+      ),
+    ).toEqual({
+      bio: "draft",
+      games_text: "Go\nChess",
+      timezone: "bad",
+      leaderboard_opt_out: true,
+    });
+    expect(member).toMatchObject({ bio: "saved", timezone: "UTC", leaderboardOptOut: false });
   });
 
   it("stops before the throttle when admission is unavailable", async () => {
