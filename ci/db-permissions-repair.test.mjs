@@ -5,6 +5,8 @@ import { test } from "node:test";
 import { parse } from "yaml";
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const workflow = parse(read("../.github/workflows/db-permissions-repair.yml"));
+const shell = (script, env, prefix = "") =>
+  spawnSync("/bin/bash", ["-c", `${prefix}\n${script}`], { env, encoding: "utf8" });
 
 test("repair dispatch isolates the credential and pins protected main and the same attempt", () => {
   assert.deepEqual(Object.keys(workflow.on), ["workflow_dispatch"]);
@@ -24,8 +26,6 @@ test("repair dispatch isolates the credential and pins protected main and the sa
   const gate = job.steps[0];
   const run = job.steps.at(-1);
   const sha = "a".repeat(40);
-  const shell = (script, env, prefix = "") =>
-    spawnSync("/bin/bash", ["-c", `${prefix}\n${script}`], { env, encoding: "utf8" });
   const context = {
     GITHUB_EVENT_NAME: "workflow_dispatch",
     GITHUB_REF: "refs/heads/main",
@@ -80,5 +80,49 @@ test("repair dispatch isolates the credential and pins protected main and the sa
     assert.equal(result.status, success ? 0 : 1);
     assert.equal(result.stdout, success ? `${line}\n` : "");
     assert.equal(result.stderr, success ? "" : `${line}\n`);
+  }
+});
+
+test("executor dispatch scopes its credential and suppresses subprocess output", () => {
+  const workflow = parse(read("../.github/workflows/db-repair-executor.yml"));
+  const { preflight, authority } = workflow.jobs;
+  assert.deepEqual(Object.keys(workflow.on), ["workflow_dispatch"]);
+  assert.deepEqual(workflow.on.workflow_dispatch.inputs.operation.options, ["provision", "revoke"]);
+  assert.equal(preflight.environment, undefined);
+  assert.equal(authority.environment, "production");
+  assert.equal(authority.needs, "preflight");
+  assert.deepEqual(workflow.concurrency, {
+    group: "web-migrate-production",
+    "cancel-in-progress": false,
+  });
+  const gate = authority.steps[0];
+  const sha = "a".repeat(40);
+  assert.equal(
+    shell(gate.run, {
+      GITHUB_SHA: sha,
+      APPROVED_SHA: sha,
+      GITHUB_RUN_ATTEMPT: "2",
+      CHECKED_ATTEMPT: "1",
+      PLAN_SHA256: "b".repeat(64),
+    }).status,
+    1,
+  );
+  const run = authority.steps.at(-1);
+  const dsn = "${{ secrets.PRODUCTION_DB_EXECUTOR_DATABASE_URL }}";
+  assert.equal(run.env.PRODUCTION_DB_EXECUTOR_DATABASE_URL, dsn);
+  assert.equal(JSON.stringify(workflow).split(dsn).length, 2);
+  assert.ok(!JSON.stringify(workflow).includes("PRODUCTION_DB_REPAIR_DATABASE_URL"));
+  for (const code of [0, 1]) {
+    const result = shell(
+      run.run,
+      { OPERATION: "revoke" },
+      `node() { printf 'fixture credential'; printf 'fixture error' >&2; return ${code}; }`,
+    );
+    assert.equal(result.status, code);
+    assert.equal(result.stdout, code ? "" : "Approved executor membership state confirmed.\n");
+    assert.equal(
+      result.stderr,
+      code ? "Executor membership operation did not confirm an outcome.\n" : "",
+    );
   }
 });
