@@ -1,6 +1,6 @@
 // RSVP member writes: PUT/DELETE /events/:key/rsvp, the POST /e/:key/rsvp
 // HTML adapter and the 405 fallback. Split out of src/events/routes.tsx;
-// behavior unchanged.
+// the handlers also serve Kit's endpoints after route admission.
 import { getSignedCookie } from "hono/cookie";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { dbFor } from "../admin/db";
@@ -52,6 +52,7 @@ async function member(c: Ctx, readFragmentSession: SessionReader): Promise<Sessi
 const putRsvp = async (
   c: Ctx,
   input: Record<string, unknown>,
+  key: string,
   readFragmentSession: SessionReader,
 ): Promise<Response> => {
   c.header("cache-control", "private, no-store");
@@ -82,8 +83,6 @@ const putRsvp = async (
   // Accepted, then refused: answering for the caller instead would look like it worked.
   if (input.user_id !== undefined && String(input.user_id) !== who.id)
     return jsonRefusal(c, "forbidden", 403);
-  // Generic Ctx (no route path type) yields string|undefined: fail closed.
-  const key = c.req.param("key") ?? "";
   if (!eventKeyAllowed(key, c.env.APP_URL)) return jsonRefusal(c, "not_found", 404);
   // POST /e/:key/rsvp aliases normalize here (PUT/DELETE already 308 above):
   // ULIDs are stored uppercase, so an alias in another letter case reaches
@@ -108,6 +107,7 @@ const putRsvp = async (
 const deleteRsvp = async (
   c: Ctx,
   input: Record<string, unknown>,
+  key: string,
   readFragmentSession: SessionReader,
 ): Promise<Response> => {
   c.header("cache-control", "private, no-store");
@@ -124,8 +124,6 @@ const deleteRsvp = async (
   if (!db) return dbUnavailableJson(c);
   // Only the caller's own row is reachable: the delete is keyed on the session user.
   // The budget is charged inside withdrawRsvp, atomically with the delete.
-  // Generic Ctx (no route path type) yields string|undefined: fail closed.
-  const key = c.req.param("key") ?? "";
   const lookupKey = canonicalEventKey(key) ?? key;
   const r = await withdrawRsvp(db, eventKeyAllowed(key, c.env.APP_URL) ? lookupKey : "", who.id);
   if (r.limited) return rateLimitExceeded(c, r.retryAfter);
@@ -147,8 +145,7 @@ const deleteRsvp = async (
 // non-browser clients (Go net/http, reqwest) replay a 301/302/303 as a
 // body-less GET that would land on the 405 catch-all, losing the write.
 // RFC 9110 §15.4.9 keeps the method and body on 308.
-const canonicalRsvpRedirect = (c: Ctx): Response | null => {
-  const key = c.req.param("key") ?? "";
+const canonicalRsvpRedirect = (c: Ctx, key: string): Response | null => {
   const canonical = canonicalEventKey(key);
   if (canonical && canonical !== key) {
     const search = new URL(c.req.url).search;
@@ -157,29 +154,24 @@ const canonicalRsvpRedirect = (c: Ctx): Response | null => {
   return null;
 };
 
-export function registerRsvpRoutes(app: App, readFragmentSession: SessionReader): void {
-  app.put("/events/:key/rsvp", requestBodyLimit("action"), async (c) => {
-    const moved = canonicalRsvpRedirect(c);
+export const rsvpHandlers = {
+  async json(c: Ctx, key: string, readFragmentSession: SessionReader): Promise<Response> {
+    const moved = canonicalRsvpRedirect(c, key);
     if (moved) return moved;
-    return putRsvp(c, await body(c), readFragmentSession);
-  });
+    if (c.req.method === "DELETE") {
+      return deleteRsvp(c, await body(c).catch(() => ({})), key, readFragmentSession);
+    }
+    return putRsvp(c, await body(c), key, readFragmentSession);
+  },
 
-  app.delete("/events/:key/rsvp", requestBodyLimit("action"), async (c) => {
-    const moved = canonicalRsvpRedirect(c);
-    if (moved) return moved;
-    return deleteRsvp(c, await body(c).catch(() => ({})), readFragmentSession);
-  });
-
-  // HTML adapter only: reuse the exact session, decoy, shared budget and
-  // locked service paths above. The frozen JSON resource still refuses POST.
-  app.post("/e/:key/rsvp", requestBodyLimit("action"), async (c) => {
+  // The native POST shares admission, the locked mutation, and dispatch with the JSON verbs.
+  async form(c: Ctx, rawKey: string, readFragmentSession: SessionReader): Promise<Response> {
     const input = await body(c);
     const response = await (input.status === "withdraw"
-      ? deleteRsvp(c, input, readFragmentSession)
-      : putRsvp(c, input, readFragmentSession));
+      ? deleteRsvp(c, input, rawKey, readFragmentSession)
+      : putRsvp(c, input, rawKey, readFragmentSession));
     // Success, guest login and refusal links rebuild from the canonical key.
     // Expired-bearer recovery keeps the shared safe return journey above.
-    const rawKey = c.req.param("key") ?? "";
     const key = canonicalEventKey(rawKey) ?? rawKey;
     // For those paths, native page context comes only from the validated
     // action-query and body carriers (both normalized, agreement required),
@@ -222,9 +214,9 @@ export function registerRsvpRoutes(app: App, readFragmentSession: SessionReader)
         },
       ),
     );
-  });
+  },
 
-  app.all("/events/:key/rsvp", (c) => {
+  refuseMethod(c: Ctx): Response {
     const { status, headers, error } = explicitMethodRefusal({
       allow: "PUT, DELETE",
       accept: c.req.header("accept"),
@@ -233,5 +225,18 @@ export function registerRsvpRoutes(app: App, readFragmentSession: SessionReader)
     c.header("Allow", headers.Allow);
     c.header("Vary", headers.Vary);
     return error ? jsonRefusal(c, error, status) : c.body(null, status);
-  });
+  },
+};
+
+export function registerRsvpRoutes(app: App, readFragmentSession: SessionReader): void {
+  app.put("/events/:key/rsvp", requestBodyLimit("action"), (c) =>
+    rsvpHandlers.json(c, c.req.param("key"), readFragmentSession),
+  );
+  app.delete("/events/:key/rsvp", requestBodyLimit("action"), (c) =>
+    rsvpHandlers.json(c, c.req.param("key"), readFragmentSession),
+  );
+  app.post("/e/:key/rsvp", requestBodyLimit("action"), (c) =>
+    rsvpHandlers.form(c, c.req.param("key"), readFragmentSession),
+  );
+  app.all("/events/:key/rsvp", rsvpHandlers.refuseMethod);
 }
