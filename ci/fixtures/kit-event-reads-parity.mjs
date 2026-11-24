@@ -126,9 +126,15 @@ export async function assertEventReadsParity({
       if (method === "HEAD" || status === 304) assert.equal(body, "", label);
       const requestId = response.headers.get("x-request-id");
       assert.ok(requestId, label);
-      const normalized = body
+      let normalized = body
         .replaceAll(requestId, "REQUEST_ID")
         .replaceAll(worker.origin, hono.origin);
+      if (path.endsWith(".ics")) {
+        const host = new URL(worker === unset ? unset.origin : hono.origin).host;
+        const uid = `UID:${published}@${host}\r\n`;
+        assert.ok(body.includes(uid), `${label}: UID uses configured authority`);
+        normalized = normalized.replace(uid, `UID:${published}@FIXTURE_HOST\r\n`);
+      }
       const cacheControl = response.headers.get("cache-control");
       if (cache === "public") assert.match(cacheControl ?? "", /^public, max-age=(?:[0-5]?\d|60)$/);
       else if (cache !== undefined) assert.equal(cacheControl, cache, label);
