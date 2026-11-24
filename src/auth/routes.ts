@@ -1,6 +1,6 @@
 // The Discord sign-in round trip plus the session-adjacent auth endpoints:
 // GET /auth/status, GET /auth/recover, GET /auth/discord/redirect,
-// GET /auth/discord, GET /auth/discord/callback, POST /logout, POST /logout/everywhere and
+// GET /auth/discord, GET /auth/discord/callback, POST /logout and
 // POST /auth/qa/:identity.
 //
 // Session + issue helpers live in the app module (it owns the Postgres store

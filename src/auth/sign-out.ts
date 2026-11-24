@@ -23,13 +23,14 @@ async function clearCookiesAndRedirect(c: SignOutContext): Promise<Response> {
   return c.redirect("/", 303);
 }
 
-function revocationUnavailable(c: SignOutContext, err: unknown, message: string) {
-  // Preserve browser cookies until revocation succeeds. Driver messages may
-  // carry connection details, so log only the class and correlation ID.
-  console.error(message, {
+function revocationFailureFields(c: SignOutContext, err: unknown) {
+  return {
     exception: exceptionClass(err),
     request_id: safeRequestId(c.get("requestId")),
-  });
+  };
+}
+
+function revocationUnavailable(c: SignOutContext) {
   c.header("cache-control", "no-store, private");
   varyAccept(c);
   if (prefersHtmlError(c)) return databaseUnavailable(c);
@@ -54,7 +55,8 @@ export async function signOut(
         await store.revokeLineage(statusHash);
       }
     } catch (err) {
-      return revocationUnavailable(c, err, "logout revocation failed");
+      console.error("logout revocation failed", revocationFailureFields(c, err));
+      return revocationUnavailable(c);
     }
   }
   return clearCookiesAndRedirect(c);
@@ -80,7 +82,8 @@ export async function signOutEverywhere(
         await store.revokeUserSessions(session.userId, REVOKE_ALL_EXCEPT);
       }
     } catch (err) {
-      return revocationUnavailable(c, err, "logout everywhere revocation failed");
+      console.error("logout everywhere revocation failed", revocationFailureFields(c, err));
+      return revocationUnavailable(c);
     }
   }
   return clearCookiesAndRedirect(c);
