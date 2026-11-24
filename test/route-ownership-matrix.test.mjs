@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { explicitMethodRefusal } from "../src/http/method";
-import { resolveRouteOwner, ROUTE_MANIFEST } from "../src/route-ownership";
+import { decideOwner, resolveRouteOwner, ROUTE_MANIFEST } from "../src/route-ownership";
 import { coverage } from "./fixtures/parity/hono-9822a6e60c6b2229c8b823bb481c87fb29fa85c9/index.json";
 import inventory from "./fixtures/route-inventory.json";
 import { rows } from "./fixtures/route-kit-map.json";
@@ -123,26 +123,58 @@ describe("route ownership preparation matrix (not runtime dispatch)", () => {
   it.each([
     ["/up", "/version", ["GET", "HEAD"], "GET"],
     ["/csp-reports", "/version", ["POST"], "POST"],
-  ])("projects an exact reserved release for %s only", (path, sibling, released, registered) => {
-    expect(familyEndpointKeys(rows, "ops").has(routeKey({ method: registered, path }))).toBe(true);
-    const selection = new Set(released.map((method) => routeKey({ method, path })));
-    const probes = [path, sibling, `${path}/`].flatMap((candidate) =>
-      methods.map((method) => ({ method, path: candidate })),
-    );
-    expect(probes.every((pair) => resolveRouteOwner(pair) === "hono")).toBe(true);
-    // The current resolver reserves these paths even with an enabled manifest entry.
-    // Keep the release expectation as a fixture for the dispatcher that can opt in.
-    const manifest = [
-      { method: registered, path, enabled: true },
-      { method: "GET", path: sibling, enabled: true },
-    ];
-    for (const pair of probes) {
-      expect(resolveRouteOwner(pair, manifest), routeKey(pair)).toBe("hono");
+  ])(
+    "releases only the enabled reserved method and path for %s",
+    (path, sibling, released, registered) => {
+      expect(familyEndpointKeys(rows, "ops").has(routeKey({ method: registered, path }))).toBe(
+        true,
+      );
+      const selection = new Set(released.map((method) => routeKey({ method, path })));
+      const probes = [path, sibling, `${path}/`].flatMap((candidate) =>
+        methods.map((method) => ({ method, path: candidate })),
+      );
+      expect(probes.every((pair) => resolveRouteOwner(pair) === "hono")).toBe(true);
+      // Enable the controls too so they require the reservation check.
+      const manifest = probes
+        .filter(({ method }) => method !== "HEAD")
+        .map((pair) => ({ ...pair, enabled: true }));
+      const releases = [{ method: registered, path }];
+      const disabled = manifest.map((entry) => ({ ...entry, enabled: false }));
+      for (const pair of probes) {
+        expect(resolveRouteOwner(pair, manifest), routeKey(pair)).toBe("hono");
+        const request = new Request(`https://example.test${pair.path}`, { method: pair.method });
+        expect(decideOwner(request, manifest), routeKey(pair)).toBe("hono");
+        expect(resolveRouteOwner(pair, disabled, releases), routeKey(pair)).toBe("hono");
+        expect(resolveRouteOwner(pair, manifest, releases), routeKey(pair)).toBe(
+          projectFixtureOwner(pair, selection, resolveRouteOwner),
+        );
+      }
+      const projected = probes.filter(
+        (pair) => projectFixtureOwner(pair, selection, resolveRouteOwner) === "kit",
+      );
+      expect(projected).toEqual(released.map((method) => ({ method, path })));
+    },
+  );
+
+  it("requires a concrete API manifest entry and keeps adapter assets reserved", () => {
+    const api = { method: "GET", path: "/api/public/events" };
+    const pattern = { ...api, path: "/api/public/:key", enabled: true };
+    const manifest = [pattern, { ...api, enabled: true }];
+    expect(resolveRouteOwner({ ...api, method: "head" }, manifest, [api])).toBe("kit");
+    expect(resolveRouteOwner(api, [pattern], [api])).toBe("hono");
+    expect(resolveRouteOwner(pattern, [pattern], [pattern])).toBe("hono");
+    for (const path of [
+      "/api/public/sibling",
+      "/api/public/%65vents",
+      "/api/public/events/__data.json",
+      "/api/public/events/%5F%5Fdata.json",
+    ]) {
+      expect(resolveRouteOwner({ ...api, path }, manifest, [api]), path).toBe("hono");
     }
-    const projected = probes.filter(
-      (pair) => projectFixtureOwner(pair, selection, resolveRouteOwner) === "kit",
-    );
-    expect(projected).toEqual(released.map((method) => ({ method, path })));
+    for (const path of ["/_app", "/_app/immutable/example.js"]) {
+      const asset = { method: "GET", path };
+      expect(resolveRouteOwner(asset, [{ ...asset, enabled: true }], [asset]), path).toBe("hono");
+    }
   });
 
   it("keeps registered 405s separate from wrong-method page 404s in the existing goldens", () => {

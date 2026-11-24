@@ -455,15 +455,12 @@ export function productionManifestFor(
 export const KIT_RENDERER_HEADER = "x-two-renderer";
 export const KIT_RENDERER_VALUE = "kit";
 
-// Paths Kit must never shadow, whatever the manifest claims. The machine API
-// prefix plus the operational endpoints the Hono app owns. /_app/* is the
-// adapter-owned immutable asset prefix: it is served by the adapter before
-// hooks run (web/wrangler.jsonc run_worker_first still bypasses handle for
-// /_app/immutable/*), so reserving it here guarantees that any request that
-// DOES reach the hook (dev, future adapter change) falls through to Hono's
-// host-guarded ASSETS branch with full headers, never to Kit resolve.
-const RESERVED_PREFIXES = ["/api/", "/_app/"];
+// Hono owns the API namespace and operational endpoints by default.
+const RESERVED_API_ROOT = "/api";
 const RESERVED_EXACT = new Set(["/up", "/version", "/csp-reports"]);
+// Adapter assets normally bypass the hook. Keep any that reach it on Hono's
+// host-guarded ASSETS branch, even when a caller opts into reservation release.
+const KIT_ASSET_ROOT = "/_app";
 
 // Kit data requests carry the page path with this suffix; ownership follows
 // the underlying page, with or without CSR.
@@ -494,12 +491,8 @@ function normalizePath(path: string, stripData = true): string | null {
   return base || "/";
 }
 
-function isReserved(path: string): boolean {
-  if (RESERVED_EXACT.has(path)) return true;
-  // The bare prefix counts too: "/api" must not escape the reservation.
-  return RESERVED_PREFIXES.some(
-    (prefix) => path === prefix.slice(0, -1) || path.startsWith(prefix),
-  );
+function isInNamespace(path: string, root: string): boolean {
+  return path === root || path.startsWith(`${root}/`);
 }
 
 function matchPattern(pattern: string, path: string): boolean {
@@ -540,17 +533,36 @@ function bestMatch(path: string, manifest: OwnedRoute[]): OwnedRoute | undefined
 function enabledRouteFor(
   decision: RouteDecision,
   manifest: OwnedRoute[],
-  stripData = true,
-  originalUrl?: string,
+  {
+    stripData = true,
+    originalUrl,
+    reservedReleases,
+  }: {
+    stripData?: boolean;
+    originalUrl?: string;
+    reservedReleases?: readonly RouteDecision[];
+  } = {},
 ): OwnedRoute | undefined {
   const normalized = normalizePath(decision.path, stripData);
-  if (normalized === null) return undefined;
-  if (isReserved(normalized)) return undefined;
+  if (normalized === null || isInNamespace(normalized, KIT_ASSET_ROOT)) return undefined;
+  const reserved = RESERVED_EXACT.has(normalized) || isInNamespace(normalized, RESERVED_API_ROOT);
   const upper = decision.method.toUpperCase();
   const lookup = upper === "HEAD" ? "GET" : upper;
+  // The reservation applies after decoding, but its release applies only to
+  // the concrete pathname. Encoded aliases and Kit data suffixes stay on Hono.
+  if (
+    reserved &&
+    (decision.path !== normalized ||
+      !reservedReleases?.some(
+        (release) => release.method === lookup && release.path === normalized,
+      ))
+  ) {
+    return undefined;
+  }
   const candidates = manifest.filter((entry) => entry.method.toUpperCase() === lookup);
   const best = bestMatch(normalized, candidates);
   if (!best?.enabled) return undefined;
+  if (reserved && (best.path !== normalized || best.path.includes(":"))) return undefined;
   if (best.documentGetOnly) {
     const documentUrl = originalUrl ? new URL(originalUrl) : undefined;
     if (documentUrl && documentUrl.origin !== STAGING_APP_URL) return undefined;
@@ -559,11 +571,15 @@ function enabledRouteFor(
   return best;
 }
 
+// A future family can supply concrete releases with its enabled manifest.
+// List uppercase methods and literal pathnames. GET includes HEAD as usual.
+// The request dispatcher does not pass releases.
 export function resolveRouteOwner(
   decision: RouteDecision,
   manifest: OwnedRoute[] = ROUTE_MANIFEST,
+  reservedReleases?: readonly RouteDecision[],
 ): RouteOwner {
-  return enabledRouteFor(decision, manifest) ? "kit" : "hono";
+  return enabledRouteFor(decision, manifest, { reservedReleases }) ? "kit" : "hono";
 }
 
 // Hook entry point: checks the method and URL, leaving the body unread and
@@ -574,8 +590,7 @@ export function decideRoute(request: Request, manifest: OwnedRoute[] = ROUTE_MAN
   return enabledRouteFor(
     { method: request.method, path: (url ?? new URL(request.url)).pathname },
     manifest,
-    !url,
-    request.url,
+    { stripData: !url, originalUrl: request.url },
   );
 }
 
