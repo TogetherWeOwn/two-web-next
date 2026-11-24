@@ -1046,36 +1046,43 @@ async function dispatchOwnedRequest(
   if (!isTrustedHost(deps.appUrl, [event.request.headers.get("host"), event.url.host])) {
     return deps.honoFetch(event.request);
   }
-  // Shared Request-to-decision path: decideRoute is the production call, so
-  // its method/path/query/decode coverage guards the dispatch too. Inlining
-  // resolveRouteOwner here once left mutants (hard-coded GET, hard-coded
-  // path, path+search) green against 32 dispatch tests.
-  const manifest =
+  return dispatchFromManifest(
+    event,
+    deps,
     deps.manifest ??
-    productionManifestFor(event, deps) ??
-    fixtureManifestFor({
-      APP_URL: deps.appUrl,
-      KIT_PARITY_FIXTURE_MEMBER_BOARD: deps.fixtureMemberBoard ? "true" : undefined,
-      KIT_PARITY_FIXTURE_EVENT_DETAIL: deps.fixtureEventDetail ? "true" : undefined,
-      KIT_PARITY_FIXTURE_JOIN: deps.fixtureJoin ? "true" : undefined,
-      includeReconciliation: deps.fixtureAdminDashboard,
-      // Use the original URL: Kit strips the data suffix from event.url.
-      KIT_PARITY_FIXTURE_ADMIN_DASHBOARD:
-        deps.fixtureAdminDashboard &&
-        event.request.method === "GET" &&
-        new URL(event.request.url).pathname === "/admin"
-          ? "true"
-          : undefined,
-    }) ??
-    stagingManifestFor({
-      APP_URL: deps.appUrl,
-      KIT_ROUTE_ARCHIVE: deps.kitRouteArchive,
-      KIT_ROUTE_STATIC: deps.kitRouteStatic,
-      KIT_ROUTE_EVENTS: deps.kitRouteEvents,
-      KIT_ROUTE_HOME: deps.kitRouteHome,
-      KIT_ROUTE_JOIN: deps.kitRouteJoin,
-    }) ??
-    ROUTE_MANIFEST;
+      productionManifestFor(event, deps) ??
+      fixtureManifestFor({
+        APP_URL: deps.appUrl,
+        KIT_PARITY_FIXTURE_MEMBER_BOARD: deps.fixtureMemberBoard ? "true" : undefined,
+        KIT_PARITY_FIXTURE_EVENT_DETAIL: deps.fixtureEventDetail ? "true" : undefined,
+        KIT_PARITY_FIXTURE_JOIN: deps.fixtureJoin ? "true" : undefined,
+        includeReconciliation: deps.fixtureAdminDashboard,
+        // Use the original URL: Kit strips the data suffix from event.url.
+        KIT_PARITY_FIXTURE_ADMIN_DASHBOARD:
+          deps.fixtureAdminDashboard &&
+          event.request.method === "GET" &&
+          new URL(event.request.url).pathname === "/admin"
+            ? "true"
+            : undefined,
+      }) ??
+      stagingManifestFor({
+        APP_URL: deps.appUrl,
+        KIT_ROUTE_ARCHIVE: deps.kitRouteArchive,
+        KIT_ROUTE_STATIC: deps.kitRouteStatic,
+        KIT_ROUTE_EVENTS: deps.kitRouteEvents,
+        KIT_ROUTE_HOME: deps.kitRouteHome,
+        KIT_ROUTE_JOIN: deps.kitRouteJoin,
+      }) ??
+      ROUTE_MANIFEST,
+  );
+}
+
+async function dispatchFromManifest(
+  event: HookEventLike,
+  deps: HookDispatchDeps,
+  manifest: OwnedRoute[],
+): Promise<Response> {
+  // Use the tested Request-to-decision path for both the method and URL.
   const route = decideRoute(event.request, manifest, event.url);
   if (route) return dispatchKitRequest(event, deps, route);
   const apiRoute = exactFamilyRouteFor(event, manifest, deps.apiFamilies);

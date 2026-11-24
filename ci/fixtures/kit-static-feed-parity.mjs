@@ -4,7 +4,11 @@ import { readFile } from "node:fs/promises";
 import postgres from "postgres";
 import { KIT_STATIC_FEED_ROUTES } from "../../src/events/kit-static-feed-routes.ts";
 
-const eventKeys = ["01J00000000000000000001001", "01J00000000000000000001002"];
+const eventKeys = [
+  "01J00000000000000000001001",
+  "01J00000000000000000001002",
+  "01J00000000000000000001003",
+];
 const cachePolicy = "max-age=300, public";
 const fixtureIp = "192.0.2.110";
 const wireHeaders = [
@@ -96,36 +100,60 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
   const sql = postgres(databaseUrl, { max: 1 });
   const buckets = [`events-read:${fixtureIp}`];
   let seeded = false;
+
+  function compare(actual, direct, target, path) {
+    const normalize = (result, origin) =>
+      result.body
+        .replaceAll(origin, "ORIGIN")
+        .replaceAll(new URL(origin).host, "HOST")
+        .replaceAll(result.id, "REQUEST_ID");
+    assert.equal(actual.status, direct.status, path);
+    assert.equal(
+      normalize(actual, target === kit ? kit.origin : hono.origin),
+      normalize(direct, hono.origin),
+      `${target.name}: ${path} body`,
+    );
+    for (const name of wireHeaders) {
+      assert.equal(
+        actual.headers.get(name),
+        direct.headers.get(name),
+        `${target.name}: ${path} ${name}`,
+      );
+    }
+    if (target !== kit) assert.equal(actual.headers.get("etag"), direct.headers.get("etag"), path);
+  }
+
+  async function compareFallback(method, path, status, origin = hono.origin) {
+    const options = { method, status, headers: { origin } };
+    const direct = await request(hono, path, options);
+    const actual = await request(on, path, options);
+    compare(actual, direct, on, path);
+  }
+
   try {
+    // Run 404 parity before seeding events. The baseline Worker may already
+    // have a cached empty suggestion list from earlier checks.
+    for (const [method, path, status, origin] of [
+      ["POST", "/events.ics", 404],
+      ["OPTIONS", "/events.rss", 404],
+      ["POST", "/events.rss", 403, "https://example.invalid"],
+      ["GET", "/events.ics/", 404],
+      ["HEAD", "/events.rss/", 404],
+      ["GET", "/events.ics/__data.json", 404],
+      ["GET", "/version", 200],
+    ]) {
+      await compareFallback(method, path, status, origin);
+    }
+    await request(on, "/about", { status: 200, renderer: "kit" });
+
     await sql`insert into events (event_key, title, game, status, starts_at, ends_at, updated_at)
       values (${eventKeys[0]}, 'Fixture Racing Night', 'Fixture Racing', 'published',
         '2099-01-02 18:00+00', '2099-01-02 19:00+00', '2026-01-01 18:00+00'),
         (${eventKeys[1]}, 'Fixture Cancelled Night', 'Fixture Puzzles', 'cancelled',
-        '2099-01-03 18:00+00', '2099-01-03 19:00+00', '2026-01-01 18:00+00')`;
+        '2099-01-03 18:00+00', '2099-01-03 19:00+00', '2026-01-01 18:00+00'),
+        (${eventKeys[2]}, 'Fixture Draft Night', 'Fixture Racing', 'draft',
+        '2099-01-04 18:00+00', '2099-01-04 19:00+00', '2026-01-01 18:00+00')`;
     seeded = true;
-
-    function compare(actual, direct, target, path) {
-      const normalize = (result, origin) =>
-        result.body
-          .replaceAll(origin, "ORIGIN")
-          .replaceAll(new URL(origin).host, "HOST")
-          .replaceAll(result.id, "REQUEST_ID");
-      assert.equal(actual.status, direct.status, path);
-      assert.equal(
-        normalize(actual, target === kit ? kit.origin : hono.origin),
-        normalize(direct, hono.origin),
-        `${target.name}: ${path} body`,
-      );
-      for (const name of wireHeaders) {
-        assert.equal(
-          actual.headers.get(name),
-          direct.headers.get(name),
-          `${target.name}: ${path} ${name}`,
-        );
-      }
-      if (target !== kit)
-        assert.equal(actual.headers.get("etag"), direct.headers.get("etag"), path);
-    }
 
     for (const [path, mediaType, disposition] of [
       ["/events.ics?game=Fixture%20Racing", "text/calendar", 'inline; filename="events.ics"'],
@@ -151,6 +179,7 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
         assert.equal(get.headers.get("set-cookie"), null);
         assert.match(get.body, /Fixture Racing Night/);
         assert.equal(get.body.includes("Fixture Cancelled Night"), disposition === null);
+        assert.doesNotMatch(get.body, /Fixture Draft Night/);
 
         const head = await run(target, { method: "HEAD", status: 200 });
         for (const name of [...wireHeaders, "etag"])
@@ -186,30 +215,8 @@ export async function assertStaticFeedParity({ hono, kit, startKit, databaseUrl 
       compare(actual, invalid, target, invalidPath);
     }
 
-    for (const [method, path, status, origin] of [
-      ["POST", "/events.ics", 404],
-      ["OPTIONS", "/events.rss", 404],
-      ["POST", "/events.rss", 403, "https://example.invalid"],
-      ["GET", "/events.ics/", 404],
-      ["HEAD", "/events.rss/", 404],
-      ["GET", "/events.ics/__data.json", 404],
-      ["GET", "/events%2Erss", 200],
-      ["GET", `/events/${eventKeys[0]}.ics`, 200],
-      ["GET", "/version", 200],
-    ]) {
-      const direct = await request(hono, path, {
-        method,
-        status,
-        headers: { origin: origin ?? hono.origin },
-      });
-      const actual = await request(on, path, {
-        method,
-        status,
-        headers: { origin: origin ?? hono.origin },
-      });
-      compare(actual, direct, on, path);
-    }
-    await request(on, "/about", { status: 200, renderer: "kit" });
+    await compareFallback("GET", "/events%2Erss", 200);
+    await compareFallback("GET", `/events/${eventKeys[0]}.ics`, 200);
 
     let directLimit;
     for (const [index, target] of modes.entries()) {
