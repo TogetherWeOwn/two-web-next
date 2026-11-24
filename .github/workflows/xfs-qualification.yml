@@ -134,7 +134,7 @@ jobs:
         id: production-parity
         shell: bash
         env:
-          CUTOVER_PACKET_DIR: ${{ runner.temp }}/kit-cutover-packet
+          CUTOVER_PACKET_DIR: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.qualify_cutover && format('{0}/kit-cutover-packet', runner.temp) || '' }}
           PARITY_DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/two_web_next
         run: |
           out=artifacts/production-kit-parity
