@@ -84,3 +84,11 @@ export function fixtureCluster(directory) {
     stop,
   };
 }
+
+export async function using(sql, work) {
+  try {
+    return await work(sql);
+  } finally {
+    await sql.end({ timeout: 5 });
+  }
+}
