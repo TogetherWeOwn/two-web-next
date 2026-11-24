@@ -192,6 +192,22 @@ both endpoints return to Hono when the binding is cleared, accounting for
 cached responses. Check delivery under the existing Tail Worker rules for the
 two registered route labels as part of release verification.
 
+### Static text and vanity redirects
+
+`KIT_ROUTE_STATIC_TEXT=true` selects Kit for exact GET and HEAD requests to
+`/llms.txt`, `/about.md`, `/faq.md`, `/rules.md`, `/privacy.md`, `/join.md`,
+`/community`, `/discord`, and `/login`. Keep the binding unset in deployed
+configurations until approval through the
+[production release gate](../CONTRIBUTING.md#production-release-gate).
+Clearing it returns the next uncached request to Hono. Encoded aliases,
+trailing slashes, Kit data URLs, other methods, and event Markdown stay
+with their existing owner.
+
+The shared Markdown responses retain their byte-derived validators, staging
+noindex policy, and one-hour public cache. Vanity redirects stay private and
+uncacheable, with the existing invite fallback and safe login destination.
+The hosted installed Worker fixture exercises both owners without member data.
+
 ### Feed endpoints
 
 `KIT_ROUTE_FEEDS=true` selects GET and HEAD on `/events.ics`, `/events.rss`

@@ -6,6 +6,7 @@ import { recordBoardView, recordQueuedBoardView } from "../../src/hotzones/board
 import { prepareKitHomePanels } from "../../src/kit-home-panels";
 import { KIT_SECURITY_TXT_ROUTE } from "../../src/kit-security-txt-route";
 import { KIT_SEO_ROUTES } from "../../src/kit-seo-routes";
+import { KIT_STATIC_TEXT_ROUTES } from "../../src/static-public";
 import { kitAccessSink } from "../../src/kit-access-sink";
 import { preserveHonoDataResponse } from "../../src/kit-worker-facade";
 import {
@@ -69,6 +70,7 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
         crossOriginRefusal: authOriginRefusal,
       },
       { flag: env.KIT_ROUTE_FEEDS, routes: [...KIT_STATIC_FEED_ROUTES, KIT_EVENT_CALENDAR_ROUTE] },
+      { flag: env.KIT_ROUTE_STATIC_TEXT, routes: KIT_STATIC_TEXT_ROUTES },
       { flag: env.KIT_ROUTE_SEO, routes: KIT_SEO_ROUTES },
       { flag: env.KIT_ROUTE_SECURITY_TXT, routes: [KIT_SECURITY_TXT_ROUTE] },
     ],

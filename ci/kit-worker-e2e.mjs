@@ -882,6 +882,38 @@ export default {
   }
   console.log("PASS generated Worker reserved method/path parity with API families off");
 
+  const textProbe = "/__fixture/static-text-parity";
+  const textEntry = join(scratch, "kit-static-text.mjs");
+  const textFixture = fileURLToPath(
+    new URL("./fixtures/kit-static-text-parity.mjs", import.meta.url),
+  );
+  await writeFile(
+    textEntry,
+    `import { withEnv } from "cloudflare:workers";
+import inner from ${JSON.stringify(worker)};
+import { assertStaticTextParity } from ${JSON.stringify(textFixture)};
+export default {
+  async fetch(request, env, ctx) {
+    if (new URL(request.url).pathname !== ${JSON.stringify(textProbe)})
+      return inner.fetch(request, env, ctx);
+    await assertStaticTextParity((input, overrides) => {
+      const bindings = { ...env, ...overrides };
+      return withEnv(bindings, () => inner.fetch(input, bindings, ctx));
+    });
+    return new Response(null, { status: 204 });
+  },
+};\n`,
+  );
+  const textWorker = await startWorker("kit-static-text", textEntry, assets, undefined, {
+    DATABASE_URL: undefined,
+  });
+  await listen(textWorker.child, textWorker.origin, () => textWorker.log);
+  const textResult = await fetch(`${textWorker.origin}${textProbe}`, {
+    signal: AbortSignal.timeout(20_000),
+  });
+  assert.equal(textResult.status, 204, "static text and vanity parity probes");
+  console.log("PASS Kit static text and vanity redirects with exact route and method boundaries");
+
   await assertStaticFeedParity({
     hono: honoWithSession,
     kit: kitWithSession,

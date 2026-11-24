@@ -12,49 +12,16 @@ import { alertRequestError } from "../alerts";
 import { canonicalEventKey, eventKeyAllowed } from "../events/keys";
 import { getPublicEvent, listFeed } from "../events/reads";
 import { publicReadGuard } from "../events/routes-shared";
-import { etagFor, matchesIfNoneMatch } from "../http/conditional";
 import { isDatabaseUnavailable } from "../db/errors";
-import { stagingRobots } from "../headers";
-import { inviteDestination } from "../invite";
 import { requestRoute } from "../request-log";
-import { rulesLastUpdated } from "../rules-last-updated";
-import {
-  FEED_MD_CACHE,
-  MARKDOWN_MIME,
-  STATIC_MD_CACHE,
-  llmsTxt,
-  mdAbout,
-  mdEvent,
-  mdEventGone,
-  mdEvents,
-  mdFaq,
-  mdJoin,
-  mdPrivacy,
-  mdRules,
-  type MdEvent,
-} from "./md";
+import { mdOk, staticMarkdown } from "../static-public";
+import { FEED_MD_CACHE, MARKDOWN_MIME, mdEvent, mdEventGone, mdEvents, type MdEvent } from "./md";
 
 type App = Hono<{ Bindings: Env }>;
 
 type Ctx = Context<{ Bindings: Env }>;
 
 const NOINDEX = "noindex, nofollow";
-
-/**
- * The one success path for every Markdown document: a strong ETag over the
- * response bytes lets agents that poll these docs revalidate with
- * If-None-Match. A match answers 304 with the same validator, cache-control
- * and robots headers and no body; errors never come through here.
- */
-async function mdOk(c: Ctx, body: string, cache: string, robots?: string): Promise<Response> {
-  const tag = robots ?? stagingRobots(c);
-  if (tag) c.header("x-robots-tag", tag);
-  c.header("cache-control", cache);
-  const etag = await etagFor(body, "SHA-1");
-  c.header("etag", etag);
-  if (matchesIfNoneMatch(c.req.header("if-none-match"), etag)) return c.body(null, 304);
-  return c.body(body, 200, { "content-type": MARKDOWN_MIME });
-}
 
 function mdError(c: Ctx, body: string, status: 403 | 404 | 410): Response {
   c.header("x-robots-tag", NOINDEX);
@@ -125,18 +92,12 @@ const toMdEvent = (e: {
 });
 
 export function registerAiFriendlyRoutes(app: App): void {
-  app.get("/llms.txt", (c) => mdOk(c, llmsTxt(c.env.APP_URL), STATIC_MD_CACHE));
-  app.get("/about.md", (c) => mdOk(c, mdAbout(c.env.APP_URL), STATIC_MD_CACHE));
-  app.get("/faq.md", (c) => mdOk(c, mdFaq(c.env.APP_URL), STATIC_MD_CACHE));
-  app.get("/rules.md", (c) =>
-    mdOk(c, mdRules(c.env.APP_URL, rulesLastUpdated(c.env.RULES_LAST_UPDATED)), STATIC_MD_CACHE),
-  );
-  app.get("/privacy.md", (c) => mdOk(c, mdPrivacy(c.env.APP_URL), STATIC_MD_CACHE));
-  // Sanitized like /join: a bad DISCORD_INVITE_URL renders the hardcoded
-  // fallback, never a dead, relative or hostile href.
-  app.get("/join.md", (c) =>
-    mdOk(c, mdJoin(c.env.APP_URL, inviteDestination(c.env.DISCORD_INVITE_URL)), STATIC_MD_CACHE),
-  );
+  app.get("/llms.txt", staticMarkdown["/llms.txt"]);
+  app.get("/about.md", staticMarkdown["/about.md"]);
+  app.get("/faq.md", staticMarkdown["/faq.md"]);
+  app.get("/rules.md", staticMarkdown["/rules.md"]);
+  app.get("/privacy.md", staticMarkdown["/privacy.md"]);
+  app.get("/join.md", staticMarkdown["/join.md"]);
 
   app.get("/events.md", async (c) => {
     const limited = await publicReadGuard(c);
