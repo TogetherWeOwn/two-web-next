@@ -1,5 +1,6 @@
 import type { RequestEvent } from "@sveltejs/kit";
 import { Context } from "hono";
+import { html } from "hono/html";
 import type { Env } from "../../../../src/env";
 import { KIT_PROFILE_WRITE_ROUTE_ID } from "../../../../src/profiles/kit-write-route";
 import {
@@ -13,10 +14,9 @@ export const profileDraftHeaders = (status: 422 | 503): Record<string, string> =
   status === 503
     ? { "cache-control": "no-store, private", vary: "Accept" }
     : { "cache-control": "private, no-store" };
-
 function renderProfileWriteDraft(request: Request, env: Env, draft: KitProfileWriteDraft) {
   return new Context(request).html(
-    ProfilePage({
+    html`${ProfilePage({
       member: draft.member,
       stats: draft.stats,
       isOwner: true,
@@ -25,7 +25,7 @@ function renderProfileWriteDraft(request: Request, env: Env, draft: KitProfileWr
       statsDraftWarning: true,
       errors: draft.errors,
       values: draft.values,
-    }),
+    })}`,
     draft.status,
     profileDraftHeaders(draft.status),
   );
