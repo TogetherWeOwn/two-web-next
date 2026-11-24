@@ -226,6 +226,7 @@ export async function assertEventReadsParity({
     await compare(`${event(published.toLowerCase())}?source=fixture`, 301, { headers: member });
 
     const publicList = `/api/public/events?game=${encodeURIComponent(game)}&per_page=1&page=50`;
+    const beforePublic = await hitCounts();
     for (const path of [publicList, publicEvent(published), "/openapi.json"]) {
       const cache = path === "/openapi.json" ? "public, max-age=3600" : "public";
       const first = await compare(path, 200, { headers: moderator, cache });
@@ -259,6 +260,11 @@ export async function assertEventReadsParity({
       await compare(path, 200, { method: "HEAD", cache });
       await compare(path, 304, { method: "HEAD", ownEtag: first.map(({ etag }) => etag), cache });
     }
+    // Four requests per event route, including 304. Discovery is budget-free.
+    assert.deepEqual(
+      await hitCounts(),
+      beforePublic.map(({ bucket, hits }) => ({ bucket, hits: hits + 8 })),
+    );
     for (const key of [missing, draft]) {
       const [refusal] = await compare(publicEvent(key), 404, {
         headers: { ...moderator, "if-none-match": "*" },
