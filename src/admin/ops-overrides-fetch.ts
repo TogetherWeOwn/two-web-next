@@ -1,6 +1,9 @@
 import { Context } from "hono";
+import { requestBodyLimit } from "../body-limit";
 import type { Env } from "../env";
 import { opsOverridesHandler, opsOverridesMethodRefused } from "./ops-overrides";
+
+const limitRefusedMethodBody = requestBodyLimit("action");
 
 /**
  * Detached transport for the operator read. The caller owns exact-path routing,
@@ -18,8 +21,14 @@ export async function fetchOpsOverrides(request: Request, env: Env): Promise<Res
     case "PUT":
     case "PATCH":
     case "DELETE":
-    case "OPTIONS":
-      return opsOverridesMethodRefused(new Context(request, { env }));
+    case "OPTIONS": {
+      const context = new Context<{ Bindings: Env }>(request, {
+        env,
+        path: new URL(request.url).pathname,
+      });
+      const refused = await limitRefusedMethodBody(context, () => Promise.resolve());
+      return refused ?? opsOverridesMethodRefused(context);
+    }
     default:
       return null;
   }

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { fetchOpsOverrides } from "../src/admin/ops-overrides-fetch";
+import { BODY_LIMIT_BYTES } from "../src/body-limit";
 import { createMemorySessionStore } from "../src/sessions";
 import app from "./app";
 import { cookieFor, env, MODERATOR } from "./helpers/member-data";
@@ -9,6 +10,7 @@ const evidence = "synthetic-evidence-bearer".padEnd(32, "x");
 const qa = "synthetic-qa-bearer".padEnd(32, "x");
 const bearer = `Bearer ${control}`;
 const record = { epoch: 7, overrides: { SETTING: "<example>" }, baseline: {}, enforcement: "off" };
+const refusedMethods = ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
 const bot = vi.fn<typeof fetch>();
 let client = 0;
 
@@ -68,6 +70,7 @@ async function fixture({ configured = control, withModerator = false } = {}) {
     expect(adapted.headers.get("cache-control")).toBe("private, no-store");
     for (const header of [
       "cache-control",
+      "content-length",
       "content-type",
       "location",
       "www-authenticate",
@@ -165,20 +168,36 @@ it("shares one attempt budget with the mounted route for the same client", async
   expect(bot).not.toHaveBeenCalled();
 });
 
-it.each(["POST", "PUT", "PATCH", "DELETE", "OPTIONS"])(
-  "refuses %s before admission with fixed JSON and Allow",
-  async (method) => {
-    const { headers, body } = await (await fixture({ configured: "" }))(
-      405,
-      method,
-      "",
-      "?token=synthetic",
-    );
-    expect(headers.get("allow")).toBe("GET, HEAD");
-    expect(body).toBe('{"error":"method_not_allowed"}');
-    expect(bot).not.toHaveBeenCalled();
-  },
-);
+it.each(refusedMethods)("refuses %s before admission with fixed JSON and Allow", async (method) => {
+  const { headers, body } = await (await fixture({ configured: "" }))(
+    405,
+    method,
+    "",
+    "?token=synthetic",
+  );
+  expect(headers.get("allow")).toBe("GET, HEAD");
+  expect(body).toBe('{"error":"method_not_allowed"}');
+  expect(bot).not.toHaveBeenCalled();
+});
+
+it.each(refusedMethods)("rejects oversized %s bodies before the fixed refusal", async (method) => {
+  const body = "x".repeat(BODY_LIMIT_BYTES.action + 1);
+  for (const advertised of [true, false]) {
+    const oversized = () => {
+      const input = new Request(request("192.0.2.254", method, ""), { body });
+      if (advertised) input.headers.set("content-length", String(body.length));
+      return input;
+    };
+    const legacy = await app.request(oversized(), undefined, env);
+    const adapted = await fetchOpsOverrides(oversized(), env);
+    expect(legacy.status, `advertised=${advertised}`).toBe(413);
+    expect(adapted?.status, `advertised=${advertised}`).toBe(legacy.status);
+    expect(adapted?.headers.get("cache-control")).toBe(legacy.headers.get("cache-control"));
+    expect(adapted?.headers.get("content-type")).toBe(legacy.headers.get("content-type"));
+    expect(adapted?.headers.has("allow")).toBe(false);
+  }
+  expect(bot).not.toHaveBeenCalled();
+});
 
 it("leaves other verbs to the caller's fallback instead of extending the fixed 405", async () => {
   const request = new Request(`${env.APP_URL}/admin/ops-overrides`, { method: "PROPFIND" });
