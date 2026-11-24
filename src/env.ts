@@ -109,6 +109,8 @@ export type Env = AgentEventsEnv & {
   DISCORD_LIVE_SOCKET_ENABLED?: string;
   // ICS and RSS reads. Only the literal string "true" opts in.
   KIT_ROUTE_FEEDS?: string;
+  // Robots and sitemap reads. Only the literal string "true" opts in.
+  KIT_ROUTE_SEO?: string;
   // B1 read-only WebMCP pilot: only the exact strings "true"/"1" inject the
   // model-context island on the four pilot pages; unset or anything else
   // leaves pages byte-identical. No session, cookie or database read.

@@ -14,7 +14,12 @@ import type { Db } from "../../src/db/index";
 import type { Env } from "../../src/env";
 import { discordEventsSource } from "../../src/events/discord-transients";
 import { fetchKitFeed } from "../../src/events/kit-feed-fetch";
-import { eventLinkAvailability, listPast, type PublicEvent } from "../../src/events/reads";
+import {
+  eventLinkAvailability,
+  listPast,
+  type PublicEvent,
+  sitemapEvents,
+} from "../../src/events/reads";
 import { dispatchEventsRequest, loadEventsPage } from "../../src/kit-events";
 import { renderEventsHtml } from "../../src/kit-events-html";
 import {
@@ -211,6 +216,7 @@ export function archiveReadFixture() {
 const kitDependencies = {
   dbFor: async (c: { env: Env }) => (c.env as Env & { ADMIN_DB?: Db }).ADMIN_DB ?? null,
   listPast,
+  sitemapEvents,
   eventLinkAvailability,
   loadPastArchivePage,
   toPublicPastArchiveRow,
@@ -239,7 +245,7 @@ export async function compileArchiveKit() {
   const outfile = join(scratch, "kit.mjs");
   const dependencyExports = new Map([
     [join(root, "src/admin/db.ts"), ["dbFor"]],
-    [join(root, "src/events/reads.ts"), ["listPast", "eventLinkAvailability"]],
+    [join(root, "src/events/reads.ts"), ["listPast", "eventLinkAvailability", "sitemapEvents"]],
     [join(root, "src/kit-past-events.ts"), ["loadPastArchivePage", "toPublicPastArchiveRow"]],
     [join(root, "src/kit-events.ts"), ["loadEventsPage"]],
     [join(root, "src/kit-events-html.ts"), ["renderEventsHtml"]],
@@ -258,15 +264,20 @@ export async function compileArchiveKit() {
         import { GET as calendar } from ${JSON.stringify(join(root, "web/src/routes/events.ics/+server.ts"))};
         import { GET as rss } from ${JSON.stringify(join(root, "web/src/routes/events.rss/+server.ts"))};
         import { GET as eventCalendar } from ${JSON.stringify(join(root, "web/src/routes/events/[key].ics/+server.ts"))};
+        import { GET as robots } from ${JSON.stringify(join(root, "web/src/routes/robots.txt/+server.ts"))};
+        import { GET as sitemap } from ${JSON.stringify(join(root, "web/src/routes/sitemap_index.xml/+server.ts"))};
         import { KIT_EVENT_CALENDAR_ROUTE } from ${JSON.stringify(join(root, "src/events/kit-event-calendar-route.ts"))};
         import { bind } from "acceptance:bindings";
-        const feeds = new Map([["/events.ics", calendar], ["/events.rss", rss]]);
+        const endpoints = new Map([
+          ["/events.ics", calendar], ["/events.rss", rss],
+          ["/robots.txt", robots], ["/sitemap_index.xml", sitemap],
+        ]);
         export async function request(request, env, deps) {
           bind(env, deps);
           const pathname = new URL(request.url).pathname;
-          const feed = feeds.get(pathname) ??
+          const endpoint = endpoints.get(pathname) ??
             (KIT_EVENT_CALENDAR_ROUTE.dynamic.matches(pathname, pathname) ? eventCalendar : undefined);
-          if (feed) return feed({request, locals: {}});
+          if (endpoint) return endpoint({request, locals: {}});
           const headers = new Headers({"content-type": "text/html; charset=utf-8"});
           try {
             if (pathname === "/events") {

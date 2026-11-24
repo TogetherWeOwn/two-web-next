@@ -139,6 +139,22 @@ require a pathname predicate and leave reserved paths to Hono. HEAD follows
 GET. Conflicting claims and overlaps with disabled page ownership entries
 fall back to Hono.
 
+### Search indexing endpoints
+
+`KIT_ROUTE_SEO=true` selects GET and HEAD on `/robots.txt` and
+`/sitemap_index.xml`. An unset or false binding, encoded or trailing-slash
+aliases, Kit data URLs and other methods stay with Hono. `/sitemap.xml` keeps
+its Hono 404. Both successful responses use the configured `APP_URL` and keep
+the one-hour public cache policy. Robots is database-free. The sitemap charges
+the shared public events-read budget once and lists the static URLs plus the
+bounded, renderable published events.
+
+Before activating the binding, qualify the exact candidate through the
+[production release gate](../CONTRIBUTING.md#production-release-gate). Verify
+both endpoints return to Hono when the binding is cleared, accounting for
+cached responses. Check delivery under the existing Tail Worker rules for the
+two registered route labels as part of release verification.
+
 ### Feed endpoints
 
 `KIT_ROUTE_FEEDS=true` selects GET and HEAD on `/events.ics`, `/events.rss`
