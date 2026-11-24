@@ -183,4 +183,19 @@ test("isolated upload diagnostics keep only the operation, exit status and provi
     stderr: "untrusted binding details [code: 10007]",
   });
   assert.equal(error.message, "Wrangler versions upload failed (exit 1), provider code 10007");
+  for (const stderr of [
+    undefined,
+    "[code: 123]",
+    Buffer.from("[code: 123456789]"),
+    "[code: TOKEN]",
+  ]) {
+    const refusal = new WranglerOperationError(
+      ["rollback", "11111111-1111-1111-1111-111111111111"],
+      {
+        status: null,
+        stderr,
+      },
+    );
+    assert.equal(refusal.message, "Wrangler rollback failed");
+  }
 });
