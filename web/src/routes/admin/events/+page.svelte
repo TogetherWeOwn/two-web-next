@@ -36,12 +36,12 @@ const now = new Date();
 {#snippet sortHeader(label: string, sort: EventSort)}
   {@const active = query.sort === sort}
   {@const order = active && query.order === "asc" ? "desc" : "asc"}
-  <th scope="col" aria-sort={active ? (query.order === "asc" ? "ascending" : "descending") : "none"}>
+  <th scope="col" aria-label={label} aria-sort={active ? (query.order === "asc" ? "ascending" : "descending") : undefined}>
     <a
       href={eventListUrl(query, { sort, order, page: 1 })}
       aria-label={sortHeaderAriaLabel(label, order)}
     >
-      {label}{active ? (query.order === "asc" ? " ↑" : " ↓") : ""}
+      {label}{#if active}<span aria-hidden="true">{query.order === "asc" ? " ↑" : " ↓"}</span>{/if}
     </a>
   </th>
 {/snippet}

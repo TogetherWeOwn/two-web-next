@@ -235,6 +235,139 @@ test("Kit offline fixture fixes the server render clock", async () => {
   );
 });
 
+test("Kit admin Events exposes the current sort and follows sort links by keyboard without JavaScript", async (t) => {
+  const filters = "q=Fixture+night&status=cancelled&series=standalone&fill=unlimited&rsvp_open=0";
+  const start = `?${filters}&sort=starts_at&order=desc&page=2`;
+  const titleAscending = `?${filters}&sort=title&order=asc`;
+  const titleDescending = `?${filters}&sort=title&order=desc`;
+  await withKitOfflineBrowser(
+    {
+      search: start,
+      searches: [titleAscending, titleDescending],
+      page: `<script lang="ts">
+import { page } from '$app/state';
+import AdminEvents from '../admin/events/+page.svelte';
+import { eventEmptyText, parseEventListQuery } from '../../../../src/admin/event-list';
+
+const query = parseEventListQuery(Object.fromEntries(page.url.searchParams));
+const rows = ['Alpha', 'Zulu'].map((name) => ({
+  eventKey: name.toLowerCase(), title: 'Fixture night ' + name, game: null, status: 'cancelled',
+  startsAt: '2030-01-02T18:00:00.000Z', endsAt: '2030-01-02T20:00:00.000Z',
+  capacity: null, rsvpOpen: false, goingCount: 0,
+}));
+if (query.order === 'desc') rows.reverse();
+</script>
+<AdminEvents data={{ query, rows: query.page === 1 ? rows : [], hasNext: false, emptyText: eventEmptyText(query), pauseReviews: {}, restoredWrite: false }} />`,
+    },
+    async ({ page }) => {
+      const origin = new URL(page.url()).origin;
+      // Keep the real href and navigation URL. The offline fixture supplies only the allowlisted SSR states.
+      await page.route(`${origin}/admin/events?*`, (route) => {
+        const url = new URL(route.request().url());
+        url.pathname = "/__browser_fixture__";
+        return route.fallback({ url: url.href });
+      });
+      const table = page.getByTestId("events-table");
+      const header = (name) => table.getByRole("columnheader", { name, exact: true });
+      const sortLink = (name) => table.getByRole("link", { name, exact: true });
+      const assertSort = async (name, direction) => {
+        assert.equal(await table.locator("th[aria-sort]").count(), 1);
+        assert.equal(await header(name).getAttribute("aria-sort"), direction);
+        assert.equal(
+          await header(name).locator('span[aria-hidden="true"]').textContent(),
+          direction === "ascending" ? " ↑" : " ↓",
+        );
+      };
+      const titleAsc = sortLink("Sort by title ascending");
+      const titleDesc = sortLink("Sort by title descending");
+      const statusAsc = sortLink("Sort by status ascending");
+      const startsAsc = sortLink("Sort by starts (UTC) ascending");
+      const rowTitles = () => table.locator("tbody tr td:first-child a").allTextContents();
+      const thead = table.locator("thead");
+
+      async function capture(state) {
+        const fixtureEvidence = process.env.KIT_CALENDAR_EVIDENCE_DIR;
+        if (!fixtureEvidence) return;
+        // The existing Kit browser fixture job archives this directory.
+        const directory = join(fixtureEvidence, "admin-events-sort");
+        await mkdir(directory, { recursive: true });
+        for (const [width, height] of [
+          [1280, 800],
+          [390, 844],
+        ]) {
+          await page.setViewportSize({ width, height });
+          const after = await page.screenshot({ fullPage: true });
+          // Restore the previous header markup as a visual control on the same SSR page.
+          const html = await thead.evaluate((element) => {
+            const original = element.innerHTML;
+            for (const th of element.querySelectorAll("th[aria-label]")) {
+              th.removeAttribute("aria-label");
+              if (!th.hasAttribute("aria-sort")) th.setAttribute("aria-sort", "none");
+              const arrow = th.querySelector('span[aria-hidden="true"]');
+              if (arrow) arrow.replaceWith(arrow.textContent);
+            }
+            return original;
+          });
+          const before = await page.screenshot({ fullPage: true });
+          await thead.evaluate((element, original) => {
+            element.innerHTML = original;
+          }, html);
+          await writeFile(join(directory, `${state}-${width}-before.png`), before);
+          await writeFile(join(directory, `${state}-${width}-after.png`), after);
+          assert.ok(before.equals(after), `${state} at ${width}px renders identically`);
+        }
+      }
+
+      await page.setViewportSize({ width: 390, height: 844 });
+      await assertSort("Starts (UTC)", "descending");
+      assert.equal(await titleAsc.getAttribute("href"), `/admin/events${titleAscending}`);
+      assert.equal(
+        await statusAsc.getAttribute("href"),
+        `/admin/events?${filters}&sort=status&order=asc`,
+      );
+      assert.equal(
+        await startsAsc.getAttribute("href"),
+        `/admin/events?${filters}&sort=starts_at&order=asc`,
+      );
+      assert.equal(
+        await page.getByTestId("events-empty").textContent(),
+        "No results on this page.",
+      );
+      t.diagnostic(await thead.ariaSnapshot());
+      await capture("starts-descending-page-2");
+
+      await page.getByTestId("events-table-scroll").focus();
+      for (const link of [titleAsc, statusAsc, startsAsc]) {
+        await page.keyboard.press("Tab");
+        assert.equal(await link.evaluate((element) => element === document.activeElement), true);
+      }
+      await page.keyboard.press("Shift+Tab");
+      await page.keyboard.press("Shift+Tab");
+      assert.equal(await titleAsc.evaluate((element) => element === document.activeElement), true);
+      await Promise.all([
+        page.waitForURL(`${origin}/admin/events${titleAscending}`),
+        page.keyboard.press("Enter"),
+      ]);
+      await assertSort("Title", "ascending");
+      assert.deepEqual(await rowTitles(), ["Fixture night Alpha", "Fixture night Zulu"]);
+      assert.equal(await titleDesc.getAttribute("href"), `/admin/events${titleDescending}`);
+      t.diagnostic(await thead.ariaSnapshot());
+      await capture("title-ascending");
+
+      await page.getByTestId("events-table-scroll").focus();
+      await page.keyboard.press("Tab");
+      assert.equal(await titleDesc.evaluate((element) => element === document.activeElement), true);
+      await Promise.all([
+        page.waitForURL(`${origin}/admin/events${titleDescending}`),
+        page.keyboard.press("Enter"),
+      ]);
+      await assertSort("Title", "descending");
+      assert.deepEqual(await rowTitles(), ["Fixture night Zulu", "Fixture night Alpha"]);
+      await capture("title-descending");
+    },
+  );
+});
+
 test("Kit browser fixture renders SSR and loads its CSS offline", async () => {
   await withKitOfflineBrowser(
     {
