@@ -83,6 +83,28 @@ function expectNoEffects() {
 }
 
 describe("registered RSVP body caps", () => {
+  it("keeps the same form return destination and fixed JSON Allow after sharing the handlers", async () => {
+    const formPath = `/e/${KEY}/rsvp?attendees=2`;
+    const submitted = await app.request(
+      formRequest("POST", formPath, BODY_LIMIT_BYTES.action, "text/html", true),
+      undefined,
+      admissionEnv,
+    );
+    expect(submitted.status).toBe(303);
+    expect(submitted.headers.get("location")).toBe(`/e/${KEY}?attendees=2`);
+
+    const wrongMethod = await app.request(
+      `/events/${KEY}/rsvp`,
+      { method: "OPTIONS", headers: { accept: "application/json" } },
+      admissionEnv,
+    );
+    expect(wrongMethod.status).toBe(405);
+    expect(wrongMethod.headers.get("allow")).toBe("PUT, DELETE");
+    expect(wrongMethod.headers.get("vary")).toBe("Accept");
+    expect(await wrongMethod.json()).toEqual({ error: "method_not_allowed" });
+    expectNoEffects();
+  });
+
   it.each(rsvpRoutes)(
     "%s %s counts streamed bytes before the decoy or store",
     async (method, path) => {

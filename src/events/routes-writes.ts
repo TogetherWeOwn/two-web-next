@@ -1,7 +1,7 @@
 // Moderator event writes (JSON): POST /events, PATCH /events/:key, the
 // publish/cancel/rsvp-pause/rsvp-reopen transitions and the duplicate copy
-// action. Split out of src/events/routes.tsx; behavior unchanged.
-import type { Context, MiddlewareHandler } from "hono";
+// action. The same handlers serve Kit's endpoints after route admission.
+import type { Context, Handler } from "hono";
 import { getSignedCookie } from "hono/cookie";
 import { dbFor } from "../admin/db";
 import {
@@ -35,7 +35,10 @@ import {
 import { SESSION_COOKIE } from "../session-cookie";
 import { isValidSessionToken } from "../sessions";
 
-async function moderator(c: Ctx, readFragmentSession: SessionReader): Promise<Session | Response> {
+export async function moderatorForEventWrite(
+  c: Ctx,
+  readFragmentSession: SessionReader,
+): Promise<Session | Response> {
   // Non-rotating: concurrent writes with one cookie must all authenticate.
   // A well-formed presented bearer with no live row (expired/revoked/rotated)
   // is an expired guest, not an unknown guest: writes recover through
@@ -123,125 +126,140 @@ async function eventBody(c: Pick<Ctx, "req" | "get">): Promise<Record<string, un
 const invalid = (c: Context<any>, err: ValidationError) =>
   jsonRefusal(c, "invalid", 422, { fields: err.fields });
 
+export const EVENT_TRANSITIONS = ["publish", "cancel", "rsvp-pause", "rsvp-reopen"] as const;
+type EventTransition = (typeof EVENT_TRANSITIONS)[number];
+
+export async function createModeratorEvent(c: Ctx, who: Session): Promise<Response> {
+  const db = await dbFor(c);
+  if (!db) return dbUnavailableJson(c);
+  try {
+    const { row } = await createEvent(
+      db,
+      { id: who.id, username: who.username },
+      parseEventForm(await eventBody(c)),
+    );
+    return c.json({ data: eventJson({ ...row, goingCount: 0, goingOccupancy: 0 }) }, 201);
+  } catch (err) {
+    if (err instanceof UnsupportedMediaTypeError)
+      return jsonRefusal(c, "unsupported_media_type", 415);
+    if (err instanceof ValidationError) return invalid(c, err);
+    throw err;
+  }
+}
+
+export async function patchModeratorEvent(c: Ctx, who: Session, key: string): Promise<Response> {
+  const db = await dbFor(c);
+  if (!db) return dbUnavailableJson(c);
+  if (!eventKeyAllowed(key, c.env.APP_URL)) return jsonRefusal(c, "not_found", 404);
+  try {
+    // PATCH: omitted fields resolve from the locked row inside the same
+    // transaction that commits the update (patchEvent), never from a
+    // pre-lock snapshot, so concurrent disjoint edits both survive.
+    const patch = await eventBody(c);
+    // `status`/`rsvpOpen` are transitioned through the publish/cancel and
+    // rsvp-pause/rsvp-reopen actions, never edited: the parser and writer
+    // below never read them, so a silent merge would answer 200 with the
+    // row visibly unchanged and mislead the moderator. Presence is refused,
+    // even when the value repeats what is stored.
+    const extraneous: Record<string, string> = {};
+    if (patch.status !== undefined)
+      extraneous.status = "Change the status with the publish/cancel actions, not by editing.";
+    // Both spellings: the read envelope serializes `rsvp_open`, so a client
+    // echoing the GET shape back must hit the same refusal (both-spellings
+    // precedent: event_key/eventKey in parseEventForm).
+    if (patch.rsvpOpen !== undefined || patch.rsvp_open !== undefined)
+      extraneous.rsvpOpen =
+        "Change RSVP availability with the rsvp-pause/rsvp-reopen actions, not by editing.";
+    if (Object.keys(extraneous).length > 0) throw new ValidationError(extraneous);
+    const { row, writeBack, childWriteBacks } = await patchEvent(
+      db,
+      { id: who.id, username: who.username },
+      key,
+      patch,
+    );
+    if (writeBack) await dispatchWriteBack(c.env, writeBack, c.get("requestId"));
+    for (const wb of childWriteBacks) await dispatchWriteBack(c.env, wb, c.get("requestId"));
+    const updated = await getPublicEvent(db, row.eventKey);
+    return c.json({ data: eventJson(updated!) });
+  } catch (err) {
+    if (err instanceof UnsupportedMediaTypeError)
+      return jsonRefusal(c, "unsupported_media_type", 415);
+    if (err instanceof ValidationError) return invalid(c, err);
+    if (err instanceof NotFoundError) return jsonRefusal(c, "not_found", 404);
+    throw err;
+  }
+}
+
+export async function transitionModeratorEvent(
+  c: Ctx,
+  who: Session,
+  key: string,
+  action: EventTransition,
+): Promise<Response> {
+  const db = await dbFor(c);
+  if (!db) return dbUnavailableJson(c);
+  try {
+    const actor = { id: who.id, username: who.username };
+    if (!eventKeyAllowed(key, c.env.APP_URL)) return jsonRefusal(c, "not_found", 404);
+    const { row, writeBack } =
+      action === "rsvp-pause" || action === "rsvp-reopen"
+        ? await setRsvpOpen(db, actor, key, action === "rsvp-reopen")
+        : await transitionEvent(db, actor, key, action === "publish" ? "published" : "cancelled");
+    if (writeBack) await dispatchWriteBack(c.env, writeBack, c.get("requestId"));
+    return c.json({ data: eventJson(await withGoingCount(db, row)) });
+  } catch (err) {
+    if (err instanceof ValidationError) return invalid(c, err);
+    if (err instanceof NotFoundError) return jsonRefusal(c, "not_found", 404);
+    throw err;
+  }
+}
+
+export async function duplicateModeratorEvent(
+  c: Ctx,
+  who: Session,
+  key: string,
+): Promise<Response> {
+  const db = await dbFor(c);
+  if (!db) return dbUnavailableJson(c);
+  try {
+    if (!eventKeyAllowed(key, c.env.APP_URL)) return jsonRefusal(c, "not_found", 404);
+    const { row } = await duplicateEvent(db, { id: who.id, username: who.username }, key);
+    return c.json({ data: eventJson(await withGoingCount(db, row)) }, 201);
+  } catch (err) {
+    if (err instanceof ValidationError) return invalid(c, err);
+    if (err instanceof NotFoundError) return jsonRefusal(c, "not_found", 404);
+    throw err;
+  }
+}
+
 export function registerWriteRoutes(app: App, readFragmentSession: SessionReader): void {
-  const moderatorGate: MiddlewareHandler<{
-    Bindings: Env;
-    Variables: { eventModerator: Session };
-  }> = async (c, next) => {
-    // The session reader uses only bindings/cookies, not this gate's variables.
-    const who = await moderator(c as unknown as Ctx, readFragmentSession);
-    if (who instanceof Response) return who;
-    c.set("eventModerator", who);
-    await next();
-  };
+  const moderated =
+    (write: (c: Ctx, who: Session) => Promise<Response>): Handler<{ Bindings: Env }> =>
+    async (c) => {
+      const who = await moderatorForEventWrite(c, readFragmentSession);
+      return who instanceof Response ? who : write(c, who);
+    };
 
   app.post(
     "/events",
     requestBodyLimit("json"),
     throttle("event-write", WRITE_THROTTLE_PER_MINUTE),
-    moderatorGate,
-    async (c) => {
-      const who = c.get("eventModerator");
-      const db = await dbFor(c);
-      if (!db) return dbUnavailableJson(c);
-      try {
-        const { row } = await createEvent(
-          db,
-          { id: who.id, username: who.username },
-          parseEventForm(await eventBody(c)),
-        );
-        return c.json({ data: eventJson({ ...row, goingCount: 0, goingOccupancy: 0 }) }, 201);
-      } catch (err) {
-        if (err instanceof UnsupportedMediaTypeError)
-          return jsonRefusal(c, "unsupported_media_type", 415);
-        if (err instanceof ValidationError) return invalid(c, err);
-        throw err;
-      }
-    },
+    moderated(createModeratorEvent),
   );
 
   app.patch(
     "/events/:key",
     requestBodyLimit("json"),
     throttle("event-write", WRITE_THROTTLE_PER_MINUTE),
-    moderatorGate,
-    async (c) => {
-      const who = c.get("eventModerator");
-      const db = await dbFor(c);
-      if (!db) return dbUnavailableJson(c);
-      const key = c.req.param("key");
-      if (!eventKeyAllowed(key, c.env.APP_URL)) return jsonRefusal(c, "not_found", 404);
-      try {
-        // PATCH: omitted fields resolve from the locked row inside the same
-        // transaction that commits the update (patchEvent), never from a
-        // pre-lock snapshot, so concurrent disjoint edits both survive.
-        const patch = await eventBody(c);
-        // `status`/`rsvpOpen` are transitioned through the publish/cancel and
-        // rsvp-pause/rsvp-reopen actions, never edited: the parser and writer
-        // below never read them, so a silent merge would answer 200 with the
-        // row visibly unchanged and mislead the moderator. Presence is refused,
-        // even when the value repeats what is stored.
-        const extraneous: Record<string, string> = {};
-        if (patch.status !== undefined)
-          extraneous.status = "Change the status with the publish/cancel actions, not by editing.";
-        // Both spellings: the read envelope serializes `rsvp_open`, so a client
-        // echoing the GET shape back must hit the same refusal (both-spellings
-        // precedent: event_key/eventKey in parseEventForm).
-        if (patch.rsvpOpen !== undefined || patch.rsvp_open !== undefined)
-          extraneous.rsvpOpen =
-            "Change RSVP availability with the rsvp-pause/rsvp-reopen actions, not by editing.";
-        if (Object.keys(extraneous).length > 0) throw new ValidationError(extraneous);
-        const { row, writeBack, childWriteBacks } = await patchEvent(
-          db,
-          { id: who.id, username: who.username },
-          key,
-          patch,
-        );
-        if (writeBack) await dispatchWriteBack(c.env, writeBack, c.get("requestId"));
-        for (const wb of childWriteBacks) await dispatchWriteBack(c.env, wb, c.get("requestId"));
-        const updated = await getPublicEvent(db, row.eventKey);
-        return c.json({ data: eventJson(updated!) });
-      } catch (err) {
-        if (err instanceof UnsupportedMediaTypeError)
-          return jsonRefusal(c, "unsupported_media_type", 415);
-        if (err instanceof ValidationError) return invalid(c, err);
-        if (err instanceof NotFoundError) return jsonRefusal(c, "not_found", 404);
-        throw err;
-      }
-    },
+    moderated((c, who) => patchModeratorEvent(c, who, c.req.param("key") ?? "")),
   );
 
-  for (const action of ["publish", "cancel", "rsvp-pause", "rsvp-reopen"] as const) {
+  for (const action of EVENT_TRANSITIONS) {
     app.post(
       `/events/:key/${action}`,
       requestBodyLimit("action"),
       throttle("event-write", WRITE_THROTTLE_PER_MINUTE),
-      moderatorGate,
-      async (c) => {
-        const who = c.get("eventModerator");
-        const db = await dbFor(c);
-        if (!db) return dbUnavailableJson(c);
-        try {
-          const actor = { id: who.id, username: who.username };
-          const key = c.req.param("key");
-          if (!eventKeyAllowed(key, c.env.APP_URL)) return jsonRefusal(c, "not_found", 404);
-          const { row, writeBack } =
-            action === "rsvp-pause" || action === "rsvp-reopen"
-              ? await setRsvpOpen(db, actor, key, action === "rsvp-reopen")
-              : await transitionEvent(
-                  db,
-                  actor,
-                  key,
-                  action === "publish" ? "published" : "cancelled",
-                );
-          if (writeBack) await dispatchWriteBack(c.env, writeBack, c.get("requestId"));
-          return c.json({ data: eventJson(await withGoingCount(db, row)) });
-        } catch (err) {
-          if (err instanceof ValidationError) return invalid(c, err);
-          if (err instanceof NotFoundError) return jsonRefusal(c, "not_found", 404);
-          throw err;
-        }
-      },
+      moderated((c, who) => transitionModeratorEvent(c, who, c.req.param("key") ?? "", action)),
     );
   }
 
@@ -252,21 +270,6 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
     "/events/:key/duplicate",
     requestBodyLimit("action"),
     throttle("event-write", WRITE_THROTTLE_PER_MINUTE),
-    moderatorGate,
-    async (c) => {
-      const who = c.get("eventModerator");
-      const db = await dbFor(c);
-      if (!db) return dbUnavailableJson(c);
-      try {
-        const key = c.req.param("key");
-        if (!eventKeyAllowed(key, c.env.APP_URL)) return jsonRefusal(c, "not_found", 404);
-        const { row } = await duplicateEvent(db, { id: who.id, username: who.username }, key);
-        return c.json({ data: eventJson(await withGoingCount(db, row)) }, 201);
-      } catch (err) {
-        if (err instanceof ValidationError) return invalid(c, err);
-        if (err instanceof NotFoundError) return jsonRefusal(c, "not_found", 404);
-        throw err;
-      }
-    },
+    moderated((c, who) => duplicateModeratorEvent(c, who, c.req.param("key") ?? "")),
   );
 }
