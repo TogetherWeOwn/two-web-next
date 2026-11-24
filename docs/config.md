@@ -135,11 +135,14 @@ an actual code fallback or a checked-in Wrangler value, not a recommended value.
 | `KIT_ROUTE_FEEDS` | Optional Kit route-rollout var | Kit Worker | Unset in deployed configurations | Only `true` selects Kit for GET and HEAD on `/events.ics` and `/events.rss`. Missing or any other value sends both reads to Hono. [Production activation requires separate approval](../CONTRIBUTING.md#production-release-gate). |
 <!-- config-docs:end -->
 
-While production opt-ins are active, responses for the selected paths use
+While the production archive and static page opt-ins are active, their responses use
 `Cache-Control: private, no-store` so a cached Kit document cannot outlast a
 flag rollback. A Hono response cached before opt-in can still be served until
 its existing freshness lifetime ends. With the opt-ins off, Hono retains its
 normal cache policy.
+
+The static feeds retain `Cache-Control: max-age=300, public`. A cache can
+reuse a fresh feed for up to five minutes after the flag is cleared.
 
 ### `SESSION_SECRET` strength and rotation
 
