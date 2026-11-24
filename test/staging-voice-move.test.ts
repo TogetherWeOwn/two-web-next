@@ -162,6 +162,18 @@ describe("protected staging voice self-move", () => {
     },
   );
 
+  it("preserves a well-formed rate limit refusal without a Retry-After header", async () => {
+    const f = fixture();
+    const { cookie } = await f.session();
+    const { status, body } = move.refusals.rate_limited;
+    outbound.mockResolvedValueOnce(Response.json(body, { status }));
+    const res = await f.post(cookie);
+    expect(res.status).toBe(status);
+    expect(res.headers.has("retry-after")).toBe(false);
+    expect(await res.json()).toEqual(body);
+    expect(outbound).toHaveBeenCalledTimes(1);
+  });
+
   it("returns a closed refusal for Bot's disabled action", async () => {
     const f = fixture();
     const { cookie } = await f.session();
@@ -192,6 +204,18 @@ describe("protected staging voice self-move", () => {
     [200, { ...success(move.results.moved), request_id: "provider-text" }],
     [502, success(move.results.moved)],
     [403, { ok: false, request_id: requestId, error: { code: "provider-text" } }],
+    [429, { ...move.refusals.rate_limited.body, ok: "false" }],
+    [
+      429,
+      {
+        ...move.refusals.rate_limited.body,
+        error: { code: "rate_limited", message: "request refused" },
+      },
+    ],
+    [
+      403,
+      { ok: false, request_id: requestId, error: { code: "action_not_allowed", retryable: false } },
+    ],
   ] as const)("keeps unconfirmed or invalid Bot replies generic (%s)", async (status, body) => {
     const f = fixture();
     const { cookie } = await f.session();
@@ -201,6 +225,24 @@ describe("protected staging voice self-move", () => {
     expect(await res.json()).toEqual({ error: "bot_unavailable" });
     expect(outbound).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    [200, { "Idempotent-Replay": "true" }],
+    [307, { Location: "https://redirect.example.test" }],
+  ] as const)(
+    "returns an unconfirmed result for replay and redirect receipts (%s)",
+    async (status, headers) => {
+      const f = fixture();
+      const { cookie } = await f.session();
+      outbound.mockResolvedValueOnce(
+        Response.json(success(move.results.moved), { status, headers }),
+      );
+      const res = await f.post(cookie);
+      expect(res.status).toBe(502);
+      expect(await res.json()).toEqual({ error: "bot_unavailable" });
+      expect(outbound).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("returns an unconfirmed result on transport loss without retrying", async () => {
     const f = fixture();
@@ -265,8 +307,11 @@ describe("protected staging voice self-move", () => {
       (await f.session("100000000000000002", true, true)).cookie,
       (await f.session(memberId, false, true)).cookie,
       (await f.session(memberId, true, false, true)).cookie,
-    ])
-      expect((await f.post(cookie)).status).toBe(403);
+    ]) {
+      const res = await f.post(cookie);
+      expect(res.status).toBe(403);
+      expect(res.headers.has("location")).toBe(false);
+    }
     expect(outbound).not.toHaveBeenCalled();
   });
 

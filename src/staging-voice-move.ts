@@ -132,7 +132,15 @@ export function registerStagingVoiceMove(app: Hono<{ Bindings: Env }>): void {
 
       try {
         const answer = await send(
-          { url, secret, keyId, timeoutSeconds: 5, fetchFn: fetch, stderrDiagnostics: false },
+          {
+            url,
+            secret,
+            keyId,
+            timeoutSeconds: 5,
+            fetchFn: fetch,
+            stderrDiagnostics: false,
+            requireExplicitRefusal: true,
+          },
           { action: "voice.move_member", discord_id: session.id, channel_id: body.channel_id },
           null,
         );

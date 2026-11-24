@@ -12,7 +12,12 @@ export type ParsedEnvelope =
     }
   | { ok: false; failure: BotFailure };
 
-export function parseEnvelope(status: number, replayed: boolean, json: unknown): ParsedEnvelope {
+export function parseEnvelope(
+  status: number,
+  replayed: boolean,
+  json: unknown,
+  requireExplicitRefusal = false,
+): ParsedEnvelope {
   if (typeof json !== "object" || json === null || !("ok" in json))
     throw new BotTransportError("bot answered without an `ok` field");
   const body = json as { ok: unknown; result?: unknown; error?: unknown; request_id?: unknown };
@@ -34,6 +39,11 @@ export function parseEnvelope(status: number, replayed: boolean, json: unknown):
       : null;
   if (!error || typeof error.code !== "string")
     throw new BotTransportError("bot failure has no error code");
+  if (
+    requireExplicitRefusal &&
+    (body.ok !== false || typeof error.retryable !== "boolean" || typeof error.message !== "string")
+  )
+    throw new BotTransportError("bot refusal did not match the action envelope");
   const code = error.code;
   return {
     ok: false,

@@ -158,9 +158,9 @@ as the signed `discord_id` and sends one keyless request to the staging Bot
 Worker. `BOT_ENDPOINT_URL` must be the exact staging Worker origin (an
 optional final slash is accepted). The existing `BOT_KEY_ID` and
 `BOT_SHARED_SECRET` must match the staging receiver. Web returns the validated
-Bot envelope and correlation ID. A `moved` receipt includes the source only
-when it is the other fixture channel. An unconfirmed attempt receives 502
-and Web does not retry it.
+Bot envelope and correlation ID. A `moved` reply with a missing source or a
+source outside the other fixture channel is unconfirmed, even if the Bot
+carried out the move. Unconfirmed attempts receive 502 without a Web retry.
 
 No checked-in Worker config enables the probe. A separate live qualification
 needs the dedicated Discord account, two dedicated staging voice channels,

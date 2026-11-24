@@ -162,6 +162,7 @@ export type ResolvedBotConfig = {
   timeoutSeconds: number;
   fetchFn: typeof fetch;
   stderrDiagnostics: boolean;
+  requireExplicitRefusal?: boolean;
 };
 
 export async function send(
@@ -213,7 +214,12 @@ export async function send(
     throw new BotTransportError(`bot answered with a redirect (${res.status}); not followed`);
   }
   const json: unknown = await readCappedJson(res);
-  const parsed = parseEnvelope(res.status, res.headers.get("Idempotent-Replay") === "true", json);
+  const parsed = parseEnvelope(
+    res.status,
+    res.headers.get("Idempotent-Replay") === "true",
+    json,
+    o.requireExplicitRefusal,
+  );
   if (!parsed.ok && parsed.failure.code === "rate_limited" && res.status === 429) {
     // The shared parser's `undefined` (unusable header) adapts to this seam's
     // `null` fallback so the caller keeps its existing fallback behavior.
