@@ -12,6 +12,13 @@ const time = new Date("2026-11-21T12:00:00Z");
 const guest = { audience: "guest", snapshot: null };
 const command = (type) => ({ v: 1, type, topics: ["voice"] });
 
+function waitForGuestPollFailure(page) {
+  return page.waitForEvent("requestfailed", {
+    predicate: (request) => request.url() === `${origin}/__fixture_guest_projection__`,
+    timeout: 5_000,
+  });
+}
+
 async function withProjection(view, exercise) {
   const { body, js } = await compileKitFixture({ fixture, props: { view } });
   const browser = await chromium.launch();
@@ -151,10 +158,7 @@ test("guest recovers on the original socket immediately and after explicit resyn
     await expect(status).toHaveAttribute("data-source", "live");
     socket.send(frames.withdrawal);
     await expect(status).toHaveAttribute("data-source", "stale");
-    const rejected = page.waitForEvent("requestfailed", {
-      predicate: (request) => request.url() === `${origin}/__fixture_guest_projection__`,
-      timeout: 5_000,
-    });
+    const rejected = waitForGuestPollFailure(page);
     await poll(0, { status: 302, headers: { location: "https://unexpected-fixture.test/" } });
     await rejected;
     socket.send(frames.covering);
@@ -165,15 +169,18 @@ test("guest recovers on the original socket immediately and after explicit resyn
     socket.send(frames.withdrawal);
     await expect(status).toHaveText("Voice unavailable");
     await expect(count).toHaveCount(0);
-    socket.send(frames.covering);
-    socket.send({ ...frames.covering, seq: 5 });
+    // Keep the rejected snapshots last so no subsequent gap can hide a rendered count.
     socket.send({ ...frames.five, seq: 7 });
+    socket.send(frames.covering);
+    socket.send({ ...frames.covering, seq: 5, value: { count: 6 } });
     await page.clock.runFor(1_999);
     expect(socket.messages).toHaveLength(1);
     await page.clock.runFor(1);
     await expect
       .poll(() => socket.messages.map((value) => JSON.parse(value)))
       .toEqual([command("subscribe"), command("resync")]);
+    await expect(status).toHaveAttribute("data-source", "stale");
+    await expect(count).toHaveCount(0);
 
     // Model the installed hub's unavailable control ahead of the covering pull.
     socket.send(frames.withdrawal);
@@ -197,7 +204,7 @@ test("guest recovers on the original socket immediately and after explicit resyn
 });
 
 test("guest retires an exhausted resync without sending a second command", async () => {
-  await withProjection(guest, async ({ page, status, connection }) => {
+  await withProjection(guest, async ({ page, status, connection, polls }) => {
     const socket = await connection(0);
     socket.send(frames.initial);
     await expect(status).toHaveAttribute("data-source", "live");
@@ -207,8 +214,13 @@ test("guest retires an exhausted resync without sending a second command", async
     await expect
       .poll(() => socket.messages.map((value) => JSON.parse(value)))
       .toEqual([command("subscribe"), command("resync")]);
+    await expect.poll(() => polls.length).toBe(1);
+    await page.clock.runFor(1_000);
+    // The abort confirms the late control reached the client before the original deadline.
+    const aborted = waitForGuestPollFailure(page);
     socket.send(frames.withdrawal);
-    await page.clock.runFor(14_999);
+    await aborted;
+    await page.clock.runFor(13_999);
     expect(socket.closes).toEqual([]);
     expect(socket.messages).toHaveLength(2);
     await page.clock.runFor(1);
