@@ -483,6 +483,14 @@ jobs:
         # vars into named environments. Fails closed when the production env
         # declares no moderators.
         run: npm run check:worker-moderators-production
+      - name: Download the attempt-specific staged packet and undo proof
+        if: env.CUTOVER_MODE != 'ordinary'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: kit-cutover-*-${{ needs.preflight.outputs.cutover_attempt }}
+          run-id: ${{ needs.preflight.outputs.cutover_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/kit-cutover
       - name: Confirm the recorded rollback target still exists with its secrets
         # The preflight recorded the live version from /up. It must still be
         # the single 100% production deployment, and the version must still
@@ -497,25 +505,13 @@ jobs:
             exit 1
           fi
           node workflow-tip/ci/check-production-secrets.mjs --rollback-version
+          if [ "$CUTOVER_MODE" != ordinary ]; then
+            node workflow-tip/ci/kit-cutover-deploy.mjs prepare "$RUNNER_TEMP/kit-cutover/kit-cutover-packet-$CUTOVER_ATTEMPT" "$RUNNER_TEMP/kit-cutover/kit-cutover-proof-$CUTOVER_ATTEMPT/proof.json"
+          fi
           echo "rollback target $ROLLBACK_VERSION_ID ($ROLLBACK_COMMIT) recorded and verified"
         env:
           ROLLBACK_VERSION_ID: ${{ needs.preflight.outputs.rollback_version_id }}
           ROLLBACK_COMMIT: ${{ needs.preflight.outputs.rollback_commit }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
-      - name: Download the attempt-specific staged packet and undo proof
-        if: env.CUTOVER_MODE != 'ordinary'
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          pattern: kit-cutover-*-${{ needs.preflight.outputs.cutover_attempt }}
-          run-id: ${{ needs.preflight.outputs.cutover_run }}
-          github-token: ${{ github.token }}
-          path: ${{ runner.temp }}/kit-cutover
-      - name: Verify cutover packet, ledger, and compatible undo under the production lock
-        if: env.CUTOVER_MODE != 'ordinary'
-        run: node workflow-tip/ci/kit-cutover-deploy.mjs prepare "$RUNNER_TEMP/kit-cutover/kit-cutover-packet-$CUTOVER_ATTEMPT" "$RUNNER_TEMP/kit-cutover/kit-cutover-proof-$CUTOVER_ATTEMPT/proof.json"
-        env:
-          ROLLBACK_VERSION_ID: ${{ needs.preflight.outputs.rollback_version_id }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
       - name: Install the locked Kit Wrangler upload tool
@@ -535,30 +531,26 @@ jobs:
       # test/probe-workflows.test.ts and reconciled per docs/runbook.md
       # ("Production trigger reconciliation"), never by this workflow.
       - name: Upload reviewed production version without changing triggers
-        if: env.CUTOVER_MODE == 'ordinary'
+        id: cutover-upload
         # No second build: the verified entry is the one uploaded. Wrangler's
         # native JSONL output binds this upload to a version UUID, not a log guess.
         run: |
           set -euo pipefail
-          node workflow-tip/ci/worker-bundle-evidence.mjs verify dist-production
           test ! -e "$WRANGLER_OUTPUT_FILE_PATH"
+          if [ "$CUTOVER_MODE" != ordinary ]; then
+            node workflow-tip/ci/kit-cutover-deploy.mjs upload "$RUNNER_TEMP/kit-cutover/kit-cutover-packet-$CUTOVER_ATTEMPT"
+            exit 0
+          fi
+          node workflow-tip/ci/worker-bundle-evidence.mjs verify dist-production
           npx wrangler versions upload --env production --tag "${DEPLOY_SHA:?}-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}" --no-bundle dist-production/worker.js
           node workflow-tip/ci/worker-bundle-evidence.mjs uploaded dist-production
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
           DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
+          ROLLBACK_VERSION_ID: ${{ needs.preflight.outputs.rollback_version_id }}
           BUILD_SHA: ${{ needs.preflight.outputs.sha }}
           WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/worker-version-upload.jsonl
-      - name: Upload exact staged version without rebuilding or changing triggers
-        id: cutover-upload
-        if: env.CUTOVER_MODE != 'ordinary'
-        run: node workflow-tip/ci/kit-cutover-deploy.mjs upload "$RUNNER_TEMP/kit-cutover/kit-cutover-packet-$CUTOVER_ATTEMPT"
-        env:
-          ROLLBACK_VERSION_ID: ${{ needs.preflight.outputs.rollback_version_id }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
-          WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/cutover-upload.jsonl
       - name: Capture pre-promote dead-letter baseline
         id: dead-letter-baseline
         # Read-only GET before promotion. Only the gradual action and the

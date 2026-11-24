@@ -915,9 +915,12 @@ describe("workflow evidence wiring", () => {
     assert.equal(steps[archive].with.path, "web/dist-production-kit/");
     const kitSteps = JSON.stringify([check, build, inventory, archive].map((i) => steps[i]));
     assert.doesNotMatch(kitSteps, /secrets\.|versions upload|--env production/);
-    for (const step of steps.filter((s) => /versions (?:upload|deploy)/.test(s.run ?? ""))) {
-      assert.doesNotMatch(step.run, /kit/i);
-    }
+    const upload = steps.find((step) => step.id === "cutover-upload")?.run;
+    assert.match(
+      upload,
+      /if \[ "\$CUTOVER_MODE" != ordinary \]; then\n +node [^\n]+ upload [^\n]+\n +exit 0\nfi/,
+    );
+    assert.match(upload, /versions upload[^\n]+--no-bundle dist-production\/worker\.js/);
   });
 
   test("CI creates build-only evidence and checks pinned no-bundle equivalence", () => {
