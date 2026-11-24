@@ -103,7 +103,7 @@ export function reconciliationIntent(input: ReconciliationIntent): Reconciliatio
  */
 export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
   async function bounded<T>(work: (tx: TxClient) => Promise<T>): Promise<T> {
-    return sql.begin("isolation level read committed", async (transaction) => {
+    return sql.begin(async (transaction) => {
       const tx = transaction as unknown as TxClient;
       await tx`select set_config('lock_timeout', ${`${LEDGER_DB_LOCK_TIMEOUT_MS}ms`}, true),
         set_config('statement_timeout', ${`${LEDGER_DB_TIMEOUT_MS}ms`}, true)`;

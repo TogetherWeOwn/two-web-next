@@ -517,6 +517,28 @@ describe("CallInternalAction", () => {
     expect(postAnnouncement).toHaveBeenCalledExactlyOnceWith(ann.action, ann.idempotencyKey);
   });
 
+  it("discards invalid announcement keys and aliases before acquiring a claim", async () => {
+    const announcementClaims = announcementStore();
+    const postAnnouncement = vi.fn();
+    const deliveries = [
+      msg({ ...ann, idempotencyKey: "invalid-key" }),
+      msg({ ...ann, action: { ...ann.action, channelKey: "a".repeat(65) } }),
+    ];
+    await consume(
+      { messages: deliveries },
+      {
+        bot: { postAnnouncement } as unknown as BotClient,
+        events: store(),
+        lock: memLock(),
+        ledger: memLedger(),
+        announcementClaims,
+      },
+    );
+    expect(deliveries.map((delivery) => delivery.acked)).toEqual([true, true]);
+    expect(announcementClaims.claimAnnouncement).not.toHaveBeenCalled();
+    expect(postAnnouncement).not.toHaveBeenCalled();
+  });
+
   it("recovers an expired claim after a hard-stop write error without another send", async () => {
     const announcementClaims = announcementStore();
     const postAnnouncement = vi.fn(async () => fail({ code: "needs_reconciliation", status: 409 }));
