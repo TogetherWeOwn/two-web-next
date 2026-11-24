@@ -151,25 +151,16 @@ normal cache policy.
 
 ### Staging voice self-move
 
-`POST /__probe/voice-move` accepts an explicit staging `Origin` and a JSON
-object with only `channel_id`. The dedicated account signs in through Discord
-and must present its current Web member session. Web uses that session's ID
-as the signed `discord_id` and sends one keyless request to the staging Bot
-Worker. `BOT_ENDPOINT_URL` must be the exact staging Worker origin (an
-optional final slash is accepted). The existing `BOT_KEY_ID` and
-`BOT_SHARED_SECRET` must match the staging receiver. Web returns the validated
-Bot envelope and correlation ID. A `moved` reply with a missing source or a
-source outside the other fixture channel is unconfirmed, even if the Bot
-carried out the move. Unconfirmed attempts receive 502 without a Web retry.
+`POST /__probe/voice-move` requires the staging `Origin`, the dedicated account's current
+Discord member session, and JSON with only `channel_id` under the 4 KiB action cap.
+Web signs one keyless request with the session's ID. Set `BOT_ENDPOINT_URL` to the exact
+staging Bot origin and use the receiver's `BOT_KEY_ID` and `BOT_SHARED_SECRET`. A `moved`
+receipt lacking the other fixture channel as source returns unconfirmed 502 without retry.
 
-No checked-in Worker config enables the probe. A separate live qualification
-needs the dedicated Discord account, two dedicated staging voice channels,
-verified occupancy and Connect permissions for the planned cases, and an
-exclusive staging window that does not overlap other Bot or Web work. Use
-the Bot's [lease-scoped self-move opt-in](https://github.com/TogetherWeOwn/two-bot-next/pull/2427)
-for that window. At teardown, clear the Web flag and fixture settings,
-verify that Web refuses the route, and verify the Bot's restored OFF state
-on lease release or expiry.
+The probe defaults off. Live qualification needs the dedicated account, two fixture channels,
+verified occupancy and Connect permissions, and an exclusive staging window with the Bot's
+[lease-scoped opt-in](https://github.com/TogetherWeOwn/two-bot-next/pull/2427). At teardown,
+clear the Web flag and fixture settings and verify Web refusal and Bot OFF after lease release.
 
 ### `SESSION_SECRET` strength and rotation
 

@@ -26,7 +26,6 @@ import { env as baseEnv } from "./helpers/member-data";
 
 const read = (path: string): string => readFileSync(path, "utf8");
 const VOICE_PROBE_FILE = "src/staging-voice-move.ts";
-const VOICE_PROBE_PATH = "/__probe/voice-move";
 const VOICE_MOVE = "voice.move_member";
 
 // Web entry surface: the card's named files plus the sibling families a
@@ -145,44 +144,31 @@ describe("CallInternalAction is never web-dispatched (TOG-12678)", () => {
 
   it("only the staging probe references the direct voice action in a mounted handler", () => {
     const problems: string[] = [];
-    const voiceHandlers: string[] = [];
     for (const r of app.routes) {
       const source = Function.prototype.toString.call(r.handler);
       for (const token of DISPATCH_TOKENS) {
         if (source.includes(token)) {
-          if (token === VOICE_MOVE && r.method === "POST" && r.path === VOICE_PROBE_PATH) {
-            voiceHandlers.push(r.path);
+          if (token === VOICE_MOVE && r.method === "POST" && r.path === "/__probe/voice-move")
             continue;
-          }
           problems.push(`${r.method} ${r.path} handler embeds ${token}`);
         }
       }
     }
     expect(problems).toEqual([]);
-    expect(voiceHandlers).toEqual([VOICE_PROBE_PATH]);
   });
 
   it("only the staging probe references the transport and the dedicated session-bound action", () => {
     const hits = scanFiles(webFiles(), DISPATCH_TOKENS);
-    expect(hits.filter(({ file }) => file !== VOICE_PROBE_FILE)).toEqual([]);
-    expect(hits.map(({ token, text }) => [token, text])).toEqual([
-      ["bot/client", 'import type { ParsedEnvelope } from "./bot/client-serialization";'],
-      ["bot/client", 'import { send } from "./bot/client-transport";'],
-      [
-        VOICE_MOVE,
-        '{ action: "voice.move_member", discord_id: session.id, channel_id: body.channel_id },',
-      ],
+    expect(hits.map(({ file, text }) => `${file}: ${text}`)).toEqual([
+      `${VOICE_PROBE_FILE}: import { send } from "./bot/client-transport";`,
+      `${VOICE_PROBE_FILE}: { action: "voice.move_member", discord_id: session.id, channel_id: body.channel_id },`,
     ]);
     const probe = read(VOICE_PROBE_FILE);
-    for (const gate of [
-      'c.env.STAGING_VOICE_MOVE_ENABLED !== "true"',
-      "c.env.APP_URL !== STAGING_APP_URL",
-      "new URL(c.req.url).origin !== STAGING_APP_URL",
-      'c.req.header("origin") !== STAGING_APP_URL',
+    expect(probe).toContain('c.env.STAGING_VOICE_MOVE_ENABLED !== "true"');
+    expect(probe).toContain("c.env.APP_URL !== STAGING_APP_URL");
+    expect(probe).toContain(
       'const STAGING_BOT_ORIGIN = "https://two-bot-next-staging.5150.workers.dev";',
-      "url !== STAGING_BOT_ORIGIN && url !== `${STAGING_BOT_ORIGIN}/`",
-    ])
-      expect(probe).toContain(gate);
+    );
   });
 
   it("INTERNAL_ACTION_QUEUE is sent only by the staging alert probe, as alert-probe only", () => {

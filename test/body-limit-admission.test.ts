@@ -126,7 +126,6 @@ async function sessionEnv(sql: Sql) {
   const env = {
     APP_URL: STAGING_APP_URL,
     QA_AUTH_TOKEN: "test-only-qa-token-with-32-plus-chars",
-    // Open the outer voice probe gate so the cap and throttle are exercised.
     STAGING_VOICE_MOVE_ENABLED: "true",
     SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
     SESSION_STORE: store,

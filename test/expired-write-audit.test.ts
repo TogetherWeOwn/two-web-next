@@ -17,7 +17,7 @@
 // route-inventory: POST /auth/qa/:identity
 // Expired-write recovery audit for the remaining non-RSVP write surfaces.
 //
-// POST/PATCH/PUT/DELETE inventory (from test/fixtures/route-inventory.json):
+// Full POST/PATCH/PUT/DELETE inventory (26 routes, from test/fixtures/route-inventory.json):
 // - Already integrated, not re-proven here:
 //   PATCH /events/:key, POST /events, POST /events/:key/{publish,cancel,rsvp-pause,rsvp-reopen}
 //   → shared gate via expiredWriteBounce(c, true), proven in test/event-edit-expired-recovery.test.ts.
@@ -34,8 +34,6 @@
 //   always 204 even with a dead session); POST /api/agent-events (machine-bearer, dead session
 //   cookie is ignored); POST /__probe/alert (staging-token, dead session cookie is ignored);
 //   POST /auth/qa/:identity (session-issuing, not session-gated).
-// - POST /__probe/voice-move is a staging probe with a dedicated member session.
-//   Its own fixture proves the 403 for an expired cookie without a recovery bounce.
 //   The dead session below is always a properly signed, expired bearer (never an unsigned
 //   cookie the app would read as no session at all), so a future recovery gate placed in
 //   front of these routes would bounce it and fail this file instead of passing silently.
