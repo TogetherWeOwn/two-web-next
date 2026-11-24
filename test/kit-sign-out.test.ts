@@ -1,5 +1,4 @@
 // route-inventory: POST /logout
-// route-inventory: POST /logout/everywhere
 import { serializeSigned } from "hono/utils/cookie";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BODY_LIMIT_BYTES } from "../src/body-limit";
@@ -7,22 +6,18 @@ import { AUTH_STATUS_COOKIE } from "../src/http/auth-status";
 import { fetchKitSignOut } from "../src/kit-sign-out";
 import { decideOwner } from "../src/route-ownership";
 import { SESSION_COOKIE } from "../src/session-cookie";
-import { hashToken, newSessionToken, REVOKE_ALL_EXCEPT, type Sql } from "../src/sessions";
+import { hashToken, newSessionToken, type Sql } from "../src/sessions";
 import type { EnvWithThrottle } from "../src/throttle";
 import { EXPIRED_WRITE_COOKIE } from "../src/write-recovery";
 import app from "./app";
 import recording from "./fixtures/parity/hono-9822a6e60c6b2229c8b823bb481c87fb29fa85c9/index.json";
-import { vectors as ordinary } from "./fixtures/parity/hono-9822a6e60c6b2229c8b823bb481c87fb29fa85c9/routes/logout.json";
-import { vectors as everywhere } from "./fixtures/parity/hono-9822a6e60c6b2229c8b823bb481c87fb29fa85c9/routes/logout_everywhere.json";
+import { vectors } from "./fixtures/parity/hono-9822a6e60c6b2229c8b823bb481c87fb29fa85c9/routes/logout.json";
 import { recoveryFixture, SECRET } from "./fixtures/session-recovery";
 import { withThrottleTx } from "./helpers/throttle-tx-double";
 
 const REQUEST_ID = "0123456789abcdef";
 const PRIVATE = "synthetic driver details";
-const ROUTES = [
-  { path: "/logout", vectors: ordinary },
-  { path: "/logout/everywhere", vectors: everywhere },
-] as const;
+const PATH = "/logout";
 type Fixture = ReturnType<typeof recoveryFixture>;
 
 beforeEach(() => {
@@ -36,9 +31,9 @@ async function signed(name: string, value: string) {
 }
 
 const responders = {
-  Hono: (f: Fixture, path: string, init: RequestInit) => app.request(path, init, f.env),
-  Kit: (f: Fixture, path: string, init: RequestInit) =>
-    fetchKitSignOut(new Request(new URL(path, f.env.APP_URL), init), f.env, REQUEST_ID),
+  Hono: (f: Fixture, init: RequestInit) => app.request(PATH, init, f.env),
+  Kit: (f: Fixture, init: RequestInit) =>
+    fetchKitSignOut(new Request(new URL(PATH, f.env.APP_URL), init), f.env, REQUEST_ID),
 };
 
 function post(f: Fixture, cookie: string, accept = "text/html"): RequestInit {
@@ -69,10 +64,10 @@ async function expectFrozenResponse(
   expect(response.headers.getSetCookie()).toEqual(
     cookies.map(({ name, value, attributes }) => [`${name}=${value}`, ...attributes].join("; ")),
   );
-  if (golden.body === ordinary.HEAD.response.body) expect(await response.text()).toBe("");
+  if (golden.body === vectors.HEAD.response.body) expect(await response.text()).toBe("");
 }
 
-describe.each(ROUTES)("detached sign-out parity for $path", ({ path, vectors }) => {
+describe("detached sign-out parity", () => {
   it("leaves method and admission refusals with Hono", async () => {
     const f = recoveryFixture();
     const live = await f.login();
@@ -87,14 +82,19 @@ describe.each(ROUTES)("detached sign-out parity for $path", ({ path, vectors }) 
     (f.env as EnvWithThrottle).THROTTLE_STORE = throttle;
     for (const method of ["GET", "HEAD", "OPTIONS", "PUT", "PATCH", "DELETE"] as const) {
       const init = { ...post(f, live.cookie, "*/*"), method };
-      const request = new Request(new URL(path, f.env.APP_URL), init);
+      const request = new Request(new URL(PATH, f.env.APP_URL), init);
       expect(decideOwner(request)).toBe("hono");
       expect(await fetchKitSignOut(request, f.env)).toBeNull();
-      await expectFrozenResponse(await responders.Hono(f, path, init), vectors[method]);
+      await expectFrozenResponse(await responders.Hono(f, init), vectors[method]);
     }
-    expect(decideOwner(new Request(new URL(path, f.env.APP_URL), post(f, live.cookie)))).toBe(
+    expect(decideOwner(new Request(new URL(PATH, f.env.APP_URL), post(f, live.cookie)))).toBe(
       "hono",
     );
+    const everywhere = new Request(
+      new URL("/logout/everywhere", f.env.APP_URL),
+      post(f, live.cookie),
+    );
+    expect(await fetchKitSignOut(everywhere, f.env)).toBeNull();
     for (const [origin, vector] of [
       ["https://other.example.test", vectors["POST origin:cross"]],
       [undefined, vectors["POST origin:missing"]],
@@ -103,20 +103,17 @@ describe.each(ROUTES)("detached sign-out parity for $path", ({ path, vectors }) 
       const headers = new Headers(init.headers);
       if (origin) headers.set("origin", origin);
       else headers.delete("origin");
-      await expectFrozenResponse(await responders.Hono(f, path, { ...init, headers }), vector);
+      await expectFrozenResponse(await responders.Hono(f, { ...init, headers }), vector);
     }
     const init = post(f, live.cookie, "*/*");
     const headers = new Headers(init.headers);
     headers.set("content-length", String(BODY_LIMIT_BYTES.action + 1));
     await expectFrozenResponse(
-      await responders.Hono(f, path, { ...init, headers }),
+      await responders.Hono(f, { ...init, headers }),
       vectors["POST body:oversized"],
     );
     expect(throttle).not.toHaveBeenCalled();
-    await expectFrozenResponse(
-      await responders.Hono(f, path, init),
-      ordinary["POST throttle:exhausted"],
-    );
+    await expectFrozenResponse(await responders.Hono(f, init), vectors["POST throttle:exhausted"]);
     expect(throttle).toHaveBeenCalledOnce();
     expect(sql.mock.calls.some(([parts]) => parts.join("").includes("INSERT"))).toBe(false);
     expect(acquire).not.toHaveBeenCalled();
@@ -133,12 +130,12 @@ describe.each(ROUTES)("detached sign-out parity for $path", ({ path, vectors }) 
     for (const respond of Object.values(responders)) {
       const form = post(f, pending);
       await expectFrozenResponse(
-        await respond(f, path, { ...form, body: new URLSearchParams({ next: "/profile" }) }),
+        await respond(f, { ...form, body: new URLSearchParams({ next: "/profile" }) }),
         vectors["POST accept:html"],
       );
       for (const cookie of [`${malformed}; ${pending}`, `${SESSION_COOKIE}=forged`]) {
         await expectFrozenResponse(
-          await respond(f, path, post(f, cookie, "application/json")),
+          await respond(f, post(f, cookie, "application/json")),
           vectors["POST accept:json"],
         );
       }
@@ -156,12 +153,10 @@ describe.each(ROUTES)("detached sign-out parity for $path", ({ path, vectors }) 
       const f = recoveryFixture();
       const live = await f.login();
       const pending = await signed(EXPIRED_WRITE_COOKIE, "pending|/profile?edit=1");
-      const mutate = vi
-        .spyOn(f.sessions, path === "/logout" ? "revoke" : "revokeUserSessions")
-        .mockRejectedValue(new Error(PRIVATE));
+      const mutate = vi.spyOn(f.sessions, "revoke").mockRejectedValue(new Error(PRIVATE));
       const init = post(f, `${live.cookie}; ${pending}`, accept);
-      const hono = await responders.Hono(f, path, init);
-      const kit = await responders.Kit(f, path, init);
+      const hono = await responders.Hono(f, init);
+      const kit = await responders.Kit(f, init);
       if (!kit) throw new Error("Missing Kit refusal");
       const body = await hono.text();
       for (const res of [hono, kit]) {
@@ -180,10 +175,10 @@ describe.each(ROUTES)("detached sign-out parity for $path", ({ path, vectors }) 
       if (accept !== "*/*") expect(body).toContain(REQUEST_ID);
       expect(mutate).toHaveBeenCalledTimes(2);
       expect(await f.sessions.get(live.tokenHash)).toBeTruthy();
-      expect(console.error).toHaveBeenCalledWith(
-        path === "/logout" ? "logout revocation failed" : "logout everywhere revocation failed",
-        { exception: "Error", request_id: REQUEST_ID },
-      );
+      expect(console.error).toHaveBeenCalledWith("logout revocation failed", {
+        exception: "Error",
+        request_id: REQUEST_ID,
+      });
     },
   );
 });
@@ -204,8 +199,8 @@ describe.each(Object.entries(responders))("sign-out effects through %s", (_, res
     const revoke = vi.spyOn(f.sessions, "revoke");
     const lineage = vi.spyOn(f.sessions, "revokeLineage");
     await expectFrozenResponse(
-      await respond(f, "/logout", post(f, `${live.cookie}; ${status}`)),
-      ordinary["POST identity:member"],
+      await respond(f, post(f, `${live.cookie}; ${status}`)),
+      vectors["POST identity:member"],
     );
     expect(revoke.mock.calls).toEqual([[live.tokenHash]]);
     expect(lineage.mock.calls).toEqual([[key]]);
@@ -214,32 +209,18 @@ describe.each(Object.entries(responders))("sign-out effects through %s", (_, res
     expect(await f.sessions.get(sibling.tokenHash)).toBeTruthy();
   });
 
-  it("sweeps only the live acting member and clears a dead bearer without sweeping", async () => {
+  it("preserves cookies on lineage failure and can retry the revocation", async () => {
     const f = recoveryFixture();
-    const expiresAt = new Date(Date.now() + 3600_000);
-    const live = await f.login(expiresAt);
-    const sibling = await f.login();
-    const dead = await f.login(new Date(0));
-    const row = (await f.sessions.get(live.tokenHash))!;
-    const other = await hashToken(newSessionToken());
-    await f.sessions.create({ ...row, userId: "100000000000000002", tokenHash: other, expiresAt });
-    const status = await signed(AUTH_STATUS_COOKIE, (await f.sessions.statusHash(live.tokenHash))!);
-    const sweep = vi.spyOn(f.sessions, "revokeUserSessions");
-    const lineage = vi.spyOn(f.sessions, "revokeLineage");
-    await expectFrozenResponse(
-      await respond(f, "/logout/everywhere", post(f, `${dead.cookie}; ${status}`)),
-      everywhere["POST identity:expired"],
-    );
-    expect(sweep).not.toHaveBeenCalled();
-    expect(lineage).not.toHaveBeenCalled();
-    expect(await f.sessions.get(live.tokenHash)).toBeTruthy();
-    await expectFrozenResponse(
-      await respond(f, "/logout/everywhere", post(f, live.cookie)),
-      everywhere["POST identity:member"],
-    );
-    expect(sweep.mock.calls).toEqual([[row.userId, REVOKE_ALL_EXCEPT]]);
+    const live = await f.login();
+    const key = (await f.sessions.statusHash(live.tokenHash))!;
+    const status = await signed(AUTH_STATUS_COOKIE, key);
+    const revoke = vi.spyOn(f.sessions, "revokeLineage").mockRejectedValueOnce(new Error(PRIVATE));
+    const init = post(f, `${live.cookie}; ${status}`, "application/json");
+    const response = await respond(f, init);
+    expect(response?.status).toBe(503);
+    expect(response?.headers.getSetCookie()).toEqual([]);
     expect(await f.sessions.get(live.tokenHash)).toBeNull();
-    expect(await f.sessions.get(sibling.tokenHash)).toBeNull();
-    expect(await f.sessions.get(other)).toBeTruthy();
+    await expectFrozenResponse(await respond(f, init), vectors["POST accept:json"]);
+    expect(revoke.mock.calls).toEqual([[key], [key]]);
   });
 });

@@ -17,7 +17,7 @@ export async function fetchKitSignOut(
 ): Promise<Response | null> {
   if (request.method !== "POST") return null;
   const { pathname } = new URL(request.url);
-  if (pathname !== "/logout" && pathname !== "/logout/everywhere") return null;
+  if (pathname !== "/logout") return null;
 
   const c = new Context<{ Bindings: Env }>(request, { env, path: pathname });
   const id = safeRequestId(requestId);
@@ -26,11 +26,7 @@ export async function fetchKitSignOut(
     c.header("x-request-id", id);
   }
   try {
-    return await signOut(
-      c,
-      () => storeForEnv(env),
-      pathname === "/logout" ? "session" : "everywhere",
-    );
+    return await signOut(c, () => storeForEnv(env));
   } catch (err) {
     if (!(err instanceof Error)) throw err;
     return internalErrorHandler(err, c, pathname);
