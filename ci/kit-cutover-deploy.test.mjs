@@ -5,6 +5,7 @@ import { verifyReady } from "./kit-cutover-evidence.mjs";
 import {
   selection,
   undoMessage,
+  verifyEmberUndoVersion,
   verifyProducer,
   verifyUndoVersion,
 } from "./kit-cutover-deploy.mjs";
@@ -30,6 +31,11 @@ test("cutover requires explicit protected selection and the paired Hono UUID", (
   assert.deepEqual(selection(active), { mode: "kit", undo: hono, ...identity });
   const ember = { ...active, CUTOVER_MODE: "ember" };
   assert.deepEqual(selection(ember), { mode: "ember", undo: hono, ...identity });
+  assert.deepEqual(selection({ ...active, CUTOVER_MODE: "admin", CUTOVER_UNDO_VERSION: kit }), {
+    mode: "admin",
+    undo: kit,
+    ...identity,
+  });
   const prepare = selection({ ...active, CUTOVER_MODE: "hono", CUTOVER_UNDO_VERSION: "" });
   assert.deepEqual(prepare, { ...identity, mode: "hono", undo: "" });
   for (const change of [
@@ -56,6 +62,40 @@ test("cutover requires explicit protected selection and the paired Hono UUID", (
     () => verifyUndoVersion(version, { ...identity, undo: hono, digest: "d".repeat(64) }),
     /Hono undo artifact/,
   );
+});
+
+test("admin rollback admits only the recorded production Ember version with admin off", () => {
+  const text = (name, value) => ({ name, text: value, type: "plain_text" });
+  const bindings = [
+    text("APP_URL", "https://togetherweown.com"),
+    text("KIT_ROUTE_EMBER_PAGES", "true"),
+  ];
+  const version = {
+    id: kit,
+    annotations: {
+      "workers/tag": `${sourceSha}-99-1`,
+      "workers/message": `two-web-cutover-kit:${digest}`,
+    },
+    resources: { bindings },
+  };
+  verifyEmberUndoVersion(version, kit, sourceSha);
+  verifyEmberUndoVersion(
+    { ...version, resources: { bindings: [...bindings, text("KIT_ROUTE_ADMIN", "false")] } },
+    kit,
+    sourceSha,
+  );
+  assert.throws(() => verifyEmberUndoVersion(version, hono, sourceSha));
+  assert.throws(() => verifyEmberUndoVersion(version, kit, "c".repeat(40)));
+  for (const rejected of [
+    bindings.slice(0, 1),
+    [...bindings, text("KIT_ROUTE_ADMIN", "true")],
+    [...bindings, { name: "KIT_ROUTE_ADMIN", type: "secret_text" }],
+    [...bindings, text("APP_URL", "https://other.example")],
+  ]) {
+    assert.throws(() =>
+      verifyEmberUndoVersion({ ...version, resources: { bindings: rejected } }, kit, sourceSha),
+    );
+  }
 });
 
 test("only exact successful main XFS dispatch metadata can produce a cutover packet", async () => {

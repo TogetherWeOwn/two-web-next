@@ -69,6 +69,7 @@ test("inert Kit production vars allow only reviewed public values and disabled r
     ...Object.fromEntries(publicKeys.map((key) => [key, vars[key]])),
     ...Object.fromEntries(flagKeys.map((key) => [`KIT_ROUTE_${key.toUpperCase()}`, "false"])),
     KIT_ROUTE_EMBER_PAGES: "false",
+    KIT_ROUTE_ADMIN: "false",
   });
 });
 

@@ -179,8 +179,49 @@ test("Ember cutover configuration opts in only the Ember documents", () => {
     KIT_ROUTE_SECURITY_TXT: "false",
     DISCORD_LIVE_SOCKET_ENABLED: "false",
   };
-  assert.deepEqual(productionUploadConfig("kit", inputs, true), { ...allOff, vars });
-  assert.throws(() => productionUploadConfig("hono", inputs, true), /requires the Kit artifact/);
+  assert.deepEqual(productionUploadConfig("kit", inputs, "ember"), { ...allOff, vars });
+  assert.throws(() => productionUploadConfig("hono", inputs, "ember"), /requires the Kit artifact/);
+});
+
+test("admin cutover requires distinct Ember and admin versions, credential proof and exact undo", () => {
+  const ember = productionUploadConfig("kit", inputs, "ember");
+  assert.equal(ember.vars.KIT_ROUTE_ADMIN, "false");
+  assert.deepEqual(productionUploadConfig("kit", inputs, "admin"), {
+    ...ember,
+    vars: { ...ember.vars, KIT_ROUTE_ADMIN: "true" },
+  });
+  const pin = { ...identity, mode: "admin" };
+  const proof = {
+    schema: 1,
+    identity,
+    worker: `${STAGING_WORKER}-21-3`,
+    bindingCheck: "isolated-and-admin",
+    configs: { ember: digest, admin: digest },
+    ember: hono,
+    admin: kit,
+    routeCount: 24,
+    kitReadinessSamples: 3,
+    adminChecks: ["default-denied", "credential-separation", "ownership-undo"],
+    checks: ["ember", "admin", "undo"].map((step) => ({
+      state: "1037",
+      step,
+      version: step === "admin" ? kit : hono,
+      status: 200,
+      pending: 0,
+      smoke: "passed",
+    })),
+  };
+  verifyStagingProof(proof, pin);
+  for (const change of [
+    { adminChecks: [] },
+    { admin: hono },
+    { checks: proof.checks.slice(0, 2) },
+    { checks: proof.checks.map((row) => ({ ...row, state: "1033" })) },
+    { bindingCheck: "isolated-and-ember" },
+  ]) {
+    assert.throws(() => verifyStagingProof({ ...proof, ...change }, pin));
+  }
+  assert.throws(() => verifyStagingProof(proof, { ...pin, mode: "ember" }));
 });
 
 test("isolated database admission fixes the host, database, owner, and run scope", async () => {

@@ -20,6 +20,7 @@ export const EMBER_CUTOVER_VARS = Object.freeze({
   KIT_ROUTE_SECURITY_TXT: "false",
   DISCORD_LIVE_SOCKET_ENABLED: "false",
 });
+export const ADMIN_STAGING_CHECKS = ["default-denied", "credential-separation", "ownership-undo"];
 const maxFileBytes = 32 * 1024 * 1024;
 const maxPacketBytes = 128 * 1024 * 1024;
 const hex = /^[a-f0-9]{64}$/;
@@ -221,6 +222,10 @@ export function verifyStagingProof(proof, pin) {
   );
   assert.equal(proof.schema, 1);
   assert.equal(proof.worker, `${STAGING_WORKER}-${runId}-${runAttempt}`);
+  if (pin.mode === "admin") {
+    verifyAdminStagingProof(proof);
+    return;
+  }
   assertRollbackVersionId(proof.hono);
   assertRollbackVersionId(proof.kit);
   assert.notEqual(proof.hono, proof.kit, "staging requires distinct versions on one Worker");
@@ -250,16 +255,43 @@ export function verifyStagingProof(proof, pin) {
   );
 }
 
-export function productionUploadConfig(profile, { root, kit }, ember = false) {
+function verifyAdminStagingProof(proof) {
+  assert.equal(proof.bindingCheck, "isolated-and-admin");
+  assert.ok(hex.test(proof.configs?.ember) && hex.test(proof.configs?.admin));
+  assertRollbackVersionId(proof.ember);
+  assertRollbackVersionId(proof.admin);
+  assert.notEqual(proof.ember, proof.admin, "ownership flip requires two versions");
+  assert.ok(Number.isSafeInteger(proof.routeCount) && proof.routeCount > 0);
+  assert.equal(proof.kitReadinessSamples, 3);
+  assert.deepEqual(
+    proof.checks,
+    ["ember", "admin", "undo"].map((step) => ({
+      state: "1037",
+      step,
+      version: step === "admin" ? proof.admin : proof.ember,
+      status: 200,
+      pending: 0,
+      smoke: "passed",
+    })),
+  );
+  assert.deepEqual(proof.adminChecks, ADMIN_STAGING_CHECKS);
+}
+
+export function productionUploadConfig(profile, { root, kit }, mode = "all-off") {
   assert.ok(PROFILES.includes(profile));
-  assert.ok(!ember || profile === "kit", "Ember requires the Kit artifact");
+  assert.ok(["all-off", "ember", "admin"].includes(mode), "invalid cutover config mode");
+  assert.ok(mode === "all-off" || profile === "kit", "Ember requires the Kit artifact");
   const { $schema, env, routes, triggers, ...hono } = { ...root, ...root.env.production };
   const config = profile === "hono" ? hono : { ...kit };
   delete config.$schema;
   delete config.triggers;
   return {
     ...config,
-    ...(ember ? { vars: { ...config.vars, ...EMBER_CUTOVER_VARS } } : {}),
+    vars: {
+      ...config.vars,
+      ...(mode !== "all-off" ? EMBER_CUTOVER_VARS : {}),
+      ...(mode === "admin" ? { KIT_ROUTE_ADMIN: "true" } : {}),
+    },
     main: profile === "kit" ? "modules/_worker.js" : "modules/worker.js",
     base_dir: "modules",
     ...(profile === "kit" ? { rules: [{ type: "ESModule", globs: ["kit-adapter.js"] }] } : {}),
@@ -275,7 +307,7 @@ export function uploadVersion(profile, directory, config, tag, options = {}) {
     "versions",
     "upload",
     "--config",
-    join(directory, "wrangler.json"),
+    options.configPath ?? join(directory, "wrangler.json"),
     "--no-bundle",
     "--upload-source-maps=false",
     "--tag",

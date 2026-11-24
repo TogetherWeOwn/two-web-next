@@ -46,6 +46,7 @@ export function admitsKitAdmin(
   isDataRequest: boolean | undefined,
   appUrl: string,
   flag: string | undefined,
+  cutoverOrigin = false,
 ): boolean {
   if (flag !== "true" || isDataRequest) return false;
   const original = new URL(request.url);
@@ -59,6 +60,7 @@ export function admitsKitAdmin(
   }
   return (
     appUrl === STAGING_APP_URL ||
+    cutoverOrigin ||
     (original.protocol === "http:" &&
       ["localhost", "127.0.0.1", "[::1]"].includes(original.hostname))
   );

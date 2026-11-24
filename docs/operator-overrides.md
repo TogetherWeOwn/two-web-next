@@ -16,14 +16,15 @@ whitespace. No checked-in Worker config sets it. Missing or invalid
 configuration leaves the route dark (404); a missing, malformed or wrong
 bearer returns 401 without upstream access.
 
-The Kit Worker includes the same adapter behind `KIT_ROUTE_ADMIN`. Only
-canonical staging and HTTP loopback origins accept that opt-in. The
-installed-Worker fixture enables it on loopback and checks that bearer
-requests bypass the browser session gate. The Hono admin guard continues
-to handle legacy redirects and the queue tools keep their existing admission.
+The Kit Worker includes the same adapter behind `KIT_ROUTE_ADMIN`. The
+production apex and isolated cutover Workers require the Ember profile as
+well. The installed-Worker fixture checks the record response on loopback.
+Isolated staging checks credential separation and restores the exact Ember
+version with admin off. Legacy redirects and queue tools keep their Hono
+admission.
 
-Credential binding and activation belong to the authorized secret
-custodian. This change creates no token and grants no production access.
+Credential binding and activation follow the protected release and secret
+procedures.
 Do not paste the token into a URL, page, screenshot, log or shell history;
 use an approved header-injection client with in-memory credentials. Never
 use a QA token as an operator credential. An ordinary navigation/reload
