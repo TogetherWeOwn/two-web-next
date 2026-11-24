@@ -338,6 +338,7 @@ exactly once.
 | `src/kit-members.ts` | profiles |
 | `src/kit-past-events.ts` | events |
 | `src/kit-restored-write.ts` | entry |
+| `src/kit-seo-fetch.ts` | entry |
 | `src/kit-session.ts` | auth |
 | `src/kit-staging-static.ts` | entry |
 | `src/kit-worker-facade.ts` | http-guard |
@@ -381,6 +382,7 @@ exactly once.
 | `src/seo-json-ld.ts` | content |
 | `src/seo-slots.ts` | content |
 | `src/seo-leaves.tsx` | entry |
+| `src/seo-responses.ts` | entry |
 | `src/session-cookie.ts` | auth |
 | `src/session-hono.ts` | auth |
 | `src/session-revocation.ts` | auth |
