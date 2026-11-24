@@ -23,7 +23,7 @@ export function profileStores(deps: ProfileDeps) {
     const db = await dbFor(c);
     return db ? createDbProfileStore(db) : null;
   };
-  const statsFor = (c: Ctx, id: string) =>
+  const statsFor = (c: Pick<Ctx, "env"> & { get: (key: "requestId") => string }, id: string) =>
     memberStatsWithBudget(
       deps.stats ??
         (async (memberId, signal) => {
