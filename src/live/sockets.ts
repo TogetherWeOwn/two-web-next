@@ -23,15 +23,22 @@ const topics = z
   .max(4)
   .refine((list) => new Set(list).size === list.length);
 const command = z.strictObject({ v: z.literal(1), type: z.enum(["subscribe", "resync"]), topics });
-const attachment = z.strictObject({
-  v: z.literal(1),
-  ref: z.string().regex(SESSION_REF_PATTERN).nullable(),
-  until: z.number().int().positive(),
-  topics: topics.nullable(),
-  nextResync: z.number().int().nonnegative(),
-  voiceSeq: z.number().int().min(0).max(MAX_VOICE_REVISIONS).default(0),
-  voiceLive: z.boolean().default(false),
-});
+const attachment = z
+  .strictObject({
+    v: z.literal(1),
+    ref: z.string().regex(SESSION_REF_PATTERN).nullable(),
+    until: z.number().int().positive(),
+    topics: topics.nullable(),
+    nextResync: z.number().int().nonnegative(),
+    voiceSeq: z.number().int().min(0).max(MAX_VOICE_REVISIONS).default(0),
+    voiceUntil: z.number().int().nonnegative().optional(),
+    voiceLive: z.boolean().optional(),
+  })
+  .transform(({ voiceUntil, voiceLive, ...meta }) => ({
+    ...meta,
+    // An older live attachment has no proof deadline. Withdraw at the next alarm.
+    voiceUntil: voiceUntil ?? (voiceLive ? 1 : 0),
+  }));
 
 type SocketMeta = z.infer<typeof attachment>;
 
@@ -54,7 +61,7 @@ export class LiveSockets {
   constructor(
     private readonly ctx: DurableObjectState,
     private readonly env: LiveSocketEnv,
-    private readonly projectVoice: () => string | null,
+    private readonly projectVoice: () => { value: string; until: number } | null,
   ) {}
 
   scheduleExpiry(until: number): Promise<void> {
@@ -156,28 +163,33 @@ export class LiveSockets {
   }
 
   #voice(socket: WebSocket, meta: SocketMeta, force: boolean): void {
-    const value = this.projectVoice(); // Read current source and lease after any auth await.
-    if (value === null) {
-      if (meta.voiceLive) this.#clearVoice(socket, meta);
+    const projection = this.projectVoice(); // Read current proof after any auth await.
+    if (projection === null) {
+      if (force && meta.voiceUntil) this.#clearVoice(socket, meta);
       else if (force) this.#unavailable(socket, "voice");
       return;
     }
-    const changed = !meta.voiceLive || value !== this.#lastVoice.get(socket);
+    const { value, until } = projection;
+    const previous = this.#lastVoice.get(socket);
+    const sameLease = meta.voiceUntil === until && previous !== undefined;
+    const changed = !sameLease || value !== previous;
     if (!changed && !force) return;
     if (changed && meta.voiceSeq >= MAX_VOICE_REVISIONS) {
       this.#close(socket, 1012);
       return;
     }
-    const type = force || !meta.voiceLive ? "snapshot" : "patch";
+    // A client with a live baseline accepts a replacement snapshot after withdrawal.
+    if (!sameLease && meta.voiceUntil) this.#unavailable(socket, "voice");
+    const type = force || !sameLease ? "snapshot" : "patch";
     if (changed) meta.voiceSeq++;
     this.#lastVoice.set(socket, value);
-    meta.voiceLive = true;
+    meta.voiceUntil = until;
     socket.serializeAttachment(meta);
     socket.send(`{"v":1,"type":"${type}","topic":"voice","seq":${meta.voiceSeq},"value":${value}}`);
   }
 
   #clearVoice(socket: WebSocket, meta: SocketMeta): void {
-    meta.voiceLive = false;
+    meta.voiceUntil = 0;
     this.#lastVoice.delete(socket);
     socket.serializeAttachment(meta);
     this.#unavailable(socket, "voice");
@@ -187,15 +199,17 @@ export class LiveSockets {
     for (const socket of this.ctx.getWebSockets()) {
       if (socket.readyState !== WebSocket.OPEN) continue;
       const meta = attachment.safeParse(socket.deserializeAttachment()).data;
-      if (!meta?.voiceLive) continue;
-      try {
-        // A loss of source is synchronous. Close authenticated streams without
-        // a frame instead of waiting for a row read before clearing old state.
-        if (meta.ref !== null || meta.until <= Date.now()) this.#close(socket, 1012);
-        else this.#clearVoice(socket, meta);
-      } catch {
-        this.#close(socket, 1011);
-      }
+      if (meta?.voiceUntil) this.#withdrawVoice(socket, meta);
+    }
+  }
+
+  #withdrawVoice(socket: WebSocket, meta: SocketMeta): void {
+    try {
+      // Close session-bearing sockets without a frame when no live row was read.
+      if (meta.ref !== null || meta.until <= Date.now()) this.#close(socket, 1012);
+      else this.#clearVoice(socket, meta);
+    } catch {
+      this.#close(socket, 1011);
     }
   }
 
@@ -204,12 +218,14 @@ export class LiveSockets {
     const sockets = this.ctx.getWebSockets();
     if (!sockets.length) return;
     const preview = this.projectVoice();
-    if (preview === null) return this.invalidate();
+    if (preview === null) return;
     await Promise.all(
       sockets.map(async (socket) => {
         if (socket.readyState !== WebSocket.OPEN || this.#publishing.has(socket)) return;
         const meta = attachment.safeParse(socket.deserializeAttachment()).data;
-        if (!meta?.topics?.includes("voice") || preview === this.#lastVoice.get(socket)) return;
+        if (!meta?.topics?.includes("voice")) return;
+        if (meta.voiceUntil === preview.until && preview.value === this.#lastVoice.get(socket))
+          return;
         this.#publishing.add(socket);
         try {
           if (!(await this.#authorize(socket, meta))) return;
@@ -224,15 +240,22 @@ export class LiveSockets {
     );
   }
 
-  async expire(sourceUntil: number): Promise<void> {
-    const now = Date.now();
-    let next = sourceUntil;
-    for (const socket of this.ctx.getWebSockets()) {
-      if (socket.readyState !== WebSocket.OPEN) continue;
-      const meta = attachment.safeParse(socket.deserializeAttachment()).data;
-      if (!meta || meta.until <= now) socket.close(1008);
-      else next = Math.min(next, meta.until);
-    }
-    if (Number.isFinite(next)) await this.scheduleExpiry(next);
+  expire(sourceUntil: number): Promise<void> {
+    return this.ctx.blockConcurrencyWhile(async () => {
+      const now = Date.now();
+      let next = sourceUntil > now ? sourceUntil : Infinity;
+      for (const socket of this.ctx.getWebSockets()) {
+        if (socket.readyState !== WebSocket.OPEN) continue;
+        const meta = attachment.safeParse(socket.deserializeAttachment()).data;
+        if (!meta || meta.until <= now) {
+          this.#close(socket, 1008);
+          continue;
+        }
+        if (meta.voiceUntil && meta.voiceUntil <= now) this.#withdrawVoice(socket, meta);
+        if (socket.readyState !== WebSocket.OPEN) continue;
+        next = Math.min(next, meta.until, meta.voiceUntil || Infinity);
+      }
+      if (Number.isFinite(next)) await this.scheduleExpiry(next);
+    });
   }
 }

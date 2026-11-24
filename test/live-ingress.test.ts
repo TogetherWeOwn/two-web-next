@@ -67,18 +67,20 @@ function fixture(hubEnv: LiveSocketEnv = config) {
     setAlarm,
     waitUntil,
     getByName,
+    message: (socket: WebSocket, type: "subscribe" | "resync") =>
+      hub.webSocketMessage(socket, JSON.stringify({ v: 1, type, topics: ["voice"] })),
     evict: () => {
       hub = new LiveGuildHub(ctx, hubEnv);
     },
   };
 }
 
-function snapshot(seq: number) {
+function snapshot(seq: number, observedAt = new Date().toISOString()) {
   return Response.json({
     v: 1,
     guild_id: guildId,
     seq,
-    observed_at: new Date().toISOString(),
+    observed_at: observedAt,
     topics: {
       guild,
       roles: [{ id: guildId, permissions: "0" }],
@@ -140,24 +142,51 @@ it.each([1, 2])("returns 503 if publishing cursor %i cannot be checkpointed", as
   expect([...storage.values()]).toEqual([{ applied: seq - 1, minimum: 1 }]);
 });
 
-it.each([1, 2])("retries a failed source alarm and publishes after cursor %i", async (seq) => {
-  const pull = vi.fn(async () => snapshot(1));
-  vi.stubGlobal("fetch", pull);
-  const { env, setAlarm, waitUntil } = fixture({
-    ...config,
-    DISCORD_LIVE_SOCKET_ENABLED: "true",
-    DISCORD_LIVE_PUBLIC_VOICE_ROOM_IDS: "200",
-  });
-  setAlarm.mockRejectedValueOnce(new Error("alarm write unavailable"));
-  const send = async (cursor: number) => (await handleLiveIngress(signed(cursor), env))?.status;
-  expect(await send(1)).toBe(503);
-  expect(waitUntil).not.toHaveBeenCalled();
-  expect(await send(seq)).toBe(204);
-  expect(waitUntil).toHaveBeenCalledOnce();
-  expect(pull).toHaveBeenCalledOnce();
-  expect(setAlarm).toHaveBeenCalledTimes(2);
-  expect(setAlarm.mock.calls[1]).toEqual(setAlarm.mock.calls[0]);
-});
+it.each([1, 2])(
+  "requires a browser to retry a failed public alarm after ingress cursor %i",
+  async (seq) => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const observedAt = new Date(now).toISOString();
+    const pull = vi.fn(async () => snapshot(1, observedAt));
+    vi.stubGlobal("fetch", pull);
+    const { env, message, setAlarm, waitUntil } = fixture({
+      ...config,
+      DISCORD_LIVE_SOCKET_ENABLED: "true",
+      DISCORD_LIVE_PUBLIC_VOICE_ROOM_IDS: "200",
+    });
+    let meta: unknown = { v: 1, ref: null, until: now + 60_000, topics: null, nextResync: 0 };
+    const socket = {
+      readyState: WebSocket.OPEN,
+      deserializeAttachment: () => structuredClone(meta),
+      serializeAttachment: (value: unknown) => {
+        meta = structuredClone(value);
+      },
+      send: vi.fn(),
+    } as unknown as WebSocket;
+    try {
+      setAlarm.mockRejectedValueOnce(new Error("alarm write unavailable"));
+      const send = async (cursor: number) => (await handleLiveIngress(signed(cursor), env))?.status;
+      expect(await send(1)).toBe(204);
+      expect(setAlarm).not.toHaveBeenCalled();
+      await expect(message(socket, "subscribe")).rejects.toThrow("alarm write unavailable");
+      expect(await send(seq)).toBe(204);
+      expect(waitUntil).not.toHaveBeenCalled();
+      expect(setAlarm).toHaveBeenCalledOnce();
+      expect(pull).toHaveBeenCalledTimes(2);
+
+      clock.mockReturnValue(now + 5_001);
+      pull.mockResolvedValueOnce(snapshot(seq, observedAt));
+      await message(socket, "resync");
+      expect(waitUntil).toHaveBeenCalledOnce();
+      expect(pull).toHaveBeenCalledTimes(3);
+      expect(setAlarm).toHaveBeenCalledTimes(2);
+      expect(setAlarm.mock.calls[1]).toEqual(setAlarm.mock.calls[0]);
+    } finally {
+      clock.mockRestore();
+    }
+  },
+);
 
 it("carries both watermarks across eviction without persisting any guild payload", async () => {
   let cursor = 1;

@@ -47,6 +47,11 @@ export class LiveSequence<State, Delta> {
     this.#current = null;
   }
 
+  /** A browser pull obtains independent proof even when the raw cursor is warm. */
+  async refresh(): Promise<LiveSnapshot<State> | null> {
+    return this.#install(await this.#load());
+  }
+
   async synchronize(): Promise<boolean> {
     if (this.current) return true;
     // Commit the latest observed gap before external I/O can yield or fail.
@@ -78,26 +83,32 @@ export class LiveSequence<State, Delta> {
   }
 
   #recover(): Promise<boolean> {
-    const load = Promise.resolve()
-      .then(() => this.load())
-      .catch(() => null);
-    this.#recovering = load.then((snapshot) => {
+    this.#recovering = this.#load().then((snapshot) => {
       try {
-        // Check against the latest observed gap, not the gap at request time.
-        if (
-          !snapshot ||
-          !Number.isSafeInteger(snapshot.seq) ||
-          snapshot.seq < this.#minimum ||
-          !fresh(snapshot)
-        ) {
-          return false;
-        }
-        this.#publish(snapshot);
-        return true;
+        // A separate browser pull may already have covered the gap.
+        return this.current !== null || this.#install(snapshot) !== null;
       } finally {
         this.#recovering = null;
       }
     });
     return this.#recovering;
+  }
+
+  #load(): Promise<LiveSnapshot<State> | null> {
+    return Promise.resolve()
+      .then(() => this.load())
+      .catch(() => null);
+  }
+
+  #install(snapshot: LiveSnapshot<State> | null): LiveSnapshot<State> | null {
+    if (
+      !snapshot ||
+      !Number.isSafeInteger(snapshot.seq) ||
+      snapshot.seq < this.#minimum ||
+      !fresh(snapshot)
+    )
+      return null;
+    this.#publish(snapshot);
+    return snapshot;
   }
 }
