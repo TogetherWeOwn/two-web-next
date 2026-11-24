@@ -1,0 +1,41 @@
+name: db-permissions-restore-replay
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - ".github/workflows/db-permissions-restore-replay.yml"
+      - "ci/db-permissions-restore-replay.test.mjs"
+      - "ci/fixtures/db-restore-replay/**"
+      - "ci/db-permissions-repair*"
+      - "ci/db-repair-executor.mjs"
+      - "ci/db-migrate.mjs"
+      - "drizzle/**"
+      - "package-lock.json"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: db-permissions-restore-replay-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  fixture:
+    name: PostgreSQL 18 branch replay fixture
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: postgres:18@sha256:2ea8630df176ad090ec92136dee850397c5af8781e4bcf2e4162593691c61bbc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+      - name: Run the disposable source and restore clusters
+        run: gosu postgres node --test --test-timeout=120000 ci/db-permissions-restore-replay.test.mjs
