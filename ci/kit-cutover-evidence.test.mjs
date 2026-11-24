@@ -95,6 +95,11 @@ test("cutover ledger admits exactly 1033 or 1037 and exact version readiness", (
   assert.throws(() => verifyReady(503, body, prefixes, expected), /readiness/);
   assert.throws(() => verifyReady(200, { ...body, pending_migrations: 1 }, prefixes), /readiness/);
   assert.throws(() => verifyReady(200, body, prefixes, { version: kit }), /version or commit/);
+  assert.throws(
+    () => verifyReady(200, body, prefixes, { ...expected, commit: "c".repeat(40) }),
+    /version or commit/,
+  );
+  assert.throws(() => verifyReady(200, body, prefixes, { ...expected, state: "1037" }), /state/);
   for (const rows of [
     prefixes["1037"].slice(0, -1),
     [...prefixes["1033"], prefixes["1037"].at(-1)],
