@@ -6,6 +6,54 @@ import { planServingIsolation, runServingIsolation } from "../db-serving-ledger-
 const ledger = "drizzle.__drizzle_migrations";
 const projection = "web_readiness.migration_timestamps";
 
+async function rehearseDistinctGrantor(owner, login, capture, run) {
+  const grantor = `isolation_grantor_${randomUUID().replaceAll("-", "")}`;
+  const members = async () => [
+    ...(await owner`SELECT
+    pg_get_userbyid(grantor) AS grantor, admin_option AS admin,
+    inherit_option AS inherit, set_option AS "set"
+    FROM pg_auth_members WHERE roleid = 'pg_read_all_data'::regrole AND member = ${login}::regrole
+    ORDER BY grantor`),
+  ];
+  const asGrantor = (change) =>
+    owner.begin(async (tx) => {
+      await tx`SET LOCAL ROLE ${tx(grantor)}`;
+      await change(tx);
+    });
+  await owner`CREATE ROLE ${owner(grantor)} NOLOGIN`;
+  try {
+    await owner`GRANT pg_read_all_data TO ${owner(grantor)} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE`;
+    await asGrantor(
+      (tx) => tx`GRANT pg_read_all_data TO ${tx(login)}
+      WITH ADMIN FALSE, INHERIT FALSE, SET FALSE GRANTED BY ${tx(grantor)}`,
+    );
+    const initial = await members();
+    assert.equal(initial.length, 2);
+    assert.deepEqual(
+      initial.find((entry) => entry.grantor === grantor),
+      {
+        grantor,
+        admin: false,
+        inherit: false,
+        set: false,
+      },
+    );
+    const raw = await capture();
+    assert.equal(await run("forward", { raw }), "committed");
+    assert.deepEqual(await members(), []);
+    assert.equal(await run("undo", { raw }), "committed");
+    assert.deepEqual(await members(), initial);
+  } finally {
+    try {
+      await asGrantor(
+        (tx) => tx`REVOKE pg_read_all_data FROM ${tx(login)} GRANTED BY ${tx(grantor)}`,
+      );
+    } finally {
+      await owner`DROP ROLE ${owner(grantor)}`;
+    }
+  }
+}
+
 // The existing bridge rehearsal owns the database, roles and both Worker builds.
 export async function rehearseServingIsolation({
   owner,
@@ -26,9 +74,9 @@ export async function rehearseServingIsolation({
   const artifact = { sourceSha: "b".repeat(40), digest: "c".repeat(64) };
   const sha = (data) => createHash("sha256").update(data).digest("hex");
   const identityHash = sha(`${database}\0${ownerRole}`);
-  const plan = JSON.stringify(
-    await planServingIsolation(owner, identityHash, version, artifact, login),
-  );
+  const capture = async () =>
+    JSON.stringify(await planServingIsolation(owner, identityHash, version, artifact, login));
+  const plan = await capture();
   const firstEnd = oldHistory.at(-1).tag;
   const lastEnd = newHistory.at(-1).tag;
   const run = (
@@ -107,6 +155,7 @@ export async function rehearseServingIsolation({
   await assert.rejects(run("forward"), /Public serving inventory changed/);
   await owner`DROP TABLE public.unreviewed_serving_table`;
   assert.equal(await run("readback"), "before");
+  await rehearseDistinctGrantor(owner, login, capture, run);
   assert.equal(await run("forward"), "committed");
   assert.equal(await run("readback"), "after");
   await assert.rejects(reader.unsafe(`SELECT created_at FROM ${ledger}`), { code: "42501" });
@@ -118,6 +167,12 @@ export async function rehearseServingIsolation({
 
   return async () => {
     assert.equal(await run("readback", { end: lastEnd }), "after");
+    await owner`REVOKE USAGE ON SEQUENCE public.event_echo_members_id_seq FROM two_web_app`;
+    await assert.rejects(
+      run("readback", { end: lastEnd }),
+      /Required Web\/Jobs privileges are missing/,
+    );
+    await owner`GRANT USAGE ON SEQUENCE public.event_echo_members_id_seq TO two_web_app`;
     await cutoverUp(newHistory, projection);
     const [scope] = await reader`SELECT
       (SELECT count(*) FROM public.event_echoes) = 0 AND

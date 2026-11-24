@@ -154,13 +154,13 @@ function aclId({ kind, name, column, right, grantor }) {
   return JSON.stringify([kind, name, column, right, grantor]);
 }
 
-async function assertPublicRights(tx, login) {
+async function assertPublicRights(tx, login, end = originalEnd) {
   // Verify required rights independently of direct ACL rows and membership.
   const [row] = await tx`select bool_and(case
     when kind = 'sequence' then has_sequence_privilege(${login}::text, 'public.' || name, "right")
     when "column" <> '' then has_column_privilege(${login}::text, 'public.' || name, "column", "right")
     else has_table_privilege(${login}::text, 'public.' || name, "right")
-    end) as allowed from jsonb_to_recordset(${JSON.stringify(baseRights)}::text::jsonb)
+    end) as allowed from jsonb_to_recordset(${JSON.stringify(end === originalEnd ? baseRights : publicServingRights)}::text::jsonb)
     as r(kind text, name text, "column" text, "right" text)`;
   assert.equal(row.allowed, true, "Required Web/Jobs privileges are missing");
   const [role] = await tx`select rolcanlogin and not
@@ -279,7 +279,7 @@ export async function runServingIsolation(operation, end, env, options = {}) {
           if (initialHash === plan.before) return "before";
           assert.equal(initialHash, plan.after);
           await assertServingLedgerIsolation(tx, login);
-          await assertPublicRights(tx, login);
+          await assertPublicRights(tx, login, end);
           return "after";
         }
 
