@@ -171,6 +171,11 @@
       "reads": "nonrotating member admission for an RSVP or withdrawal"
     },
     {
+      "route": "POST /events",
+      "binding": "web/src/routes/events/+server.ts",
+      "reads": "moderator session before creating a draft event"
+    },
+    {
       "route": "PATCH /events/:key",
       "binding": "web/src/routes/events/[key]/+server.ts",
       "reads": "moderator session and event row for a bounded patch"

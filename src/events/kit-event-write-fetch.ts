@@ -21,7 +21,6 @@ import {
 
 const actionCap = requestBodyLimit("action");
 const jsonCap = requestBodyLimit("json");
-
 function eventWriteContext(request: Request, env: Env, requestId?: string) {
   const c = new Context<{ Bindings: Env }>(request, { env, path: getPath(request) });
   const id = safeRequestId(requestId);
@@ -48,7 +47,6 @@ export async function fetchKitEventWrite(
       ("dynamic" in route ? route.dynamic.matches(rawPath, c.req.path) : route.path === rawPath),
   );
   if (!route) return new Response(null, { status: 404 });
-  // Decode the key as Hono does using the original request path.
   const [, mount, segment = "", action] = c.req.path.split("/");
   const key = tryDecodeURIComponent(segment);
   try {
@@ -61,10 +59,7 @@ export async function fetchKitEventWrite(
     const cap = route.path === "/events" || (method === "PATCH" && !isRsvp) ? jsonCap : actionCap;
     const refused = await cap(c, async () => {});
     if (refused) return refused;
-    if (isRsvp) {
-      return await (native ? rsvpHandlers.form : rsvpHandlers.json)(c, key, readSession);
-    }
-
+    if (isRsvp) return await (native ? rsvpHandlers.form : rsvpHandlers.json)(c, key, readSession);
     const limited = await throttleGuard(c, "event-write", WRITE_THROTTLE_PER_MINUTE);
     if (limited) return limited;
     const moderator = await moderatorForEventWrite(c, readSession);

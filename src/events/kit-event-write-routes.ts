@@ -1,5 +1,5 @@
 import { EVENT_TRANSITIONS } from "./routes-writes";
-const eventActions = [...EVENT_TRANSITIONS, "duplicate"] as const;
+
 function dynamicWrite(method: string, path: string, id: string, pattern: RegExp) {
   return {
     method,
@@ -18,7 +18,7 @@ export const KIT_EVENT_WRITE_ROUTES = [
   dynamicWrite("PATCH", "/events/:key", "/events/[key]", /^\/events\/[^/]+$/),
   dynamicWrite("*", "/events/:key/rsvp", "/events/[key]/rsvp", /^\/events\/[^/]+\/rsvp$/),
   dynamicWrite("POST", "/e/:key/rsvp", "/e/[key]/rsvp", /^\/e\/[^/]+\/rsvp$/),
-  ...eventActions.map((action) =>
+  ...[...EVENT_TRANSITIONS, "duplicate"].map((action) =>
     dynamicWrite(
       "POST",
       `/events/:key/${action}`,
