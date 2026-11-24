@@ -80,10 +80,8 @@ export const load: PageServerLoad = async ({
   // lifecycle facts this detail read does not supply.
   return {
     model,
-    lifeline: composeLifeline(
-      { eventKey: model.eventKey, startsAt, endsAt },
-      {},
-      now.getTime(),
-    ).filter((step) => step.id === "counting"),
+    lifeline: composeLifeline({ eventKey: model.eventKey, startsAt, endsAt }, {}, now.getTime(), [
+      "counting",
+    ]),
   };
 };

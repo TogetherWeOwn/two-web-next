@@ -1918,7 +1918,8 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
         const lifeline = page.getByRole("region", { name: "Lifeline" });
         const step = lifeline.locator("li");
         await expect(step).toHaveCount(1);
-        await expect(step).toHaveAttribute("data-state", "planned");
+        await expect(step).toHaveAttribute("data-state", "next");
+        await expect(step).toHaveAttribute("aria-current", "step");
         await expect(step.locator(".title")).toHaveText("Bot counts who’s in");
         await expect(lifeline.locator("a, button, form")).toHaveCount(0);
         await expect(
@@ -2148,7 +2149,7 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
     await expect(enhancedCard.getByTestId("rsvp-unknown")).toHaveAttribute("role", "alert");
     await expect(enhancedBar).toHaveCount(0);
 
-    // Probe absence against actual server snapshots, without redoing the sibling renderer captures.
+    // Verify the active window and omission cases against actual server snapshots.
     await context.addCookies(await enhanced.cookies());
     for (const state of ["live", "ended", "invalid", "cancelled"]) {
       await withSessionDb(async (sql) => {
@@ -2170,6 +2171,14 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
         const step = lifeline.locator("li");
         await expect(step).toHaveCount(1);
         await expect(step).toHaveAttribute("data-state", "current");
+        await expect(step).toHaveAttribute("aria-current", "step");
+        for (const width of [1280, 390]) {
+          await page.setViewportSize({ width, height: width === 390 ? 844 : 800 });
+          const name = `kit-review-lifeline-live-${width}`;
+          const path = test.info().outputPath(`${name}.png`);
+          await page.screenshot({ path, fullPage: true, animations: "disabled", caret: "hide" });
+          await test.info().attach(name, { path, contentType: "image/png" });
+        }
       }
     }
   } finally {
