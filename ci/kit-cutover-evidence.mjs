@@ -275,6 +275,18 @@ export function uploadVersion(profile, directory, config, tag, options = {}) {
   return row.version_id;
 }
 
+export class WranglerOperationError extends Error {
+  constructor(args, error) {
+    const operation = args
+      .slice(0, 2)
+      .filter((part) => /^[a-z-]+$/.test(part))
+      .join(" ");
+    const code = /\[code: (\d{4,8})\]/.exec(String(error.stderr ?? ""))?.[1];
+    const status = Number.isSafeInteger(error.status) ? ` (exit ${error.status})` : "";
+    super(`Wrangler ${operation} failed${status}${code ? `, provider code ${code}` : ""}`);
+  }
+}
+
 export function wrangler(profile, args, env = process.env) {
   assert.ok(PROFILES.includes(profile));
   const tool = profile === "kit" ? "web/node_modules/.bin/wrangler" : "node_modules/.bin/wrangler";
@@ -287,7 +299,6 @@ export function wrangler(profile, args, env = process.env) {
       timeout: 180_000,
     });
   } catch (error) {
-    const detail = Number.isSafeInteger(error.status) ? ` (exit ${error.status})` : "";
-    throw new Error(`Wrangler ${args[0]} ${args[1]} failed${detail}`);
+    throw new WranglerOperationError(args, error);
   }
 }
