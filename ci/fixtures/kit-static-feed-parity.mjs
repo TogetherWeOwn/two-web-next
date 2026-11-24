@@ -159,13 +159,14 @@ export async function assertStaticFeedParity({
   databaseUrl,
 }) {
   await assertMountedEndpoints();
-  // Opposite flag values exercise both families independently on the same Workers.
+  // Exercise the rollout flags independently on the same installed Workers.
   const [seoOn, feedOn] = await Promise.all([
     startKit("kit-seo-on", {
       APP_URL: `${hono.origin}/`,
       KIT_ROUTE_FEEDS: "false",
       KIT_ROUTE_SEO: "true",
       KIT_ROUTE_SECURITY_TXT: "false",
+      KIT_ROUTE_EVENT_WRITES: "true",
     }),
     startKit("kit-feed-on", {
       APP_URL: hono.origin,
@@ -175,7 +176,7 @@ export async function assertStaticFeedParity({
   ]);
   const modes = [hono, kit, seoOn, feedOn];
   const sql = postgres(databaseUrl, { max: 1 });
-  const buckets = [`events-read:${fixtureIp}`];
+  const buckets = [`events-read:${fixtureIp}`, `event-write:${fixtureIp}`];
   const sessionLineages = [];
   let seeded = false;
 
@@ -363,6 +364,27 @@ export async function assertStaticFeedParity({
   }
 
   try {
+    const eventPath = `/events/${eventKeys[0]}`;
+    for (const [method, path, status] of [
+      ["POST", "/events", 401],
+      ["PATCH", eventPath, 401],
+      ["POST", `${eventPath}/publish`, 401],
+      ["PUT", `${eventPath}/rsvp`, 401],
+      ["DELETE", `${eventPath}/rsvp`, 401],
+      ["OPTIONS", `${eventPath}/rsvp`, 405],
+      ["POST", `/e/${eventKeys[0]}/rsvp`, 303],
+    ]) {
+      await request(kit, path, { method, status, headers: { origin: kit.origin } });
+      const result = await request(seoOn, path, {
+        method,
+        status,
+        headers: { origin: hono.origin },
+        renderer: "kit",
+      });
+      if (method === "OPTIONS") assert.equal(result.headers.get("allow"), "PUT, DELETE");
+    }
+    console.log("PASS installed Kit event write mounts with the flag absent and enabled");
+
     await assertSecurityTxtParity();
     const publicPath = eventCalendar(eventKeys[0]);
     const draftPath = eventCalendar(eventKeys[2]);
