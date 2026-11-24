@@ -5,6 +5,12 @@ import { join } from "node:path";
 import { generateSignedCookie } from "hono/cookie";
 import { chromium } from "playwright";
 import postgres from "postgres";
+import {
+  parseRenderedPage,
+  renderedAttribute,
+  renderedElements,
+  renderedText,
+} from "../rendered-page.mjs";
 
 const owner = "900000000000090810";
 const moderator = "900000000000090811";
@@ -241,7 +247,7 @@ export async function assertKitProfileWriteParity({ kit, off, hono, databaseUrl,
     ]) {
       const invalid = await send(kit, path, {
         method: "POST",
-        body: "_method=PATCH&bio=Synthetic+rejected+draft&timezone=Not%2FAZone",
+        body: new URLSearchParams({ _method: "PATCH", bio: draft, timezone: "Not/AZone" }),
         headers: { ...form, accept },
         cookie,
       });
@@ -249,7 +255,21 @@ export async function assertKitProfileWriteParity({ kit, off, hono, databaseUrl,
       assert.equal(invalid.headers.get("x-two-renderer"), "kit");
       assert.equal(invalid.headers.get("vary"), null);
       assert.match(invalid.headers.get("content-type"), /^text\/html/);
-      assert.match(await invalid.text(), /Choose a valid IANA timezone/);
+      const document = parseRenderedPage(await invalid.text());
+      const editor = [...renderedElements(document, { tag: "form" })].find(
+        (candidate) => renderedAttribute(candidate, "data-testid") === "profile-form",
+      );
+      assert.ok(editor, "fallback response contains a parsed editor form");
+      assert.equal(renderedAttribute(editor, "method"), "post");
+      assert.equal(renderedAttribute(editor, "action"), profilePath);
+      const [bio] = renderedElements(editor, { tag: "textarea", id: "profile-bio" });
+      assert.ok(bio);
+      assert.equal(renderedText(bio), draft);
+      const [timezone] = renderedElements(editor, { tag: "input", id: "profile-timezone" });
+      assert.ok(timezone);
+      assert.equal(renderedAttribute(timezone, "value"), "Not/AZone");
+      assert.equal(renderedAttribute(timezone, "aria-invalid"), "true");
+      assert.match(renderedText(document), /Choose a valid IANA timezone/);
     }
     for (const headers of [form, { ...form, accept: "application/json" }]) {
       const init = {
