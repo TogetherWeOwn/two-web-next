@@ -132,7 +132,7 @@ an actual code fallback or a checked-in Wrangler value, not a recommended value.
 | `KIT_ROUTE_HOME` | Optional staging route-rollout var | staging only; leave unset in dev/prod | `web/wrangler.staging.jsonc`: `false`; missing or any other value defaults to Hono | Only exact `true` with the exact staging `APP_URL` and an enabled `GET /` manifest entry selects Kit. The `home`, `events-home`, and `ember-pages` dispatch choices set this flag. |
 | `DISCORD_LIVE_SOCKET_ENABLED` | Optional live socket var | Unset in shipped Wrangler configs | Disabled unless exactly `true` | Controls the installed `/api/discord-live/v1` upgrade and the Kit home public count island. The socket still requires valid ingress bindings, source and admission proof. This flag does not select the home renderer. |
 | `KIT_ROUTE_JOIN` | Optional staging route-rollout var | staging only; leave unset in dev/prod | `web/wrangler.staging.jsonc`: `false`; missing or any other value defaults to Hono | Only exact `true` with the exact staging `APP_URL` and an enabled `GET /join` manifest entry selects Kit. The `join`, `events-join`, and `ember-pages` dispatch choices set this flag; OAuth and recovery stay on Hono. |
-| `KIT_ROUTE_FEEDS` | Optional Kit route-rollout var | Kit Worker | Unset in deployed configurations | Only `true` selects Kit for GET and HEAD on `/events.ics` and `/events.rss`. Missing or any other value sends both reads to Hono. [Production activation requires separate approval](../CONTRIBUTING.md#production-release-gate). |
+| `KIT_ROUTE_FEEDS` | Optional Kit route-rollout var | Kit Worker | Unset in deployed configurations | Only `true` selects Kit for GET and HEAD on `/events.ics` and `/events.rss`. Missing or any other value sends both reads to Hono. Feeds use `Cache-Control: max-age=300, public`, so a cache can reuse a fresh feed for up to five minutes after the flag is cleared. [Production activation requires separate approval](../CONTRIBUTING.md#production-release-gate). |
 <!-- config-docs:end -->
 
 While the production archive and static page opt-ins are active, their responses use
@@ -140,9 +140,6 @@ While the production archive and static page opt-ins are active, their responses
 flag rollback. A Hono response cached before opt-in can still be served until
 its existing freshness lifetime ends. With the opt-ins off, Hono retains its
 normal cache policy.
-
-The static feeds retain `Cache-Control: max-age=300, public`. A cache can
-reuse a fresh feed for up to five minutes after the flag is cleared.
 
 ### `SESSION_SECRET` strength and rotation
 
