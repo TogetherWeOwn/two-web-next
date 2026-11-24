@@ -8,6 +8,7 @@ import { signedLiveSnapshot } from "./transport";
 import { decodeLiveDelta, type LiveDelta, liveId, type LiveState, snapshotTopics } from "./wire";
 
 const WATERMARKS = "live-watermarks-v1";
+const SOCKET_PULL_AFTER = "live-socket-pull-after-v1";
 const SOCKET_RECOVERY_INTERVAL_MS = 5_000;
 const PUBLIC_VOICE_PAGE = "public-voice";
 
@@ -30,7 +31,6 @@ export class LiveGuildHub {
   readonly #publicRooms: ReadonlySet<string> | null;
   // Producer recovery can restore the raw cursor. Only a browser pull arms delivery.
   #publicUntil = 0;
-  #nextSocketPull = 0;
   #pullingPublic = false;
 
   constructor(
@@ -120,30 +120,31 @@ export class LiveGuildHub {
     return value === null ? null : { value, until };
   }
 
-  async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    if (!this.#sequence) return socket.close(1008);
-    if (!(await this.#sockets.message(socket, message))) return;
+  async #refreshPublic(): Promise<boolean> {
+    if (!this.#sequence || !this.#publicRooms || this.#pullingPublic) return false;
+    const kv = this.ctx.storage.kv;
     const now = Date.now();
-    if (
-      !this.#publicRooms ||
-      this.#publicUntil > now ||
-      this.#pullingPublic ||
-      now < this.#nextSocketPull
-    )
-      return;
-    this.#nextSocketPull = now + SOCKET_RECOVERY_INTERVAL_MS;
+    if (now < (kv.get<number>(SOCKET_PULL_AFTER) ?? 0)) return false;
+    // A reconstruction shares the same browser pull budget.
+    kv.put(SOCKET_PULL_AFTER, now + SOCKET_RECOVERY_INTERVAL_MS);
     this.#pullingPublic = true;
     try {
       const proof = await this.#sequence.refresh();
-      if (proof?.validUntil === undefined) return;
+      if (proof?.validUntil === undefined) return false;
       await this.#sockets.scheduleExpiry(proof.validUntil);
       // Only continuous state from the browser's observation can use this alarm.
-      if (!this.#sequence.stillCovers(proof)) return;
+      if (!this.#sequence.stillCovers(proof)) return false;
       this.#publicUntil = proof.validUntil;
       this.ctx.waitUntil(this.#sockets.publish());
+      return true;
     } finally {
       this.#pullingPublic = false;
     }
+  }
+
+  async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    if (!this.#sequence) return socket.close(1008);
+    await this.#sockets.message(socket, message, () => this.#refreshPublic());
   }
 
   webSocketClose(socket: WebSocket): void {

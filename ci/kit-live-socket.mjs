@@ -40,7 +40,7 @@ function refusal(url, headers) {
 }
 
 // Read the first frame directly so TCP teardown cannot pass as a policy Close.
-function openIdle(url, headers) {
+export function openIdle(url, headers) {
   const started = performance.now();
   return new Promise((resolve, reject) => {
     const req = upgrade(url, headers);
@@ -86,7 +86,7 @@ function openIdle(url, headers) {
   });
 }
 
-async function awaitServerClose(peer, expiry, label) {
+export async function awaitServerClose(peer, expiry, label) {
   assert.ok(Number.isFinite(expiry));
   while (!peer.first && !peer.error && !peer.socket.destroyed && Date.now() < expiry + 4_000) {
     await delay(25);
@@ -100,6 +100,17 @@ async function awaitServerClose(peer, expiry, label) {
     peer.at >= expiry - peer.upgradeMs - 2 && peer.at < expiry + 4_000,
     `${label}: closed ${peer.at - expiry} ms from DB expiry (upgrade ${peer.upgradeMs} ms)`,
   );
+}
+
+export async function finishIdle(peer) {
+  const mask = randomBytes(4);
+  const closed = once(peer.socket, "close", deadline());
+  peer.socket.write(
+    Buffer.from([0x88, 0x82, ...mask, peer.first[2] ^ mask[0], peer.first[3] ^ mask[1]]),
+  );
+  // Let the Close reply flush without waiting for a TCP FIN from the fixture proxy.
+  peer.socket.destroySoon();
+  await closed;
 }
 
 async function fixtureSession(secret) {

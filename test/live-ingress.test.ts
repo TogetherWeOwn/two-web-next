@@ -106,6 +106,7 @@ function guestSocket(until: number): WebSocket {
       meta = structuredClone(value);
     },
     send: vi.fn(),
+    close: vi.fn(),
   } as unknown as WebSocket;
 }
 
@@ -160,7 +161,7 @@ it.each([1, 2])("returns 503 if publishing cursor %i cannot be checkpointed", as
 });
 
 it.each([1, 2])(
-  "requires a browser to retry a failed public alarm after ingress cursor %i",
+  "requires a new browser command after a failed public alarm at ingress cursor %i",
   async (seq) => {
     const now = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
@@ -174,7 +175,8 @@ it.each([1, 2])(
       const send = async (cursor: number) => (await handleLiveIngress(signed(cursor), env))?.status;
       expect(await send(1)).toBe(204);
       expect(setAlarm).not.toHaveBeenCalled();
-      await expect(message(socket, "subscribe")).rejects.toThrow("alarm write unavailable");
+      await message(socket, "subscribe");
+      expect(socket.close).toHaveBeenCalledWith(1011);
       expect(await send(seq)).toBe(204);
       expect(waitUntil).not.toHaveBeenCalled();
       expect(setAlarm).toHaveBeenCalledOnce();
@@ -182,7 +184,7 @@ it.each([1, 2])(
 
       clock.mockReturnValue(now + 5_001);
       pull.mockResolvedValueOnce(snapshot(seq, observedAt));
-      await message(socket, "resync");
+      await message(guestSocket(now + 60_000), "subscribe");
       expect(waitUntil).toHaveBeenCalledOnce();
       expect(pull).toHaveBeenCalledTimes(3);
       expect(setAlarm).toHaveBeenCalledTimes(2);
@@ -206,6 +208,35 @@ it.each([2, 3])("checks continuity through alarm I/O when ingress advances to %i
   expect(pull).toHaveBeenCalledTimes(continuous ? 1 : 2);
   expect(setAlarm).toHaveBeenCalledOnce();
   expect(waitUntil).toHaveBeenCalledTimes(continuous ? 1 : 0);
+});
+
+it("shares the browser pull cooldown across sockets and hub reconstruction", async () => {
+  const now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  const pull = vi.fn(async () => snapshot(1, new Date(now).toISOString()));
+  vi.stubGlobal("fetch", pull);
+  const { message, evict } = fixture(publicConfig);
+  const first = guestSocket(now + 60_000);
+  const second = guestSocket(now + 60_000);
+  const unavailable = '{"v":1,"type":"unavailable","topic":"voice"}';
+  try {
+    await message(first, "subscribe");
+    expect(pull).toHaveBeenCalledOnce();
+    evict();
+    clock.mockReturnValue(now + 4_999);
+    await message(second, "subscribe");
+    expect(pull).toHaveBeenCalledOnce();
+    expect(second.send).toHaveBeenCalledExactlyOnceWith(unavailable);
+
+    clock.mockReturnValue(now + 5_000);
+    await message(first, "resync");
+    expect(pull).toHaveBeenCalledTimes(2);
+    expect(first.send).toHaveBeenLastCalledWith(
+      '{"v":1,"type":"snapshot","topic":"voice","seq":1,"value":{"count":null}}',
+    );
+  } finally {
+    clock.mockRestore();
+  }
 });
 
 it("carries both watermarks across eviction without persisting any guild payload", async () => {
