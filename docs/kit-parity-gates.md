@@ -490,7 +490,7 @@ to 256B — the repository rule in `ci/budgets/README.md`):
 `e2e/kit-parity/parity.spec.ts` runs the journeys — past-archive
 paging and refusals (including successful Older/Newer/Back turns over 24
 seeded rows that `afterAll` sweeps), the events list (seeded row, calendar
-island contract, POST/JSON staying Hono-owned, normalized calendar-section
+island contract, JSON read staying Hono-owned, normalized calendar-section
 equality), join-landing funnel, auth-recovery outcome, hot-zone grids and
 signal navigation, public feeds/SEO, reserved/API surface, cross-origin
 refusals, and the authenticated member-board journey (guest bounce, member
@@ -507,8 +507,11 @@ the archive page is driven at desktop and mobile widths with a horizontal
 overflow assertion and a page-error watch. Seeded rows pin non-empty
 collections so an empty fixture cannot pass silently.
 
-Login journeys (member RSVP, moderator admin, profile edit) stay Hono-only
-until their routes migrate; the gate ledger derives each entry from
+The generated loopback Kit Worker enables `KIT_ROUTE_EVENT_WRITES` for the
+synthetic RSVP and moderator event-write journey. The journey verifies renderer
+selection, body and role refusal, persisted waitlist rank and scoped withdrawal,
+the native form response, and the moderator lifecycle on disposable Postgres.
+The live rollout ledger derives its login journey entries from
 `ROUTE_MANIFEST` and records Hono-owned routes as
 `skipped: <route> not Kit-native` with reason strings — loud, countable,
 never quiet green, and never a `test.skip` call (the floor forbids new

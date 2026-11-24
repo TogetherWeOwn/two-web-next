@@ -16,6 +16,7 @@ import {
 } from "../../ci/kit-parity-gates.mjs";
 import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
 import { QA_IDENTITIES } from "../../src/qa";
+import { BODY_LIMIT_BYTES } from "../../src/http/body-limit";
 import {
   memberBoardDocument,
   prepareMemberBoardFixtures,
@@ -60,9 +61,8 @@ import { postParityQaLogin } from "./parity-qa-login.mjs";
 // member with a single going RSVP on the seeded event, deleted in
 // afterAll: no earlier journey leaves a going RSVP behind, so without it
 // both boards render their empty state and ranked content is unprovable.
-// Login journeys (member RSVP, moderator admin, profile edit) stay Hono-only
-// until their routes migrate; they are ledgered as loud skips with reasons by
-// ci/kit-parity-gates.mjs, never as quiet test.skip calls here.
+// The live rollout ledger still records Hono-owned login journeys separately.
+// The built loopback fixture also enables the dormant event-write endpoints.
 const targets = parityTargets();
 const contexts = new Map<string, APIRequestContext>();
 
@@ -525,13 +525,13 @@ for (const target of targets) {
       expect(body).not.toContain("Sign out");
     });
 
-    test("POST and the JSON contract stay Hono-owned without the Kit marker", async () => {
+    test("the JSON read stays Hono-owned and POST uses the fixture's write owner", async () => {
       const post = await api(target).post("/events", {
         headers: { origin: target.origin },
         data: { title: "Seed swap" },
       });
       expect(post.status()).toBe(401);
-      expect(post.headers()["x-two-renderer"] ?? null).toBeNull();
+      expect(post.headers()["x-two-renderer"] ?? null).toBe(target.name === "kit" ? "kit" : null);
       const json = await api(target).get("/events.json");
       expect(json.status()).toBe(401);
       expect(json.headers()["x-two-renderer"] ?? null).toBeNull();
@@ -1140,7 +1140,7 @@ for (const target of targets) {
       }
     });
 
-    test("JSON, ICS and RSVP mutations stay Hono-owned without the Kit marker", async () => {
+    test("JSON and ICS stay Hono-owned and the fixture selects Kit for RSVP writes", async () => {
       // The event JSON names its viewer (waitlist position), so it needs the
       // member session like every other member read; guests get the 401
       // refusal on both renderers (src/events/routes-detail.tsx jsonSession).
@@ -1155,7 +1155,7 @@ for (const target of targets) {
 
       const put = await api(target).put(`/events/${EVENT_KEY}/rsvp`, { data: {} });
       expect([401, 403, 404, 422], `${target.name} RSVP PUT refused`).toContain(put.status());
-      expectNoMarker(put.headers(), `${target.name} RSVP PUT`);
+      expect(put.headers()["x-two-renderer"] ?? null).toBe(target.name === "kit" ? "kit" : null);
 
       const post = await api(target).post(EVENT_PATH + "/rsvp", {
         data: "status=going",
@@ -1164,7 +1164,7 @@ for (const target of targets) {
       expect([303, 401, 403], `${target.name} RSVP POST refused/redirected`).toContain(
         post.status(),
       );
-      expectNoMarker(post.headers(), `${target.name} RSVP POST`);
+      expect(post.headers()["x-two-renderer"] ?? null).toBe(target.name === "kit" ? "kit" : null);
     });
   });
 
@@ -4001,6 +4001,180 @@ test("Kit cancelled event renders its record and next date without JavaScript", 
       await sql`delete from rsvps where user_id = ${attendee}`;
       await sql`delete from events where event_key like ${`${prefix}%`}`;
       await sql`delete from users where id = ${attendee}`;
+    });
+  }
+});
+
+test("Kit event writes preserve RSVP admission, scoped rank and native refusals", async () => {
+  const target = targets.find((item) => item.name === "kit")!;
+  const key = "01J00000000000000000000851";
+  const otherKey = "01J00000000000000000000852";
+  const rsvp = `/events/${key}/rsvp`;
+  const form = `/e/${key}/rsvp?attendees=2`;
+  const session = (userId: string, member: boolean, moderator: boolean) => {
+    const bearer = `two_${randomBytes(32).toString("base64url")}`;
+    const hash = createHash("sha256").update(bearer).digest("hex");
+    const signature = createHmac("sha256", kitFixtureSessionSecret())
+      .update(bearer)
+      .digest("base64");
+    return { userId, member, moderator, hash, cookie: `__Host-two_session=${bearer}.${signature}` };
+  };
+  const member = session("900000000000000851", true, false);
+  const nonMember = session("900000000000000852", false, false);
+  const moderator = session("900000000000000853", true, true);
+  const audience = [member, nonMember, moderator];
+  const fixtureTitle = "Kit write parity lifecycle fixture";
+  const clientIp = "192.0.2.71";
+  const send = async (
+    method: string,
+    path: string,
+    options: { cookie?: string; accept?: string; origin?: string; data?: string | object } = {},
+  ) => {
+    const response = await api(target).fetch(path, {
+      method,
+      maxRedirects: 0,
+      headers: {
+        origin: options.origin ?? target.origin,
+        accept: options.accept ?? "application/json",
+        "x-forwarded-for": clientIp,
+        ...(options.cookie ? { cookie: options.cookie } : {}),
+        ...(typeof options.data === "string"
+          ? { "content-type": "application/x-www-form-urlencoded" }
+          : {}),
+      },
+      data: options.data,
+    });
+    expect(response.headers()["x-two-renderer"], `${method} used the Kit endpoint`).toBe("kit");
+    return response;
+  };
+
+  try {
+    await withSessionDb(async (sql) => {
+      for (const who of audience) {
+        await sql`insert into web_sessions (token_hash, status_hash, user_id, username, member, moderator, expires_at)
+          values (${who.hash}, ${who.hash}, ${who.userId}, 'Event-write fixture', ${who.member}, ${who.moderator},
+            ${new Date(Date.now() + 3_600_000)})`;
+      }
+      await sql`insert into events (event_key, title, starts_at, ends_at, timezone, status, capacity, rsvp_open)
+        values (${key}, 'Kit write parity event', '2099-03-01 18:00Z', '2099-03-01 20:00Z', 'UTC', 'published', 1, true),
+               (${otherKey}, 'Kit write parity decoy', '2099-03-01 18:00Z', '2099-03-01 20:00Z', 'UTC', 'published', 1, true)`;
+      await sql`insert into rsvps (event_id, user_id, status, created_at)
+        select id, '900000000000000854', 'going', '2026-01-01 00:00Z'::timestamptz from events where event_key = ${key}
+        union all
+        select id, '900000000000000855', 'waitlisted', '2026-01-01 00:01Z'::timestamptz from events where event_key = ${key}
+        union all
+        select id, ${member.userId}::text, 'waitlisted', '2026-01-01 00:02Z'::timestamptz from events where event_key = ${otherKey}`;
+    });
+
+    const oversized = await send("PUT", rsvp, {
+      cookie: nonMember.cookie,
+      data: "status=going&padding=".padEnd(BODY_LIMIT_BYTES.action + 1, "x"),
+    });
+    expect(oversized.status()).toBe(413);
+    expect(await oversized.json()).toMatchObject({ reason: "payload_too_large" });
+
+    const crossOrigin = await send("POST", form, {
+      origin: "https://outside.example.invalid",
+      accept: "text/html",
+      data: "status=going&attendees=2",
+    });
+    expect(crossOrigin.status()).toBe(403);
+    expect(crossOrigin.headers()["content-type"]).toContain("text/html");
+    expect(crossOrigin.headers().vary).toBe("Accept");
+
+    const refused = await send("POST", form, {
+      cookie: nonMember.cookie,
+      accept: "text/html",
+      data: "status=going&attendees=2",
+    });
+    expect(refused.status()).toBe(403);
+    expect(refused.headers()["cache-control"]).toContain("no-store");
+    const html = await refused.text();
+    expect(html).toContain("Nothing changed. Return to the event");
+    expect(html).toContain(`href="/e/${key}?attendees=2"`);
+
+    const wrongMethod = await send("OPTIONS", rsvp);
+    expect(wrongMethod.status()).toBe(405);
+    expect(wrongMethod.headers().allow).toBe("PUT, DELETE");
+    expect(wrongMethod.headers().vary).toBe("Accept");
+
+    const answer = await send("PUT", rsvp, { cookie: member.cookie, data: { status: "going" } });
+    expect(answer.status()).toBe(201);
+    expect(await answer.json()).toEqual({
+      data: { status: "waitlisted", waitlist_position: 2, synced_to_discord_at: null },
+    });
+    const targetRows = await withSessionDb(
+      (sql) => sql`
+      select user_id, status from rsvps join events on events.id = rsvps.event_id
+      where event_key = ${key} order by rsvps.created_at`,
+    );
+    expect(targetRows).toEqual([
+      { user_id: "900000000000000854", status: "going" },
+      { user_id: "900000000000000855", status: "waitlisted" },
+      { user_id: member.userId, status: "waitlisted" },
+    ]);
+
+    const withdrawal = await send("POST", form, {
+      cookie: member.cookie,
+      accept: "text/html",
+      data: "status=withdraw&attendees=2",
+    });
+    expect(withdrawal.status()).toBe(303);
+    expect(withdrawal.headers().location).toBe(`/e/${key}?attendees=2`);
+    const remaining = await withSessionDb(
+      (sql) => sql`
+      select event_key from rsvps join events on events.id = rsvps.event_id
+      where user_id = ${member.userId}`,
+    );
+    expect(remaining).toEqual([{ event_key: otherKey }]);
+
+    const forbidden = await send("PATCH", `/events/${key}`, {
+      cookie: member.cookie,
+      data: { title: "Must not persist" },
+    });
+    expect(forbidden.status()).toBe(403);
+    expect(await forbidden.json()).toEqual({
+      error: "forbidden",
+      request_id: forbidden.headers()["x-request-id"],
+    });
+
+    const create = await send("POST", "/events", {
+      cookie: moderator.cookie,
+      data: {
+        title: fixtureTitle,
+        starts_at: "2099-03-01 18:00",
+        ends_at: "2099-03-01 20:00",
+        timezone: "UTC",
+      },
+    });
+    expect(create.status()).toBe(201);
+    const { data: draft } = await create.json();
+    expect(draft).toMatchObject({ title: fixtureTitle, status: "draft" });
+    const lifecycle = `/events/${draft.event_key}`;
+    const patched = await send("PATCH", lifecycle, {
+      cookie: moderator.cookie,
+      data: { location: "Fixture voice" },
+    });
+    expect(patched.status()).toBe(200);
+    expect((await patched.json()).data.location).toBe("Fixture voice");
+    for (const [action, status, expected] of [
+      ["duplicate", 201, { status: "draft" }],
+      ["publish", 200, { status: "published" }],
+      ["rsvp-pause", 200, { rsvp_open: false }],
+      ["rsvp-reopen", 200, { rsvp_open: true }],
+      ["cancel", 200, { status: "cancelled" }],
+    ] as const) {
+      const response = await send("POST", `${lifecycle}/${action}`, { cookie: moderator.cookie });
+      expect(response.status()).toBe(status);
+      expect((await response.json()).data).toMatchObject(expected);
+    }
+  } finally {
+    await withSessionDb(async (sql) => {
+      await sql`delete from activity_log where causer_id = ${moderator.userId}`;
+      await sql`delete from events where event_key in ${sql([key, otherKey])} or created_by = ${moderator.userId}`;
+      await sql`delete from web_sessions where token_hash in ${sql(audience.map((who) => who.hash))}`;
+      await sql`delete from web_throttle_hits where bucket = ${`rsvp-write:${member.userId}`}`;
+      await sql`delete from web_throttle_hits where bucket = ${`event-write:${clientIp}`}`;
     });
   }
 });
