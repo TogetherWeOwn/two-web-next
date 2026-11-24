@@ -56,7 +56,7 @@ function snapshot(seq, count, observedAt = new Date().toISOString()) {
   };
 }
 
-async function ingest(origin, seq, op) {
+export async function ingest(origin, seq, op) {
   const body = JSON.stringify({
     v: 1,
     guild_id: LIVE_FIXTURE_GUILD,
@@ -84,6 +84,8 @@ async function ingest(origin, seq, op) {
   await response.body?.cancel();
   return response.status;
 }
+
+export { snapshot as liveFixtureSnapshot };
 
 function connect(url, headers) {
   const socket = new WebSocket(url, { headers });

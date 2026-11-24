@@ -106,6 +106,7 @@ export type Env = AgentEventsEnv & {
   KIT_ROUTE_EVENTS?: string;
   KIT_ROUTE_HOME?: string;
   KIT_ROUTE_JOIN?: string;
+  DISCORD_LIVE_SOCKET_ENABLED?: string;
   // B1 read-only WebMCP pilot: only the exact strings "true"/"1" inject the
   // model-context island on the four pilot pages; unset or anything else
   // leaves pages byte-identical. No session, cookie or database read.

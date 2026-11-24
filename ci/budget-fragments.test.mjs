@@ -79,6 +79,7 @@ const SHIPPING_BUNDLE_BUDGETS = {
   "public/islands/local-time-compare.js": { maxRawBytes: 1536, maxGzipBytes: 768 },
   "public/islands/event-time-from-now.js": { maxRawBytes: 2048, maxGzipBytes: 1024 },
   "public/islands/kit-live-event-time.js": { maxRawBytes: 5120, maxGzipBytes: 2304 },
+  "public/islands/kit-public-voice.js": { maxRawBytes: 4608, maxGzipBytes: 2048 },
 };
 
 // sha256 of the frozen legacy-history archives: header + the verbatim

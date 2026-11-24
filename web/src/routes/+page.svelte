@@ -26,6 +26,8 @@ import type { PageProps } from "./$types";
 import HomeGuestIntro from "./HomeGuestIntro.svelte";
 import "./home-join-band.css";
 
+const publicVoiceIsland = '<script src="/islands/kit-public-voice.js" defer></' + "script>";
+
 // Kit passes only its usual page props. The offline render fixture passes
 // an audience projection separately; the shipped load never produces one.
 let { data, voice }: PageProps & { voice?: VoiceView } = $props();
@@ -186,6 +188,10 @@ const nextVoiceEvent = $derived.by(() => {
             {" · Last seen "}<time datetime={countsSnapshot.observedAt}>{countsSnapshot.observedAt.replace("T", " ").replace("Z", " UTC")}</time>
           {/if}
         </p>
+      {/if}
+      {#if data.publicVoiceEnabled}
+        <p class="counts" id="home-public-voice">Voice numbers are not available right now.</p>
+        {@html publicVoiceIsland}
       {/if}
     </div>
     {#if homeVoice}
