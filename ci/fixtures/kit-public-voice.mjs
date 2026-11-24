@@ -3,7 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { chromium, expect } from "@playwright/test";
 import postgres from "postgres";
-import { fixtureSession } from "../kit-live-socket.mjs";
+import { fixtureSession, refusal } from "../kit-live-socket.mjs";
 import { SESSION_COOKIE } from "../parity/fixture.mjs";
 import { ingest, liveFixtureSnapshot } from "./kit-live-fanout.mjs";
 import frames from "./kit-live-frames.json" with { type: "json" };
@@ -39,10 +39,11 @@ async function capture(page, state) {
 function observe(page) {
   const sockets = [];
   page.on("websocket", (socket) => {
-    const trace = { url: socket.url(), sent: [], received: [], closed: false };
+    const trace = { url: socket.url(), sent: [], received: [], errors: [], closed: false };
     sockets.push(trace);
     socket.on("framesent", ({ payload }) => trace.sent.push(JSON.parse(payload)));
     socket.on("framereceived", ({ payload }) => trace.received.push(JSON.parse(payload)));
+    socket.on("socketerror", (error) => trace.errors.push(error));
     socket.on("close", () => {
       trace.closed = true;
     });
@@ -71,25 +72,29 @@ async function setSession(page, origin, cookie) {
   ]);
 }
 
-async function verifyRefusedRetries(sql, sockets, first, count, reason) {
-  async function scans() {
-    // This phase has no session writers or other session-bearing pages.
-    // Include sequential scans so the assertion is independent of the plan.
-    const [row] = await sql`select (seq_scan + idx_scan)::float8 as scans
-      from pg_stat_user_tables where relid = 'web_sessions'::regclass`;
-    return row.scans;
+async function verifyRefusedRetries(sql, sockets, first, checkUncached, count, reason) {
+  async function assertRefusal(index) {
+    await expect.poll(() => sockets[index]?.closed, { timeout: 12_000 }).toBe(true);
+    const trace = sockets[index];
+    assert.match(
+      trace.errors.join("\n"),
+      /\b401\b|^HTTP Authentication failed\b/m,
+      `${reason} cookie upgrade ${index}`,
+    );
+    assert.deepEqual(trace.sent, []);
+    assert.deepEqual(trace.received, []);
   }
-  // The second refusal gives the initial database connection time to exit and
-  // flush its stats. Compare completed retries while the cookie is unchanged.
-  await expect.poll(() => sockets[first + 1]?.closed, { timeout: 12_000 }).toBe(true);
-  const before = await scans();
-  await expect.poll(() => sockets[first + 2]?.closed, { timeout: 12_000 }).toBe(true);
-  await expect.poll(() => sockets[first + 3]?.closed, { timeout: 12_000 }).toBe(true);
-  assert.equal(await scans(), before, `${reason} cookie retries should reuse the refusal`);
-  for (const attempt of sockets.slice(first, first + 4)) {
-    assert.deepEqual(attempt.sent, []);
-    assert.deepEqual(attempt.received, []);
-  }
+
+  await assertRefusal(first);
+  // With the disposable session table locked, a fresh read times out with
+  // 503. The same browser bearer must still receive 401 on each retry.
+  await sql.begin(async (tx) => {
+    await tx`set local lock_timeout = '2s'`;
+    await tx`set local idle_in_transaction_session_timeout = '20s'`;
+    await tx`lock table web_sessions in access exclusive mode`;
+    assert.equal(sockets.length, first + 1, `${reason} fixture must lock before the next retry`);
+    await Promise.all([assertRefusal(first + 1), assertRefusal(first + 2), checkUncached()]);
+  });
   await expect(count).toHaveText(unavailable);
 }
 
@@ -113,6 +118,14 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
     return cookie;
   }
   try {
+    const probe = await fixtureSession(secret);
+    const checkUncached = async () => {
+      const status = await refusal(liveOrigin + socketPath, {
+        Origin: liveOrigin,
+        Cookie: probe.cookie,
+      });
+      assert.equal(status, 503, "a different bearer needs the blocked session read");
+    };
     const guest = await browser.newPage();
     const offSockets = observe(guest);
     const offHtml = await openHome(guest, offOrigin);
@@ -163,7 +176,7 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
     await expect(count).toHaveText(voice(6));
     await expect(memberCount).toHaveText(unavailable);
     assert.deepEqual(memberSockets[0].received.at(-1), publicBaseline);
-    await verifyRefusedRetries(sql, memberSockets, 1, memberCount, "revoked");
+    await verifyRefusedRetries(sql, memberSockets, 1, checkUncached, memberCount, "revoked");
     await setSession(member, liveOrigin, await mintSession("10 minutes"));
     await expect(memberCount).toHaveText(voice(6), { timeout: 20_000 });
     assert.deepEqual(memberSockets.at(-1).received.at(-1), {
@@ -206,7 +219,7 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
     await setSession(expired, liveOrigin, await mintSession("-1 minute"));
     await openHome(expired, liveOrigin);
     const expiredCount = expired.locator("#home-public-voice");
-    await verifyRefusedRetries(sql, expiredSockets, 0, expiredCount, "expired");
+    await verifyRefusedRetries(sql, expiredSockets, 0, checkUncached, expiredCount, "expired");
     await expired.context().clearCookies();
     await expect(expiredCount).toHaveText(voice(5), { timeout: 20_000 });
     assert.deepEqual(expiredSockets.at(-1).received.at(-1), publicBaseline);

@@ -24,7 +24,7 @@ function upgrade(url, headers) {
   });
 }
 
-function refusal(url, headers) {
+export function refusal(url, headers) {
   return new Promise((resolve, reject) => {
     const req = upgrade(url, headers);
     req.on("response", (response) => {

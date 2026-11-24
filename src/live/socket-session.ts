@@ -42,7 +42,7 @@ export function cacheSocketAdmissionRefusals(
   };
 }
 
-/** Authoritative exact reread for admission and commands. validUntil is a
+/** Bound the lifetime from an exact session lookup. validUntil is a
  * conservative Worker-local epoch deadline for expiry alarms, not a DB stamp
  * or a substitute for a fresh row read. Throws if the read is indeterminate. */
 export async function readTimedSocketSession(
