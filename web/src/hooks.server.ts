@@ -1,5 +1,5 @@
 import { captureRefusal, captureResponse } from "../../src/render-clock";
-import type { Handle } from "@sveltejs/kit/hooks";
+import { type Handle, sequence } from "@sveltejs/kit/hooks";
 import { env } from "cloudflare:workers";
 import { recordBoardView, recordQueuedBoardView } from "../../src/hotzones/board-log";
 import { prepareKitHomePanels } from "../../src/kit-home-panels";
@@ -37,12 +37,15 @@ import { honoFetch, honoRecoveryFetch } from "#lib/server/hono.ts";
 // to "unknown" rather than a false logout.
 const localCapture = typeof __TWO_LOCAL_CAPTURE__ !== "undefined" && __TWO_LOCAL_CAPTURE__ === true;
 
-export const handle: Handle = async ({ event, resolve }) => {
+const admitCapture: Handle = ({ event, resolve }) => {
   if (localCapture) {
     const refusal = captureRefusal(event.request, env);
     if (refusal) return refusal;
   }
+  return resolve(event);
+};
 
+const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
   let honoOwned = false;
   const response = await dispatchHookRequest(event, {
     appUrl: env.APP_URL,
@@ -104,3 +107,5 @@ export const handle: Handle = async ({ event, resolve }) => {
     ? preserveHonoDataResponse(event.request, result)
     : result;
 };
+
+export const handle: Handle = sequence(admitCapture, dispatchWithSecurity);
