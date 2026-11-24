@@ -2,20 +2,13 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { appendFile, copyFile, cp, mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
-import {
-  inventory,
-  ledgerPrefixes,
-  sourceInputs,
-  verifyPackage,
-  writeManifest,
-} from "./kit-cutover-evidence.mjs";
+import { inventory, sourceInputs, verifyPackage, writeManifest } from "./kit-cutover-evidence.mjs";
 import { sha256 } from "./worker-bundle-evidence.mjs";
 
 // Publish only after the parity verifier has approved the exact installed
 // bytes. Wrangler receives an explicit Hono compile-time readiness profile.
 export async function packageCutover(dir, repo, installed, identity, context) {
   const inputs = await sourceInputs(repo);
-  ledgerPrefixes(inputs.journal);
   await mkdir(dir);
   for (const profile of ["hono", "kit"]) {
     await mkdir(join(dir, profile, "modules"), { recursive: true });
