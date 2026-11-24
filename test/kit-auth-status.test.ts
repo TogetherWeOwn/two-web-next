@@ -61,10 +61,12 @@ describe("detached Kit auth status parity", () => {
   it("preserves the refusal when a presented cookie cannot be checked without a secret", async () => {
     const f = recoveryFixture();
     const live = await f.login();
+    const pending = await signed(EXPIRED_WRITE_COOKIE, "pending|/profile?edit=1");
     f.env.SESSION_SECRET = "";
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const get = vi.spyOn(f.sessions, "get");
     await expectParity(f, "", false);
+    await expectParity(f, pending, false, 503);
     await expectParity(f, live.cookie, false, 503);
     expect(get).not.toHaveBeenCalled();
   });
