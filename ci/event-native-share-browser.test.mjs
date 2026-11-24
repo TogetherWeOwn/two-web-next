@@ -564,7 +564,7 @@ describe("Native event sharing", () => {
   }
 });
 
-test("Kit event suggestions expose named markerless lists and keep native link order", async (t) => {
+describe("Kit event suggestions expose named markerless lists and keep native link order", () => {
   const related = [
     { eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAA", title: "Chess finals" },
     { eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAB", title: "Chess open" },
@@ -578,18 +578,22 @@ test("Kit event suggestions expose named markerless lists and keep native link o
     game: "Chess",
     rsvpOpen: true,
   }));
-  if (listEvidence) await mkdir(listEvidence, { recursive: true });
+  before(async () => {
+    if (listEvidence) await mkdir(listEvidence, { recursive: true });
+  });
 
-  for (const { status, name, listSelector, linkTestId } of [
+  for (const { status, name, headingId, listSelector, linkTestId } of [
     {
       status: "published",
       name: "More events you might like",
+      headingId: "event-related-heading",
       listSelector: "[data-testid=event-related] > ul",
       linkTestId: "event-related-link",
     },
     {
       status: "cancelled",
       name: "Other upcoming events",
+      headingId: "event-cancelled-alternatives-heading",
       listSelector: "[data-testid=event-cancelled-alternatives]",
       linkTestId: "event-cancelled-alternative",
     },
@@ -599,15 +603,14 @@ test("Kit event suggestions expose named markerless lists and keep native link o
       { width: 390, height: 844 },
     ]) {
       const label = `${status}-${viewport.width}`;
-      await t.test(label, async (t) => {
+      test(label, async (t) => {
         const options = { status, viewport, javaScriptEnabled: false };
         const { page, html, blocked, errors } = await open(t, "Kit", {
           ...options,
           kitRelated: related,
         });
-        const ssrList = html.match(
-          /<ul\b[^>]*aria-labelledby="event-(?:related|cancelled-alternatives)-heading"[^>]*>[\s\S]*?<\/ul>/,
-        )?.[0];
+        const listOpening = new RegExp(`<ul\\b[^>]*aria-labelledby="${headingId}"[^>]*>`);
+        const ssrList = html.match(new RegExp(`${listOpening.source}[\\s\\S]*?</ul>`))?.[0];
         assert.ok(ssrList, "SSR associates the list with its heading");
         assert.match(ssrList, /^<ul\b[^>]* role="list"/);
         assert.equal([...ssrList.matchAll(/<li\b/g)].length, related.length);
@@ -670,10 +673,7 @@ test("Kit event suggestions expose named markerless lists and keep native link o
         assert.deepEqual(errors, []);
 
         const empty = await open(t, "Kit", options);
-        assert.doesNotMatch(
-          empty.html,
-          /<ul\b[^>]*aria-labelledby="event-(?:related|cancelled-alternatives)-heading"/,
-        );
+        assert.doesNotMatch(empty.html, listOpening);
         await expect(empty.page.locator(listSelector)).toHaveCount(0);
         await expect(empty.page.getByRole("heading", { name, exact: true })).toHaveCount(0);
         if (status === "cancelled") {
