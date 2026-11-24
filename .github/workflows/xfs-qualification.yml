@@ -119,6 +119,10 @@ jobs:
             | tee "$RUNNER_TEMP/kit-installed-output.log" || result=$?
           grep -Fx 'Fixture mounts and backing file removed' "$RUNNER_TEMP/kit-installed-output.log"
           exit "$result"
+      - name: Build the Kit cutover server readiness profile
+        run: npm run build --prefix web
+        env:
+          TWO_WEB_1033_COMPAT: "true"
       - name: Record all-off production Kit parity
         id: production-parity
         shell: bash

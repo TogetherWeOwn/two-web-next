@@ -264,6 +264,7 @@ async function recordRun({
   out,
   tailLabel,
   meta,
+  beforeRecording,
 }) {
   const admin = postgres(adminUrl.href, { max: 1, onnotice: () => {} });
   const runDb = `${template}_run${runIndex}`;
@@ -309,6 +310,15 @@ async function recordRun({
     stream.on("data", (data) => (workerLog += data));
   try {
     await waitReady(port, child, () => workerLog);
+    if (beforeRecording) {
+      await beforeRecording(clone, () =>
+        send(port, {
+          method: "GET",
+          path: "/up",
+          headers: { "x-parity-vector": "cutover-readiness", "x-parity-client": "192.0.2.1" },
+        }),
+      );
+    }
     const context = { cookies: await identityCookies(), etags: new Map(), appUrl };
     const files = new Map();
     for (const vector of vectors) {
@@ -355,6 +365,7 @@ export async function record({
   targetConfig = "wrangler.jsonc",
   databaseUrl,
   extraPublicFiles = [],
+  beforeRecording,
 }) {
   const adminUrl = requireDisposableDatabase(databaseUrl);
   const inputs = await loadVectorInputs(repo);
@@ -406,6 +417,7 @@ export async function record({
         out: dir,
         tailLabel,
         meta,
+        beforeRecording,
       });
       console.log(
         `route parity: recorded ${vectors.length} vectors from ${targetConfig} into ${dir}`,

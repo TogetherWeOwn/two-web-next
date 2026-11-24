@@ -21,8 +21,8 @@ export const DEFAULT_DIR = resolve(
 
 // Adapter Cloudflare 8 copies a default object literal with a fetch method.
 // Reject ambiguous object shapes without evaluating the generated module.
-async function prepareFacade(source) {
-  const result = await compileKitFacade(source);
+async function prepareFacade(source, productionCutover) {
+  const result = await compileKitFacade(source, { productionCutover });
   const program = parse(source, { sourceType: "module" }).program;
   const declaration = program.body.find((node) => node.type === "ExportDefaultDeclaration");
   const object = declaration?.declaration;
@@ -34,6 +34,9 @@ async function prepareFacade(source) {
     }
     const name = property.key.name ?? property.key.value;
     if (name === "__proto__") throw new Error("unsupported adapter fetch contract");
+    if (productionCutover && (name === "queue" || name === "scheduled")) {
+      throw new Error("adapter already declares a cutover jobs handler");
+    }
     if (name === "fetch") {
       const callable =
         (property.type === "ObjectMethod" && property.kind === "method" && !property.generator) ||
@@ -50,9 +53,19 @@ async function prepareFacade(source) {
 // The CLI and API require an existing private, stable XFS output directory,
 // including when using DEFAULT_DIR; withKitLock verifies admission before writing.
 // Hold the lock through preparation, installation, and rollback.
-export async function installWorkerFacade({ dir = DEFAULT_DIR, io = {} } = {}) {
+export async function installWorkerFacade({
+  dir = DEFAULT_DIR,
+  io = {},
+  productionCutover = false,
+} = {}) {
   const root = resolve(dir);
-  return withKitLock(root, () => installFacadeFiles({ root, prepare: prepareFacade, io }));
+  return withKitLock(root, () =>
+    installFacadeFiles({
+      root,
+      prepare: (source) => prepareFacade(source, productionCutover),
+      io,
+    }),
+  );
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

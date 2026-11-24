@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { securityHeadersFor } from "../src/headers";
+import { RECONCILE_CRON } from "../src/jobs/constants";
 import {
   COMPANION_NAME,
   ENTRY_NAME,
@@ -106,6 +107,46 @@ describe("installWorkerFacade", () => {
     expect(facade).toContain(`sha256=${result.adapterSha256}`);
     expect(read(dir, IGNORE)).toBe(`${ENTRY_NAME}\n${COMPANION_NAME}\n`);
     expect(names(dir)).toEqual([IGNORE, COMPANION_NAME, ENTRY_NAME].sort());
+  });
+
+  it("installs the production cutover fetch and same-script jobs handlers", async () => {
+    const source = "export default { fetch(request) { return new Response(request.method); } };";
+    const dir = scratch(source);
+    await installWorkerFacade({ dir, productionCutover: true });
+    expect(read(dir, COMPANION_NAME)).toBe(source);
+    const { default: worker } = await load(dir);
+    const response = await worker.fetch(
+      new Request("https://togetherweown.com/internal/discord-live/v1/ingest", { method: "POST" }),
+      env,
+      {},
+    );
+    expect(await response.text()).toBe("POST");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    const missingDatabase = /no database configured/;
+    const alerts = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(worker.queue({ messages: [] }, env, {})).rejects.toThrow(missingDatabase);
+      expect(alerts).not.toHaveBeenCalled();
+      await expect(worker.scheduled({ cron: RECONCILE_CRON }, env, {})).rejects.toThrow(
+        missingDatabase,
+      );
+      expect(alerts).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(alerts.mock.calls[0][0])).toMatchObject({
+        event: "scheduled.failing",
+        job: "events:reconcile",
+      });
+    } finally {
+      alerts.mockRestore();
+    }
+  });
+
+  it("refuses a production cutover adapter that already owns a jobs handler", async () => {
+    for (const name of ["queue", "scheduled"]) {
+      const dir = scratch(`export default { fetch() {}, ${name}() {} };`);
+      await rejectsUnchanged(dir, /adapter already declares a cutover jobs handler/, {
+        productionCutover: true,
+      });
+    }
   });
 
   it("preserves existing .assetsignore entries and ensures a final companion exclusion", async () => {
