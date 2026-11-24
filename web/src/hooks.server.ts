@@ -22,6 +22,8 @@ import { dispatchEventDetailRequest } from "../../src/events/kit-detail";
 import { KIT_EVENT_CALENDAR_ROUTE } from "../../src/events/kit-event-calendar-route";
 import { KIT_EVENT_JSON_ROUTE } from "../../src/events/kit-json-routes";
 import { KIT_STATIC_FEED_ROUTES } from "../../src/events/kit-static-feed-routes";
+import { KIT_EVENT_WRITE_ROUTES } from "../../src/events/kit-event-write-routes";
+import { refuseKitEventWriteOrigin } from "../../src/events/kit-event-write-fetch";
 import { KIT_PUBLIC_API_ROUTES } from "../../src/public-data/kit-routes";
 import { dispatchEventsRequest } from "../../src/kit-events";
 import { dispatchHotzonesRequest } from "../../src/kit-hotzones";
@@ -87,6 +89,12 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
         crossOriginRefusal: authOriginRefusal,
       },
       kitOpsFamily(),
+      {
+        flag: env.KIT_ROUTE_EVENT_WRITES,
+        routes: KIT_EVENT_WRITE_ROUTES,
+        crossOriginRefusal: (request, requestId) =>
+          refuseKitEventWriteOrigin(request, env, requestId),
+      },
     ],
     versionMetadata: env.CF_VERSION_METADATA,
     featuredImageHosts: env.FEATURED_IMAGE_HOSTS,

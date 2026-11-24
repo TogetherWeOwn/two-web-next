@@ -7,14 +7,15 @@ import { loadEventsPage } from "../../../../src/kit-events";
 import { renderEventsHtml } from "../../lib/server/render-events-html";
 import { kitEventsJourneyFor, kitEventsSessionFor } from "../../../../src/kit-session";
 import { JOIN_RESULT_COOKIE } from "../../../../src/return-journey";
+import { serveEventWrite } from "#lib/server/event-write.ts";
 
 export const trailingSlash = "ignore";
+export const POST = serveEventWrite;
 
 // Server-rendered Svelte inside the shared document shell: this endpoint has
 // no client entry while the hook dispatch keeps the Hono guard/cache/422/503
-// contract. Only GET is listed in the manifest (HEAD follows it); any other
-// method never reaches here because decideRoute matches the entry GET-only
-// and the hook hands the rest to Hono, so POST /events stays Hono-owned.
+// contract. HEAD follows the GET manifest entry. The write family separately
+// admits POST, which stays Hono-owned when that family is off.
 export const GET: RequestHandler = async ({ request, cookies, url, locals, setHeaders }) => {
   const collected: Record<string, string> = {};
   const island = request.headers.has("x-two-island");
