@@ -82,8 +82,9 @@ export async function buildCutoverApps(root) {
 // login without running a queue, cron or remote Discord call.
 export async function probeCutoverEventSync(pgEventStore, runtime) {
   const eventKey = randomUUID();
-  await runtime`INSERT INTO events (event_key, title, starts_at, ends_at, status)
-    VALUES (${eventKey}, 'Cutover fixture', now(), now() + interval '1 hour', 'published')`;
+  const [event] = await runtime`INSERT INTO events (event_key, title, starts_at, ends_at, status)
+    VALUES (${eventKey}, 'Cutover fixture', now(), now() + interval '1 hour', 'published')
+    RETURNING id`;
   const store = pgEventStore(runtime);
   const key = randomUUID();
   const now = new Date();
@@ -91,7 +92,15 @@ export async function probeCutoverEventSync(pgEventStore, runtime) {
   assert.equal(prepared?.idempotencyKey, key);
   const claimed = await store.claimSync(prepared, now);
   assert.equal(claimed?.requestAttempts, 1);
-  const discordEventId = "1000000000000000001";
+  const discordEventId = String(1_000_000_000_000_000_000n + BigInt(event.id));
   await store.completeSync(claimed, discordEventId);
-  assert.equal(await store.needsSync(eventKey), false);
+  const [settled] = await runtime`SELECT a.state, e.discord_event_id,
+    e.synced_revision = a.revision AS acknowledged
+    FROM event_sync_attempts a JOIN events e ON e.id = a.event_id
+    WHERE a.idempotency_key = ${key}::uuid`;
+  assert.deepEqual(settled, {
+    state: "succeeded",
+    discord_event_id: discordEventId,
+    acknowledged: true,
+  });
 }

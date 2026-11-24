@@ -21,6 +21,9 @@ const git = (...args) => execFileSync("git", args, { maxBuffer: 32 * 1024 * 1024
 const fixture = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const projection = "web_readiness.migration_timestamps";
 const ledger = "drizzle.__drizzle_migrations";
+const webTags = JSON.parse(fixture("../drizzle/meta/_journal.json"))
+  .entries.map(({ tag }) => tag)
+  .filter((tag) => /^1\d{3}_/.test(tag));
 
 async function pinnedApp(root, sha) {
   git("merge-base", "--is-ancestor", sha, "origin/main");
@@ -130,13 +133,22 @@ export async function rehearseWebReadiness(owner, url) {
         await checkUp(candidate, reader, expected, status, pending, queries, projection);
       }
     };
-    const cutoverUp = async (expected, status, pending, relation) => {
+    const cutoverUp = async (expected, relation) => {
+      // A future web migration outside the reviewed window requires the full
+      // current journal, even when this historical fixture is a valid prefix.
+      const hasNewRequirement = webTags.some((tag) => tag.slice(0, 4) > "1038");
+      const applied = new Set(expected?.map(({ tag }) => tag));
+      const pending = expected
+        ? hasNewRequirement
+          ? webTags.filter((tag) => !applied.has(tag)).length
+          : 0
+        : null;
       for (const app of cutover.apps) {
         await checkUp(
           app,
           reader,
           expected,
-          status,
+          pending === 0 ? 200 : 503,
           pending,
           queries,
           relation,
@@ -185,13 +197,13 @@ export async function rehearseWebReadiness(owner, url) {
     const pairs = (history) => history.map(({ created_at, hash }) => ({ created_at, hash }));
     await migrate(drizzle(owner), old);
     assert.deepEqual(await readLedger(), pairs(old.history));
-    await cutoverUp(old.history, 200, 0, ledger);
+    await cutoverUp(old.history, ledger);
     await probeCutoverEventSync(cutover.pgEventStore, reader);
     await owner.unsafe(fixture("../docs/web-readiness-projection.sql"));
     await owner`GRANT USAGE ON SCHEMA public, web_readiness TO ${owner(login)}`;
     await owner`GRANT SELECT ON web_readiness.migration_timestamps TO ${owner(login)}`;
     await bridgeUp(old.history, 503, 4);
-    await cutoverUp(old.history, 200, 0, projection);
+    await cutoverUp(old.history, projection);
 
     await migrate(drizzle(owner), first);
     const expanded = await readLedger();
@@ -203,7 +215,7 @@ export async function rehearseWebReadiness(owner, url) {
     await assert.rejects(reader.unsafe(`INSERT INTO ${projection} VALUES (1)`), { code: "55000" });
     await checkUp(old, reader, first.history, 200, 0, queries, ledger);
     await bridgeUp(first.history, 200, 0);
-    await cutoverUp(first.history, 200, 0, projection);
+    await cutoverUp(first.history, projection);
 
     await owner.begin(async (tx) => {
       await grantScopedAcl(tx, login);
@@ -214,12 +226,12 @@ export async function rehearseWebReadiness(owner, url) {
     assert.deepEqual(await identity(reader), { ...catalog, role: login, login });
     await assert.rejects(reader.unsafe(`SELECT created_at FROM ${ledger}`), { code: "42501" });
     await bridgeUp(first.history, 200, 0);
-    await cutoverUp(first.history, 200, 0, projection);
+    await cutoverUp(first.history, projection);
     await probeCutoverEventSync(cutover.pgEventStore, reader);
     await checkUp(old, reader, null, 503, null, queries, ledger);
     await owner`REVOKE SELECT ON web_readiness.migration_timestamps FROM ${owner(login)}`;
     await bridgeUp(null, 503, null);
-    await cutoverUp(null, 503, null, projection);
+    await cutoverUp(null, projection);
     await owner`GRANT SELECT ON web_readiness.migration_timestamps TO ${owner(login)}`;
     await probeWorkloads(owner, reader);
     assert.deepEqual(await readLedger(), expanded);

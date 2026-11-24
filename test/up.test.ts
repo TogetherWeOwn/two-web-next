@@ -103,18 +103,24 @@ describe("web migration journal comparison", () => {
     expect(baseline).toBe(32);
     expect(transition).toBe(36);
     expect(deferred).toBe(36);
+    const laterRequired = applied.length - (deferred + 1);
+    const pendingAt = (end: number) => (laterRequired === 0 ? 0 : applied.length - end);
     const newerForeignRow = { created_at: "9999999999999" };
-    expect(pendingWebMigrations(applied.slice(0, baseline))).toBe(5);
+    expect(pendingWebMigrations(applied.slice(0, baseline))).toBe(5 + laterRequired);
     for (let end = baseline; end <= transition; end += 1) {
-      expect(pendingWebMigrations([...applied.slice(0, end), newerForeignRow], true)).toBe(0);
+      expect(pendingWebMigrations([...applied.slice(0, end), newerForeignRow], true)).toBe(
+        pendingAt(end),
+      );
     }
-    expect(pendingWebMigrations(applied.slice(0, baseline - 1), true)).toBe(1);
+    expect(pendingWebMigrations(applied.slice(0, baseline - 1), true)).toBe(
+      pendingAt(baseline) + 1,
+    );
     expect(
       pendingWebMigrations([...applied.slice(0, baseline), applied[baseline + 1]!], true),
-    ).toBe(1);
+    ).toBe(laterRequired === 0 ? 1 : applied.length - baseline - 1);
     expect(
       pendingWebMigrations([...applied.slice(0, transition - 1), applied[deferred]!], true),
-    ).toBe(1);
+    ).toBe(laterRequired + 1);
     expect(pendingWebMigrations(applied, true)).toBe(0);
     expect(() => pendingWebMigrations([{ created_at: null }], true)).toThrow();
   });
