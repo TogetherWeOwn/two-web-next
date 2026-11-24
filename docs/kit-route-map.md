@@ -122,8 +122,8 @@ when the read and write families are migrated independently.
 The standalone resolver accepts a dormant reservation release list for future
 families. Each release requires an enabled manifest entry for the same method
 and literal pathname. HEAD follows GET. Encoded aliases and Kit data URLs
-remain reserved, as do adapter assets that reach the resolver. The serving
-hook supplies no API family catalog, so the dispatcher releases no pairs.
+remain reserved, as do adapter assets that reach the resolver. The static
+feed catalog has no pairs in the reserved set.
 
 After Ember changes land, re-take and validate the mounted inventory, route map
 and pure-Hono golden evidence against the then-current main revision. This
@@ -132,20 +132,32 @@ family flip; this earlier snapshot does not satisfy that release checkpoint.
 [`hooks.server.ts`](../web/src/hooks.server.ts) runs capture admission before
 the existing request dispatcher. The dispatcher checks host and ownership
 before Kit's same-origin check, shared session bridge and route guards. The
-dormant family selector runs only when the existing ownership lookup falls
-back to Hono. Each family requires its own binding set to the literal string
+family selector runs only when the existing ownership lookup falls back to
+Hono. Each family requires its own binding set to the literal string
 `true`. A candidate must match the original method and pathname as well as a
 mounted, static Kit route ID. The entry supplies its own exact reservation
-release and read policy. HEAD follows GET. Conflicting claims from opted-in
-families fall back to Hono.
+release and read policy. HEAD follows GET. Conflicting family claims and
+overlaps with disabled page ownership entries fall back to Hono.
 
-In the first family integration PR, mount the ready `+server.ts` handlers and
-pass that family's reviewed catalog and binding to `dispatchHookRequest`.
-Validate every configured pair against the mounted inventory and reject
-duplicate claims. Check that each `+server.ts` exports the configured method.
-A static Kit route ID can also refer to a page. Keep request-specific auth,
-body caps and throttles on their existing shared helpers in the handler's
-established order. Extend the
-built Worker fixture to turn that one family on and back off and check method
-refusals, slash variants and `/<route>/__data.json`. Production activation
-follows its own release gate.
+### Static feed endpoints
+
+`KIT_ROUTE_FEEDS` selects `GET /events.ics` and `GET /events.rss`, including
+HEAD, when set to `true`. An absent or false binding leaves both reads with
+Hono. Both endpoints use the original request and the shared handlers, which
+charge the same `events-read` bucket before reading events. Kit supplies the
+request ID, global response headers and completion log. Public feed reads skip
+the document cookie and session steps.
+
+The hosted built-Worker fixture checks the compiled Kit manifest against the
+mounted Hono inventory, then compares feed bytes, validators, success and
+refusal headers, and shared budget charges across absent, off and on bindings.
+It exercises trailing slashes, encoded and data URL variants, wrong methods,
+an existing Kit page and the reserved Hono `/version` read. The per-event ICS
+still uses Hono's parameterized route and draft policy. Event JSON and the
+public API have their own integration work.
+
+Before activating the flag, qualify the exact candidate with staging feed and
+rollback checks through the [production release gate](../CONTRIBUTING.md#production-release-gate).
+Use the same two paths to confirm that clearing the binding returns requests
+to Hono, and account for cached feed responses under the existing 300-second
+cache policy.

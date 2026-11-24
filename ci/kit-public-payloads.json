@@ -42,6 +42,18 @@
       "note": "Executes the bundled GET with hostile database rows; checks response bytes, not a source substring."
     },
     {
+      "id": "kit-payload-static-ics",
+      "route": "GET /events.ics",
+      "binding": "web/src/routes/events.ics/+server.ts",
+      "tests": ["Kit static feed anonymous payloads"]
+    },
+    {
+      "id": "kit-payload-static-rss",
+      "route": "GET /events.rss",
+      "binding": "web/src/routes/events.rss/+server.ts",
+      "tests": ["Kit static feed anonymous payloads"]
+    },
+    {
       "id": "kit-payload-events-past",
       "route": "GET /events/past",
       "binding": "web/src/routes/events/past/+page.server.ts",

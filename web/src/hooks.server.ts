@@ -15,6 +15,7 @@ import {
 } from "../../src/kit-session";
 import { dispatchHookRequest } from "../../src/route-ownership";
 import { dispatchEventDetailRequest } from "../../src/events/kit-detail";
+import { KIT_STATIC_FEED_ROUTES } from "../../src/events/kit-static-feed-routes";
 import { dispatchEventsRequest } from "../../src/kit-events";
 import { dispatchHotzonesRequest } from "../../src/kit-hotzones";
 import { dispatchPastArchiveRequest } from "../../src/kit-past-events";
@@ -53,6 +54,8 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
     kitRouteEvents: env.KIT_ROUTE_EVENTS,
     kitRouteHome: env.KIT_ROUTE_HOME,
     kitRouteJoin: env.KIT_ROUTE_JOIN,
+    apiFamilies: [{ flag: env.KIT_ROUTE_FEEDS, routes: KIT_STATIC_FEED_ROUTES }],
+    versionMetadata: env.CF_VERSION_METADATA,
     featuredImageHosts: env.FEATURED_IMAGE_HOSTS,
     honoFetch: (request) => {
       honoOwned = true;
