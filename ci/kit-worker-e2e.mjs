@@ -770,6 +770,20 @@ export default {
     ),
   );
 
+  if (args.length) {
+    const { assertEventMarkdownParity } = await import("./fixtures/kit-event-markdown-parity.mjs");
+    await assertEventMarkdownParity({
+      hono: honoWithSession,
+      kit: kitWithSession,
+      databaseUrl,
+      startKit: async (name, vars) => {
+        const instance = await startWorker(name, worker, assets, secret, vars);
+        await listen(instance.child, instance.origin, () => instance.log);
+        return instance;
+      },
+    });
+  }
+
   if (!args.length) {
     const profile = await startWorker("kit-profile-write", worker, assets, secret, {
       KIT_ROUTE_PROFILE_WRITES: "true",

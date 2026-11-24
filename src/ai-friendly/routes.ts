@@ -13,8 +13,8 @@ import { canonicalEventKey, eventKeyAllowed } from "../events/keys";
 import { getPublicEvent, listFeed } from "../events/reads";
 import { publicReadGuard } from "../events/routes-shared";
 import { isDatabaseUnavailable } from "../db/errors";
-import { requestRoute } from "../request-log";
 import { mdOk, staticMarkdown } from "../static-public";
+import { EVENT_MARKDOWN_PATH, EVENTS_MARKDOWN_PATH } from "./kit-event-markdown-routes";
 import { FEED_MD_CACHE, MARKDOWN_MIME, mdEvent, mdEventGone, mdEvents, type MdEvent } from "./md";
 
 type App = Hono<{ Bindings: Env }>;
@@ -48,14 +48,14 @@ function mdInternal(c: Ctx): Response {
  * and unexpected query/serializer faults alert once (class fingerprint, the
  * same privacy boundary as the global handler) and 500 as Markdown.
  */
-async function mdRead<T>(c: Ctx, run: () => Promise<T>): Promise<T | Response> {
+async function mdRead<T>(c: Ctx, route: string, run: () => Promise<T>): Promise<T | Response> {
   try {
     return await run();
   } catch (err) {
     if (isDatabaseUnavailable(err)) return mdUnavailable(c);
     alertRequestError(err, {
       method: c.req.method,
-      route: requestRoute(c),
+      route,
       requestId: c.get("requestId"),
     });
     return mdInternal(c);
@@ -99,26 +99,33 @@ export function registerAiFriendlyRoutes(app: App): void {
   app.get("/privacy.md", staticMarkdown["/privacy.md"]);
   app.get("/join.md", staticMarkdown["/join.md"]);
 
-  app.get("/events.md", async (c) => {
+  app.get(EVENTS_MARKDOWN_PATH, eventMarkdownHandlers.collection);
+
+  // Keep the suffix handler ahead of the generic /e/:key document.
+  app.get(EVENT_MARKDOWN_PATH, (c) =>
+    eventMarkdownHandlers.detail(c, () => c.req.param("file").slice(0, -3)),
+  );
+}
+
+export const eventMarkdownHandlers = {
+  async collection(c: Ctx): Promise<Response> {
     const limited = await publicReadGuard(c);
     if (limited) return limited;
     const db = await dbFor(c);
     if (!db) return mdUnavailable(c);
     // Query and serialization stay inside the envelope together: a corrupt
     // row faults Markdown either way.
-    const built = await mdRead(c, async () =>
+    const built = await mdRead(c, EVENTS_MARKDOWN_PATH, async () =>
       mdEvents(c.env.APP_URL, (await listFeed(db, ["published"])).map(toMdEvent)),
     );
     if (built instanceof Response) return built;
     return mdOk(c, built, FEED_MD_CACHE);
-  });
+  },
 
-  // Same suffix pattern as the per-event ICS export: one canonical key form
-  // per event, forged keys refuse, unknown keys 404.
-  app.get("/e/:file{.+\\.md}", async (c) => {
+  async detail(c: Ctx, keyFor: () => string): Promise<Response> {
     const limited = await publicReadGuard(c);
     if (limited) return limited;
-    const key = c.req.param("file").slice(0, -3);
+    const key = keyFor();
     const canonical = canonicalEventKey(key);
     if (canonical && canonical !== key) {
       const search = new URL(c.req.url).search;
@@ -127,18 +134,20 @@ export function registerAiFriendlyRoutes(app: App): void {
     if (!eventKeyAllowed(key, c.env.APP_URL)) return mdError(c, "Not found", 404);
     const db = await dbFor(c);
     if (!db) return mdUnavailable(c);
-    const e = await mdRead(c, () => getPublicEvent(db, key));
+    const e = await mdRead(c, EVENT_MARKDOWN_PATH, () => getPublicEvent(db, key));
     if (e instanceof Response) return e;
     if (!e) return mdError(c, "Not found", 404);
     if (e.status === "draft") return mdError(c, "Forbidden", 403);
     if (e.status === "cancelled") {
-      const gone = await mdRead(c, async () => mdEventGone(c.env.APP_URL, e));
+      const gone = await mdRead(c, EVENT_MARKDOWN_PATH, async () => mdEventGone(c.env.APP_URL, e));
       if (gone instanceof Response) return gone;
       return mdError(c, gone, 410);
     }
     const robots = e.status === "past" ? NOINDEX : undefined;
-    const built = await mdRead(c, async () => mdEvent(c.env.APP_URL, toMdEvent(e)));
+    const built = await mdRead(c, EVENT_MARKDOWN_PATH, async () =>
+      mdEvent(c.env.APP_URL, toMdEvent(e)),
+    );
     if (built instanceof Response) return built;
     return mdOk(c, built, FEED_MD_CACHE, robots);
-  });
-}
+  },
+};

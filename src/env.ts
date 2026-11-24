@@ -122,6 +122,8 @@ export type Env = AgentEventsEnv & {
   KIT_ROUTE_PUBLIC_API?: string;
   // RSVP and moderator event mutations. Only the literal string "true" opts in.
   KIT_ROUTE_EVENT_WRITES?: string;
+  // Default off. Public event Markdown collection and detail GET/HEAD.
+  KIT_ROUTE_EVENT_MARKDOWN?: string;
   // Robots and sitemap reads. Only the literal string "true" opts in.
   KIT_ROUTE_SEO?: string;
   // RFC 9116 disclosure file. Only the literal string "true" opts in.

@@ -265,11 +265,24 @@ cap and throttle. The existing queue and request alert run only after admission.
 The built and installed Worker fixture uses synthetic inputs, counts diagnostics
 and intercepts the queue and outbound network.
 
-The remaining API-3 endpoints are the vanity redirects `/community`,
-`/discord`, `/login`, the static text routes `/llms.txt`, `/about.md`,
-`/faq.md`, `/join.md`, `/privacy.md`, `/rules.md`, and the event Markdown
-routes `/events.md` and `/e/:file{.+\\.md}`. Event Markdown still needs shared
-read-budget and suffix precedence proof, including paths with multiple segments.
+### Event Markdown endpoints
+
+`KIT_ROUTE_EVENT_MARKDOWN=true` selects GET and HEAD on `/events.md` and
+`/e/<key>.md` with a literal mount and suffix and one non-empty key segment.
+These reads use the same `events-read` budget as Hono and charge it before
+canonical redirects and conditional requests. The collection lists upcoming
+published rows. Detail reads are session-free, including the draft 403 for
+moderators, the cancelled 410, the missing 404 and the past `noindex` response.
+
+The Markdown endpoint takes precedence over the generic event page when both
+are mounted. When the flag is off, Hono serves the suffix path even if the Kit
+event page is enabled. Encoded mount and suffix variants, trailing slashes,
+Kit data URLs, other methods and multisegment variants continue to Hono. The
+bare `/e/.md` path follows the generic event page route.
+
+Qualify the exact candidate through the [production release gate](../CONTRIBUTING.md#production-release-gate)
+before activating the binding. Clearing it restores Hono. Cached successful
+responses can remain fresh for five minutes.
 
 ### Event detail JSON, public event reads and OpenAPI
 
