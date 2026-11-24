@@ -11,12 +11,16 @@ import AxeBuilder from "@axe-core/playwright";
 import { build } from "esbuild";
 import { chromium } from "playwright";
 import { eventRow, featuredRow } from "../test/helpers/admin-validation-correction.ts";
+import { parseEventListQuery } from "../src/admin/event-list.ts";
+import { featuredListUrl, parseFeaturedListQuery } from "../src/admin/featured-list-query.ts";
 import { buildEventCreateView } from "../src/admin/kit-event-create.ts";
 import { resolveKitEventEdit } from "../src/admin/kit-event-edit.ts";
+import { buildEventListView } from "../src/admin/kit-events.ts";
 import { resolveKitFeaturedEdit } from "../src/admin/kit-featured-edit.ts";
 import { EventFormPage, FeaturedFormPage } from "../src/admin/pages.tsx";
 import { EventEditableFields } from "../src/admin/pages/event-editable-fields.tsx";
 import { parseRecurrenceForm } from "../src/admin/recurrence.ts";
+import { parseJoinAttemptsQuery } from "../src/admin/table-list.ts";
 import { parseHumanEventForm, ValidationError } from "../src/admin/validation.ts";
 
 const output = resolve("web/.svelte-kit/output");
@@ -165,6 +169,7 @@ before(async () => {
   const editRejected = { ...event.view.values, title: editRejectedTitle };
   const editErrors = rejectedFields(editRejected, parseHumanEventForm);
   assert.deepEqual(Object.keys(editErrors), ["title"], "only the title is rejected");
+  const featuredQuery = parseFeaturedListQuery({});
   fixtures = [
     { name: "event-new", path: "/admin/events/new", data: buildEventCreateView() },
     {
@@ -228,13 +233,49 @@ before(async () => {
       },
     },
     {
+      name: "events-list",
+      path: "/admin/events",
+      currentHref: "/admin/events",
+      data: buildEventListView(parseEventListQuery({}), []),
+    },
+    {
+      name: "featured-list",
+      path: "/admin/featured",
+      currentHref: "/admin/featured",
+      data: {
+        query: featuredQuery,
+        rows: [],
+        emptyText: "No featured content yet.",
+        positionHeader: {
+          href: featuredListUrl(featuredQuery, { order: "desc" }),
+          ariaSort: "ascending",
+          ariaLabel: "Sort by position descending",
+          text: "Position ↑",
+        },
+        updatedHeader: {
+          href: featuredListUrl(featuredQuery, { sort: "updated_at" }),
+          ariaSort: "none",
+          ariaLabel: "Sort by last changed ascending",
+          text: "Last changed",
+        },
+      },
+    },
+    {
+      name: "join-attempts-list",
+      path: "/admin/join-attempts",
+      currentHref: "/admin/join-attempts",
+      data: { query: parseJoinAttemptsQuery({}), outcomes: [], rows: [], retentionDays: 30 },
+    },
+    {
       name: "activity-log",
       path: "/admin/activity-log",
+      currentHref: "/admin/activity-log",
       data: { rows: [], query: { subject: "", causer: "", page: 1 }, hasNext: false },
     },
     {
       name: "activity-log-filtered",
       path: "/admin/activity-log?subject=event&page=2",
+      currentHref: "/admin/activity-log",
       data: { rows: [], query: { subject: "event", causer: "", page: 2 }, hasNext: false },
     },
   ];
@@ -288,8 +329,8 @@ before(async () => {
     f.html = await response.text();
     assert.match(f.html, /_app\/immutable\/assets\/0\.[^\"]+\.css/, "real root stylesheet linked");
     assert.doesNotMatch(f.html, /type="module"[^>]*>\s*import/, "admin stays server rendered");
-    if (f.name.startsWith("activity-log")) {
-      assert.match(f.html, /<a href="\/admin\/activity-log" aria-current="page">Activity log<\/a>/);
+    if (f.currentHref) {
+      assert.ok(f.html.includes(`<a href="${f.currentHref}" aria-current="page">`), f.path);
     }
   }
   browser = await chromium.launch({ headless: true });
@@ -322,24 +363,22 @@ describe("Kit admin contrast", () => {
         const f = fixtures.find((fixture) => fixture.name === (isTextLimit ? "event-new" : name));
         const isDashboard = name === "dashboard";
         const isInvalid = name.endsWith("-invalid");
-        const activityPages = isDashboard
-          ? fixtures.filter(({ name }) => name.startsWith("activity-log"))
+        const navigationPages = isDashboard
+          ? fixtures.filter(({ currentHref }) => currentHref)
           : [];
-        const context = await browser.newContext({
-          viewport: { width, height: width === 390 ? 844 : 800 },
-        });
+        const documents = [f, ...navigationPages];
+        const viewport = { width, height: width === 390 ? 844 : 800 };
+        const context = await browser.newContext({ viewport });
         const unexpected = [];
         const errors = [];
         try {
-          await context.route("**/*", async (route) => {
+          const fulfillFixture = async (route) => {
             const url = new URL(route.request().url());
             if (url.origin !== origin || route.request().method() !== "GET") {
               unexpected.push(url.pathname);
               return route.abort();
             }
-            const document = [f, ...activityPages].find(
-              ({ path }) => path === url.pathname + url.search,
-            );
+            const document = documents.find(({ path }) => path === url.pathname + url.search);
             if (document) return route.fulfill({ contentType: "text/html", body: document.html });
             const directory = url.pathname.startsWith("/_app/")
               ? join(output, "client")
@@ -357,7 +396,8 @@ describe("Kit admin contrast", () => {
             }
             unexpected.push(url.pathname);
             return route.abort();
-          });
+          };
+          await context.route("**/*", fulfillFixture);
           const page = await context.newPage();
           page.on("pageerror", (error) => errors.push(error.message));
           await page.goto(origin + f.path);
@@ -632,24 +672,36 @@ describe("Kit admin contrast", () => {
             await save.click();
             assert.equal(await form.getAttribute("data-submitted-title"), "Corrected game night");
           }
-          for (const activity of activityPages) {
-            await page.goto(origin + activity.path);
-            const nav = await assertAdminNavigation(page, "/admin/activity-log");
-            if (evidence) {
-              const after = await page.screenshot({
-                path: join(evidence, `${activity.name}-${width}-after.png`),
-              });
-              // Removing the sole markup change recreates the previous pixels.
-              await nav.locator('[aria-current="page"]').evaluate((link) => {
-                link.removeAttribute("aria-current");
-              });
-              const before = await page.screenshot({
-                path: join(evidence, `${activity.name}-${width}-before.png`),
-              });
-              assert.ok(
-                before.equals(after),
-                `${activity.path} at ${width}px keeps its appearance`,
-              );
+          if (isDashboard) {
+            const navigationContext = await browser.newContext({
+              viewport,
+              javaScriptEnabled: false,
+            });
+            try {
+              await navigationContext.route("**/*", fulfillFixture);
+              const navigationPage = await navigationContext.newPage();
+              for (const fixture of navigationPages) {
+                await navigationPage.goto(origin + fixture.path);
+                const nav = await assertAdminNavigation(navigationPage, fixture.currentHref);
+                if (evidence) {
+                  const capture = (state) =>
+                    navigationPage.screenshot({
+                      path: join(evidence, `${fixture.name}-${width}-${state}.png`),
+                    });
+                  const after = await capture("after");
+                  // Removing the sole markup change recreates the previous pixels.
+                  await nav.locator('[aria-current="page"]').evaluate((link) => {
+                    link.removeAttribute("aria-current");
+                  });
+                  const before = await capture("before");
+                  assert.ok(
+                    before.equals(after),
+                    `${fixture.path} at ${width}px keeps its appearance`,
+                  );
+                }
+              }
+            } finally {
+              await navigationContext.close();
             }
           }
           assert.deepEqual(unexpected, [], "no live or mutating requests");
