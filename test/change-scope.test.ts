@@ -657,10 +657,7 @@ describe("ci heavy-job scope gates", () => {
         "Kit adapter build and local startup diagnostic (no deploy)",
         "node ci/check-worker-startup.mjs",
       ],
-      [
-        "Kit Worker bundle dry run (no deploy)",
-        "npx wrangler deploy --config web/wrangler.jsonc --dry-run",
-      ],
+      ["Kit Worker bundle dry run (no deploy)", "npm run preview:deploy -- --dry-run"],
       [
         "Kit Worker runtime fixture (disposable Postgres, fake Discord)",
         "node ci/kit-worker-e2e.mjs",

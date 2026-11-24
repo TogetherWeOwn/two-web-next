@@ -92,14 +92,20 @@ async function install() {
 const throwingHooks = {
   name: "test-only-throwing-hooks",
   setup(builder) {
-    builder.onLoad({ filter: /\/output\/server\/entries\/hooks\.server\.js$/ }, ({ path }) => {
-      assert.equal(path, join(dirname(assets), "output/server/entries/hooks.server.js"));
-      assert.match(fs.readFileSync(path, "utf8"), /\bhandle\b/);
-      evidence.hookSubstitutions += 1;
-      return {
-        contents: `export const handle = () => { throw new Error("TEST_ONLY_PRIVATE_DETAIL"); }; export const handleError = () => ({ message: "Internal Error" });`,
-      };
-    });
+    builder.onLoad(
+      { filter: /\/cloudflare-tmp\/worker\/server\/entries\/hooks\.server\.js$/ },
+      ({ path }) => {
+        assert.equal(
+          path,
+          join(dirname(assets), "cloudflare-tmp/worker/server/entries/hooks.server.js"),
+        );
+        assert.match(fs.readFileSync(path, "utf8"), /\bhandle\b/);
+        evidence.hookSubstitutions += 1;
+        return {
+          contents: `export const handle = () => { throw new Error("TEST_ONLY_PRIVATE_DETAIL"); }; export const handleError = () => ({ message: "Internal Error" });`,
+        };
+      },
+    );
   },
 };
 

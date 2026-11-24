@@ -211,7 +211,8 @@ describe("production jobs split (wrangler.jobs.jsonc env.production)", () => {
 describe("Kit preview Worker config (web/wrangler.jsonc)", () => {
   it("is a workers.dev preview with no route, consumer or cron", () => {
     expect(kit.name).toBe("two-web-next-kit-preview");
-    expect(kit.main).toBe(".svelte-kit/cloudflare/_worker.js");
+    expect(kit.main).toBeUndefined();
+    expect(kit.assets?.directory).toBeUndefined();
     expect(kit.workers_dev).toBe(true);
     expect(kit.preview_urls).toBe(false);
     expect(kit.routes).toBeUndefined();
