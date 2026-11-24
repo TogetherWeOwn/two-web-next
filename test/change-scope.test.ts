@@ -652,19 +652,22 @@ describe("ci heavy-job scope gates", () => {
 
   it("runs the adapter build, dry run and generated Worker fixture in required check", () => {
     const block = jobBlock("check");
-    for (const [name, command] of [
+    for (const [name, expected] of [
       [
         "Kit adapter build and local startup diagnostic (no deploy)",
         "node ci/check-worker-startup.mjs",
       ],
-      ["Kit Worker bundle dry run (no deploy)", "npm run preview:deploy -- --dry-run"],
+      [
+        "Kit Worker bundle dry run (no deploy)",
+        "working-directory: web\n        run: npm run preview:deploy -- --dry-run",
+      ],
       [
         "Kit Worker runtime fixture (disposable Postgres, fake Discord)",
         "node ci/kit-worker-e2e.mjs",
       ],
     ]) {
       const step = block.split(`- name: ${name}\n`)[1]?.split("\n      - ")[0] ?? "";
-      expect(step, name).toContain(command);
+      expect(step, name).toContain(expected);
       expect(step, name).toContain("needs.scope.outputs.app == 'true'");
       expect(step, name).toContain("needs.scope.outputs.worker == 'true'");
       expect(step, name).toContain("needs.scope.outputs.draft != 'true'");
