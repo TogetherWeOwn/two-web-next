@@ -115,6 +115,8 @@ export type Env = AgentEventsEnv & {
   KIT_ROUTE_SEO?: string;
   // RFC 9116 disclosure file. Only the literal string "true" opts in.
   KIT_ROUTE_SECURITY_TXT?: string;
+  // Health, version, CSP sink and alert probe. Only "true" opts in.
+  KIT_ROUTE_OPS?: string;
   // B1 read-only WebMCP pilot: only the exact strings "true"/"1" inject the
   // model-context island on the four pilot pages; unset or anything else
   // leaves pages byte-identical. No session, cookie or database read.
