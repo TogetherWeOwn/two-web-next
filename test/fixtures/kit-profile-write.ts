@@ -111,8 +111,10 @@ type HttpCase = {
   vary?: "Cookie" | "Accept";
   allow?: string;
   retry?: string;
+  contentType?: "text/html" | "text/plain";
   body?: string;
   draft?: { errors: Record<string, string> };
+  log?: string;
   save?: boolean;
   beforeSession?: boolean;
 };
@@ -126,6 +128,8 @@ const outage = new (class PostgresError extends Error {
   code = "ECONNRESET";
 })();
 const cancelled = Object.assign(new Error(), { name: "PostgresError", code: "57014" });
+const requestFailureLog = "Profile request failed; refusing contents.";
+const saveFailureLog = "profile save failed";
 
 export const httpCases: HttpCase[] = [
   {
@@ -146,6 +150,7 @@ export const httpCases: HttpCase[] = [
   },
   {
     name: "fails closed when the session store throws",
+    log: "profiles could not resolve the session; refusing.",
     setup: (f) => {
       f.sessionGet.mockRejectedValueOnce(new Error("session failed"));
     },
@@ -199,6 +204,7 @@ export const httpCases: HttpCase[] = [
   },
   {
     name: "maps a classified lookup outage",
+    log: requestFailureLog,
     setup: (f) => {
       f.find.mockRejectedValueOnce(outage);
     },
@@ -208,6 +214,7 @@ export const httpCases: HttpCase[] = [
   },
   {
     name: "fails closed on an unclassified lookup error",
+    log: requestFailureLog,
     setup: (f) => {
       f.find.mockRejectedValueOnce(new Error("store failed"));
     },
@@ -288,6 +295,7 @@ export const httpCases: HttpCase[] = [
   },
   {
     name: "preserves the definite native save failure",
+    log: saveFailureLog,
     request: [form, "POST", html],
     setup: (f) => {
       f.save.mockRejectedValueOnce(outage);
@@ -298,6 +306,7 @@ export const httpCases: HttpCase[] = [
   },
   {
     name: "preserves the uncertain native save failure",
+    log: saveFailureLog,
     request: [form, "POST", html],
     setup: (f) => {
       f.save.mockRejectedValueOnce(cancelled);
@@ -308,6 +317,7 @@ export const httpCases: HttpCase[] = [
   },
   {
     name: "preserves the definite JSON save failure",
+    log: saveFailureLog,
     setup: (f) => {
       f.save.mockRejectedValueOnce(outage);
     },
@@ -319,6 +329,7 @@ export const httpCases: HttpCase[] = [
   },
   {
     name: "preserves the uncertain JSON save failure",
+    log: saveFailureLog,
     setup: (f) => {
       f.save.mockRejectedValueOnce(cancelled);
     },
@@ -329,6 +340,9 @@ export const httpCases: HttpCase[] = [
   },
   {
     name: "serves the negotiated 500 HTML",
+    log: saveFailureLog,
+    contentType: "text/html",
+    body: "Something broke on our side",
     request: [valid, "PATCH", html],
     setup: (f) => {
       f.save.mockRejectedValueOnce(new Error("save failed"));
@@ -339,6 +353,8 @@ export const httpCases: HttpCase[] = [
   },
   {
     name: "serves the negotiated 500 text",
+    log: saveFailureLog,
+    contentType: "text/plain",
     setup: (f) => {
       f.save.mockRejectedValueOnce(new Error("save failed"));
     },

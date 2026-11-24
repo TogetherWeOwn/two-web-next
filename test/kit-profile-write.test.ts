@@ -91,7 +91,7 @@ describe("Kit profile write HTTP adapter", () => {
 
   it.each(httpCases)("$name", async (sample) => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    vi.spyOn(console, "error").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const f = await fixture("owner", sample.options);
     sample.setup?.(f);
     const result = await f.write(...(sample.request ?? ['{"games":[]}']));
@@ -109,10 +109,17 @@ describe("Kit profile write HTTP adapter", () => {
       expect(res.headers.get("vary")).toBe(sample.vary ?? null);
       expect(res.headers.get("allow")).toBe(sample.allow ?? null);
       expect(res.headers.get("retry-after")).toBe(sample.retry ?? null);
+      if (sample.contentType)
+        expect(res.headers.get("content-type")?.split(";")[0]).toBe(sample.contentType);
       if (res.status === 303) expect(res.headers.get("location")).toBe(`/members/${OWNER}`);
       if (sample.body) expect(await res.text()).toContain(sample.body);
     }
     expect(f.save).toHaveBeenCalledTimes(sample.save ? 1 : 0);
+    if (sample.log)
+      expect(error).toHaveBeenCalledWith(sample.log, {
+        exception: "Error",
+        request_id: REQUEST_ID,
+      });
     if (sample.beforeSession) {
       expect(f.sessionGet).not.toHaveBeenCalled();
       expect(f.throttle).not.toHaveBeenCalled();
