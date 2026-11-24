@@ -15,7 +15,8 @@ async function serveSnapshot(url, request, env, kv, held) {
     headers.get("X-TWO-Key-Id") !== env.DISCORD_LIVE_SNAPSHOT_KEY_ID ||
     !/^[1-9]\d*$/.test(timestamp ?? "") ||
     !/^[a-f0-9]{32}$/.test(nonce ?? "") ||
-    !signature
+    !signature ||
+    typeof request.body !== "string"
   ) {
     return new Response(null, { status: 401 });
   }
@@ -55,7 +56,14 @@ export function fixtureHub(InstalledHub) {
   return class LiveGuildHub extends InstalledHub {
     constructor(ctx, env) {
       const kv = ctx.storage.kv;
-      super(ctx, env, (url, request) => serveSnapshot(url, request, env, kv, () => this.held));
+      super(ctx, env, async (url, request) => {
+        const response = await serveSnapshot(url, request, env, kv, () => this.held);
+        if (response.ok && this.holdSessionAfterPull) {
+          this.holdSessionAfterPull = false;
+          this.sessionRead = "hold";
+        }
+        return response;
+      });
       this.kv = kv;
       this.generation = (kv.get("fixture-generation") ?? 0) + 1;
       kv.put("fixture-generation", this.generation);
@@ -68,9 +76,12 @@ export function fixtureHub(InstalledHub) {
         return super.fetch(request);
       }
       this.firstEvent ??= "control";
+      const sessionRead = url.searchParams.get("session");
+      if (sessionRead) this.sessionRead = sessionRead;
       if (request.method === "POST") {
         this.kv.put("fixture-snapshot", await request.json());
         this.held = url.searchParams.has("hold");
+        this.holdSessionAfterPull = url.searchParams.has("hold-session-after-pull");
       } else if (request.method === "DELETE") {
         this.held = false;
       }
@@ -78,7 +89,21 @@ export function fixtureHub(InstalledHub) {
         generation: this.generation,
         firstEvent: this.firstEvent,
         alarms: this.kv.get("fixture-alarms") ?? [],
+        sessionRead: this.sessionRead,
       });
+    }
+
+    async readSocketSession(ref) {
+      if (this.sessionRead !== "hold") return super.readSocketSession(ref);
+      this.sessionRead = "waiting";
+      const deadline = Date.now() + 4_000;
+      while (this.sessionRead === "waiting" && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      const result = this.sessionRead;
+      this.sessionRead = undefined;
+      if (result !== "release") throw new Error("Synthetic session read failed");
+      return super.readSocketSession(ref);
     }
 
     webSocketMessage(socket, message) {

@@ -1,11 +1,7 @@
 import { z } from "zod";
 import { exceedsUtf8ByteLimit } from "../http/length-limit";
-import {
-  type LiveSocketEnv,
-  readLiveSocketSession,
-  SESSION_REF,
-  SESSION_UNTIL,
-} from "./socket-route";
+import type { SessionStore } from "../sessions";
+import { type LiveSocketEnv, SESSION_REF, SESSION_UNTIL } from "./socket-route";
 import { readTimedSocketSession } from "./socket-session";
 
 const MAX_SOCKETS = 64;
@@ -67,6 +63,7 @@ export class LiveSockets {
     private readonly ctx: DurableObjectState,
     private readonly env: LiveSocketEnv,
     private readonly projectVoice: () => { value: string; until: number } | null,
+    private readonly readSession: SessionStore["getLive"],
   ) {}
 
   scheduleExpiry(until: number): Promise<void> {
@@ -153,9 +150,7 @@ export class LiveSockets {
 
   async #authorize(socket: WebSocket, meta: SocketMeta): Promise<boolean> {
     if (meta.ref === null) return true;
-    const row = await readTimedSocketSession(meta.ref, (ref) =>
-      readLiveSocketSession(this.env, ref),
-    );
+    const row = await readTimedSocketSession(meta.ref, this.readSession);
     if (!row) return this.#close(socket, 1008);
     if (row.validUntil >= meta.until) return true;
     // Shorten the hibernating lease without overwriting a concurrent update.

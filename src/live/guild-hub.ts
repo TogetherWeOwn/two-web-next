@@ -1,7 +1,7 @@
 import { HUB_INGEST_URL, liveIngressConfig } from "./ingress";
 import { encodeLiveProjection } from "./projection";
 import { LiveSequence, type LiveWatermarks } from "./sequence";
-import { HUB_SOCKET_URL, type LiveSocketEnv } from "./socket-route";
+import { HUB_SOCKET_URL, type LiveSocketEnv, readLiveSocketSession } from "./socket-route";
 import { LiveSockets } from "./sockets";
 import { reduceLiveState } from "./state";
 import { signedLiveSnapshot } from "./transport";
@@ -42,7 +42,12 @@ export class LiveGuildHub {
       env.DISCORD_LIVE_SOCKET_ENABLED === "true"
         ? publicVoiceRooms(env.DISCORD_LIVE_PUBLIC_VOICE_ROOM_IDS)
         : null;
-    this.#sockets = new LiveSockets(ctx, env, () => this.#publicVoice());
+    this.#sockets = new LiveSockets(
+      ctx,
+      env,
+      () => this.#publicVoice(),
+      (ref) => this.readSocketSession(ref),
+    );
     const config = liveIngressConfig(env);
     if (!config) return;
     this.#guildId = config.guildId;
@@ -64,6 +69,10 @@ export class LiveGuildHub {
       initial,
       write: (watermarks) => kv.put(WATERMARKS, watermarks),
     });
+  }
+
+  protected readSocketSession(ref: string) {
+    return readLiveSocketSession(this.env, ref);
   }
 
   async fetch(request: Request): Promise<Response> {

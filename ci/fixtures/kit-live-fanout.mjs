@@ -10,7 +10,7 @@ import { SESSION_COOKIE } from "../parity/fixture.mjs";
 import frames from "./kit-live-frames.json" with { type: "json" };
 
 const ingestPath = "/internal/discord-live/v1/ingest";
-const guild = "326474832151838730";
+export const LIVE_FIXTURE_GUILD = "900000000000001390";
 const people = ["101", "102", "103", "104", "105", "106", "107"];
 const permissions = String((1 << 10) | (1 << 20));
 const deadline = (ms = 5_000) => ({ signal: AbortSignal.timeout(ms) });
@@ -27,20 +27,22 @@ function room(id, restricted) {
     kind: "voice",
     parentId: null,
     position: null,
-    overwrites: restricted ? [{ kind: "role", id: guild, allow: "0", deny: permissions }] : [],
+    overwrites: restricted
+      ? [{ kind: "role", id: LIVE_FIXTURE_GUILD, allow: "0", deny: permissions }]
+      : [],
   };
 }
 
 function snapshot(seq, count, observedAt = new Date().toISOString()) {
   return {
     v: 1,
-    guild_id: guild,
+    guild_id: LIVE_FIXTURE_GUILD,
     seq,
     observed_at: observedAt,
     topics: {
       guild: { ownerId: people[0], afkChannelId: null },
       channels: [room("10", false), room("11", true), room("12", false)],
-      roles: [{ id: guild, permissions }],
+      roles: [{ id: LIVE_FIXTURE_GUILD, permissions }],
       members: people.map((userId) => ({
         userId,
         nick: "Synthetic occupant",
@@ -57,7 +59,7 @@ function snapshot(seq, count, observedAt = new Date().toISOString()) {
 async function ingest(origin, seq, op) {
   const body = JSON.stringify({
     v: 1,
-    guild_id: guild,
+    guild_id: LIVE_FIXTURE_GUILD,
     seq,
     occurred_at: new Date().toISOString(),
     ops: [op],
@@ -107,8 +109,8 @@ function connect(url, headers) {
     subscribe(topics) {
       socket.send(JSON.stringify({ v: 1, type: "subscribe", topics }));
     },
-    resyncVoice() {
-      socket.send(JSON.stringify({ v: 1, type: "resync", topics: ["voice"] }));
+    resync(topic = "voice") {
+      socket.send(JSON.stringify({ v: 1, type: "resync", topics: [topic] }));
     },
   };
 }
@@ -128,6 +130,14 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
   const source = async (doc, hold = false) =>
     (await control(doc ? { method: "POST", body: JSON.stringify(doc) } : {}, hold ? "?hold" : ""))
       .generation;
+  const awaitSessionRead = async () => {
+    const until = Date.now() + 2_000;
+    do {
+      if ((await control()).sessionRead === "waiting") return;
+      await delay(20);
+    } while (Date.now() < until);
+    assert.fail("Expected the command to reach the held session read");
+  };
   await source(snapshot(40, 4));
   assert.equal(await ingest(origin, 40, leave("105")), 204, "cold signed snapshot");
 
@@ -151,23 +161,38 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
       values (${ref}, '900000000000001377', 'Synthetic fan-out member', true, now() + interval '10 minutes')`;
     member = connect(url, memberHeaders);
     await member.ready;
-    member.subscribe(["voice"]);
+    member.subscribe(["members", "voice"]);
+    await member.frame(unavailable("members"));
     await member.frame(frames.initial);
-    await sql`update web_sessions set revoked_at = clock_timestamp() where token_hash = ${ref}`;
-    const [status, , [closed]] = await Promise.all([
+
+    await delay(2_100);
+    await control({}, "?session=hold");
+    member.resync("members");
+    await awaitSessionRead();
+    const [status] = await Promise.all([
       ingest(origin, 41, join("105", "10")),
       guest.frame(frames.five),
-      once(member.socket, "close", deadline()),
+      member.frame(frames.five, 2_000),
     ]);
     assert.equal(status, 204);
-    assert.equal(closed.code, 1008);
-    assert.deepEqual(member.frames, [], "revoked exact row receives no fan-out");
+    assert.equal((await control()).sessionRead, "waiting", "patch beats the session read");
+    await control({}, "?session=release");
+    await member.frame(unavailable("members"));
+    console.log("PASS installed Kit public voice patch during a held members-only resync");
 
     assert.equal(await ingest(origin, 42, join("106", "11")), 204);
     assert.equal(await ingest(origin, 43, join("107", "12")), 204);
-    assert.equal(await ingest(origin, 44, leave("105")), 204);
+    await sql`update web_sessions set revoked_at = clock_timestamp() where token_hash = ${ref}`;
+    const [revocationStatus, , [closed]] = await Promise.all([
+      ingest(origin, 44, leave("105")),
+      guest.frame(frames.suppressed),
+      once(member.socket, "close", deadline()),
+    ]);
+    assert.equal(revocationStatus, 204);
+    assert.equal(closed.code, 1008);
+    assert.deepEqual(member.frames, [], "revoked exact row receives no fan-out");
     // No extra revision from either the restricted allowlisted room or the unlisted room.
-    await guest.frame(frames.suppressed);
+    assert.deepEqual(guest.frames, []);
 
     await source(snapshot(40, 4), true);
     let recovered = false;
@@ -193,13 +218,13 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
     await delay(5_100); // Leave time for the independent browser pull throttle.
     assert.deepEqual(guest.frames, [], "raw recovery must not publish a baseline");
     await source(snapshot(45, 5));
-    guest.resyncVoice();
+    guest.resync();
     await guest.frame(frames.withdrawal);
     await delay(5_100);
     assert.deepEqual(guest.frames, [], "a fresh raw state cannot replace a covering browser pull");
     const covering = snapshot(46, 5);
     assert.equal(await source(covering), generation);
-    guest.resyncVoice();
+    guest.resync();
     await guest.frame(frames.withdrawal);
     await guest.frame(frames.covering);
     const roomPolicy = (restricted) => ({
@@ -227,7 +252,7 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
         assert.equal(await source(), generation);
         if (i === 1) {
           await source(renewal);
-          guest.resyncVoice();
+          guest.resync();
           const at = await guest.frame(projected("snapshot", 6, 5));
           assert.ok(at < sourceUntil, "warm resync uses the same active socket and revision");
         }
@@ -258,11 +283,11 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
     const renewed = snapshot(49, 5);
     assert.equal(await source(renewed), generation);
     const firstCommandAt = Date.now();
-    guest.resyncVoice();
+    guest.resync();
     await guest.frame(frames.withdrawal);
     await guest.frame(frames.warm);
     assert.equal(await source(), generation, "the socket resynced on the same hub without ingress");
-    observer.resyncVoice();
+    observer.resync();
     await observer.frame(frames.withdrawal);
     const secondReply = await observer.frame(projected("snapshot", 2, 5), 8_000);
     assert.ok(
@@ -299,7 +324,7 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
     const recovery = snapshot(51, 6);
     const recoveryGeneration = await source(recovery);
     assert.deepEqual(guest.frames, [], "cold expiry sends one withdrawal");
-    guest.resyncVoice();
+    guest.resync();
     await guest.frame(frames.withdrawal);
     await guest.frame(frames.cold);
     assert.equal(await source(), recoveryGeneration, "independent proof restores the same socket");
@@ -337,7 +362,7 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
       await delay(5_100);
       const initial = snapshot(++cursor, 5);
       const generation = await source(initial);
-      guest.resyncVoice();
+      guest.resync();
       await guest.frame(frames.withdrawal);
       await guest.frame(projected("snapshot", ++revision, 5));
       const idle = 20_000;
@@ -354,13 +379,13 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
         assert.equal(await ingest(origin, cursor + 1, join("106", "11")), 204);
         assert.deepEqual(guest.frames, [], "producer wake leaves the live baseline alone");
         await source(snapshot(cursor, 5));
-        guest.resyncVoice();
+        guest.resync();
         await guest.frame(frames.withdrawal);
         await delay(5_100);
         await source(replacement);
       }
       assert.deepEqual(guest.frames, [], "the baseline stays quiet before explicit resync");
-      guest.resyncVoice();
+      guest.resync();
       if (producerWake) await guest.frame(frames.withdrawal);
       const at = await guest.frame(projected("snapshot", ++revision, 6));
       const originalUntil = Date.parse(initial.observed_at) + 30_000;
@@ -379,6 +404,45 @@ export async function verifyPublicFanout(origin, appOrigin, databaseUrl, secret)
     }
     console.log(
       "PASS installed Kit pre-expiry resync with warm, socket-woken and producer-woken hubs",
+    );
+
+    await source(snapshot(cursor, 5));
+    guest.resync();
+    await guest.frame(frames.withdrawal);
+    await guest.frame(projected("snapshot", ++revision, 5));
+    guest.socket.close();
+    for (const [outcome, code] of [
+      ["expired", 1008],
+      ["failed", 1011],
+    ]) {
+      await sql`update web_sessions set expires_at = clock_timestamp() + interval '10 minutes'
+        where token_hash = ${ref}`;
+      member = connect(url, memberHeaders);
+      await member.ready;
+      member.subscribe(["voice"]);
+      await member.frame(projected("snapshot", 1, 5));
+      await delay(5_100);
+      await control(
+        { method: "POST", body: JSON.stringify(snapshot(cursor, 5)) },
+        "?hold-session-after-pull",
+      );
+      const [[closed]] = await Promise.all([
+        once(member.socket, "close", deadline()),
+        (async () => {
+          member.resync();
+          await awaitSessionRead();
+          if (outcome === "expired") {
+            await sql`update web_sessions set expires_at = clock_timestamp()
+              where token_hash = ${ref}`;
+          }
+          await control({}, outcome === "expired" ? "?session=release" : "?session=fail");
+        })(),
+      ]);
+      assert.equal(closed.code, code, outcome);
+      assert.deepEqual(member.frames, [], `a ${outcome} post-pull read sends no snapshot`);
+    }
+    console.log(
+      "PASS installed Kit expired and failed post-pull authorization closes without a frame",
     );
   } finally {
     guest.socket.close();
