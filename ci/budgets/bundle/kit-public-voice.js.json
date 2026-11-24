@@ -1,0 +1,8 @@
+{
+  "budgets": {
+    "public/islands/kit-public-voice.js": {
+      "maxRawBytes": 4608,
+      "maxGzipBytes": 2048
+    }
+  }
+}

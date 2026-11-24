@@ -113,7 +113,7 @@ export async function finishIdle(peer) {
   await closed;
 }
 
-async function fixtureSession(secret) {
+export async function fixtureSession(secret) {
   const token = `two_${randomBytes(32).toString("base64url")}`;
   const ref = createHash("sha256").update(token).digest("hex");
   const signed = await generateSignedCookie(SESSION_COOKIE, token, secret, { secure: true });

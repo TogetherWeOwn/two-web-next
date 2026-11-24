@@ -13,6 +13,9 @@ on:
       - test/fixtures/kit-browser-harness.svelte
       - test/fixtures/kit-live-topic-browser.svelte
       - src/live/**
+      - assets/islands/kit-public-voice.js
+      - web/src/routes/+page.server.ts
+      - web/src/routes/+page.svelte
       - package*.json
       - web/.npmrc
       - web/package*.json
@@ -29,6 +32,9 @@ on:
       - test/fixtures/kit-browser-harness.svelte
       - test/fixtures/kit-live-topic-browser.svelte
       - src/live/**
+      - assets/islands/kit-public-voice.js
+      - web/src/routes/+page.server.ts
+      - web/src/routes/+page.svelte
       - package*.json
       - web/.npmrc
       - web/package*.json

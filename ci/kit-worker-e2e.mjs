@@ -234,6 +234,7 @@ function fetch(request, env, context) {
   const url = new URL(incoming.pathname + incoming.search, env.APP_URL);
   const secure = new Request(url, request);
   secure.headers.set("host", url.host);
+  if (secure.headers.get("origin") === incoming.origin) secure.headers.set("origin", url.origin);
   return worker.fetch(secure, env, context);
 }\n`,
     );
@@ -257,6 +258,8 @@ function fetch(request, env, context) {
     const { verifyKitLiveSocket } = await import("./kit-live-socket.mjs");
     await verifyKitLiveSocket(live.origin, "https://kit-live.invalid", databaseUrl, secret);
     await verifyPublicFanout(live.origin, "https://kit-live.invalid", databaseUrl, secret);
+    const { verifyKitPublicVoice } = await import("./fixtures/kit-public-voice.mjs");
+    await verifyKitPublicVoice(origin, live.origin, databaseUrl, secret);
   }
 
   const archive = await fetch(`${origin}/events/past`);
