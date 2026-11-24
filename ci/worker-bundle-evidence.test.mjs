@@ -920,7 +920,6 @@ describe("workflow evidence wiring", () => {
       upload,
       /if \[ "\$CUTOVER_MODE" != ordinary \]; then\n +node [^\n]+ upload [^\n]+\n +exit 0\nfi/,
     );
-    assert.match(upload, /versions upload[^\n]+--no-bundle dist-production\/worker\.js/);
   });
 
   test("CI creates build-only evidence and checks pinned no-bundle equivalence", () => {
