@@ -658,7 +658,7 @@ export interface KitResolveOptions {
 
 export interface HookDispatchDeps {
   appUrl: string;
-  adminEnv?: Env;
+  admin?: { env: Env; completeForm: () => never };
   // Signature-only notice peek, independent of the public route's session store.
   sessionSecret?: string;
   // Archive and static opt-ins are shared by the separate staging and
@@ -1061,18 +1061,18 @@ async function dispatchOwnedRequest(
   if (!isTrustedHost(deps.appUrl, [event.request.headers.get("host"), event.url.host])) {
     return deps.honoFetch(event.request);
   }
-  const adminEnv = deps.adminEnv;
+  const admin = deps.admin;
   if (
-    adminEnv &&
+    admin &&
     admitsKitAdmin(
       event.request,
       event.url,
       event.isDataRequest,
       deps.appUrl,
-      adminEnv.KIT_ROUTE_ADMIN,
+      admin.env.KIT_ROUTE_ADMIN,
     )
   ) {
-    const response = await dispatchKitAdminRequest(event, deps, adminEnv);
+    const response = await dispatchKitAdminRequest(event, deps, admin);
     if (response) return response;
   }
   return dispatchFromManifest(
@@ -1115,7 +1115,7 @@ const KIT_ADMIN_READS = ROUTE_MANIFEST.filter(({ path }) => isInNamespace(path, 
 async function dispatchKitAdminRequest(
   event: HookEventLike,
   deps: HookDispatchDeps,
-  env: Env,
+  { env, completeForm }: NonNullable<HookDispatchDeps["admin"]>,
 ): Promise<Response | null> {
   const { request, url } = event;
   const operator = familyRouteFor(event, ROUTE_MANIFEST, [
@@ -1151,17 +1151,9 @@ async function dispatchKitAdminRequest(
   if (originRefused) return finish(originRefused);
   if (operator) return finish(await deps.resolve(event));
 
-  let locals: KitLocals | undefined;
-  try {
-    locals = await deps.sessionFor?.(event);
-  } catch (error) {
-    console.warn("kit admin session bridge unavailable", {
-      exception: error instanceof Error ? error.name : "unknown",
-    });
-  }
-  const admission = await kitAdminAdmission(context, locals);
+  const admission = await kitAdminAdmission(context, () => deps.sessionFor?.(event));
   if (admission.kind === "refused") return finish(admission.response);
-  event.locals = { ...(event.locals as object), ...locals, requestId };
+  event.locals = { ...(event.locals as object), ...admission.locals, requestId };
   if (read) {
     const result = await dispatchKitRequest(
       event,
@@ -1181,6 +1173,7 @@ async function dispatchKitAdminRequest(
     runAdminForm: async () => {
       outcome ??= submit();
       await outcome;
+      return completeForm();
     },
   });
   const kit = await deps.resolve(event);

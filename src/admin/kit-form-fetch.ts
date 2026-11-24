@@ -8,28 +8,18 @@ import { buildAdminApp } from "./routes";
 
 const formAdmission = Symbol("kitAdminFormAdmission");
 type FormBindings = Env & {
-  [formAdmission]?: { actor: Actor; requestId: string };
+  [formAdmission]: { actor: Actor; requestId: string };
 };
 
 function createFormApp() {
   const forms = new Hono<QueuePreviewVars>();
   forms.onError(internalErrorHandler);
-  // Run the shared controller only for an admitted form POST. Bindings are
-  // request-local and no client header can supply the capability or actor.
-  forms.use("*", async (c, next) => {
-    const admission = (c.env as FormBindings)[formAdmission];
-    if (c.req.method !== "POST" || !admission || !adminFormPath(new URL(c.req.url).pathname)) {
-      return c.notFound();
-    }
-    c.set("requestId", admission.requestId);
-    await next();
-  });
   forms.route(
     "/admin",
     buildAdminApp(async (c, next) => {
-      const admission = (c.env as FormBindings)[formAdmission];
-      if (!admission) return c.notFound();
-      c.set("adminActor", admission.actor);
+      const { actor, requestId } = (c.env as FormBindings)[formAdmission];
+      c.set("requestId", requestId);
+      c.set("adminActor", actor);
       await next();
     }),
   );
@@ -44,6 +34,11 @@ export async function fetchKitAdminForm(
   actor: Actor,
   requestId: string,
 ) {
+  if (request.method !== "POST" || !adminFormPath(new URL(request.url).pathname)) {
+    return new Response(null, { status: 404 });
+  }
+  // The router is private to this function. Only the calling dispatcher can
+  // attach its admitted actor and request ID to these per-request bindings.
   const bindings: FormBindings = { ...env, [formAdmission]: { actor, requestId } };
   return (formApp ??= createFormApp()).fetch(request, bindings);
 }

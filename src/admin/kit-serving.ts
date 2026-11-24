@@ -1,4 +1,5 @@
 import type { Context } from "hono";
+import { exceptionClass } from "../alerts";
 import type { Env } from "../env";
 import { databaseUnavailable, forbidden } from "../errors";
 import type { KitLocals } from "../kit-session";
@@ -65,15 +66,21 @@ export function admitsKitAdmin(
 
 export async function kitAdminAdmission(
   context: Context<{ Bindings: Env }>,
-  locals: Partial<KitLocals> | undefined,
+  readLocals: () => Promise<KitLocals> | undefined,
 ) {
+  let locals: KitLocals | undefined;
+  try {
+    locals = await readLocals();
+  } catch (error) {
+    console.warn("kit admin session bridge unavailable", { exception: exceptionClass(error) });
+  }
   const decision = decideKitAdminGuard(
     { status: locals?.status, session: locals?.session },
     context.req.path,
   );
   switch (decision.kind) {
     case "pass":
-      return decision;
+      return { ...decision, locals };
     case "guest":
       return { kind: "refused", response: await bounceToLogin(context) } as const;
     case "forbidden":

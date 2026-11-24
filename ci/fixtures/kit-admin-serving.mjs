@@ -8,8 +8,6 @@ import { FIXTURE_SECRETS, SESSION_COOKIE } from "../parity/fixture.mjs";
 const editor = "/admin/events/new";
 const operator = "/admin/ops-overrides";
 const html = { accept: "text/html" };
-const moderatorId = "900000000000009574";
-const memberId = "900000000000009575";
 
 export async function prepareAdminFixture(worker, entry) {
   const bot = "https://fixture-operator-bot.invalid";
@@ -81,6 +79,9 @@ async function visit(worker, path, status, { method = "GET", headers, body, owne
 }
 
 export async function assertKitAdminServing({ kit, off, hono, databaseUrl }) {
+  const actor = 900000000000000000n + BigInt(`0x${randomBytes(7).toString("hex")}`);
+  const moderatorId = String(actor);
+  const memberId = String(actor + 1n);
   const sql = postgres(databaseUrl, { max: 1 });
   try {
     let moderator = await session(sql, moderatorId, true);
@@ -226,7 +227,8 @@ export async function assertKitAdminServing({ kit, off, hono, databaseUrl }) {
     assert.equal(legacy.headers.get("location"), editor);
   } finally {
     try {
-      await sql`delete from activity_log where causer_id = ${moderatorId}`;
+      // Audit rows are append-only and are isolated by the synthetic actor.
+      // The hosted job discards the disposable database at teardown.
       await sql`delete from featured_contents where created_by = ${moderatorId}`;
       await sql`delete from events where created_by = ${moderatorId}`;
       await sql`delete from web_sessions where user_id in (${moderatorId}, ${memberId})`;
