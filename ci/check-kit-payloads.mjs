@@ -65,6 +65,11 @@ const CHECK_MATCHERS = [
     testContains: "GET /sitemap_index.xml",
   },
   {
+    id: "kit-payload-security-txt",
+    describe: "Kit security.txt anonymous payload",
+    testContains: null,
+  },
+  {
     id: "kit-payload-events-past",
     describe: "Kit GET /events/past anonymous payload",
     testContains: null,

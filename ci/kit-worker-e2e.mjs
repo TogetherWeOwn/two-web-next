@@ -869,6 +869,45 @@ export default {
       await listen(instance.child, instance.origin, () => instance.log);
       return instance;
     },
+    startSecurityTxtPair: async () => {
+      const appUrl = "https://policy.example.test";
+      const [direct, enabled] = await Promise.all(
+        [
+          ["hono-policy", join(repo, "src/worker.ts"), join(repo, "public"), undefined],
+          ["kit-policy", worker, assets, "true"],
+        ].map(async ([name, main, assetsDirectory, flag]) => {
+          // Present synthetic HTTPS authorities without leaving loopback.
+          const entry = join(scratch, `${name}.mjs`);
+          await writeFile(
+            entry,
+            `import worker from ${JSON.stringify(main)};
+export default {
+  fetch(request, env, context) {
+    const original = new URL(request.url);
+    const url = new URL(env.APP_URL);
+    const canonicalHost = url.host;
+    url.host = request.headers.get("x-fixture-url-host") ?? canonicalHost;
+    url.pathname = original.pathname;
+    url.search = original.search;
+    const rewritten = new Request(url, request);
+    rewritten.headers.set("host", request.headers.get("x-fixture-host") ?? canonicalHost);
+    rewritten.headers.delete("x-fixture-url-host");
+    rewritten.headers.delete("x-fixture-host");
+    return worker.fetch(rewritten, env, context);
+  },
+};\n`,
+          );
+          const instance = await startWorker(name, entry, assetsDirectory, undefined, {
+            APP_URL: appUrl,
+            DATABASE_URL: undefined,
+            KIT_ROUTE_SECURITY_TXT: flag,
+          });
+          await listen(instance.child, instance.origin, () => instance.log);
+          return instance;
+        }),
+      );
+      return { appUrl, direct, enabled };
+    },
   });
 
   if (args.length) {

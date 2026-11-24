@@ -162,3 +162,25 @@ describe("Kit search indexing anonymous payloads", () => {
     assertNoMemberBytes(bytes);
   });
 });
+
+describe("Kit security.txt anonymous payload", () => {
+  it("serves the disclosure file without member or session data", async () => {
+    const query = vi.fn(() => {
+      throw new Error("Security.txt unexpectedly read from the database");
+    });
+    const path = "/.well-known/security.txt";
+    const request = new Request(`${ARCHIVE_ORIGIN}${path}`, {
+      headers: { cookie: `__Host-two_session=${SESSION_BEARER}` },
+    });
+    const response = await kit.request(request, archiveEnv(drizzle(query) as unknown as Db));
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(body).toContain("Contact: ");
+    expect(body).toContain(`Canonical: ${ARCHIVE_ORIGIN}${path}\n`);
+    expect(query).not.toHaveBeenCalled();
+    assertNoMemberBytes(body);
+  });
+});

@@ -266,11 +266,13 @@ export async function compileArchiveKit() {
         import { GET as eventCalendar } from ${JSON.stringify(join(root, "web/src/routes/events/[key].ics/+server.ts"))};
         import { GET as robots } from ${JSON.stringify(join(root, "web/src/routes/robots.txt/+server.ts"))};
         import { GET as sitemap } from ${JSON.stringify(join(root, "web/src/routes/sitemap_index.xml/+server.ts"))};
+        import { GET as securityTxt } from ${JSON.stringify(join(root, "web/src/routes/.well-known/security.txt/+server.ts"))};
         import { KIT_EVENT_CALENDAR_ROUTE } from ${JSON.stringify(join(root, "src/events/kit-event-calendar-route.ts"))};
         import { bind } from "acceptance:bindings";
         const endpoints = new Map([
           ["/events.ics", calendar], ["/events.rss", rss],
           ["/robots.txt", robots], ["/sitemap_index.xml", sitemap],
+          ["/.well-known/security.txt", securityTxt],
         ]);
         export async function request(request, env, deps) {
           bind(env, deps);
