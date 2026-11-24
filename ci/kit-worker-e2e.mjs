@@ -862,10 +862,12 @@ export default machineParityWorker(inner, ${JSON.stringify(probePath)});\n`,
       assert.deepEqual(await response.json(), {
         agentCreate: 201,
         mcpComplete: "eof",
-        mcpDisconnect: "cancelled",
+        mcpReaderCancel: "cancelled",
       });
-      console.log(`PASS ${name} agent JSON success and MCP SSE completion and cancellation`);
+      console.log(`PASS ${name} agent JSON success, MCP SSE EOF and in-Worker reader cancellation`);
     }
+    const { verifyKitMachineDisconnect } = await import("./fixtures/kit-machine-disconnect.mjs");
+    await verifyKitMachineDisconnect(worker, scratch);
   }
 } catch (error) {
   failed = true;
