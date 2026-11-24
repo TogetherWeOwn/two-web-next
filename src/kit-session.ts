@@ -2,8 +2,8 @@
 // hook uses while Hono retains OAuth/session authority.
 //
 // Read-only by construction. It verifies the signed __Host session cookie with
-// the same hono primitive Hono's own readers use (parseSigned), hashes the
-// bearer, and makes exactly one store.get per request — one decision per
+// the shared Hono-compatible codec, hashes the bearer, and makes one
+// store.get per verified bearer — one decision per
 // request, shared with Kit loads through locals (createRequestSessionCache
 // shares one decision across concurrent readers of the same Request where
 // several readers are wired). The bridge never rotates, revokes, or issues
@@ -30,12 +30,11 @@
 // never reported as a logout, so Kit renders "unknown" instead of flipping a
 // member to logged-out). The auth-status probe cookie is deliberately never
 // accepted here: it proves liveness only and is not a login token.
-import { parseSigned } from "hono/utils/cookie";
 import { exceptionClass } from "./alerts";
 import { AUTH_STATUS_COOKIE } from "./auth-status";
 import type { Env } from "./env";
 import { storeForEnv } from "./http/session";
-import { signedCookieHeader } from "./http/signed-cookie";
+import { signedCookieHeader, verifySignedCookie } from "./http/signed-cookie";
 import type { KitEventsSession } from "./kit-events";
 import { safeNext } from "./join/service";
 import {
@@ -98,16 +97,41 @@ const GUEST: KitRequestSession = { status: "guest", session: null };
 const UNKNOWN: KitRequestSession = { status: "unknown", session: null };
 const NO_JOURNEY: KitReturnJourney = { returnTo: null, joinResult: null, expiredWrite: null };
 
+const KIT_COOKIE_NAMES: ReadonlySet<string> = new Set([
+  SESSION_COOKIE,
+  LOGIN_NEXT_COOKIE,
+  LOGIN_INTENDED_COOKIE,
+  JOIN_RESULT_COOKIE,
+  EXPIRED_WRITE_COOKIE,
+]);
+
 async function verifiedCookies(
   request: Request,
   sessionSecret: string,
-): Promise<Record<string, string | false> | null> {
+): Promise<Record<string, string | null> | null> {
   if (!sessionSecret) return null;
+  const encoded = new Map<string, string>();
+  for (const pair of (request.headers.get("cookie") ?? "").split(";")) {
+    const separator = pair.indexOf("=");
+    if (separator < 0) continue;
+    const name = pair.slice(0, separator).replace(/^[ \t]+|[ \t]+$/g, "");
+    if (!KIT_COOKIE_NAMES.has(name) || encoded.has(name)) continue;
+    const raw = pair.slice(separator + 1).replace(/^[ \t]+|[ \t]+$/g, "");
+    const value = raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw;
+    // Hono permits printable ASCII except quote, semicolon, and backslash.
+    // A syntactically valid pair claims the name even when its MAC fails.
+    if (/^[\x20-\x21\x23-\x3a\x3c-\x5b\x5d-\x7e]*$/.test(value)) encoded.set(name, value);
+  }
   try {
-    return await parseSigned(request.headers.get("cookie") ?? "", sessionSecret);
+    return Object.fromEntries(
+      await Promise.all(
+        [...encoded].map(
+          async ([name, value]) => [name, await verifySignedCookie(value, sessionSecret)] as const,
+        ),
+      ),
+    );
   } catch {
-    // A malformed Cookie header must not 500 a Kit render; without verified
-    // cookies there is simply no session and no journey to report.
+    // A crypto failure is indeterminate, not a logout or a failed render.
     return null;
   }
 }
@@ -180,13 +204,13 @@ export function createRequestSessionCache(): (
   };
 }
 
-function joinResultOf(value: string | false | undefined): JoinResult | null {
+function joinResultOf(value: string | null | undefined): JoinResult | null {
   return value === "added" || value === "already_member" ? value : null;
 }
 
 // Mirrors consumeExpiredWrite: only a pending notice resolves; a restored one
 // belongs to Hono's banner render, never to a Kit destination.
-function expiredWriteOf(value: string | false | undefined): string | null {
+function expiredWriteOf(value: string | null | undefined): string | null {
   if (typeof value !== "string" || !value.startsWith("pending|")) return null;
   return safeNext(value.slice("pending|".length));
 }
