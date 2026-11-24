@@ -4,7 +4,6 @@ import { diagnosticCode } from "../bot/diagnostic-code";
 import {
   ANNOUNCEMENT_RECONCILIATION_REASON,
   CALL_INTERNAL_ACTION,
-  LEDGER_DB_LOCK_TIMEOUT_MS,
   LEDGER_DB_TIMEOUT_MS,
 } from "./constants";
 import { stampQueueFailure } from "./postgres";
@@ -105,7 +104,7 @@ export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
   async function bounded<T>(work: (tx: TxClient) => Promise<T>): Promise<T> {
     return sql.begin(async (transaction) => {
       const tx = transaction as unknown as TxClient;
-      await tx`select set_config('lock_timeout', ${`${LEDGER_DB_LOCK_TIMEOUT_MS}ms`}, true),
+      await tx`select set_config('lock_timeout', ${`${LEDGER_DB_TIMEOUT_MS}ms`}, true),
         set_config('statement_timeout', ${`${LEDGER_DB_TIMEOUT_MS}ms`}, true)`;
       return work(tx);
     }) as Promise<T>;
