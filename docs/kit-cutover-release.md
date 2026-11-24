@@ -18,3 +18,4 @@ the staging Environment for a dedicated synthetic Neon project with the
 `two_web_cutover` control database and `two_web_cutover_owner` login.
 It runs public smoke and exact-version undo on both ledger states, then
 removes the run-owned Worker, database, and expiring login.
+To retry, select **Re-run all jobs** so staging uses a packet from that attempt.

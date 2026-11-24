@@ -198,6 +198,7 @@ jobs:
           name: kit-cutover-packet-${{ github.run_attempt }}
           path: ${{ runner.temp }}/kit-cutover-packet
       - name: Stage Hono, exercise Kit, and restore the exact Hono UUID
+        timeout-minutes: 15
         run: node ci/kit-cutover-staging.mjs "$RUNNER_TEMP/kit-cutover-packet" "$RUNNER_TEMP/proof.json"
         env:
           CUTOVER_PACKET_DIGEST: ${{ needs.kit-fatal-proof.outputs.cutover_digest }}
