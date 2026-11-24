@@ -99,7 +99,7 @@ describe("Kit static feed anonymous payloads", () => {
       startsAt: new Date("2099-01-02T18:00:00Z"),
       endsAt: new Date("2099-01-02T19:00:00Z"),
       createdBy: MEMBER_ID,
-      joinInstructions: USERS[1]!.username,
+      join_instructions: USERS[1]!.username,
     });
     const db = drizzle(async (sql, params) => {
       expect(sql).toContain('from "events"');
