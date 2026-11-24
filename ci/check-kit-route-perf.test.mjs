@@ -364,6 +364,38 @@ test("shipping reports an unapproved route without admitting it to the ratchet",
   assert.match(incomplete.error, /inventory mismatch/);
 });
 
+test("strict route budgets admit both measured reconciliation fixture pages", (t) => {
+  const f = fixture(t);
+  const admissionPath = "ci/budgets/decisions/kit-perf/2026-11-23-reconciliation-routes.json";
+  const admission = JSON.parse(
+    readFileSync(join(import.meta.dirname, "..", admissionPath), "utf8"),
+  );
+  const ids = ["/admin/reconciliation", "/admin/reconciliation/[key]"];
+  assert.deepEqual(Object.keys(admission.routes), ids);
+  for (const id of ids) {
+    f.put(`web/src/routes${id}/+page.svelte`, "synthetic reconciliation page");
+    f.evidence.routes.push({ id, page: f.evidence.routes.find(({ id }) => id === "/about").page });
+  }
+  f.save();
+  assert.match(checkRoutes(f.root).error, /inventory mismatch/);
+
+  const saveAdmittedBudget = () =>
+    f.put(ROUTE_BUDGET, { ...f.budget, routes: { ...f.budget.routes, ...admission.routes } });
+  saveAdmittedBudget();
+  assert.match(checkRoutes(f.root).error, /approved route plan/);
+  f.put(admissionPath, admission);
+  const admitted = checkRoutes(f.root);
+  assert.equal(admitted.exitCode, 0, admitted.error);
+  for (const id of ids) assert.ok(admitted.routes[id].js.files > 0);
+
+  f.budget.routes["/"].js.maxFiles -= 1;
+  f.approveBudget();
+  saveAdmittedBudget();
+  const overBudget = checkRoutes(f.root);
+  assert.equal(overBudget.exitCode, 1);
+  assert.deepEqual(overBudget.breaches, ["/ js"]);
+});
+
 function runReportOnlyCli(args, summaryPath) {
   return spawnSync(process.execPath, ["ci/check-kit-route-perf.mjs", "--report-only", ...args], {
     cwd: join(import.meta.dirname, ".."),

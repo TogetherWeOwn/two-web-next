@@ -168,6 +168,8 @@ describe("/join widget.json presence (server-side cache only)", () => {
     expect(second.html).toContain('data-testid="join-widget-presence"');
     expect(second.html).toContain("42");
     expect(second.html).toContain("stage-night");
+    expect(second.html).toContain("In Together We Own now");
+    expect(second.html).not.toContain("as of the last update");
     expect(second.html).toContain("https://discord.gg/widget-invite");
     expect(second.html).not.toContain("opaque-1");
     expect(second.html).not.toContain("bot-token");
@@ -215,13 +217,52 @@ describe("/join widget.json presence (server-side cache only)", () => {
 
     // Rate-limited at the next verdict window: the presence block stays.
     status = 429;
-    h.advance(60_000);
+    h.advance(59_999);
+    expect((await h.join()).html).toContain("In Together We Own now");
+    h.advance(1);
     await Promise.all((await h.join()).pending);
     const limited = await h.join();
     expect(limited.status).toBe(200);
+    expect(limited.cacheControl).toBe("no-store");
     expect(limited.html).toContain('data-testid="join-widget-presence"');
     expect(limited.html).toContain("stage-night");
     expect(limited.html).toContain("42");
+    expect(limited.html).toContain("In Together We Own as of the last update");
+    expect(limited.html).not.toContain("In Together We Own now");
+
+    // Further rate limits must not extend the lifetime of old presence data.
+    h.advance(60_000);
+    const repeated = await h.join();
+    expect(repeated.cacheControl).toBe("no-store");
+    expect(repeated.html).toContain("In Together We Own as of the last update");
+    await Promise.all(repeated.pending);
+    h.advance(59_999);
+    expect((await h.join()).html).toContain("In Together We Own as of the last update");
+    h.advance(1);
+    await Promise.all((await h.join()).pending);
+    const expired = await h.join();
+    expect(expired.cacheControl).toBe("public, max-age=3600");
+    expect(expired.html).not.toContain('data-testid="join-widget-presence"');
+    expect(expired.html).not.toContain("stage-night");
+    expect(expired.html).not.toContain('data-testid="join-widget-online"');
+    expect(expired.html).toContain('data-testid="join-widget-load"');
+    expect(h.calls).toHaveLength(4);
+  });
+
+  it("qualifies an empty channel list once its snapshot is stale", async () => {
+    const h = harness(async () => Response.json(widgetPayload({ channels: [] })));
+    await Promise.all((await h.join()).pending);
+    const fresh = await h.join();
+    expect(fresh.html).toContain("No voice channels open right now.");
+    expect(fresh.html).not.toContain("No voice channels open as of the last update.");
+
+    h.advance(60_000);
+    const stale = await h.join();
+    expect(stale.cacheControl).toBe("no-store");
+    expect(stale.html).toContain("In Together We Own as of the last update");
+    expect(stale.html).toContain("No voice channels open as of the last update.");
+    expect(stale.html).not.toContain("No voice channels open right now.");
+    await Promise.all(stale.pending);
   });
 
   it("hides presence when the guild mismatches the cached verdict", async () => {

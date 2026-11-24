@@ -46,11 +46,11 @@
 import { createHash } from "node:crypto";
 import { jsx } from "hono/jsx/jsx-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import app from "./app";
 import type { Env } from "../src/env";
 import { EventPage } from "../src/events/pages";
 import { getPublicEvent, listFeed, type PublicEvent } from "../src/events/reads";
 import { MARKDOWN_MIME, mdEvent, mdEvents, type MdEvent } from "../src/ai-friendly/md";
+import { requestApp } from "./helpers/fetch-app";
 
 vi.mock("../src/events/reads", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/events/reads")>()),
@@ -167,7 +167,7 @@ const get = (
   appUrl = APP_URL,
   headers: Record<string, string> = {},
   database = true,
-) => app.request(path, { headers }, env(appUrl, database));
+) => requestApp(path, { headers }, env(appUrl, database));
 
 // Independent byte oracle, not etagFor from production.
 const etagOf = (bytes: Uint8Array): string => `"${createHash("sha1").update(bytes).digest("hex")}"`;

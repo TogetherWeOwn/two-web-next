@@ -119,6 +119,7 @@ def check():
             "REPO_PRIVATE": os.environ.get("REPO_PRIVATE", "false"),
             "REQUIRE_CARD_REF": "false",
             "PR_STANDARDS_MODE": os.environ["PR_STANDARDS_MODE"],
+            "PR_VERIFICATION_MODE": os.environ.get("PR_VERIFICATION_MODE", ""),
             "PR_NUMBER": os.environ.get("PR_NUMBER", ""),
             "HEAD_REF_ERROR_FROM_PR": os.environ.get("HEAD_REF_ERROR_FROM_PR", ""),
         }

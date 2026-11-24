@@ -220,39 +220,36 @@ export function securityTxtAssertions(
 }
 
 async function readJoinMarkup(body) {
-  // Staging installs parse5. Keep callers without a renderer expectation dependency-free.
-  const { parse } = await import("parse5");
-  const nodes = [parse(body)];
-  let action = false;
-  let heading = false;
-  while (nodes.length > 0) {
-    const node = nodes.pop();
-    if (node.namespaceURI === "http://www.w3.org/1999/xhtml") {
-      const attr = (name) => node.attrs.find((entry) => entry.name === name)?.value;
-      if (attr("inert") !== undefined || attr("hidden") !== undefined) continue;
-      // A bare /join GET renders this same-origin action without query parameters.
-      if (
-        node.tagName === "a" &&
-        attr("href") === "/join/discord" &&
-        attr("data-testid") === "join-oneclick"
-      ) {
-        action = true;
-      }
-      if (node.tagName === "h2" && attr("id") === "join-card-heading") {
-        const [text] = node.childNodes;
-        if (
-          node.childNodes.length === 1 &&
-          text.nodeName === "#text" &&
-          text.value === "Join with one sign-in"
-        ) {
-          heading = true;
-        }
-      }
-    }
-    // Template contents are inert and are not part of childNodes.
-    for (const child of node.childNodes ?? []) nodes.push(child);
-  }
+  // Load the parser only for structural checks. Other smoke callers can run without dependencies.
+  const { parseRenderedPage, renderedAttribute, renderedElements, renderedText } = await import(
+    "../ci/rendered-page.mjs"
+  );
+  const page = parseRenderedPage(body);
+  // A bare /join GET renders this same-origin action without query parameters.
+  const action = renderedElements(page, { tag: "a" }).some(
+    (link) =>
+      renderedAttribute(link, "href") === "/join/discord" &&
+      renderedAttribute(link, "data-testid") === "join-oneclick",
+  );
+  const heading = renderedElements(page, { tag: "h2", id: "join-card-heading" }).some(
+    (node) => renderedText(node) === "Join with one sign-in",
+  );
   return { action, heading };
+}
+
+async function hasGuestKitHomeHeading(body) {
+  const { parseRenderedPage, renderedElements, renderedText } = await import(
+    "../ci/rendered-page.mjs"
+  );
+  const headings = [
+    ...renderedElements(parseRenderedPage(body), { tag: "h1", id: "home-heading" }),
+  ];
+  return (
+    headings.length === 1 &&
+    /^(?:The lobby is open\.|Next game night: \S(?:.*\S)?\. Come play with us\.)$/.test(
+      renderedText(headings[0]).replace(/\s+/g, " ").trim(),
+    )
+  );
 }
 
 // Optional per-route hook for machine verdicts (--json/--ledger): called once
@@ -749,8 +746,16 @@ export async function smoke(
           check(heading, 'Kit Join card heading "Join with one sign-in"', "heading did not match");
         }
       }
-      if (!kitJoin && route.body)
+      const kitHome = route.path === "/" && headers.get("x-two-renderer") === "kit";
+      if (kitHome) {
+        check(
+          await hasGuestKitHomeHeading(body),
+          "Kit guest h1#home-heading with the lobby or scheduled text",
+          "heading missing or did not match",
+        );
+      } else if (!kitJoin && route.body) {
         check(route.body.test(body), `body matching ${route.body}`, "body did not match");
+      }
       if (route.redirect && response.status === 302) {
         const location = headers.get("location");
         let target;

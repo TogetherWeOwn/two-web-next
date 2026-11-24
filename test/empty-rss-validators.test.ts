@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { events } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
-import app from "./app";
+import { fetchAppPath } from "./helpers/fetch-app";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
 const APP_URL = "https://next.example.test";
@@ -42,7 +42,7 @@ describe.skipIf(!process.env.DATABASE_URL)("empty RSS validators (isolated test 
   });
 
   const request = (etag?: string) =>
-    app.request(
+    fetchAppPath(
       "/events.rss",
       {
         headers: etag ? { "if-none-match": etag } : {},
@@ -89,7 +89,7 @@ describe.skipIf(!process.env.DATABASE_URL)("empty RSS validators (isolated test 
       expect(await read()).toEqual(empty);
       await unchanged(empty.etag);
     }
-    const withCookie = await app.request(
+    const withCookie = await fetchAppPath(
       "/events.rss",
       {
         headers: { cookie: "__Host-two_session=not-a-session", "if-none-match": empty.etag },

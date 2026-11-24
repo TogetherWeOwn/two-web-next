@@ -6,8 +6,8 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import { fileURLToPath, URL } from "node:url";
-import { expect, test, type Page } from "@playwright/test";
-import { periodNow, periodPaths } from "../test/fixtures/hotzone-period-picker";
+import { expect, type Locator, type Page, test } from "@playwright/test";
+import { committedPeriods, periodNow, periodPaths } from "../test/fixtures/hotzone-period-picker";
 import {
   compilePeriodKit,
   periodOrigin,
@@ -87,8 +87,7 @@ async function capture(page: Page, twin: string, path: string, width: number, st
   });
 }
 
-async function tabTo(page: Page, selector: string) {
-  const target = page.locator(selector);
+async function tabTo(page: Page, target: Locator) {
   for (let n = 0; n < 40; n += 1) {
     await page.keyboard.press("Tab");
     if (await target.evaluate((node) => node === node.ownerDocument.activeElement)) break;
@@ -113,10 +112,10 @@ for (const twin of ["Hono", "Kit"] as const) {
         await expect(input).toHaveCount(1, { timeout: 1000 });
         await expect(page.getByLabel(/period|season/i).and(input)).toBeVisible();
         await expect(input).toHaveValue("2026-02");
-        await tabTo(page, 'input[name="season"]');
+        await tabTo(page, input);
         for (const value of ["2026", "2026-04", "2026-Q2", "all"]) {
           if (!(await input.evaluate((node) => node === node.ownerDocument.activeElement))) {
-            await tabTo(page, 'input[name="season"]');
+            await tabTo(page, input);
           }
           await page.keyboard.press("ControlOrMeta+A");
           await page.keyboard.insertText(value);
@@ -158,7 +157,7 @@ for (const twin of ["Hono", "Kit"] as const) {
           expect(box!.x).toBeGreaterThanOrEqual(0);
           expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width);
         }
-        await tabTo(page, 'input[name="season"]');
+        await tabTo(page, input);
         await page.keyboard.press("ControlOrMeta+A");
         await page.keyboard.insertText("not-a-season");
         const [refusal] = await Promise.all([
@@ -194,4 +193,98 @@ for (const twin of ["Hono", "Kit"] as const) {
       });
     }
   }
+}
+
+function hotzoneNavigation(page: Page) {
+  return page.getByRole("navigation", { name: "Hot zones", exact: true });
+}
+
+test("Kit Hotzones navigation identifies only the exact current page", async ({ page }) => {
+  await fixture(page, "Kit");
+  for (const [index, path] of periodPaths.entries()) {
+    for (const { query, value } of committedPeriods) {
+      await test.step(path + query, async () => {
+        const response = await page.goto(`${periodOrigin}${path}${query}`);
+        expect(response?.status()).toBe(200);
+        const suffix = value === "all" ? "" : query;
+        const labels =
+          index === 0
+            ? ["Joins heatmap", "Voice heatmap", "Games heatmap"]
+            : ["All hot zones", "joins", "voice", "games"];
+        const linkPaths = index === 0 ? periodPaths.slice(1) : periodPaths;
+        const navigation = hotzoneNavigation(page);
+        await expect(navigation).toHaveCount(1);
+        await expect(navigation.getByRole("link")).toHaveText(labels);
+        const links = await navigation.getByRole("link").evaluateAll((anchors) =>
+          anchors.map((anchor) => ({
+            href: anchor.getAttribute("href"),
+            current: anchor.getAttribute("aria-current"),
+          })),
+        );
+        expect(links).toEqual(
+          linkPaths.map((linkPath) => ({
+            href: linkPath + suffix,
+            current: linkPath === path ? "page" : null,
+          })),
+        );
+      });
+    }
+  }
+});
+
+async function captureNavigationFocus(link: Locator, page: Page, state: string, width: number) {
+  await expect(link).toBeFocused();
+  await expect(link).toBeInViewport();
+  expect(
+    await link.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return (
+        element.matches(":focus-visible") &&
+        ((parseFloat(style.outlineWidth) > 0 && !["none", "hidden"].includes(style.outlineStyle)) ||
+          style.boxShadow !== "none")
+      );
+    }),
+  ).toBe(true);
+  const name = `kit-review-hotzones-${state}-${width}`;
+  const path = test.info().outputPath(`${name}.png`);
+  await page.screenshot({ path, animations: "disabled" });
+  await test.info().attach(name, { path, contentType: "image/png" });
+}
+
+for (const viewport of [
+  { width: 1280, height: 800 },
+  { width: 390, height: 844 },
+]) {
+  test(`Kit Hotzones navigation stays keyboard-operable at ${viewport.width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await fixture(page, "Kit");
+    const query = "?season=2026-02";
+    await page.goto(`${periodOrigin}/hotzones${query}`);
+    const navigation = hotzoneNavigation(page);
+    const joinsHeatmap = navigation.getByRole("link", { name: "Joins heatmap", exact: true });
+    await tabTo(page, joinsHeatmap);
+    await captureNavigationFocus(joinsHeatmap, page, "index-focus", viewport.width);
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(`${periodOrigin}/hotzones/joins${query}`);
+
+    const all = navigation.getByRole("link", { name: "All hot zones", exact: true });
+    await tabTo(page, all);
+    await page.keyboard.press("Tab");
+    await expect(navigation.getByRole("link", { name: "joins", exact: true })).toBeFocused();
+    await page.keyboard.press("Tab");
+    const voice = navigation.getByRole("link", { name: "voice", exact: true });
+    await captureNavigationFocus(voice, page, "signal-focus", viewport.width);
+    await page.keyboard.press("Tab");
+    await expect(navigation.getByRole("link", { name: "games", exact: true })).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(voice).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(`${periodOrigin}/hotzones/voice${query}`);
+
+    await tabTo(page, all);
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(`${periodOrigin}/hotzones${query}`);
+  });
 }

@@ -17,12 +17,12 @@ on `main`.
 ## Cutting a release
 
 Nothing to do by hand: a successful `deploy-production` promote is the cut. The
-release vehicle is the promoted commit itself. Every commit on `main` already
-has exact-head green required checks, including `CodeRabbit` and `Devin Review`
-(rulesets). The promote gate (`ci/production-deploy-gate.mjs`) requires a green
-main `ci` on that exact SHA, plus staging evidence under auto-approve. The tag
-is written only after the deploy job's promotion and identity-aware smoke
-succeed.
+release vehicle is the promoted commit itself. PRs merge to `main` only after
+[the required checks](../CONTRIBUTING.md#branch-protection-and-required-checks)
+pass on the PR head. The promote gate (`ci/production-deploy-gate.mjs`) requires
+a green main `ci` on the exact release SHA, plus staging evidence under
+auto-approve. The tag is written only after the deploy job's promotion and
+identity-aware smoke succeed.
 
 ## Versions and notes
 
@@ -150,8 +150,8 @@ CalVer. It never calls the Releases API, changes Latest or dispatches deployment
 The API status and response body go to the Actions log (not request headers), and
 the summary records target, captured main, invocation SHA/ref and cleanup.
 
-The workflow must first land through normal review, Security, exact-head Actions
-and Release Manager merge gates. Before each dispatch, inspect the workflows at
+The workflow must first land through T0 review, exact-head Actions and final
+technical release acceptance. Before each dispatch, inspect the workflows at
 both the invocation and target commits for tag/create/release triggers that could
 turn a diagnostic ref into a deployment. Keep the run URLs and exact SHAs as
 evidence. Do not introduce an artificial main change just to run the experiment.
@@ -190,7 +190,7 @@ recovery. A 403 in arm 3 refuses that proposed route, but its body and controls
 must still be inspected for other restrictions. Neither outcome authorizes
 production publication. Any recovery retains the original successful production
 producer run/attempt, revalidated receipt, normal release-only workflow and fresh
-exact-SHA Release Manager acceptance. Do not rerun production, manufacture proof,
+exact-SHA independent release approval. Do not rerun production, manufacture proof,
 backdate an unfrozen plan, reuse an admin App or broaden credentials. Durable
 publisher changes depend on the observed result and require their own review.
 

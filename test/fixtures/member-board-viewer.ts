@@ -9,35 +9,51 @@ import { MemberLeaderboardPage } from "../../src/leaderboards/pages";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const webRequire = createRequire(new URL("../../web/package.json", import.meta.url));
-export type Twin = "hono" | "kit";
+export type Twin = "hono" | "kit" | "season";
 export type Scope = "overall" | "relative";
 export const VIEWER = "Fixture viewer";
 const viewerId = "100000000000000202";
 
 type Data = Record<string, unknown>;
 type RenderKit = (data: Data) => string;
-let renderKit: RenderKit;
-let compileCss: Awaited<ReturnType<typeof cssCompiler>>;
+let kit: Awaited<ReturnType<typeof compileKitBoard>>;
+let seasonBoard: Awaited<ReturnType<typeof compileKitBoard>>;
 
-function cssCompiler() {
+function cssCompiler(componentCss: string[]) {
   const { compile } = webRequire("@tailwindcss/node") as {
     compile: (
       css: string,
       options: { base: string; onDependency: (path: string) => void },
     ) => Promise<{ build: (candidates: string[]) => string }>;
   };
-  return compile(readFileSync(join(root, "web/src/app.css"), "utf8"), {
-    base: join(root, "web/src"),
-    onDependency: () => {},
-  });
+  const source = (path: string) => readFileSync(join(root, path), "utf8");
+  // app.css loads the real theme first. Strip component references so the
+  // fixture does not shadow its emitted tokens with reference-only definitions.
+  const styles = [
+    source("web/src/app.css"),
+    source("vendor/design-kit/tokens.css"),
+    source("web/src/lib/segmented-control.css"),
+    ...componentCss,
+  ]
+    .join("\n")
+    .replaceAll('@import "../ember-theme.css" reference;', "");
+  return compile(styles, { base: join(root, "web/src"), onDependency: () => {} });
 }
 
 export async function prepareMemberBoardFixtures() {
+  kit = await compileKitBoard("web/src/routes/leaderboards/members/+page.svelte");
+}
+
+export async function prepareSeasonBoardFixtures() {
+  seasonBoard = await compileKitBoard("web/src/lib/SeasonBoard.svelte");
+}
+
+async function compileKitBoard(component: string) {
   const { compile } = webRequire("svelte/compiler") as {
     compile: (
       source: string,
       options: { generate: string; dev: boolean; filename: string },
-    ) => { js: { code: string } };
+    ) => { js: { code: string }; css: { code: string } | null };
   };
   const scratch = mkdtempSync(
     join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "member-board-viewer-"),
@@ -45,10 +61,11 @@ export async function prepareMemberBoardFixtures() {
   try {
     const entry = join(scratch, "entry.mjs");
     const outfile = join(scratch, "render.mjs");
+    const componentCss: string[] = [];
     writeFileSync(
       entry,
       `import { render } from "svelte/server";
-import Page from ${JSON.stringify(join(root, "web/src/routes/leaderboards/members/+page.svelte"))};
+import Page from ${JSON.stringify(join(root, component))};
 export function renderPage(data) {
   const { head, body } = render(Page, { props: { data } });
   return "<head>" + head + "</head><body>" + body + "</body>";
@@ -63,33 +80,40 @@ export function renderPage(data) {
       absWorkingDir: root,
       nodePaths: [join(root, "web/node_modules"), join(root, "node_modules")],
       alias: { "#lib": join(root, "web/src/lib/") },
+      loader: { ".css": "empty" },
       plugins: [
         {
           name: "member-board-viewer-ssr",
           setup(plugin) {
-            plugin.onLoad({ filter: /\.svelte$/ }, ({ path }) => ({
-              contents: compile(readFileSync(path, "utf8"), {
+            plugin.onLoad({ filter: /\.svelte$/ }, ({ path }) => {
+              const { js, css } = compile(readFileSync(path, "utf8"), {
                 generate: "server",
                 dev: false,
                 filename: path,
-              }).js.code,
-              loader: "js",
-              resolveDir: dirname(path),
-            }));
+              });
+              if (css) componentCss.push(css.code);
+              return { contents: js.code, loader: "js", resolveDir: dirname(path) };
+            });
           },
         },
       ],
     });
-    ({ renderPage: renderKit } = (await import(pathToFileURL(outfile).href)) as {
+    const { renderPage } = (await import(pathToFileURL(outfile).href)) as {
       renderPage: RenderKit;
-    });
-    compileCss = await cssCompiler();
+    };
+    return { renderPage, css: await cssCompiler(componentCss) };
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
 }
 
-export function renderMemberBoard(twin: Twin, scope: Scope, viewerPresent = true, empty = false) {
+export function renderMemberBoard(
+  twin: Twin,
+  scope: Scope,
+  viewerPresent = true,
+  empty = false,
+  overrides: Data = {},
+) {
   // Overall is long; relative is the real eleven-row neighborhood with absolute ranks.
   const size = empty ? 0 : scope === "overall" ? 60 : 11;
   const viewerIndex = scope === "overall" ? 8 : 5;
@@ -101,15 +125,21 @@ export function renderMemberBoard(twin: Twin, scope: Scope, viewerPresent = true
     rank: scope === "overall" ? index + 1 : index + 36,
     isViewer: index === viewerIndex && viewerPresent,
   }));
-  if (twin === "kit") {
-    return renderKit({
+  if (twin !== "hono") {
+    return (twin === "kit" ? kit : seasonBoard).renderPage({
       season: "all",
       scope,
       activity: null,
-      rows,
+      rows: rows.map(({ username, count, rank, isViewer }) => ({
+        username,
+        count,
+        rank,
+        isViewer,
+      })),
       viewerUsername: VIEWER,
       available: true,
       appUrl: "https://example.test",
+      ...overrides,
     });
   }
   return MemberLeaderboardPage({
@@ -121,18 +151,25 @@ export function renderMemberBoard(twin: Twin, scope: Scope, viewerPresent = true
   })!.toString() as string;
 }
 
-export function memberBoardDocument(twin: Twin, scope: Scope) {
-  const html = renderMemberBoard(twin, scope);
+export function memberBoardDocument(twin: Twin, scope: Scope, overrides: Data = {}) {
+  const html = renderMemberBoard(twin, scope, true, false, overrides);
   const candidates = [...html.matchAll(/class="([^"]+)"/g)].flatMap((match) =>
     match[1]!.split(/\s+/),
   );
-  // Real served order for the schedule shell (src/page-shell.tsx): styles,
-  // theme-tokens, theme, schedule-theme. Tokens must precede the sheets that
-  // consume them, or sticky headers resolve --surface to transparent.
-  const css = ["styles", "theme-tokens", "theme", "schedule-theme"]
+  // Match each shell's external stylesheet links. Kit gets its --surface
+  // alias from app.css, not the Hono-only theme-tokens.css fallback.
+  const sheets =
+    twin === "hono"
+      ? ["styles", "theme-tokens", "theme", "schedule-theme"]
+      : ["styles", "theme", "schedule-theme"];
+  const css = sheets
     .map((name) => readFileSync(join(root, `public/${name}.css`), "utf8"))
     .join("\n");
-  const styles = css + (twin === "kit" ? `\n${compileCss.build(candidates)}` : "");
+  // Mirror the Kit layout's header import for the scrolled mobile bar.
+  const styles =
+    twin === "hono"
+      ? css
+      : `${css}\n${(twin === "kit" ? kit : seasonBoard).css.build(candidates)}\n${readFileSync(join(root, "web/src/lib/site-header.css"), "utf8")}`;
   if (styles.includes("</style")) throw new Error("Fixture CSS must not close its style tag");
   // Keep the real shell and page, but inline the served styles and never execute islands.
   // Preserve the real <body> attributes: the Hono shell themes through
@@ -237,5 +274,12 @@ export function memberBoardDocument(twin: Twin, scope: Scope) {
     }
     return out;
   };
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${inert(head)}<style>${styles}</style></head><body${bodyAttrs}>${inert(body)}</body></html>`;
+  const content =
+    twin !== "hono"
+      ? inert(body).replaceAll(
+          'src="/logo.svg"',
+          `src="data:image/svg+xml;base64,${readFileSync(join(root, "public/logo.svg")).toString("base64")}"`,
+        )
+      : inert(body);
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${inert(head)}<style>${styles}</style></head><body${bodyAttrs}>${content}</body></html>`;
 }

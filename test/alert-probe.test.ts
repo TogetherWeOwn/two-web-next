@@ -1,6 +1,5 @@
 // route-inventory: POST /__probe/alert
 import { afterEach, describe, expect, it, vi } from "vitest";
-import app from "../src/index";
 import { QA_HEADER, STAGING_APP_URL } from "../src/qa";
 import { ALERT_PROBE_HEADER, AlertProbeError, validProbeId } from "../src/alert-probe-error";
 import { consume } from "../src/jobs/consumer";
@@ -9,13 +8,14 @@ import type { BotClient, EventStore, QueueLedger, UniqueLock } from "../src/jobs
 import { createTailWorker } from "../tail/worker";
 import { env as baseEnv } from "./helpers/member-data";
 import { withThrottleTx } from "./helpers/throttle-tx-double";
+import { requestApp } from "./helpers/fetch-app";
 
 const token = "test-only-probe-token-with-32-plus";
 const staging = { ...baseEnv, APP_URL: STAGING_APP_URL, QA_AUTH_TOKEN: token };
 afterEach(() => vi.restoreAllMocks());
 
 function request(env: Env, headers: Record<string, string> = {}, method = "POST") {
-  return app.request(
+  return requestApp(
     new URL("/__probe/alert", env.APP_URL).toString(),
     {
       method,

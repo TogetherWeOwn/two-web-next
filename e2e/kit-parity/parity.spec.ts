@@ -8,8 +8,20 @@ import {
 } from "@playwright/test";
 import postgres from "postgres";
 import { assertEmberArchive, stripEmberDelta } from "../../ci/kit-archive-delta.mjs";
+import {
+  allowsEndedMemberBoardCopy,
+  hasKitGuestChrome,
+  memberBoardEmptyText,
+  memberBoardStatus,
+} from "../../ci/kit-parity-gates.mjs";
 import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
 import { QA_IDENTITIES } from "../../src/qa";
+import {
+  memberBoardDocument,
+  prepareMemberBoardFixtures,
+  prepareSeasonBoardFixtures,
+  VIEWER,
+} from "../../test/fixtures/member-board-viewer";
 import { requireGithubRunner, requireTestDatabase } from "../ci-only.mjs";
 import {
   expectedKitMarker,
@@ -28,6 +40,13 @@ import {
 } from "../kit-parity";
 import { qaLoginRetryBudgetMs } from "../qa-login-retry.mjs";
 import { expectSavedReviewActions } from "../saved-review-actions";
+import {
+  KIT_LABELED_VIEWER_CELLS,
+  KIT_VIEWER_ROW_NAME,
+  normalizeKitViewerRow,
+  SEEDED_VIEWER_CELLS,
+  SEEDED_VIEWER_ROW,
+} from "./member-board-viewer-row.mjs";
 import { postParityQaLogin } from "./parity-qa-login.mjs";
 
 // Kit journey parity (docs/kit-parity-gates.md): the journeys run
@@ -290,11 +309,6 @@ function memberGoingRsvp(): Promise<void> {
   return memberRsvpPromise;
 }
 
-// The viewer's ranked row as both renderers emit it, after the shared
-// normalization: rank 1, the seeded going count 1. The bare name also
-// rides the member chrome, so only the table row proves ranked content.
-const RANKED_ROW = '<td>1</td><th scope="row">QA Member</th><td>1</td>';
-
 function expectNoMarker(headers: Record<string, string>, label: string) {
   expect(
     headers["x-two-renderer"] ?? null,
@@ -325,6 +339,11 @@ function headerSignOut(page: Page) {
   return page
     .locator('.header-account form[method="post"][action="/logout"] button[type="submit"]')
     .and(page.getByRole("button", { name: "Sign out", exact: true }));
+}
+
+function expectGuestChrome(body: string, marker: string | null, href?: string) {
+  if (marker === "kit") expect(hasKitGuestChrome(body, href)).toBe(true);
+  else expect(body).toContain("Welcome, guest");
 }
 
 test("kit: capture synthetic non-member and account-hidden headers", async ({ browser }) => {
@@ -393,6 +412,12 @@ test("kit: capture synthetic non-member and account-hidden headers", async ({ br
           animations: "disabled",
           caret: "hide",
         });
+        expect((await page.goto("/events"))?.headers()["x-two-renderer"]).toBe("kit");
+        await (await compactMenu(page))?.click();
+        const header = page.getByRole("banner");
+        await expect(header.locator('a[href="/join"]')).toHaveCount(0);
+        if (state === "non-member") await expect(headerSignOut(page)).toHaveCount(1);
+        else await expect(header.getByRole("link", { name: "Open Discord" })).toHaveCount(1);
       } finally {
         try {
           await context.close();
@@ -495,7 +520,7 @@ for (const target of targets) {
       expect(body).toContain('data-testid="events-past-archive-link"');
       expect(body).toContain('data-testid="events-subscribe"');
       expect(body).toContain("E2E Community Night");
-      expect(body).toContain("Welcome, guest");
+      expectGuestChrome(body, expectedMarker);
       expect(body).not.toContain("Sign out");
     });
 
@@ -530,7 +555,7 @@ for (const target of targets) {
       expect(scrubSecrets(body)).toEqual([]);
       expect(body).toContain('data-testid="join-oneclick"');
       expect(body).toContain('data-testid="join-invite"');
-      expect(body).toContain("Welcome, guest");
+      expectGuestChrome(body, expectedMarker, "/auth/discord");
       expect(body).not.toContain("Sign out");
       expect(body).not.toContain("<iframe");
       // Exactly one widget zone across the three isolate states (cold facade,
@@ -854,14 +879,23 @@ for (const target of targets) {
         expect(body).toContain("Sign out");
         expect(body).not.toContain("Welcome, guest");
         expect(body).not.toContain('href="/members/');
-        const normalized = normalizeSection(body);
         if (ranked) {
-          expect(normalized, `${target.name} ${path}: ranked viewer row`).toContain(RANKED_ROW);
+          const table = memberBoardTable(body);
+          expect(
+            target.name === "kit" ? normalizeKitViewerRow(table) : table,
+            `${target.name} ${path}: ranked viewer row`,
+          ).toContain(SEEDED_VIEWER_ROW);
         } else {
-          expect(body, `${target.name} ${path}: empty board`).toContain(
-            "Nobody is ranked for this season and game yet.",
+          expect(
+            memberBoardStatus(body, allowsEndedMemberBoardCopy(path)),
+            `${target.name} ${path}: empty board`,
+          ).toBe("overall-empty");
+          const normalized = expect(
+            normalizeSection(body),
+            `${target.name} ${path}: no ranked row`,
           );
-          expect(normalized, `${target.name} ${path}: no ranked row`).not.toContain(RANKED_ROW);
+          normalized.not.toContain(SEEDED_VIEWER_CELLS);
+          normalized.not.toContain(KIT_LABELED_VIEWER_CELLS);
         }
       }
     });
@@ -1270,13 +1304,19 @@ for (const target of targets) {
           });
           const menu = await compactMenu(page);
           const logo = await page.locator(".brand img:visible").boundingBox();
-          expect(logo?.height).toBe(menu ? 32 : 50);
-          if (menu) expect(logo?.width).toBeCloseTo((456.86 * 32) / 126.34, 1);
+          const ember = target.name === "kit" && state.path === "/events";
+          const height = menu ? 32 : ember ? 38 : 50;
+          expect(logo?.height).toBe(height);
+          if (menu || ember) expect(logo?.width).toBeCloseTo((456.86 * height) / 126.34, 1);
           else expect(logo?.width).toBe(width <= 480 ? 50 : 180);
+          const header = page.getByRole("banner");
+          if (ember) await expect(header).toHaveCSS("height", width <= 820 ? "60px" : "68px");
           await menu?.click();
+          if (ember)
+            await expect(header.getByRole("link", { name: "Join", exact: true })).toHaveCount(1);
           const chrome = (await page.evaluate(`(() => {
             const account = document.querySelector('.header-account');
-            const button = account.querySelector('.btn');
+            const button = account.querySelector('.btn, .ember-header-action');
             const who = account.querySelector('.who');
             const range = document.createRange();
             if (button) range.selectNodeContents(button);
@@ -2138,7 +2178,42 @@ test("cross-target: normalized archive sections match", async () => {
   ).toBe(sectionOf(bodies.get("hono")!, "past-events"));
 });
 
+test("Kit Events groups schedule dates but plots the grid on host-local dates", async ({
+  page,
+}) => {
+  const key = "01J00000000000000000000EM8E";
+  await withSessionDb(async (sql) => {
+    await sql`insert into events (event_key, title, starts_at, ends_at, timezone, location, status)
+      values (${key}, 'E2E May LA', '2099-05-15T01:00:00Z', '2099-05-15T02:00:00Z',
+        'America/Los_Angeles', 'Community voice', 'published')`;
+  });
+  try {
+    await page.setViewportSize({ width: 744, height: 844 });
+    await page.context().addCookies([{ name: "e2e-parity-bypass", value: "1", url: KIT_ORIGIN }]);
+    await page.goto(`${KIT_ORIGIN}/events`);
+    const schedule = page.getByTestId("events-list");
+    await expect(schedule.getByRole("heading", { level: 3, name: /15 May/ })).toBeVisible();
+    const group = schedule.getByRole("list", { name: /15 May/ });
+    await expect(group).toHaveAttribute("role", "list"); // WebKit drops implicit roles on unmarked lists.
+    await expect(group.getByRole("listitem")).toHaveCount(2);
+    const row = group.getByTestId("event-card").first();
+    const title = row.getByRole("heading", { level: 4, name: /^E2E May LA$/ });
+    await expect(title.and(row.locator("h4"))).toBeVisible();
+    await expect(row.locator(".schedule-location")).toHaveText("Community voice");
+    await expect(row.locator(".schedule-actions")).toHaveCSS("grid-column", "3");
+    await page.goto(`${KIT_ORIGIN}/events?view=calendar&month=2099-05&past=1`);
+    await expect(page.locator(".schedule-clock")).toContainText(/local dates.*UTC/);
+    await expect(page.locator('[data-date="2099-05-14"]')).toContainText("E2E May LA");
+    await expect(page.locator('[data-date="2099-05-15"]')).not.toContainText("E2E May LA");
+  } finally {
+    await withSessionDb(async (sql) => {
+      await sql`delete from events where event_key = ${key}`;
+    });
+  }
+});
+
 test("Kit calendar styles survive a swap into the old document", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
   // Serve the old Hono shell without the new aliases; the island fetches from Kit.
   const old = await page.request.get(`${HONO_ORIGIN}/events`, { maxRedirects: 0 });
   expect(old.status()).toBe(200);
@@ -2158,41 +2233,218 @@ test("Kit calendar styles survive a swap into the old document", async ({ page }
   await expect(selected).toHaveAttribute("aria-current", "page");
   await expect(selected).toHaveCSS("gap", "8px");
   await expect(selected).toHaveCSS("background-color", "rgb(46, 36, 32)");
+  await page.getByTestId("events-view-list").click();
+  const row = page.getByTestId("event-card").first();
+  await expect(row.locator(".schedule-when")).toBeVisible();
+  await expect(row).toHaveCSS("grid-template-columns", /^\d+(?:\.\d+)?px$/);
+  await row.getByTestId("signin").focus();
+  await expect(row.getByTestId("signin")).toBeFocused();
   await expect(html).toHaveAttribute("data-rollout-shell", "old");
 });
 
-test("cross-target: normalized events-calendar sections match", async ({ playwright, page }) => {
-  // Normalize serializer noise and the Kit wrapper, not the tabs' links or selection.
-  const calendarSection = async (html: string) =>
-    normalizeSection(
-      await page.evaluate((html) => {
-        const document = new DOMParser().parseFromString(html, "text/html");
-        const section = document.querySelector('section[data-testid="events-calendar"]');
-        if (!section) throw new Error("Missing calendar section");
-        const segments = section.querySelector('nav.segments[aria-label="How to show the events"]');
-        if (segments) {
-          section.querySelector('link[rel=stylesheet][href="/kit-events-controls.css"]')?.remove();
-          const group = document.createElement("div");
-          group.className = "schedule-views";
-          group.setAttribute("role", "group");
-          group.setAttribute("aria-label", "How to show the events");
-          while (segments.firstChild) group.appendChild(segments.firstChild);
-          segments.replaceWith(group);
+test("cross-target: Events schedule behavior matches", async ({ playwright, page }) => {
+  // Compare the island contract independently of the intentional Ember layout.
+  const calendarSection = (html: string) =>
+    page.evaluate((html) => {
+      const section = new DOMParser()
+        .parseFromString(html, "text/html")
+        .querySelector('section[data-testid="events-calendar"]');
+      if (!section) throw new Error("Missing calendar section");
+      const nodes = (root: Element, selector: string) => [...root.querySelectorAll(selector)];
+      const text = (node: Element) => (node.textContent ?? "").replace(/\s+/g, " ").trim();
+      // The description uses white-space: pre-line: collapse horizontal space,
+      // not line breaks, and read the body rather than the disclosure label.
+      const descriptionText = (node: Element) =>
+        (node.textContent ?? "")
+          .replace(/[ \t]+/g, " ")
+          .replace(/ *\n */g, "\n")
+          .replace(/^ | $/g, "");
+      const zoneOf = (node: Element) => node.closest("[data-cal-zone]");
+      const zones = nodes(section, "[data-cal-zone]");
+      if (zones.some((zone) => zone.parentElement?.closest("[data-cal-zone]"))) {
+        throw new Error("Calendar replacement zones must not be nested");
+      }
+      // The actions zone is replaceable, but must keep its past-scope input
+      // in the stable GET form even though the default response omits it.
+      const searchForm = section.querySelector('form[role="search"]');
+      const actions = section.querySelector('[data-cal-zone="actions"]');
+      if (!searchForm || zoneOf(searchForm) || actions?.closest("form") !== searchForm) {
+        throw new Error("Missing replaceable actions zone inside the stable search form");
+      }
+      for (const selector of [
+        '[data-testid="events-search"]',
+        'select[name="game"]',
+        '[data-testid="events-read-retry"]',
+        '[data-testid="events-read-clear"]',
+      ]) {
+        const hook = section.querySelector(selector);
+        if (!hook || zoneOf(hook) !== null) throw new Error(`Missing stable hook ${selector}`);
+      }
+      const loading = section.querySelector('[data-testid="events-loading"][hidden]');
+      const heading = section.querySelector('#events-heading[tabindex="-1"]');
+      const content = section.querySelector('[data-cal-zone="content"]');
+      const headingLinks = nodes(section, ".schedule-heading a");
+      if (!loading || zoneOf(loading) !== null) throw new Error("Missing stable loading hook");
+      if (
+        !heading ||
+        section.getAttribute("aria-labelledby") !== heading.id ||
+        zoneOf(heading) !== null
+      ) {
+        throw new Error("Missing stable Events heading focus target");
+      }
+      if (!headingLinks.length || headingLinks.some((node) => zoneOf(node) !== null)) {
+        throw new Error("Missing guest Join hook outside replacement zones");
+      }
+      const statusSelector = [
+        "[data-cal-feedback]",
+        '[data-testid="events-view-status"]',
+        '[data-testid="events-search-status"]',
+        '[data-testid="events-past-status"]',
+        '[data-testid="calendar-month-status"]',
+        '[data-testid="events-read-status"]',
+      ];
+      for (const selector of statusSelector) {
+        const status = section.querySelector(selector);
+        if (!status?.matches('[role="status"]') || zoneOf(status) !== null) {
+          throw new Error(`Missing stable status hook ${selector}`);
         }
-        for (const element of [section, ...section.querySelectorAll("*")]) {
-          const attrs = [...element.attributes].sort((a, b) => a.name.localeCompare(b.name));
-          for (const { name, value } of attrs) {
-            element.removeAttribute(name);
-            element.setAttribute(name, value);
+      }
+      const head = section.querySelector('[data-cal-zone="head"]');
+      const viewList = head?.querySelector('[data-testid="events-view-list"]');
+      const viewCalendar = head?.querySelector('[data-testid="events-view-calendar"]');
+      const views = viewList?.closest('nav:not([role]), [role="group"], [role="navigation"]');
+      const viewLabel = views?.getAttribute("aria-label");
+      const isExposed = (node: Element) => {
+        if (node.closest('[hidden], [inert], [aria-hidden="true"]')) return false;
+        // A closed disclosure exposes only its first direct summary.
+        for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+          if (
+            parent.matches("details:not([open])") &&
+            !parent.querySelector(":scope > summary")?.contains(node)
+          ) {
+            return false;
           }
         }
-        const comments = document.createTreeWalker(section, NodeFilter.SHOW_COMMENT);
-        const markers: Node[] = [];
-        while (comments.nextNode()) markers.push(comments.currentNode);
-        for (const marker of markers) marker.parentNode?.removeChild(marker);
-        return section.outerHTML;
-      }, html),
-    );
+        return true;
+      };
+      if (
+        !viewList ||
+        !viewCalendar ||
+        !views ||
+        !views.contains(viewCalendar) ||
+        !head?.contains(views) ||
+        !viewLabel?.trim() ||
+        !isExposed(viewList) ||
+        !isExposed(viewCalendar)
+      ) {
+        throw new Error("Missing exposed, labelled List/Calendar controls");
+      }
+      const subscribe = section.querySelector('[data-cal-zone="subscribe"]');
+      if (!subscribe?.matches("details") || !subscribe.querySelector(":scope > summary")) {
+        throw new Error("Missing subscription disclosure or its summary");
+      }
+      // Bare, empty and "true" spellings are equivalent for presence flags,
+      // not for data values, form values, or ARIA state.
+      const flags = new Set([
+        "checked",
+        "data-cal-feedback",
+        "data-copy-feed",
+        "data-copy-toast",
+        "disabled",
+        "hidden",
+        "multiple",
+        "open",
+        "readonly",
+        "required",
+        "selected",
+      ]);
+      const attrs = (node: Element) =>
+        [...node.attributes]
+          .filter(({ name }) => name !== "class")
+          .map(({ name, value }) =>
+            flags.has(name) && !(name === "hidden" && value === "until-found")
+              ? name
+              : `${name}=${value}`,
+          )
+          .sort();
+      const link = (node: Element) => [text(node), attrs(node)];
+      const control = (node: Element) => ({
+        tag: node.localName,
+        attrs: attrs(node),
+        disabled: node.matches(":disabled"),
+        text: node.matches("form, select") ? null : text(node),
+        value:
+          node instanceof HTMLInputElement || node instanceof HTMLSelectElement ? node.value : null,
+      });
+      const rowInfoText = (node: Element) => {
+        // Compare disclosure contents separately from their container. The
+        // summary's explicit line break separates the excerpt from the label.
+        if (node.matches("details.schedule-text")) return null;
+        if (node.matches("details.schedule-text > summary")) {
+          const summary = node.cloneNode(true) as Element;
+          for (const br of nodes(summary, "br")) br.replaceWith(" ");
+          return text(summary);
+        }
+        return node.matches("p.schedule-text, details.schedule-text > p")
+          ? descriptionText(node)
+          : text(node);
+      };
+      return {
+        attributes: attrs(section),
+        zones: zones.map(attrs),
+        loading: attrs(loading),
+        status: nodes(section, '[role="status"]').map((node) => [attrs(node), text(node)]),
+        headingLinks: headingLinks.map(link),
+        viewLabel,
+        // Links can move within the head; preserve targets and selection, not visual order.
+        headLinks: nodes(section, '[data-cal-zone="head"] a').map(link).sort(),
+        links: nodes(
+          section,
+          'a:not(.schedule-heading a, [data-cal-zone="head"] a, [data-testid="event-card"] a)',
+        ).map(link),
+        subscribe: nodes(subscribe, "summary, label, input, button, p").map(control),
+        search: nodes(
+          section,
+          'form[role="search"], form[role="search"] :is(input, select, option, label, button, p)',
+        ).map(control),
+        buttons: nodes(section, 'button:not(form button, [data-cal-zone="subscribe"] button)').map(
+          control,
+        ),
+        rows: nodes(section, '[data-testid="event-card"]').map((row) => {
+          if (!content || zoneOf(row) !== content) {
+            throw new Error(`Event row ${row.id} is outside the content zone`);
+          }
+          const title = row.querySelector(".schedule-info :is(h3, h4)");
+          if (!title) throw new Error(`Missing title for ${row.id}`);
+          // Hono renders location inline; Kit can put it anywhere in the row.
+          const locations = nodes(row, ".schedule-location, p:has(> time) > span:nth-of-type(2)");
+          return {
+            attrs: attrs(row),
+            title: text(title),
+            links: nodes(row, "a").map(link),
+            when: nodes(row, "time").map((time) => [
+              time.getAttribute("datetime"),
+              text(time),
+              time.closest("[hidden]") !== null,
+            ]),
+            zone: nodes(
+              row,
+              ".schedule-when > span:not(:has(time)), p:has(> time) > span:first-of-type",
+            ).map(text),
+            location: locations.map((node) => [attrs(node), text(node)]),
+            info: nodes(
+              row,
+              ".schedule-info :is(p:not(:has(> time)), details, summary, .schedule-badge)",
+            )
+              .filter((node) => !locations.some((location) => location.contains(node)))
+              .map((node) => [attrs(node), rowInfoText(node)]),
+            attendance: nodes(row, ".schedule-attendance, .schedule-attendance [data-testid]").map(
+              (node) => [attrs(node), text(node)],
+            ),
+          };
+        }),
+      };
+    }, html);
   const bodies = new Map<string, string>();
   for (const target of targets) {
     // A fresh jar prevents authentication by the shared QA-login cookie.
@@ -2209,7 +2461,7 @@ test("cross-target: normalized events-calendar sections match", async ({ playwri
       });
       expect(response.status()).toBe(200);
       const body = await response.text();
-      expect(body).toContain("Welcome, guest");
+      expectGuestChrome(body, target.name === "kit" ? expectedKitMarker("/events") : null);
       expect(body).not.toContain("Sign out");
       expect(response.headers()["set-cookie"] ?? null).toBeNull();
       bodies.set(target.name, normalizeOrigin(body, target.origin));
@@ -2221,10 +2473,11 @@ test("cross-target: normalized events-calendar sections match", async ({ playwri
   // two empty lists cannot pass for parity.
   const hono = await calendarSection(bodies.get("hono")!);
   const kit = await calendarSection(bodies.get("kit")!);
-  expect(hono, "Hono events-calendar section carries the seeded row").toContain(
-    "E2E Community Night",
-  );
-  expect(kit, "Kit matches the Hono calendar contract after normalization").toBe(hono);
+  expect(
+    hono.rows.map(({ title }) => title),
+    "Hono carries the seeded row",
+  ).toContain("E2E Community Night");
+  expect(kit, "Kit matches the Hono calendar contract").toEqual(hono);
 });
 
 test("cross-target: normalized member-board tables match", async () => {
@@ -2235,11 +2488,12 @@ test("cross-target: normalized member-board tables match", async () => {
       headers: { cookie: await memberCookie(target) },
     });
     expect(response.status()).toBe(200);
-    tables.set(target.name, memberBoardTable(await response.text()));
+    const table = memberBoardTable(await response.text());
+    tables.set(target.name, target.name === "kit" ? normalizeKitViewerRow(table) : table);
   }
   // Non-vacuous equality: the compared tables carry the ranked row, so
   // two empty boards cannot pass for parity.
-  expect(tables.get("hono"), "Hono table carries the ranked row").toContain(RANKED_ROW);
+  expect(tables.get("hono"), "Hono table carries the ranked row").toContain(SEEDED_VIEWER_ROW);
   expect(tables.get("kit"), "Kit table matches Hono table after normalization").toBe(
     tables.get("hono"),
   );
@@ -3078,23 +3332,55 @@ test.describe("archive page turns prove successful paging and history", () => {
         },
       ]);
       await page.evaluate("window.__noticeSameDoc = 1");
+      const pageTwoUrl = new URL("/events/past?page=2", KIT_ORIGIN).href;
+      const marker = { name: "x-two-island", value: "past-events" };
+      // Clone the marked response before the island consumes it, so the assertion
+      // doesn't depend on DevTools retaining the body across the history update.
+      const capture = await page.evaluateHandle(
+        ({ url, marker }) => {
+          const captured: { response: Response | null } = { response: null };
+          const originalFetch = window.fetch;
+          window.fetch = async (...args) => {
+            const response = await originalFetch.apply(window, args);
+            if (response.url === url && !captured.response) {
+              const [input, init] = args;
+              const headers = new Headers(
+                init?.headers ?? (input instanceof Request ? input.headers : undefined),
+              );
+              if (headers.get(marker.name) === marker.value) {
+                captured.response = response.clone();
+                window.fetch = originalFetch;
+              }
+            }
+            return response;
+          };
+          return captured;
+        },
+        { url: pageTwoUrl, marker },
+      );
       const responsePromise = page.waitForResponse(
         (response) =>
-          new URL(response.url()).pathname === "/events/past" &&
-          new URL(response.url()).search === "?page=2",
+          response.url() === pageTwoUrl &&
+          response.request().headers()[marker.name] === marker.value,
       );
       await page.locator('a[data-archive-page]:has-text("Older")').click();
       const pagination = await responsePromise;
       expect(pagination.status()).toBe(200);
+      expect(pagination.request().resourceType()).toBe("fetch");
       const paginationHeaders = await pagination.request().allHeaders();
       expect(paginationHeaders["x-two-island"]).toBe("past-events");
       expect(paginationHeaders["sec-fetch-dest"]).toBeUndefined();
       expect(paginationHeaders["sec-fetch-mode"]).toBeUndefined();
       expect((paginationHeaders["cookie"] ?? "").includes(`${name}=`)).toBe(true);
-      expect(await pagination.text()).not.toContain('data-testid="auth-error"');
       await expect(page.getByTestId("past-events")).toHaveAttribute("data-page", "2");
       await expect(page.getByTestId("past-events")).not.toHaveAttribute("aria-busy");
       expect(await page.evaluate("window.__noticeSameDoc")).toBe(1);
+      const paginationBody = await capture.evaluate(({ response }) => {
+        if (!response) throw new Error("The page-two archive fetch was not captured");
+        return response.text();
+      });
+      expect(paginationBody).toContain(archiveTurnTitle(4));
+      expect(paginationBody).not.toContain('data-testid="auth-error"');
       expect(
         (await context.cookies(KIT_ORIGIN)).filter((cookie) => cookie.name === name),
       ).toHaveLength(1);
@@ -3328,7 +3614,8 @@ test("Kit worker answers traffic within the liveness bound", async ({ playwright
 const MEMBER_BOARD_VIEWS: Array<[name: string, path: string]> = [
   ["default", "/leaderboards/members"],
   ["relative", "/leaderboards/members?scope=relative"],
-  ["season", "/leaderboards/members?season=2026"],
+  // A completed leap-month window keeps season progress stable across CI dates.
+  ["season", "/leaderboards/members?season=2000-02"],
   ["activity", "/leaderboards/members?activity=valheim"],
 ];
 
@@ -3423,14 +3710,24 @@ test.describe("kit: member-board visuals", () => {
           await page.waitForLoadState("networkidle");
           if (view === "default" || view === "relative") {
             const rankedRow = page.getByRole("row").filter({
-              has: page.getByRole("rowheader", { name: "QA Member" }),
+              has: page.getByRole("rowheader", { name: KIT_VIEWER_ROW_NAME }),
             });
+            await expect(rankedRow).toHaveAttribute("aria-current", "true");
             await expect(rankedRow.getByRole("cell")).toHaveText(["1", "1"]);
           } else {
             await expect(
-              page.getByText("Nobody is ranked for this season and game yet."),
+              page
+                .getByRole("main")
+                .getByRole("status")
+                .and(page.locator("p"))
+                .filter({
+                  hasText: memberBoardEmptyText("overall", allowsEndedMemberBoardCopy(path)),
+                }),
             ).toBeVisible();
-            await expect(page.getByRole("rowheader", { name: "QA Member" })).toHaveCount(0);
+            // Reject any viewer row here, even if its label is malformed.
+            await expect(
+              page.getByRole("rowheader", { name: "QA Member", exact: false }),
+            ).toHaveCount(0);
           }
           await expect.soft(page).toHaveScreenshot(`member-board-${view}-${viewport.name}.png`, {
             fullPage: true,
@@ -3442,6 +3739,89 @@ test.describe("kit: member-board visuals", () => {
         await context.close();
       }
     });
+  }
+});
+
+test("isolated Kit season board shows the named viewer at both widths", async ({ page }) => {
+  await Promise.all([prepareMemberBoardFixtures(), prepareSeasonBoardFixtures()]);
+  await page.route("**/*", (route) => route.abort("blockedbyclient"));
+  const views = [
+    { name: "overall", scope: "overall", viewer: ["9", "92"] },
+    { name: "relative", scope: "relative", viewer: ["41", "95"] },
+    {
+      name: "filtered-empty",
+      scope: "overall",
+      data: { activity: "valheim", rows: [] },
+      status: "Nobody is ranked",
+    },
+    {
+      name: "ended-unranked",
+      scope: "relative",
+      data: { season: "2000-02", rows: [] },
+      status: "This season has ended.",
+    },
+    {
+      name: "unavailable",
+      scope: "overall",
+      data: { available: false },
+      status: "Rankings are temporarily unavailable.",
+    },
+    {
+      name: "tied",
+      scope: "overall",
+      data: {
+        rows: [
+          { username: VIEWER, rank: 1, count: 5, isViewer: true },
+          { username: "Fixture member", rank: 2, count: 5, isViewer: false },
+        ],
+      },
+    },
+  ] as const;
+  for (const { name, size } of PARITY_VIEWPORTS) {
+    await page.setViewportSize(size);
+    for (const view of views) {
+      for (const twin of "viewer" in view ? (["kit", "season"] as const) : (["season"] as const)) {
+        await page.setContent(
+          memberBoardDocument(twin, view.scope, "data" in view ? view.data : {}),
+        );
+        if ("viewer" in view) {
+          const table = page.getByRole("table");
+          const label = twin === "season" ? `${VIEWER} (you)` : VIEWER;
+          const viewer = table.getByRole("row").filter({
+            has: page.getByRole("rowheader", { name: label, exact: true }),
+          });
+          await expect(viewer).toHaveAttribute("aria-current", "true");
+          await expect(viewer.getByRole("cell")).toHaveText([...view.viewer]);
+          await expect(table.getByRole("rowheader", { name: /\(you\)$/ })).toHaveCount(
+            twin === "season" ? 1 : 0,
+          );
+          await viewer.scrollIntoViewIfNeeded();
+          await expect(viewer).toBeInViewport({ ratio: 1 });
+          if (name === "mobile") {
+            const menu = await page.locator("#kit-menu").boundingBox();
+            const heading = await table.getByRole("columnheader", { name: "Member" }).boundingBox();
+            expect(heading!.y).toBeGreaterThanOrEqual(menu!.y + menu!.height);
+          }
+        } else if ("status" in view) {
+          await expect(page.getByRole("table")).toHaveCount(0);
+          await expect(page.getByRole("status")).toContainText(view.status);
+          if (view.name === "ended-unranked") {
+            const progress = page.getByRole("progressbar", { name: "Season elapsed" });
+            await expect(progress).toHaveAttribute("max", "29");
+            await expect(progress).toHaveAttribute("value", "29");
+            await expect(page.getByText("Ended 1 March 2000 (UTC)", { exact: true })).toBeVisible();
+          }
+        } else {
+          const tied = page.getByRole("table").getByRole("cell", { name: "5 · Tied", exact: true });
+          await expect(tied).toHaveCount(2);
+          await tied.first().scrollIntoViewIfNeeded();
+        }
+        const capture = `kit-review-season-board-${twin}-${view.name}-${name}`;
+        const path = test.info().outputPath(`${capture}.png`);
+        await page.screenshot({ path, animations: "disabled", caret: "hide" });
+        await test.info().attach(capture, { path, contentType: "image/png" });
+      }
+    }
   }
 });
 

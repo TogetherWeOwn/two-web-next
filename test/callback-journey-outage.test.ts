@@ -4,7 +4,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import type { Env } from "../src/env";
+import { signedCookieHeader, verifySignedCookie } from "../src/http/signed-cookie";
 import { createMemorySessionStore, hashToken } from "../src/sessions";
+import { EXPIRED_WRITE_COOKIE } from "../src/write-recovery";
 
 const flows = ["join", "auth"] as const;
 type Flow = (typeof flows)[number];
@@ -12,7 +14,7 @@ const env: Env = {
   APP_URL: "https://next.example.test",
   DISCORD_CLIENT_ID: "fixture-client",
   DISCORD_CLIENT_SECRET: "fixture-client-secret-canary",
-  DISCORD_GUILD_ID: "326474832151838730",
+  DISCORD_GUILD_ID: "100000000000000001",
   DISCORD_BOT_TOKEN: "fixture-bot-secret-canary",
   DISCORD_INVITE_URL: "https://discord.gg/fixture",
   SESSION_SECRET: "fixture signing key ".repeat(3),
@@ -32,6 +34,10 @@ async function fixture(flow: Flow) {
   const create = vi.spyOn(store, "create");
   const replace = vi.spyOn(store, "replace");
   const bindings = { ...env, SESSION_STORE: store, JOIN_DEPS: { store: async () => null } };
+  const fetch = vi.fn(() => {
+    throw new Error("Unexpected outbound call in callback journey fixture");
+  });
+  vi.stubGlobal("fetch", fetch);
   const start = await app.request(
     flow === "join" ? "/join/discord?next=/profile&source=fixture" : "/auth/discord?next=/profile",
     {},
@@ -39,14 +45,8 @@ async function fixture(flow: Flow) {
   );
   expect(start.status).toBe(302);
   const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
-  const cookie = start.headers
-    .getSetCookie()
-    .map((line) => line.split(";")[0])
-    .join("; ");
-  const fetch = vi.fn(() => {
-    throw new Error("Unexpected outbound call in callback outage fixture");
-  });
-  vi.stubGlobal("fetch", fetch);
+  const startCookies = start.headers.getSetCookie();
+  const cookie = startCookies.map((line) => line.split(";")[0]).join("; ");
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   const error = vi.spyOn(console, "error").mockImplementation(() => {});
   const info = vi.spyOn(console, "info").mockImplementation(() => {});
@@ -64,6 +64,8 @@ async function fixture(flow: Flow) {
     log,
     state,
     cookie,
+    startCookies,
+    bindings,
     request: (suffix = "", presentedState = state) =>
       app.request(
         `${callbackPath(flow)}?code=fixture-oauth-code-canary&state=${presentedState}${suffix}`,
@@ -75,7 +77,7 @@ async function fixture(flow: Flow) {
 
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 
-function assertNoAdmission(f: Fixture, res: Response) {
+function assertNoSessionWork(f: Fixture, res: Response) {
   expect(f.fetch).not.toHaveBeenCalled();
   expect(f.create).not.toHaveBeenCalled();
   expect(f.replace).not.toHaveBeenCalled();
@@ -122,7 +124,7 @@ describe.each(flows)("%s callback journey failure classification", (flow) => {
       expect(res.headers.get("x-content-type-options")).toBe("nosniff");
       expect(res.headers.get("x-request-id")).toBeTruthy();
       expect(f.consume).toHaveBeenCalledExactlyOnceWith(await hashToken(f.state), flow);
-      assertNoAdmission(f, res);
+      assertNoSessionWork(f, res);
       assertCookies(flow, res);
       const logs = JSON.stringify(
         [f.warn.mock.calls, f.error.mock.calls, f.info.mock.calls, f.log.mock.calls],
@@ -175,7 +177,7 @@ describe.each(flows)("%s callback journey failure classification", (flow) => {
         expect(res.headers.get("location")).toBe("/?n=signin_failed");
       }
       expect(f.consume).toHaveBeenCalledTimes(kind === "lost" ? 0 : 1);
-      assertNoAdmission(f, res);
+      assertNoSessionWork(f, res);
       assertCookies(flow, res);
     },
   );
@@ -187,9 +189,56 @@ describe.each(flows)("%s callback journey failure classification", (flow) => {
     expect(res.status).toBe(flow === "join" ? 200 : 302);
     if (flow === "join") expect(await res.text()).toContain("Join link expired");
     else expect(res.headers.get("location")).toBe("/?n=signin_failed");
-    assertNoAdmission(f, res);
+    assertNoSessionWork(f, res);
     assertCookies(flow, res);
   });
+});
+
+it("hands Hono OAuth state through the shared cookie helper to the callback", async () => {
+  const f = await fixture("auth");
+  const name = stateCookie("auth");
+  const prefix = `${name}=`;
+  const issued = f.startCookies.find((line) => line.startsWith(prefix));
+  const [pair = "", ...attributes] = issued?.split("; ") ?? [];
+  const scope = ["Path=/", "HttpOnly", "Secure", "SameSite=Lax"];
+  expect(attributes.sort()).toEqual(["Max-Age=600", ...scope].sort());
+
+  const state = await verifySignedCookie(pair.slice(prefix.length), env.SESSION_SECRET);
+  if (!state) throw new Error("The shared reader did not verify the Hono state cookie");
+  expect(state).toBe(f.state);
+  const query = new URLSearchParams({ state, error: "access_denied" });
+  const recoveryHeader = await signedCookieHeader(
+    EXPIRED_WRITE_COOKIE,
+    "pending|/profile",
+    env.SESSION_SECRET,
+    600,
+  );
+  const recoveryCookie = recoveryHeader.split(";", 1)[0];
+  const denyWithCookie = async (secret: string) => {
+    const header = await signedCookieHeader(name, state, secret, 600);
+    const cookie = `${header.split(";", 1)[0]}; ${recoveryCookie}`;
+    return app.request(
+      `${callbackPath("auth")}?${query}`,
+      { headers: { cookie, accept: "text/html" } },
+      f.bindings,
+    );
+  };
+
+  const refused = await denyWithCookie(`${env.SESSION_SECRET}other fixture signer`);
+  expect(refused.status).toBe(302);
+  expect(refused.headers.get("location")).toBe("/?n=signin_failed");
+  expect(f.consume).not.toHaveBeenCalled();
+  expect(refused.headers.getSetCookie()).toEqual([]);
+  assertNoSessionWork(f, refused);
+
+  // The redirect alone would also pass for a replayed denial.
+  const res = await denyWithCookie(env.SESSION_SECRET);
+  expect(res.status).toBe(302);
+  expect(res.headers.get("location")).toBe("/?n=signin_denied");
+  expect(f.consume).toHaveBeenCalledExactlyOnceWith(await hashToken(f.state), "auth");
+  const cleared = res.headers.getSetCookie().find((line) => line.startsWith(prefix));
+  expect(cleared?.split("; ").sort()).toEqual([prefix, "Max-Age=0", ...scope].sort());
+  assertNoSessionWork(f, res);
 });
 
 it("auth replayed denial retains signin_denied without upstream or session work", async () => {
@@ -199,6 +248,6 @@ it("auth replayed denial retains signin_denied without upstream or session work"
   const res = await f.request("&error=access_denied");
   expect(res.status).toBe(302);
   expect(res.headers.get("location")).toBe("/?n=signin_denied");
-  assertNoAdmission(f, res);
+  assertNoSessionWork(f, res);
   assertCookies("auth", res);
 });

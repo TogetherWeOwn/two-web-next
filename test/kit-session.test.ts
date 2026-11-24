@@ -814,6 +814,15 @@ describe("kitAuthStatusCookieFor (moderator admin documents only)", () => {
     expect(write).not.toMatch(/Domain=/i);
     const cookies = await parseSigned(write!, SECRET);
     expect(cookies[AUTH_STATUS_COOKIE]).toBe(await store.statusHash(row.tokenHash));
+    expect(write).toBe(
+      await serializeSigned(AUTH_STATUS_COOKIE, String(cookies[AUTH_STATUS_COOKIE]), SECRET, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+        maxAge: SESSION_TTL_SECONDS,
+      }),
+    );
   });
 
   it("does not read or sign a probe for non-moderators or non-admin routes", async () => {

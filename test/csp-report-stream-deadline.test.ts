@@ -1,8 +1,8 @@
 // route-inventory: POST /csp-reports
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import app from "./app";
 import { CSP_REPORT_BODY_DEADLINE_MS, MAX_CSP_REPORT_BYTES } from "../src/csp-report-body";
 import type { Env } from "../src/env";
+import { requestApp } from "./helpers/fetch-app";
 
 const DEADLINE_MS = CSP_REPORT_BODY_DEADLINE_MS;
 const encode = (text: string) => new TextEncoder().encode(text);
@@ -28,7 +28,7 @@ const request = (body: BodyInit | null, headers: HeadersInit = {}) =>
     duplex: "half",
     headers: { cookie: "__Host-two_session=two_forged.bad", ...headers },
   } as RequestInit);
-const post = async (req: Request) => app.request(req, undefined, env);
+const post = async (req: Request) => requestApp(req, undefined, env);
 const assert204 = async (response: Response | undefined) => {
   expect(response?.status).toBe(204);
   expect(await response!.text()).toBe("");
