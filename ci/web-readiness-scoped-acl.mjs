@@ -18,14 +18,11 @@ const sequences = {
     "events featured_contents rsvps event_search_logs board_view_logs agent_event_idempotency_keys agent_event_hits queue_failed_jobs join_attempts web_throttle_hits event_echoes event_echo_members",
 };
 
-export const addedAfter1033 = new Set([
-  "event_echoes",
-  "event_echo_members",
-  "bot_reconciliation_intents",
-  "waitlist_offers",
-  "event_echoes_id_seq",
-  "event_echo_members_id_seq",
-]);
+export const addedAfter1033 = new Set(
+  "event_echoes event_echo_members bot_reconciliation_intents waitlist_offers event_echoes_id_seq event_echo_members_id_seq".split(
+    " ",
+  ),
+);
 
 export const publicServingRights = [
   { kind: "table", name: "agent_event_grants", column: "updated_at", right: "UPDATE" },

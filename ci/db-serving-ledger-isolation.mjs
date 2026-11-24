@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { pathToFileURL } from "node:url";
 import {
   approvedEnds,
   assertProjection,
@@ -27,10 +26,14 @@ const digest = (s) => createHash("sha256").update(s).digest("hex");
 const fingerprint = /^[a-f0-9]{64}$/;
 const identifier = /^[a-z_][a-z_0-9-]{0,62}$/;
 const baseRights = publicServingRights.filter(({ name }) => !addedAfter1033.has(name));
+const baseObjects = [...new Set(baseRights.map(({ name }) => name))].sort();
 const edgeKey = (edge) => [edge.kind, edge.name, edge.column, edge.right].join("/");
 const publicKeys = new Set(baseRights.map(edgeKey));
 const order = (edges) =>
-  edges.toSorted((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b), "en"));
+  edges
+    .map((edge) => JSON.stringify(edge))
+    .sort()
+    .map((row) => JSON.parse(row));
 
 async function catalog(tx, login) {
   const acl = await tx`with objects as (
@@ -140,11 +143,11 @@ async function aclChange(tx, login, edge, grant) {
 }
 
 async function membershipChange(tx, login, edge, grant) {
-  const { role, inherit, set } = edge;
+  const { role, grantor, inherit, set } = edge;
   return grant
     ? tx`grant ${tx(role)} to ${tx(login)}
-          with admin false, inherit ${tx.unsafe(inherit ? "true" : "false")}, set ${tx.unsafe(set ? "true" : "false")}`
-    : tx`revoke ${tx(role)} from ${tx(login)} restrict`;
+          with admin false, inherit ${tx.unsafe(inherit ? "true" : "false")}, set ${tx.unsafe(set ? "true" : "false")} granted by ${tx(grantor)}`
+    : tx`revoke ${tx(role)} from ${tx(login)} granted by ${tx(grantor)} restrict`;
 }
 
 function aclId({ kind, name, column, right, grantor }) {
@@ -169,12 +172,13 @@ async function assertPublicRights(tx, login) {
 
 // Capture only role and ACL metadata. The reviewed plan carries hashes of both
 // endpoints and the exact delta, so an inverse can run after the journal grows.
-export async function planServingIsolation(tx, identity, version, login = app) {
+export async function planServingIsolation(tx, identity, version, artifact, login = app) {
   const before = await catalog(tx, login);
   const { add, remove, after } = delta(before);
   return {
     identity,
     version,
+    artifact,
     before: digest(JSON.stringify(before)),
     after: digest(JSON.stringify(after)),
     add: order(add),
@@ -188,6 +192,7 @@ function parsePlan(raw, hash) {
   const plan = JSON.parse(raw);
   assert.deepEqual(Object.keys(plan).sort(), [
     "add",
+    "artifact",
     "after",
     "before",
     "identity",
@@ -201,6 +206,8 @@ function parsePlan(raw, hash) {
     ) && plan.before !== plan.after,
   );
   assertRollbackVersionId(plan.version);
+  assert.match(plan.artifact?.sourceSha ?? "", /^[a-f0-9]{40}$/);
+  assert.match(plan.artifact?.digest ?? "", fingerprint);
   assert.ok(
     plan.add.length <= baseRights.length && plan.remove.length <= 64 && plan.membership.length <= 8,
   );
@@ -210,29 +217,15 @@ function parsePlan(raw, hash) {
   }
   assert.ok(plan.add.every((edge) => publicKeys.has(edgeKey(edge))));
   const ledgerRights = {
-    schema: { drizzle: ["USAGE", "CREATE"] },
-    table: {
-      [ledgerTable]: [
-        "SELECT",
-        "INSERT",
-        "UPDATE",
-        "DELETE",
-        "TRUNCATE",
-        "REFERENCES",
-        "TRIGGER",
-        "MAINTAIN",
-      ],
-    },
-    sequence: { [ledgerSequence]: ["USAGE", "SELECT", "UPDATE"] },
+    schema: { drizzle: "USAGE" },
+    table: { [ledgerTable]: "SELECT" },
+    sequence: { [ledgerSequence]: "SELECT" },
   };
   for (const { name, kind, right, column } of plan.remove) {
     assert.ok(Object.hasOwn(ledgerRights, kind) && Object.hasOwn(ledgerRights[kind], name));
-    assert.ok(ledgerRights[kind][name].includes(right));
+    assert.equal(ledgerRights[kind][name], right);
     assert.ok(
-      column === "" ||
-        (name === ledgerTable &&
-          ["created_at", "hash", "id"].includes(column) &&
-          ["SELECT", "INSERT", "UPDATE", "REFERENCES"].includes(right)),
+      column === "" || (name === ledgerTable && ["created_at", "hash", "id"].includes(column)),
     );
   }
   for (const { role, grantor, admin, inherit, set } of plan.membership) {
@@ -280,7 +273,6 @@ export async function runServingIsolation(operation, end, env, options = {}) {
           await tx`lock table drizzle.__drizzle_migrations in share mode nowait`;
         }
         const timestamps = await assertMigrationPrefix(tx, end);
-        await assertProjection(tx, login, timestamps, owner);
         const initial = await catalog(tx, login);
         const initialHash = digest(JSON.stringify(initial));
         if (readOnly) {
@@ -294,6 +286,10 @@ export async function runServingIsolation(operation, end, env, options = {}) {
         const forward = operation === "forward";
         assert.equal(initialHash, forward ? plan.before : plan.after);
         if (forward) {
+          const [{ names }] = await tx`select array(select c.relname::text from pg_class c
+            where c.relnamespace = 'public'::regnamespace and c.relkind in ('r','p','v','m','f','S')) as names`;
+          assert.deepEqual(names.sort(), baseObjects, "Public serving inventory changed");
+          await assertProjection(tx, login, timestamps, owner);
           const { add, remove, after } = delta(initial);
           assert.deepEqual(plan.add, order(add));
           assert.deepEqual(plan.remove, order(remove));
@@ -305,6 +301,7 @@ export async function runServingIsolation(operation, end, env, options = {}) {
             env.PRODUCTION_DB_ISOLATION_CF_ACCOUNT_ID,
             env.PRODUCTION_DB_ISOLATION_CF_READ_TOKEN,
             fetchImpl,
+            plan.artifact,
           );
         }
         // Add the replacement path before removing the original one in both directions.
@@ -320,14 +317,5 @@ export async function runServingIsolation(operation, end, env, options = {}) {
     );
   } finally {
     await client.end({ timeout: 5 });
-  }
-}
-
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  try {
-    const result = await runServingIsolation(process.argv[2], process.argv[3], process.env);
-    process.exitCode = { committed: 0, before: 10, after: 11 }[result] ?? 1;
-  } catch {
-    process.exitCode = 1;
   }
 }

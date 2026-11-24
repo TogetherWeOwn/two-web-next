@@ -9,6 +9,7 @@ import {
   migrationConnectionConfig,
   webMigrationLockKey,
 } from "./db-migrate.mjs";
+import { verifyUndoVersion } from "./kit-cutover-deploy.mjs";
 import { assertRollbackVersionId } from "./production-deploy-gate.mjs";
 import { liveVersion, rollbackEnvironment } from "./rollback-target.mjs";
 
@@ -65,20 +66,29 @@ async function readJson(url, options, fetchImpl, maxBytes) {
   }
 }
 
-export async function assertReadinessTraffic(version, timestamps, account, token, fetchImpl) {
+export async function assertReadinessTraffic(
+  version,
+  timestamps,
+  account,
+  token,
+  fetchImpl,
+  artifact = null,
+) {
   assert.match(account ?? "", /^[0-9a-f]{32}$/);
   assert.ok(token, "Missing Workers read credential");
   const { origin, worker } = rollbackEnvironment("production");
-  const { success, result } = await readJson(
-    `https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/${worker}/deployments`,
-    { headers: { authorization: `Bearer ${token}` } },
-    fetchImpl,
-    1024 * 1024,
-  );
+  const api = `https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/${worker}`;
+  const auth = { headers: { authorization: `Bearer ${token}` } };
+  const { success, result } = await readJson(`${api}/deployments`, auth, fetchImpl, 1024 * 1024);
   assert.ok(
     success === true && liveVersion(result?.deployments) === version,
     "Approved Worker must serve all Web traffic",
   );
+  if (artifact) {
+    const metadata = await readJson(`${api}/versions/${version}`, auth, fetchImpl, 1024 * 1024);
+    assert.equal(metadata.success, true);
+    verifyUndoVersion(metadata.result, { ...artifact, undo: version });
+  }
   const health = await readJson(
     new URL("/up", origin),
     { headers: { "cache-control": "no-cache" } },
