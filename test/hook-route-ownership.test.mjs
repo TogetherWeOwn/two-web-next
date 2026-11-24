@@ -663,6 +663,7 @@ describe("dormant API family admission", () => {
   const path = "/api/fixture";
   const read = { method: "GET", path, enabled: true, reads: "public" };
   const write = { ...read, method: "POST" };
+  const memberReads = { resource: "profile", action: "view", route: "fixture" };
 
   async function owner(event, ...apiFamilies) {
     const d = deps(apiFamilies.length ? { apiFamilies } : {});
@@ -716,20 +717,10 @@ describe("dormant API family admission", () => {
     const event = apiEvent("/events/past");
     const pastArchive = vi.fn(async (_request, render) => render());
     const sessionFor = vi.fn();
+    const competing = { ...read, path: event.url.pathname, reads: memberReads };
     const d = deps({
       manifest: KIT_MANIFEST,
-      apiFamilies: [
-        {
-          flag: "true",
-          routes: [
-            {
-              ...read,
-              path: event.url.pathname,
-              reads: { resource: "events", action: "list", route: "fixture" },
-            },
-          ],
-        },
-      ],
+      apiFamilies: [{ flag: "true", routes: [competing] }],
       pastArchive,
       sessionFor,
     });
@@ -762,12 +753,7 @@ describe("dormant API family admission", () => {
   it("applies existing Kit security before a selected write can read a body", async () => {
     const sessionFor = vi.fn(async () => ({ status: "guest", session: null }));
     const d = deps({
-      apiFamilies: [
-        {
-          flag: "true",
-          routes: [{ ...write, reads: { resource: "profile", action: "view", route: "fixture" } }],
-        },
-      ],
+      apiFamilies: [{ flag: "true", routes: [{ ...write, reads: memberReads }] }],
       sessionFor,
       resolve: vi.fn(async ({ request, locals }) => {
         expect(locals.status).toBe("guest");
