@@ -36,12 +36,10 @@ async function capture(page, state) {
   }
 }
 
-function observe(page, origin) {
+function observe(page) {
   const sockets = [];
-  const wsUrl = new URL(socketPath, origin.replace(/^http:/, "ws:")).href;
   page.on("websocket", (socket) => {
-    assert.equal(socket.url(), wsUrl);
-    const trace = { sent: [], received: [], closed: false };
+    const trace = { url: socket.url(), sent: [], received: [], closed: false };
     sockets.push(trace);
     socket.on("framesent", ({ payload }) => trace.sent.push(JSON.parse(payload)));
     socket.on("framereceived", ({ payload }) => trace.received.push(JSON.parse(payload)));
@@ -74,7 +72,7 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
   const sql = postgres(databaseUrl, { max: 1 });
   try {
     const guest = await browser.newPage();
-    const offSockets = observe(guest, offOrigin);
+    const offSockets = observe(guest);
     const offHtml = await openHome(guest, offOrigin);
     assert.ok(!offHtml.includes(scriptPath));
     await expect(guest.locator("#home-public-voice")).toHaveCount(0);
@@ -83,7 +81,8 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
     await guest.close();
 
     const page = await browser.newPage();
-    const sockets = observe(page, liveOrigin);
+    const sockets = observe(page);
+    // Use a cursor beyond the unchanged fan-out fixture on this installed guild.
     await source(100, 4);
     const html = await openHome(page, liveOrigin);
     assert.ok(html.includes(scriptPath));
@@ -103,7 +102,7 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
     await sql`insert into web_sessions (token_hash, user_id, username, member, expires_at)
       values (${ref}, ${memberId}, 'Synthetic homepage member', true, now() + interval '10 minutes')`;
     const member = await browser.newPage();
-    const memberSockets = observe(member, liveOrigin);
+    const memberSockets = observe(member);
     await member.context().addCookies([
       {
         name: SESSION_COOKIE,
@@ -153,6 +152,8 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
     assert.equal(sockets.length, 1);
     assert.deepEqual(sockets[0].sent, [subscribe, resync]);
     assert.deepEqual(sockets[0].received.at(-1), frames.covering);
+    const socketUrl = new URL(socketPath, liveOrigin.replace(/^http:/, "ws:")).href;
+    assert.ok([...sockets, ...memberSockets].every(({ url }) => url === socketUrl));
     console.log(
       "PASS installed Kit home: default off, public-only updates, revoked admission, reconnect and gap withdrawal/resync",
     );

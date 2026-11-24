@@ -1,4 +1,5 @@
 {
+  "$comment": "See ci/budgets/decisions/bundle/2026-11-24-kit-public-voice.md.",
   "budgets": {
     "public/islands/kit-public-voice.js": {
       "maxRawBytes": 4608,

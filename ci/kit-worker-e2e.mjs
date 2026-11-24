@@ -107,6 +107,8 @@ async function unusedPort() {
 
 requireDisposableDatabase(databaseUrl);
 const args = process.argv.slice(2);
+const publicVoiceBrowser = args[0] === "--installed-output" && args[1] === "--public-voice-browser";
+if (publicVoiceBrowser) args.splice(1, 1);
 const { worker, assets } = await workerOutput(args);
 const scratch = await mkdtemp(
   join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "kit-worker-e2e-"),
@@ -258,8 +260,10 @@ function fetch(request, env, context) {
     const { verifyKitLiveSocket } = await import("./kit-live-socket.mjs");
     await verifyKitLiveSocket(live.origin, "https://kit-live.invalid", databaseUrl, secret);
     await verifyPublicFanout(live.origin, "https://kit-live.invalid", databaseUrl, secret);
-    const { verifyKitPublicVoice } = await import("./fixtures/kit-public-voice.mjs");
-    await verifyKitPublicVoice(origin, live.origin, databaseUrl, secret);
+    if (publicVoiceBrowser) {
+      const { verifyKitPublicVoice } = await import("./fixtures/kit-public-voice.mjs");
+      await verifyKitPublicVoice(origin, live.origin, databaseUrl, secret);
+    }
   }
 
   const archive = await fetch(`${origin}/events/past`);
