@@ -9,9 +9,7 @@
 // with no declaration and no audit row. Read order mirrors
 // src/profiles/routes-reads.tsx: the store declares the retrieved owner (never
 // the requested id); a missing member declares the empty read and 404s.
-// POST/PATCH sibling paths are not modelled here and stay Hono-owned: the
-// manifest carries GET entries only, and the Kit view's edit form posts back
-// to the Hono write routes until the edit-parity follow-up.
+// POST/PATCH admission is handled by the separate profile write family.
 import { drizzle } from "drizzle-orm/postgres-js";
 import { generateCookie, generateSignedCookie } from "hono/cookie";
 import postgres from "postgres";

@@ -135,7 +135,7 @@ const fixtures = {
   ],
 };
 
-async function stub(t, change = () => {}) {
+async function stub(t, change = () => {}, extraFixtures = {}) {
   const requests = [];
   const buildSecurityTxt = await securityTxtBuilder();
   const server = createServer((request, response) => {
@@ -145,8 +145,9 @@ async function stub(t, change = () => {}) {
       cookie: request.headers.cookie,
       host: request.headers.host,
       override: request.headers["cloudflare-workers-version-overrides"],
+      fetchMetadata: ["mode", "dest", "site"].map((name) => request.headers[`sec-fetch-${name}`]),
     });
-    const fixture = fixtures[request.url];
+    const fixture = extraFixtures[request.url] ?? fixtures[request.url];
     if (!fixture) {
       response.writeHead(500).end("Unexpected request");
       return;
@@ -1117,6 +1118,46 @@ test("Home smoke accepts only the guest headings on Kit responses", async (t) =>
     if (ok) assert.match(result.output, /^PASS \/$/m, name);
     else if (kit) assert.match(result.output, /FAIL \/: expected Kit guest h1#home-heading/, name);
     else assert.match(result.output, /FAIL \/: expected body matching/, name);
+  }
+});
+
+test("Ember cutover smoke requires Kit documents and Hono fallback", async (t) => {
+  const fragment = (origin) =>
+    `<link rel="canonical" href="${origin}/events"><section data-island="events-calendar">${["head", "subscribe", "actions", "miss", "content"].map((zone) => `<div data-cal-zone="${zone}"></div>`).join("")}</section>`;
+  const fragments = { "/events?view=calendar": [200, "text/html", fragment] };
+  let missingAttribute = "";
+  const render = (path, response) => {
+    if (["/", "/events", "/events?view=calendar", "/join"].includes(path))
+      response.headers["x-two-renderer"] = "kit";
+    if (path === "/") response.body = '<h1 id="home-heading">The lobby is open.</h1>';
+    if (path === "/join") {
+      response.body =
+        '<h2 id="join-card-heading">Join with one sign-in</h2>' +
+        '<a href="/join/discord" data-testid="join-oneclick">Join with Discord</a>';
+    }
+    if (missingAttribute && path === "/events?view=calendar") {
+      delete response.headers["x-two-renderer"];
+      response.body = response.body.replace(missingAttribute, "");
+    }
+    if (missingAttribute && path === "/admin") response.headers["x-two-renderer"] = "kit";
+  };
+  const good = await stub(t, render, fragments);
+  const override = 'two-web-next-production="22345678-1234-1234-1234-123456789abc"';
+  const options = { expectedCutoverRenderer: "kit", versionOverride: override };
+  assert.equal((await run(good.url, options)).ok, true);
+  const documents = good.requests.filter(({ path }) => ["/", "/events", "/join"].includes(path));
+  assert.equal(documents.length, 3);
+  for (const request of documents) {
+    assert.deepEqual(request.fetchMetadata.slice(0, 2), ["navigate", "document"]);
+    assert.equal(request.override, override);
+  }
+  assert.equal(good.requests.at(-1)?.fetchMetadata[2], "same-origin");
+  for (missingAttribute of ['rel="canonical"', 'data-cal-zone="content"']) {
+    const result = await run(good.url, options);
+    assert.equal(result.ok, false);
+    assert.match(result.output, /FAIL \/events\?view=calendar: expected x-two-renderer: kit/);
+    assert.match(result.output, /calendar canonical and swap zones; actual invalid fragment/);
+    assert.match(result.output, /FAIL \/admin: expected no x-two-renderer/);
   }
 });
 

@@ -891,4 +891,27 @@ describe("dormant API family admission", () => {
     expect(d.resolve).toHaveBeenCalledExactlyOnceWith(sameOrigin);
     expect(d.honoFetch).not.toHaveBeenCalled();
   });
+
+  it("uses the selected family's refusal renderer before session and body work", async () => {
+    const crossOriginRefusal = vi.fn(() => new Response("refused", { status: 403 }));
+    const sessionFor = vi.fn();
+    const d = deps({
+      apiFamilies: [{ flag: "true", routes: [write], crossOriginRefusal }],
+      sessionFor,
+    });
+    const event = apiEvent(path, { method: "POST", origin: "https://other.example" });
+    const response = await dispatchHookRequest(event, d);
+    expect(response.status).toBe(403);
+    expect(await response.text()).toBe("refused");
+    expect(response.headers.get("x-two-renderer")).toBe("kit");
+    expect(response.headers.get("content-security-policy")).toBeTruthy();
+    expect(crossOriginRefusal).toHaveBeenCalledExactlyOnceWith(
+      event.request,
+      response.headers.get("x-request-id"),
+    );
+    expect(event.request.bodyUsed).toBe(false);
+    expect(sessionFor).not.toHaveBeenCalled();
+    expect(d.resolve).not.toHaveBeenCalled();
+    expect(d.honoFetch).not.toHaveBeenCalled();
+  });
 });

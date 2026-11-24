@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 import { writeFileSync } from "node:fs";
+import { get as httpGet } from "node:http";
+import { get as httpsGet } from "node:https";
+import { text } from "node:stream/consumers";
 import { pathToFileURL } from "node:url";
 import { headerIndexingRules } from "../ci/robots-directives.mjs";
 
@@ -17,6 +20,13 @@ const html = [
   ["/events/past", /id="past-events-heading"/],
   ["/join", /id="join-heading"/],
 ];
+const emberPages = new Set(["/", "/events", "/join"]);
+const eventsFragment = {
+  path: "/events?view=calendar",
+  statuses: [200],
+  type: "text/html",
+  headers: { "x-two-island": "events-calendar", "sec-fetch-site": "same-origin" },
+};
 // HTML leaves that stay non-indexable even on the indexable apex: the archive
 // and the branded 404s carry their noindex in <meta>, so the deploy smoke
 // asserts the X-Robots-Tag header only on the indexable leaves.
@@ -252,6 +262,37 @@ async function hasGuestKitHomeHeading(body) {
   );
 }
 
+async function hasCalendarFragment(body, origin) {
+  const {
+    parseRenderedPage,
+    renderedAttribute: attribute,
+    renderedElements,
+  } = await import("../ci/rendered-page.mjs");
+  const page = parseRenderedPage(body);
+  const canonical = [...renderedElements(page, { tag: "link" })].find(
+    (link) =>
+      attribute(link, "rel") === "canonical" && attribute(link, "href") === `${origin}/events`,
+  );
+  const island = [...renderedElements(page, { tag: "section" })].find(
+    (section) => attribute(section, "data-island") === "events-calendar",
+  );
+  if (!canonical || !island) return false;
+  const zones = [...renderedElements(island, {})].map((node) => attribute(node, "data-cal-zone"));
+  return zones.filter(Boolean).sort().join(" ") === "actions content head miss subscribe";
+}
+
+function probeNavigation(url, headers, signal) {
+  // Node fetch rewrites Sec-Fetch-Mode. Native GET preserves it without redirects.
+  const get = url.protocol === "https:" ? httpsGet : httpGet;
+  const requestHeaders = { ...headers, "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document" };
+  return new Promise((resolve, reject) => {
+    get(url, { headers: requestHeaders, signal }, (response) => {
+      const headers = new Headers(response.headers);
+      resolve({ status: response.statusCode, headers, text: () => text(response) });
+    }).once("error", reject);
+  });
+}
+
 // Optional per-route hook for machine verdicts (--json/--ledger): called once
 // per route with (path, failedAssertionCount) after its PASS/FAIL lines.
 // Omitting it leaves the human output byte-identical to previous versions.
@@ -267,6 +308,7 @@ export async function smoke(
     allowMissingBaseline = false,
     failOnReadyWaitCritical = false,
     expectedJoinRenderer,
+    expectedCutoverRenderer,
     onRoute,
   } = {},
 ) {
@@ -288,6 +330,9 @@ export async function smoke(
   if (expectedJoinRenderer !== undefined && !["hono", "kit"].includes(expectedJoinRenderer)) {
     throw new Error("SMOKE_EXPECT_JOIN_RENDERER must be hono or kit");
   }
+  if (expectedCutoverRenderer !== undefined && !["hono", "kit"].includes(expectedCutoverRenderer)) {
+    throw new Error("SMOKE_EXPECT_CUTOVER_RENDERER must be hono or kit");
+  }
   const baseline = failedBaseline === undefined ? undefined : assertFailedBaseline(failedBaseline);
   const overrideVersionId =
     versionOverride === undefined ? undefined : versionIdFromOverride(versionOverride);
@@ -296,7 +341,9 @@ export async function smoke(
       ? {}
       : { "Cloudflare-Workers-Version-Overrides": versionOverride };
   let failures = 0;
-  for (const route of routes) {
+  for (const route of expectedCutoverRenderer === undefined
+    ? routes
+    : [...routes, eventsFragment]) {
     let routeFailures = 0;
     const check = (valid, expected, actual) => {
       if (!valid) {
@@ -308,11 +355,13 @@ export async function smoke(
     try {
       // Manual redirects keep guest checks unauthenticated and never visit Discord.
       // Node timeout also bounds reading the body: https://nodejs.org/docs/latest-v24.x/api/globals.html#static-method-abortsignaltimeoutdelay
-      const response = await fetch(new URL(route.path, base), {
-        redirect: "manual",
-        signal: AbortSignal.timeout(timeoutMs),
-        headers: overrideHeaders,
-      });
+      const url = new URL(route.path, base);
+      const signal = AbortSignal.timeout(timeoutMs);
+      const requestHeaders = { ...overrideHeaders, ...route.headers };
+      const response =
+        expectedCutoverRenderer !== undefined && emberPages.has(route.path)
+          ? await probeNavigation(url, requestHeaders, signal)
+          : await fetch(url, { redirect: "manual", signal, headers: requestHeaders });
       check(
         route.statuses.includes(response.status),
         `HTTP ${route.statuses.join(" or ")}`,
@@ -732,14 +781,21 @@ export async function smoke(
           check(false, "valid JSON object", "invalid JSON");
         }
       }
-      const kitJoin = route.path === "/join" && expectedJoinRenderer === "kit";
-      if (route.path === "/join" && expectedJoinRenderer !== undefined) {
+      let expectedRenderer = route.path === "/join" ? expectedJoinRenderer : undefined;
+      if (expectedCutoverRenderer !== undefined) {
+        expectedRenderer =
+          emberPages.has(route.path) || route === eventsFragment ? expectedCutoverRenderer : "hono";
+      }
+      if (expectedRenderer !== undefined) {
         const renderer = headers.get("x-two-renderer");
         check(
-          renderer === (expectedJoinRenderer === "kit" ? "kit" : null),
-          expectedJoinRenderer === "kit" ? "x-two-renderer: kit" : "no x-two-renderer (Hono)",
+          renderer === (expectedRenderer === "kit" ? "kit" : null),
+          expectedRenderer === "kit" ? "x-two-renderer: kit" : "no x-two-renderer (Hono)",
           renderer === null ? "header missing" : "unexpected renderer header",
         );
+      }
+      const kitJoin = route.path === "/join" && expectedRenderer === "kit";
+      if (route.path === "/join" && expectedRenderer !== undefined) {
         const { action, heading } = await readJoinMarkup(body);
         check(action, "join-oneclick link to /join/discord", "link did not match");
         if (kitJoin) {
@@ -753,6 +809,9 @@ export async function smoke(
           "Kit guest h1#home-heading with the lobby or scheduled text",
           "heading missing or did not match",
         );
+      } else if (route === eventsFragment) {
+        const usable = await hasCalendarFragment(body, base.origin);
+        check(usable, "calendar canonical and swap zones", "invalid fragment");
       } else if (!kitJoin && route.body) {
         check(route.body.test(body), `body matching ${route.body}`, "body did not match");
       }
@@ -934,6 +993,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
           failOnReadyWaitCritical,
           // Only callers with a route selection opt into an exact renderer check.
           expectedJoinRenderer: process.env.SMOKE_EXPECT_JOIN_RENDERER,
+          expectedCutoverRenderer: process.env.SMOKE_EXPECT_CUTOVER_RENDERER || undefined,
           onRoute:
             jsonVerdict || ledgerPath !== undefined
               ? (path, failedAssertions) => {

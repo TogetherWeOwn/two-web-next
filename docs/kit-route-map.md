@@ -168,6 +168,13 @@ Join recovery.
 Keep the binding unset in deployed configurations until the exact candidate
 qualifies through the [production release gate](../CONTRIBUTING.md#production-release-gate).
 
+### Admin serving
+
+`KIT_ROUTE_ADMIN=true` enables moderator pages, native admin form POSTs, and
+the operator overrides endpoint on canonical staging or HTTP loopback. The
+operator endpoint uses its bearer independently of the moderator cookie. The
+existing Hono guard serves legacy redirects and other unowned admin paths.
+
 ### Security disclosure endpoint
 
 `KIT_ROUTE_SECURITY_TXT=true` admits trusted GET and HEAD on the literal
@@ -176,6 +183,15 @@ host refusals, encoded paths, trailing slashes, and Kit data URLs. The response
 uses the shared disclosure text, including a `Canonical` field from HTTPS
 `APP_URL`, and keeps its one-hour public cache policy. It requires no database
 or session access.
+
+### Profile writes
+
+`KIT_ROUTE_PROFILE_WRITES=true` admits PATCH and the default form POST on
+`/members/:user`. The shared host and origin gates precede the body cap, then
+the shared signed session, per-viewer throttle and owner checks. The native
+POST retains the `_method=PATCH` form contract. GET and HEAD use their existing
+owners, including the frozen `/members` and `/members/` 404s. Leave the flag
+unset in deployed configuration until activation is qualified.
 
 ### Search indexing endpoints
 

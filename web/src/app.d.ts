@@ -2,6 +2,7 @@ import type { Env as AppEnv } from "../../src/env";
 import type { KitHomePanels } from "../../src/kit-home-panels";
 import type { KitLocals } from "../../src/kit-session";
 import type { EventGoneModel, EventMissingModel } from "../../src/kit-event-states";
+import type { KitProfileWriteDraft } from "../../src/profiles/kit-write";
 import type { RecoveryModel } from "../../src/recovery-outcome";
 
 // adapter-cloudflare 8 passes no `platform`; bindings come from
@@ -30,6 +31,11 @@ declare global {
       // requestLog parity): response header, error pages and error.alert
       // lines carry this same value. Absent off the Kit branch.
       requestId?: string;
+      runAdminForm?: () => Promise<never>;
+      // The default profile action shares its admitted owner draft or final
+      // HTTP response with the server renderer via this request's locals.
+      profileWriteDraft?: KitProfileWriteDraft;
+      profileWriteResponse?: Response;
     }
     // Branded detail states: the /e/:key load throws the #838 state model
     // with the served status, and the route-level error page renders it. Every

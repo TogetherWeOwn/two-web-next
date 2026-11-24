@@ -59,8 +59,7 @@ const PRIVACY_HELP_ID = "profile-leaderboard-privacy-help";
 // test ids and copy are shared, so the existing profile tests and islands
 // apply. Member fields render through Svelte interpolation only — never
 // {@html} — so a hostile username, bio or game name stays escaped text, like
-// the Hono JSX render. The edit form posts to the Hono-owned write routes
-// (POST/PATCH /members/:user stay off the manifest until edit parity).
+// the Hono JSX render. Both write owners use the same form action URL.
 let {
   member,
   stats = null,
@@ -70,6 +69,7 @@ let {
   joinResult = null,
   errors = null,
   values = null,
+  statsDraftWarning = false,
   sharedGames = undefined,
   restoredWrite = false,
 }: {
@@ -81,9 +81,7 @@ let {
   joinResult?: JoinResult | null;
   errors?: Record<string, string> | null;
   values?: ProfileFormValues | null;
-  // No statsDraftWarning: Kit is GET-only and the 422 re-render is Hono-owned,
-  // so no Kit route can set it. Re-add with wiring and a render test if Kit
-  // write parity ever needs it.
+  statsDraftWarning?: boolean;
   /** Member's displayed game strings the viewer also plays; entries exactly
    * equal to a value render the shared marker. Absent (or empty) renders the
    * plain list: own profile and zero-shared never mark. */
@@ -283,6 +281,7 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
           <p class="profile-hint">Member stats unavailable right now.</p>
           <p class="profile-hint">
             <a href={`/members/${member.id}`}>Retry loading member stats</a>
+            {#if statsDraftWarning} Reloading discards your unsaved changes.{/if}
           </p>
         </section>
       {:else}
@@ -329,6 +328,7 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
             <p class="profile-hint">Milestones unavailable right now.</p>
             <p class="profile-hint">
               <a href={`/members/${member.id}`}>Retry loading milestones</a>
+              {#if statsDraftWarning} Reloading discards your unsaved changes.{/if}
             </p>
           {:else}
             {#if stats.milestonesTruncated}
@@ -492,9 +492,13 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
             <button class="btn" type="submit" data-testid={PROFILE_SAVE_TESTID}>
               {PROFILE_COPY.save}
             </button>
-            <button class="btn profile-secondary" type="reset" data-testid={PROFILE_CANCEL_TESTID}>
-              {PROFILE_COPY.cancel}
-            </button>
+            {#if values}
+              <a class="btn profile-secondary" href={`/members/${member.id}`} data-testid={PROFILE_CANCEL_TESTID}>{PROFILE_COPY.cancel}</a>
+            {:else}
+              <button class="btn profile-secondary" type="reset" data-testid={PROFILE_CANCEL_TESTID}>
+                {PROFILE_COPY.cancel}
+              </button>
+            {/if}
           </div>
         </form>
         {@html editorIsland}

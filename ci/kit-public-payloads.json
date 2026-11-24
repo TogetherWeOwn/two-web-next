@@ -148,6 +148,11 @@
   ],
   "sessionRequired": [
     {
+      "route": "POST /admin/*",
+      "binding": "web/src/routes/admin/[...action]/+page.server.ts",
+      "reads": "exact moderator form actions admitted by the hook before controller dispatch"
+    },
+    {
       "route": "GET /profile",
       "binding": "web/src/routes/profile/+page.server.ts",
       "reads": "own member record (audited)"
@@ -156,6 +161,11 @@
       "route": "GET /members/:user",
       "binding": "web/src/routes/members/[user]/+page.server.ts",
       "reads": "member profile plus the viewer's own games row for the shared-games match (audited)"
+    },
+    {
+      "route": "PATCH /members/:user",
+      "binding": "web/src/routes/members/[user]/+server.ts",
+      "reads": "own profile after signed member and owner admission"
     },
     {
       "route": "GET /leaderboards/members",
@@ -229,6 +239,11 @@
     }
   ],
   "outOfScope": [
+    {
+      "route": "GET /admin/ops-overrides",
+      "binding": "web/src/routes/admin/ops-overrides/+server.ts",
+      "reason": "Private operator record behind independent control-bearer admission."
+    },
     {
       "route": "GET /e/:key",
       "binding": "web/src/routes/e/[key]/+page.server.ts",

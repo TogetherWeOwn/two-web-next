@@ -991,7 +991,7 @@ export function assertProductionTarget(configText) {
   }
 }
 
-export const KIT_ROUTE_FLAGS = ["ARCHIVE", "STATIC", "EVENTS", "HOME", "JOIN"].map(
+export const KIT_ROUTE_FLAGS = ["ARCHIVE", "STATIC", "EVENTS", "HOME", "JOIN", "EMBER_PAGES"].map(
   (family) => `KIT_ROUTE_${family}`,
 );
 const KIT_BINDING_KEYS = (
@@ -1016,6 +1016,8 @@ export function assertKitProductionCandidate(rootText, kitText) {
     throw new Error("Kit candidate must name the root production Worker two-web-next-production");
   }
   for (const flag of KIT_ROUTE_FLAGS) {
+    // Older all-off packets predate the Ember flag.
+    if (flag === "KIT_ROUTE_EMBER_PAGES" && kit.vars?.[flag] === undefined) continue;
     if (kit.vars?.[flag] !== "false") throw new Error(`Kit candidate ${flag} must be "false"`);
   }
   if (!Array.isArray(kit.triggers?.crons) || kit.triggers.crons.length !== 0) {
