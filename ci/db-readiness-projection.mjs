@@ -13,6 +13,7 @@ import { assertRollbackVersionId } from "./production-deploy-gate.mjs";
 import { liveVersion, rollbackEnvironment } from "./rollback-target.mjs";
 
 const source = new URL("../docs/web-readiness-projection.sql", import.meta.url);
+const reviewedSqlHash = "d202ac7d38a6c932276e8e90d3fee049e4cf700b261952106f722deb7c9615ec";
 const marker = "two-web readiness projection installation v1";
 const definition = "SELECT created_at FROM drizzle.__drizzle_migrations OFFSET 0;";
 const approvedEnds = new Set(["1033_session-roles-checked-at", "1037_waitlist-offers"]);
@@ -86,7 +87,7 @@ async function assertUndoTraffic(plan, timestamps, account, token, fetchImpl) {
   );
   assert.equal(health.revision?.version_id, plan.webVersion, "Readiness version mismatch");
   assert.equal(health.db, "ok");
-  assert.equal(health.pending_migrations, 0);
+  assert.equal(health.pending_migrations, 0, "Fallback Worker reports pending migrations");
   assert.deepEqual(health.migration_ledger, timestamps);
 }
 
@@ -174,7 +175,9 @@ export async function runReadinessProjection(operation, env, options = {}) {
       const timestamps = await assertMigrationPrefix(tx, plan.ledger);
 
       if (operation === "forward") {
-        await tx.unsafe(readFileSync(source, "utf8")).simple();
+        const sql = readFileSync(source);
+        assert.equal(createHash("sha256").update(sql).digest("hex"), reviewedSqlHash);
+        await tx.unsafe(sql.toString("utf8")).simple();
         await tx`comment on view web_readiness.migration_timestamps is 'two-web readiness projection installation v1'`;
         await tx`grant usage on schema web_readiness to ${tx(plan.servingRole)}`;
         await tx`grant select on web_readiness.migration_timestamps to ${tx(plan.servingRole)}`;

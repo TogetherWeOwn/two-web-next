@@ -13,6 +13,7 @@ permissions: {}
 
 concurrency:
   group: web-migrate-production
+  queue: max
   cancel-in-progress: false
 
 jobs:
@@ -49,6 +50,7 @@ jobs:
     # Hold the deploy/rollback lane from the traffic check through the inverse.
     concurrency:
       group: production-worker-mutation
+      queue: max
       cancel-in-progress: false
     steps:
       - name: Require approval pins for this run attempt

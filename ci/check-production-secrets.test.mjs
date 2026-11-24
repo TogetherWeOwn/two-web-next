@@ -822,7 +822,9 @@ test("readiness identity preflight scopes credentials and requires protected dis
   const { on, jobs, concurrency } = parseDocument(source).toJS();
   assert.deepEqual(Object.keys(on), ["workflow_dispatch"]);
   assert.equal(concurrency.group, "web-migrate-production");
+  assert.equal(concurrency.queue, "max");
   assert.equal(jobs.projection.concurrency.group, "production-worker-mutation");
+  assert.equal(jobs.projection.concurrency.queue, "max");
   assert.equal(jobs.projection.needs, "preflight");
   assert.equal(jobs.projection.environment, "production");
   const run = jobs.projection.steps.at(-1);

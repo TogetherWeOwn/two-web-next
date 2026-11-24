@@ -4,7 +4,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
-import { PLANETSCALE_PRODUCTION_BRANCH_ID, PLANETSCALE_PRODUCTION_HOST } from "../db-migrate.mjs";
+import {
+  PLANETSCALE_PRODUCTION_BRANCH_ID,
+  PLANETSCALE_PRODUCTION_HOST,
+  webMigrationLockKey,
+} from "../db-migrate.mjs";
 import { runReadinessProjection } from "../db-readiness-projection.mjs";
 
 const source = fileURLToPath(new URL("../../drizzle", import.meta.url));
@@ -152,6 +156,16 @@ export async function rehearseProjection({ client, url }) {
         await tx`LOCK TABLE drizzle.__drizzle_migrations IN ROW EXCLUSIVE MODE`;
         await assert.rejects(run("forward"), { code: "55P03" });
       });
+      await client.begin(async (tx) => {
+        await tx`SELECT pg_advisory_xact_lock(${webMigrationLockKey})`;
+        await assert.rejects(run("forward"), /Web migration lock held/);
+      });
+      await client`CREATE TABLE public.announcement_send_claims (id int)`;
+      await assert.rejects(run("forward"), /Unexpected ledger owner, shape, or serving role/);
+      await client`DROP TABLE public.announcement_send_claims`;
+      await client`GRANT ${client(ownerRole)} TO ${client(servingRole)} WITH INHERIT FALSE, SET FALSE`;
+      await assert.rejects(run("forward"), /Unexpected ledger owner, shape, or serving role/);
+      await client`REVOKE ${client(ownerRole)} FROM ${client(servingRole)}`;
       await owner`UPDATE drizzle.__drizzle_migrations SET hash = 'wrong' WHERE id = 1`;
       await assert.rejects(run("forward"), /not an exact prefix/);
       await owner`UPDATE drizzle.__drizzle_migrations SET hash = ${rows[0].hash} WHERE id = 1`;
@@ -192,7 +206,10 @@ export async function rehearseProjection({ client, url }) {
       await grantFallback();
       await assert.rejects(run("undo", { trafficVersion: randomUUID() }), /Approved fallback/);
       await assert.rejects(run("undo", { percentage: 50 }), /not a single-version/);
-      await assert.rejects(run("undo", { pending: 1 }));
+      await assert.rejects(
+        run("undo", { pending: 1 }),
+        /Fallback Worker reports pending migrations/,
+      );
       const paddedHealth = (bytes) => (health) =>
         new Response(JSON.stringify(health).padEnd(bytes));
       await assert.rejects(
