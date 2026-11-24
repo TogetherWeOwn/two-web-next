@@ -11,6 +11,22 @@ async function encodeSignedValue(value: string, secret: string): Promise<string>
   return encodeURIComponent(`${value}.${btoa(String.fromCharCode(...new Uint8Array(mac)))}`);
 }
 
+/** Select the first wire-valid pair for each requested name, before verifying any MAC. */
+export function signedCookiePairs(header: string | null, names: ReadonlySet<string>) {
+  const encoded = new Map<string, string>();
+  for (const pair of (header ?? "").split(";")) {
+    const separator = pair.indexOf("=");
+    if (separator < 0) continue;
+    const name = pair.slice(0, separator).replace(/^[ \t]+|[ \t]+$/g, "");
+    if (!names.has(name) || encoded.has(name)) continue;
+    const raw = pair.slice(separator + 1).replace(/^[ \t]+|[ \t]+$/g, "");
+    const value = raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw;
+    // Hono permits printable ASCII except quote, semicolon, and backslash.
+    if (/^[\x20-\x21\x23-\x3a\x3c-\x5b\x5d-\x7e]*$/.test(value)) encoded.set(name, value);
+  }
+  return encoded;
+}
+
 /** Verify an encoded wire value. Like Hono, the MAC covers the value, not the cookie name. */
 export async function verifySignedCookie(encoded: string, secret: string): Promise<string | null> {
   if (!secret) return null;

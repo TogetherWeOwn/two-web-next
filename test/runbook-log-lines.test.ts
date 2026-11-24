@@ -418,7 +418,7 @@ describe("kit session-store outage warning docs", () => {
 
   it("sources emit the warnings with class-only fields, request_id on the probe leg only", () => {
     const cases = [
-      { file: "src/auth-status.ts", message: AUTH_STATUS_DOWN, requestId: true },
+      { file: "src/http/auth-status.ts", message: AUTH_STATUS_DOWN, requestId: true },
       { file: "src/kit-session.ts", message: KIT_SESSION_DOWN, requestId: false },
       { file: "src/kit-session.ts", message: KIT_BRIDGE_DOWN, requestId: false },
       { file: "src/kit-session.ts", message: KIT_EVENTS_DOWN, requestId: false },
@@ -428,7 +428,7 @@ describe("kit session-store outage warning docs", () => {
       const call = `console.warn("${message}"`;
       const start = source.indexOf(call);
       expect(start, `missing ${call} in ${file}`).toBeGreaterThanOrEqual(0);
-      // The warn payload carries the exception class plus, on the Hono probe
+      // The warn payload carries the exception class plus, on the status probe
       // leg only, the validated request id: no message, token, cookie, or
       // member identity travels on any leg.
       const payload = source.slice(start, source.indexOf("});", start));
