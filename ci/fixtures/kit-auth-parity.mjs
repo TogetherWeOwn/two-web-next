@@ -31,18 +31,28 @@ async function assertNoJavaScript(origin) {
   const browser = await chromium.launch();
   try {
     const context = await browser.newContext({ javaScriptEnabled: false });
-    await context.route("**/*", async (route) => {
-      const url = new URL(route.request().url());
-      if (url.origin === origin) return route.continue();
-      if (url.origin !== "https://discord.com" || url.pathname !== "/oauth2/authorize")
-        return route.abort();
-      const redirect = new URL(url.searchParams.get("redirect_uri"));
-      redirect.search = new URLSearchParams({
-        code: "fixture-code",
-        state: url.searchParams.get("state"),
-      });
-      return route.fulfill({ status: 302, headers: { location: redirect.href } });
-    });
+    await context.route("**/*", (route) =>
+      new URL(route.request().url()).origin === origin ? route.continue() : route.abort(),
+    );
+    // Playwright routes only the first request in a redirect chain. Fetch
+    // the real login start without following its outbound Location.
+    await context.route(
+      (url) => url.origin === origin && url.pathname === "/auth/discord",
+      async (route) => {
+        const response = await route.fetch({ maxRedirects: 0 });
+        assert.equal(response.status(), 302);
+        const headers = response.headers();
+        const url = new URL(headers.location);
+        assert.equal(url.origin + url.pathname, "https://discord.com/oauth2/authorize");
+        const redirect = new URL(url.searchParams.get("redirect_uri"));
+        assert.equal(redirect.href, origin + callback);
+        redirect.search = new URLSearchParams({
+          code: "fixture-code",
+          state: url.searchParams.get("state"),
+        });
+        await route.fulfill({ response, headers: { ...headers, location: redirect.href } });
+      },
+    );
     const page = await context.newPage();
     await page.goto(origin);
     const signedIn = page.waitForResponse((r) => new URL(r.url()).pathname === callback);
