@@ -12,6 +12,8 @@ import { orderedDeploymentTime } from "./staging-forward.mjs";
 import { observeStaging, validateStagingIdentityPair } from "./staging-provenance.mjs";
 
 const GRAPHQL_URL = "https://api.cloudflare.com/client/v4/graphql";
+// The query returns one account and at most one aggregate row.
+const MAX_ANALYTICS_RESPONSE_BYTES = 64 * 1024;
 const SHA = /^[0-9a-f]{40}$/;
 const UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 const positiveInteger = (value) => Number.isSafeInteger(value) && value > 0;
@@ -180,6 +182,29 @@ export async function captureStagingSoakReceipt(
   return sampleReceipt(base, counts, now());
 }
 
+async function readAnalyticsJson(response) {
+  if (!response.body) throw new Error("Missing Cloudflare analytics response body");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return JSON.parse(text + decoder.decode());
+      bytes += value.byteLength;
+      if (bytes > MAX_ANALYTICS_RESPONSE_BYTES) {
+        // Refuse immediately even if the underlying stream stalls during cancellation.
+        void reader.cancel().catch(() => undefined);
+        throw new Error("Oversized Cloudflare analytics response");
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 async function versionTaggedCounts(base, sampledAt, { accountId, token, fetchImpl }) {
   const versionId = base.workerVersion;
   const observedAt = new Date(sampledAt).toISOString();
@@ -200,7 +225,7 @@ async function versionTaggedCounts(base, sampledAt, { accountId, token, fetchImp
       signal: AbortSignal.timeout(30_000),
     });
     if (!response.ok) throw new Error("Cloudflare analytics response refused");
-    const payload = await response.json();
+    const payload = await readAnalyticsJson(response);
     const errors = payload?.errors;
     if (errors !== null && errors !== undefined && !Array.isArray(errors)) {
       throw new Error("Malformed Cloudflare analytics response");
