@@ -1,10 +1,12 @@
-import type { Context } from "hono";
+import { Context } from "hono";
 import postgres from "postgres";
+import { requestBodyLimit } from "../body-limit";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import type { Env } from "../env";
 import type { SourceReadReport, SourceReadStatement } from "../jobs/events";
 import { loadReplayCandidateWithSql, parseFailureId } from "../jobs/preview";
 import { STAGING_APP_URL } from "../qa";
+import { crossOriginRefusal } from "../same-origin";
 import type { QueuePreviewVars } from "./queue-preview";
 
 /**
@@ -178,14 +180,49 @@ function bearerToken(request: Request): string {
   return header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
 }
 
-/** Write verbs on the evidence path refuse before any middleware or source read. */
+/** Registered method refusals run before admin admission or any source read. */
+export const SOURCE_EVIDENCE_REFUSED_METHODS = ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
+export const sourceEvidenceBodyLimit = requestBodyLimit("action");
+
 export function sourceEvidenceMethodRefused(c: Context<QueuePreviewVars>) {
   c.header("cache-control", "private, no-store");
   c.header("allow", "GET");
   return c.json({ error: "method_not_allowed" }, 405);
 }
 
-export async function sourceEvidenceHandler(c: Context<QueuePreviewVars>) {
+export function sourceEvidenceHandler(c: Context<QueuePreviewVars>) {
+  return sourceEvidenceResponse(c, () => c.req.param("id"));
+}
+
+function sourceEvidenceContext(request: Request, env: Env, requestId?: string) {
+  const c = new Context<QueuePreviewVars>(request, { env, path: new URL(request.url).pathname });
+  if (requestId) c.set("requestId", requestId);
+  return c;
+}
+
+export function refuseSourceEvidenceOrigin(request: Request, env: Env, requestId: string) {
+  return crossOriginRefusal(sourceEvidenceContext(request, env, requestId));
+}
+
+export async function fetchSourceEvidence(
+  request: Request,
+  env: Env,
+  id: string,
+  requestId?: string,
+) {
+  const c = sourceEvidenceContext(request, env, requestId);
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    const refused = await sourceEvidenceBodyLimit(c, () => Promise.resolve());
+    return refused ?? sourceEvidenceMethodRefused(c);
+  }
+  const response = await sourceEvidenceResponse(c, () => id);
+  return request.method === "HEAD" ? new Response(null, response) : response;
+}
+
+async function sourceEvidenceResponse(
+  c: Context<QueuePreviewVars>,
+  readId: () => string | undefined,
+) {
   c.header("cache-control", "private, no-store");
   const env = c.env;
   if (
@@ -195,10 +232,9 @@ export async function sourceEvidenceHandler(c: Context<QueuePreviewVars>) {
   ) {
     return c.json({ error: "evidence_disabled" }, 404);
   }
-  // Only GET reaches this handler: sibling write verbs are refused by
-  // `sourceEvidenceMethodRefused`, registered on the same path before every
-  // admin middleware, so the method contract never depends on sibling flags.
-  const id = parseFailureId(c.req.param("id") ?? "");
+  // GET and HEAD share admission. The other registered methods take the
+  // capped refusal path under either owner.
+  const id = parseFailureId(readId() ?? "");
   // No query overrides are admitted.
   if (id === null || new URL(c.req.url).search !== "") {
     return c.json({ error: "invalid_failure_id" }, 422);

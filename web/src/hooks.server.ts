@@ -2,6 +2,8 @@ import { captureRefusal, captureResponse } from "../../src/render-clock";
 import { redirect } from "@sveltejs/kit";
 import { type Handle, sequence } from "@sveltejs/kit/hooks";
 import { env } from "cloudflare:workers";
+import { KIT_SOURCE_EVIDENCE_ROUTES } from "../../src/admin/kit-source-evidence-route";
+import { refuseSourceEvidenceOrigin } from "../../src/admin/source-evidence";
 import { KIT_EVENT_MARKDOWN_ROUTES } from "../../src/ai-friendly/kit-event-markdown-routes";
 import { recordBoardView, recordQueuedBoardView } from "../../src/hotzones/board-log";
 import { prepareKitHomePanels } from "../../src/kit-home-panels";
@@ -91,6 +93,12 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
       { flag: env.KIT_ROUTE_EVENT_MARKDOWN, routes: KIT_EVENT_MARKDOWN_ROUTES },
       { flag: env.KIT_ROUTE_SEO, routes: KIT_SEO_ROUTES },
       { flag: env.KIT_ROUTE_SECURITY_TXT, routes: [KIT_SECURITY_TXT_ROUTE] },
+      {
+        flag: env.KIT_ROUTE_ADMIN_SOURCE_EVIDENCE,
+        routes: KIT_SOURCE_EVIDENCE_ROUTES,
+        crossOriginRefusal: (request, requestId) =>
+          refuseSourceEvidenceOrigin(request, env, requestId),
+      },
       {
         flag: env.KIT_ROUTE_PROFILE_WRITES,
         routes: KIT_PROFILE_WRITE_ROUTES,

@@ -67,6 +67,8 @@ export type Env = AgentEventsEnv & {
   SOURCE_EVIDENCE_VERIFIER_INCIDENT_ID?: string;
   SOURCE_EVIDENCE_VERIFIER_ISSUED_AT?: string;
   SOURCE_EVIDENCE_VERIFIER_EXPIRES_AT?: string;
+  // Selects the exact Kit source-evidence endpoint independently of verifier admission.
+  KIT_ROUTE_ADMIN_SOURCE_EVIDENCE?: string;
   // The staging alert probe uses the same internal queue as JobsEnv, without a DB fixture.
   INTERNAL_ACTION_QUEUE?: Queue<QueueMessage>;
   // CSP violation sink (TOG-10107): fraction of valid reports (0.0–1.0)
