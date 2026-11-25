@@ -1,15 +1,16 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { parse } from "yaml";
 import { fileURLToPath } from "node:url";
 import { first, preRollback, soakEnv, trustedReads } from "../test/fixtures/staging-soak-http.mjs";
 import { verifyOrdinaryLedger } from "./check-production-secrets.mjs";
 import {
+  inventory,
   productionUploadConfig,
   verifyReady,
   verifyStagingProof,
@@ -23,8 +24,9 @@ import {
   verifyProducer,
   verifyUndoVersion,
 } from "./kit-cutover-deploy.mjs";
+import { packageCutover } from "./kit-cutover-package.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
-import { verifyAllocationSoak } from "./production-deploy-gate.mjs";
+import { KIT_ROUTE_FLAGS, verifyAllocationSoak } from "./production-deploy-gate.mjs";
 import { deploymentTarget } from "./staging-deploy-gate.mjs";
 import { resolveStagingCandidate } from "./staging-provenance.mjs";
 
@@ -178,6 +180,104 @@ test("offline Ember readback enforces the byte limit and UTF-8 decoding", () => 
   assertReadbackRejected(Buffer.concat([atLimit, Buffer.from(" ")]));
   assertReadbackRejected(Buffer.concat([packet, Buffer.from([0xff])]));
   assertReadbackRejected("");
+});
+
+test("failed Hono dry run removes build scratch without publishing a packet digest", async (t) => {
+  const fixture = await mkdtemp(join(tmpdir(), "cutover-hono-dry-run-test-"));
+  t.after(() => rm(fixture, { recursive: true, force: true }));
+
+  const repo = join(fixture, "repo");
+  const assets = join(fixture, "installed/cloudflare");
+  const runnerTemp = join(fixture, "runner");
+  const packet = join(fixture, "packet");
+  const output = join(fixture, "github-output");
+  const summary = join(fixture, "github-summary");
+  const siblingEvidence = join(runnerTemp, "hono-cutover-build-neighbor/evidence.txt");
+  const name = "two-web-next-production";
+  const wrangler = { version: "1.2.3" };
+  const sourceFiles = {
+    "wrangler.jsonc": { env: { production: { name, main: "src/worker.ts" } } },
+    "web/wrangler.production.jsonc": {
+      name,
+      main: ".svelte-kit/cloudflare/_worker.js",
+      vars: Object.fromEntries(KIT_ROUTE_FLAGS.map((flag) => [flag, "false"])),
+      triggers: { crons: [] },
+      workers_dev: false,
+      preview_urls: false,
+      assets: { directory: ".svelte-kit/cloudflare" },
+    },
+    "drizzle/meta/_journal.json": { entries: [] },
+    "package-lock.json": { packages: { "node_modules/wrangler": wrangler } },
+    "node_modules/wrangler/package.json": wrangler,
+  };
+  for (const [file, data] of Object.entries(sourceFiles)) {
+    const path = join(repo, file);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, JSON.stringify(data));
+  }
+  for (const [file, bytes] of [
+    [join(repo, "public/fixture.txt"), "synthetic Hono asset"],
+    [join(assets, "_worker.js"), "synthetic Kit facade"],
+    [join(assets, "kit-adapter.js"), "synthetic Kit adapter"],
+    [siblingEvidence, "neighboring scratch evidence"],
+    [output, "existing_output=fixture\n"],
+    [summary, "Existing fixture summary\n"],
+  ]) {
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(file, bytes);
+  }
+  const stub = join(repo, "node_modules/.bin/wrangler");
+  await mkdir(dirname(stub));
+  await writeFile(
+    stub,
+    `#!/bin/sh
+set -eu
+test "$1 $2 $3 $4 $5" = "deploy --dry-run --env production --outdir"
+test "\${6%/*}" = "$RUNNER_TEMP"
+case "\${6##*/}" in
+  hono-cutover-build-*) ;;
+  *) exit 2 ;;
+esac
+test -d "$6"
+printf 'synthetic partial Hono bundle' > "$6/worker.js"
+printf '%s' "$6" > "$RUNNER_TEMP/wrangler-outdir"
+exit 31
+`,
+    { mode: 0o755 },
+  );
+
+  for (const [key, value] of Object.entries({
+    RUNNER_TEMP: runnerTemp,
+    GITHUB_OUTPUT: output,
+    GITHUB_STEP_SUMMARY: summary,
+  })) {
+    const previous = process.env[key];
+    t.after(() => {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    });
+    process.env[key] = value;
+  }
+  const kitFiles = await inventory(assets);
+  const files = Object.fromEntries(
+    Object.entries(kitFiles).map(([path, hash]) => [`cloudflare/${path}`, hash]),
+  );
+  const { runId, runAttempt } = identity;
+  await assert.rejects(
+    packageCutover(packet, repo, { assets }, { files }, { sourceSha, runId, runAttempt }),
+    { status: 31 },
+  );
+
+  const scratch = await readFile(join(runnerTemp, "wrangler-outdir"), "utf8");
+  assert.equal(dirname(scratch), runnerTemp);
+  await assert.rejects(lstat(scratch), { code: "ENOENT" });
+  assert.equal(await readFile(siblingEvidence, "utf8"), "neighboring scratch evidence");
+
+  await assert.rejects(lstat(packet), { code: "ENOENT" });
+  assert.equal(await readFile(join(repo, "public/fixture.txt"), "utf8"), "synthetic Hono asset");
+  assert.deepEqual(await inventory(assets), kitFiles);
+  assert.equal(await readFile(output, "utf8"), "existing_output=fixture\n");
+  assert.equal(await readFile(summary, "utf8"), "Existing fixture summary\n");
 });
 
 test("cutover requires explicit protected selection and the paired Hono UUID", () => {
