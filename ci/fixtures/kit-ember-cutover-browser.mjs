@@ -211,10 +211,10 @@ export async function verifyEmberCutoverJourney({
   const sql = postgres(databaseUrl, { max: 1 });
   try {
     browser = await chromium.launch({
-      args: ["--host-resolver-rules=MAP * ~NOTFOUND"],
-      // Chromium bypasses its proxy for loopback. Every other HTTP request
-      // hits the same restrictive listener, which also rejects CONNECT.
-      proxy: { server: proxy.origin },
+      args: ["--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"],
+      // Route all browser traffic to the loopback listener. It permits only
+      // fixture document and asset GETs and rejects CONNECT.
+      proxy: { server: proxy.origin, bypass: "<-loopback>" },
     });
     const options = {
       baseURL: proxy.origin,
