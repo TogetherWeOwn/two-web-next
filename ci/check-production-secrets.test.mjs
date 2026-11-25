@@ -8,6 +8,7 @@ import { isScalar, parseDocument } from "yaml";
 import {
   probeIsolationDispatch,
   probeProjectionDispatch,
+  runIsolationDispatch,
 } from "./fixtures/web-readiness-dispatch.mjs";
 import {
   REQUIRED_PRODUCTION_SECRETS,
@@ -859,6 +860,92 @@ test("serving isolation is manual, protected and serialized with schema and Work
   assert.equal(jobs.isolation.steps.at(-1).env.PRODUCTION_DB_ISOLATION_DATABASE_URL, dsn);
   assert.equal(source.split(dsn).length, 2);
   probeIsolationDispatch(jobs);
+});
+
+test("serving isolation distinguishes acknowledged mutations from failures when cleanup fails", async () => {
+  const { runServingIsolationCli } = await import("./db-serving-ledger-isolation-cli.mjs");
+  const { prepareServingIsolationOutcome } = await import(
+    "./fixtures/web-serving-isolation-outcome.mjs"
+  );
+  const { run, events, faults } = await prepareServingIsolationOutcome();
+  const cli = (operation) => run(operation, { execute: runServingIsolationCli });
+  const workflow = readFileSync(new URL("db-serving-ledger-isolation.yml", WORKFLOWS), "utf8");
+  const execute = parseDocument(workflow).toJS().jobs.isolation.steps.at(-1);
+  const readback = async (expected) => {
+    delete faults.close;
+    events.length = 0;
+    assert.equal(await cli("readback"), expected);
+    assert.deepEqual(events, ["read only", "callback completed", "acknowledged", "close"]);
+  };
+  const closeError = new Error("synthetic close diagnostic with private input");
+  const statementError = new Error("synthetic statement failure");
+  faults.close = closeError;
+  await assert.rejects(run("forward"), (error) => {
+    assert.equal(
+      error.message,
+      "Database serving ledger isolation connection cleanup failed after an acknowledged outcome.",
+    );
+    assert.equal(error.outcome, "committed");
+    assert.equal(error.cause, undefined);
+    return true;
+  });
+  await readback(11);
+  assert.equal(await cli("undo"), 0);
+
+  events.length = 0;
+  faults.close = closeError;
+  faults.statement = statementError;
+  await assert.rejects(run("forward"), (err) => err === statementError);
+  assert.deepEqual(events, [
+    "write transaction",
+    "revoke pg_read_all_data",
+    "revoke pg_write_all_data",
+    "close",
+  ]);
+  const failedStatus = await cli("forward");
+  assert.equal(failedStatus, 1);
+  const unconfirmed = [
+    1,
+    "",
+    "Database serving ledger isolation operation did not confirm an outcome.\n",
+  ];
+  assert.deepEqual(runIsolationDispatch(execute, "forward", failedStatus), unconfirmed);
+  delete faults.statement;
+  await readback(10);
+
+  for (const [operation, expectedReadback, direction] of [
+    ["forward", 11, ""],
+    ["undo", 10, " inverse"],
+  ]) {
+    events.length = 0;
+    faults.close = closeError;
+    const status = await cli(operation);
+    assert.equal(status, 12);
+    assert.deepEqual(events, [
+      "write transaction",
+      `${operation === "forward" ? "revoke" : "grant"} pg_read_all_data`,
+      `${operation === "forward" ? "revoke" : "grant"} pg_write_all_data`,
+      "callback completed",
+      "acknowledged",
+      "close",
+    ]);
+    assert.deepEqual(runIsolationDispatch(execute, operation, status), [
+      1,
+      "",
+      `Database serving ledger isolation${direction} committed. Connection cleanup failed. Verify with readback.\n`,
+    ]);
+    assert.equal(await cli("readback"), 1);
+    await readback(expectedReadback);
+  }
+
+  faults.acknowledgement = new Error("synthetic missing commit acknowledgement");
+  faults.close = closeError;
+  events.length = 0;
+  assert.equal(await cli("forward"), 1);
+  assert.deepEqual(events.slice(-2), ["callback completed", "close"]);
+  delete faults.acknowledgement;
+  await readback(11);
+  assert.deepEqual(runIsolationDispatch(execute, "readback", 12), unconfirmed);
 });
 
 test("db-backup selects its environment from the dispatch target, staging by default", () => {

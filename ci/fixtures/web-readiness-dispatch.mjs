@@ -56,6 +56,17 @@ export function probeProjectionDispatch({ preflight, projection }) {
   ]);
 }
 
+export function runIsolationDispatch(execute, operation, status) {
+  return shell(
+    execute,
+    { OPERATION: operation, LEDGER: "1033_session-roles-checked-at" },
+    `node() {
+      [[ "$#" == 3 && "$1" == ci/db-serving-ledger-isolation-cli.mjs && "$2" == "$OPERATION" && "$3" == "$LEDGER" ]] || return 99
+      echo synthetic-url; echo driver-error >&2; return ${status}
+    }`,
+  );
+}
+
 export function probeIsolationDispatch({ preflight, isolation }) {
   const [scope] = preflight.steps;
   const [pins] = isolation.steps;
@@ -95,15 +106,7 @@ export function probeIsolationDispatch({ preflight, isolation }) {
   ]) {
     assert.deepEqual(shell(pins, { ...approved, ...override }), refused);
   }
-  const run = (operation, status) =>
-    shell(
-      execute,
-      { OPERATION: operation, LEDGER: "1033_session-roles-checked-at" },
-      `node() {
-      [[ "$#" == 3 && "$1" == ci/db-serving-ledger-isolation-cli.mjs && "$2" == "$OPERATION" && "$3" == "$LEDGER" ]] || return 99
-      echo synthetic-url; echo driver-error >&2; return ${status}
-    }`,
-    );
+  const run = (operation, status) => runIsolationDispatch(execute, operation, status);
   for (const [operation, status, message] of [
     ["forward", 0, "Database serving ledger isolation committed."],
     ["undo", 0, "Database serving ledger isolation inverse committed."],
