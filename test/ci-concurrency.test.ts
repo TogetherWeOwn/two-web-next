@@ -219,33 +219,39 @@ describe("PR gate event matrix", () => {
     },
   );
 
-  it.each(["in_progress", "failure"])(
-    "retains a %s scan verdict until another real same-head scan",
-    (scanState) => {
+  it.each([
+    ["same head with an in-progress scan", "merge-a", "merge-a", "in_progress"],
+    ["same head with a failed scan", "merge-a", "merge-a", "failure"],
+    ["new head with its only scan queued", "merge-a", "merge-b", "success"],
+    ["retarget with its only scan queued", "merge-a", "merge-c", "in_progress"],
+  ])(
+    "keeps a real scan for the latest revision on %s",
+    (_case, priorRevision, latestRevision, scanState) => {
       // Model the run group while edits arrive. A queued synchronize may be the
       // only run for this revision, so its replacement must still scan it.
       const scanCondition = prGates.jobs.gitleaks.if;
       const cancelledVerdict = conditionHolds(scanCondition, true) ? "skipped" : "cancelled";
-      const active = { revision: "merge-sha", scan: scanState };
-      let pending = { revision: active.revision, event: "synchronize", scan: "queued" };
+      const currentScan = { revision: priorRevision, scan: scanState };
+      let pending = { revision: latestRevision, event: "source event", scan: "queued" };
       const superseded = [];
       for (const event of ["first edit", "last edit"]) {
         if (cancelsActivePrGate("pull_request", "edited", { body: { from: "previous body" } })) {
-          active.scan = cancelledVerdict;
+          currentScan.scan = cancelledVerdict;
         }
         superseded.push({ ...pending, scan: cancelledVerdict });
-        pending = { revision: active.revision, event, scan: "queued" };
+        pending = { revision: latestRevision, event, scan: "queued" };
       }
 
-      expect(active.scan).toBe(scanState);
-      expect(superseded.map(({ event, scan }) => [event, scan])).toEqual([
-        ["synchronize", "cancelled"],
-        ["first edit", "cancelled"],
+      expect(currentScan.scan).toBe(scanState);
+      expect(superseded).toEqual([
+        { revision: latestRevision, event: "source event", scan: "cancelled" },
+        { revision: latestRevision, event: "first edit", scan: "cancelled" },
       ]);
-      expect(pending).toEqual({ revision: active.revision, event: "last edit", scan: "queued" });
-      expect([active, pending, ...superseded].some(({ scan }) => PASSING.includes(scan))).toBe(
-        false,
+      expect(pending).toEqual({ revision: latestRevision, event: "last edit", scan: "queued" });
+      const passingReplacements = [...superseded, pending].filter(({ scan }) =>
+        PASSING.includes(scan),
       );
+      expect(passingReplacements).toEqual([]);
       expect(conditionHolds(scanCondition, false)).toBe(true);
     },
   );
