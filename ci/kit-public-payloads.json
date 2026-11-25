@@ -270,6 +270,11 @@
       "reads": "empty create view (no store read on fresh GET)"
     },
     {
+      "route": "GET /admin/events/create",
+      "binding": "web/src/routes/admin/events/create/+server.ts",
+      "reads": "moderator session admitted by the hook before the fixed redirect (no event lookup)"
+    },
+    {
       "route": "GET /admin/events/:key",
       "binding": "web/src/routes/admin/events/[key]/+page.server.ts",
       "reads": "events/view + roster members (audited, failed audit refuses the render)"
