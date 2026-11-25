@@ -17,6 +17,7 @@ import {
   assertKitAttendanceDisabled,
   assertMixedAdminAuthRollback,
   prepareAdminFixture,
+  prepareAdminPublishFixture,
 } from "./fixtures/kit-admin-serving.mjs";
 import { assertEventReadsParity } from "./fixtures/kit-event-reads-parity.mjs";
 import { assertResponseContracts } from "./fixtures/kit-response-contracts.mjs";
@@ -880,13 +881,23 @@ export default {
   }
 
   const secret = FIXTURE_SECRETS.SESSION_SECRET;
+  const honoEntry = join(repo, "src/worker.ts");
   const honoWithSession = await startWorker(
     "hono-session",
-    join(repo, "src/worker.ts"),
+    args.length
+      ? await prepareAdminPublishFixture(honoEntry, join(scratch, "hono-publish.mjs"))
+      : honoEntry,
     join(repo, "public"),
     secret,
   );
-  const kitWithSession = await startWorker("kit-session", worker, assets, secret);
+  const kitWithSession = await startWorker(
+    "kit-session",
+    args.length
+      ? await prepareAdminPublishFixture(worker, join(scratch, "kit-off-publish.mjs"))
+      : worker,
+    assets,
+    secret,
+  );
   await Promise.all(
     [honoWithSession, kitWithSession].map((instance) =>
       listen(instance.child, instance.origin, () => instance.log),
@@ -921,7 +932,8 @@ export default {
   if (args.length) {
     const entry = join(scratch, "kit-admin.mjs");
     const vars = await prepareAdminFixture(worker, entry);
-    const admin = await startWorker("kit-admin", entry, assets, secret, vars);
+    const publishEntry = await prepareAdminPublishFixture(entry, join(scratch, "kit-publish.mjs"));
+    const admin = await startWorker("kit-admin", publishEntry, assets, secret, vars);
     const nativeCreate = await startWorker("kit-admin-native-create", entry, assets, secret, {
       ...vars,
       KIT_PARITY_FIXTURE_ADMIN_EVENT_CREATE_REDIRECT: "true",
