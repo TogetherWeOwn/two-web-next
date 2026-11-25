@@ -4,9 +4,8 @@ import { PLANETSCALE_PRODUCTION_BRANCH_ID, PLANETSCALE_PRODUCTION_HOST } from ".
 import { planServingIsolation, runServingIsolation } from "../db-serving-ledger-isolation.mjs";
 
 const ledger = "drizzle.__drizzle_migrations";
-const projection = "web_readiness.migration_timestamps";
 
-async function rehearseDistinctGrantor(owner, login, capture, run) {
+async function rehearseDistinctGrantor(owner, login, migrationRole, capture, run) {
   const grantor = `isolation_grantor_${randomUUID().replaceAll("-", "")}`;
   const members = async () => [
     ...(await owner`SELECT
@@ -23,6 +22,7 @@ async function rehearseDistinctGrantor(owner, login, capture, run) {
   await owner`CREATE ROLE ${owner(grantor)} NOLOGIN`;
   try {
     await owner`GRANT pg_read_all_data TO ${owner(grantor)} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE`;
+    await owner`GRANT ${owner(grantor)} TO ${owner(migrationRole)} WITH INHERIT FALSE, SET TRUE`;
     await asGrantor(
       (tx) => tx`GRANT pg_read_all_data TO ${tx(login)}
       WITH ADMIN FALSE, INHERIT FALSE, SET FALSE GRANTED BY ${tx(grantor)}`,
@@ -54,18 +54,18 @@ async function rehearseDistinctGrantor(owner, login, capture, run) {
   }
 }
 
-// The existing bridge rehearsal owns the database, roles and both Worker builds.
+// The existing bridge rehearsal owns the databases, roles and Worker builds.
 export async function rehearseServingIsolation({
   owner,
   reader,
   login,
   database,
-  ownerRole,
+  migrator,
+  migrationRole,
   databasePath,
   oldHistory,
   newHistory,
-  cutoverUp,
-  probeEventSync,
+  probePrincipals,
 }) {
   await owner`GRANT USAGE ON SCHEMA drizzle TO ${owner(login)}`;
   await owner`GRANT SELECT (created_at) ON drizzle.__drizzle_migrations TO ${owner(login)}`;
@@ -77,15 +77,29 @@ export async function rehearseServingIsolation({
   const version = randomUUID();
   const artifact = { sourceSha: "b".repeat(40), digest: "c".repeat(64) };
   const sha = (data) => createHash("sha256").update(data).digest("hex");
-  const identityHash = sha(`${database}\0${ownerRole}`);
+  const identityHash = sha(`${database}\0${migrationRole}`);
   const capture = async () =>
     JSON.stringify(await planServingIsolation(owner, identityHash, version, artifact, login));
   const plan = await capture();
   const firstEnd = oldHistory.at(-1).tag;
   const lastEnd = newHistory.at(-1).tag;
+  const timestamps = oldHistory.map(({ created_at }) => Number(created_at));
+  const health = {
+    revision: { version_id: version },
+    db: "ok",
+    pending_migrations: 0,
+    migration_ledger: timestamps,
+  };
   const run = (
     operation,
-    { end = firstEnd, liveVersion = version, qualified = true, raw = plan, hash = sha(raw) } = {},
+    {
+      end = firstEnd,
+      liveVersion = version,
+      qualified = true,
+      raw = plan,
+      hash = sha(raw),
+      readiness = health,
+    } = {},
   ) =>
     runServingIsolation(
       operation,
@@ -99,10 +113,10 @@ export async function rehearseServingIsolation({
       },
       {
         login,
-        owner: ownerRole,
+        owner: migrationRole,
         connect(config) {
           config.url.pathname = databasePath;
-          return { begin: owner.begin, end: async () => {} };
+          return { begin: migrator.begin, end: async () => {} };
         },
         fetchImpl(target) {
           assert.equal(operation, "forward");
@@ -134,12 +148,7 @@ export async function rehearseServingIsolation({
             });
           }
           assert.equal(String(target), "https://togetherweown.com/up");
-          return Response.json({
-            revision: { version_id: version },
-            db: "ok",
-            pending_migrations: 0,
-            migration_ledger: oldHistory.map(({ created_at }) => Number(created_at)),
-          });
+          return Response.json(readiness);
         },
       },
     );
@@ -149,6 +158,20 @@ export async function rehearseServingIsolation({
     /Approved fallback must serve all/,
   );
   await assert.rejects(run("forward", { qualified: false }), /does not identify the staged Hono/);
+  for (const migrationLedger of [timestamps.slice(0, -1), undefined]) {
+    await assert.rejects(
+      run("forward", { readiness: { ...health, migration_ledger: migrationLedger } }),
+      {
+        code: "ERR_ASSERTION",
+        operator: "deepStrictEqual",
+        actual: migrationLedger,
+        expected: timestamps,
+      },
+    );
+    assert.equal(await run("readback"), "before");
+  }
+  console.info("Stale and missing /up ledger evidence refused with the original grants intact.");
+  await probePrincipals(oldHistory, false);
   await assert.rejects(run("forward", { raw: "{" }), SyntaxError);
   await assert.rejects(run("forward", { hash: "0".repeat(64) }));
   await assert.rejects(run("forward", { raw: plan.padEnd(24577, " ") }));
@@ -159,12 +182,11 @@ export async function rehearseServingIsolation({
   await assert.rejects(run("forward"), /Public serving inventory changed/);
   await owner`DROP TABLE public.unreviewed_serving_table`;
   assert.equal(await run("readback"), "before");
-  await rehearseDistinctGrantor(owner, login, capture, run);
+  await rehearseDistinctGrantor(owner, login, migrationRole, capture, run);
   assert.equal(await run("forward"), "committed");
   assert.equal(await run("readback"), "after");
   await assert.rejects(reader.unsafe(`SELECT created_at FROM ${ledger}`), { code: "42501" });
-  await cutoverUp(oldHistory, projection);
-  await probeEventSync();
+  await probePrincipals(oldHistory, true);
   assert.equal(await run("undo"), "committed");
   assert.equal(await run("readback"), "before");
   assert.equal(await run("forward"), "committed");
@@ -177,7 +199,7 @@ export async function rehearseServingIsolation({
       /Required Web\/Jobs privileges are missing/,
     );
     await owner`GRANT USAGE ON SEQUENCE public.event_echo_members_id_seq TO two_web_app`;
-    await cutoverUp(newHistory, projection);
+    await probePrincipals(newHistory, true);
     const [scope] = await reader`SELECT
       (SELECT count(*) FROM public.event_echoes) = 0 AND
       (SELECT count(*) FROM public.event_echo_members) = 0 AND
@@ -192,6 +214,7 @@ export async function rehearseServingIsolation({
     assert.equal(await run("undo", { end: lastEnd }), "committed");
     assert.equal(await run("readback", { end: lastEnd }), "before");
     await reader`SELECT created_at FROM drizzle.__drizzle_migrations ORDER BY created_at LIMIT 1`;
+    await probePrincipals(newHistory, false);
     await owner`GRANT SELECT ON web_readiness.migration_timestamps TO ${owner(login)}`;
     await owner`REVOKE USAGE ON SCHEMA drizzle FROM ${owner(login)}`;
     await owner`REVOKE SELECT (created_at) ON drizzle.__drizzle_migrations FROM ${owner(login)}`;

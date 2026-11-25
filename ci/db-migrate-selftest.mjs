@@ -1463,7 +1463,9 @@ test("web readiness bridge rehearsal: locked expansion and scoped runtime cutove
   await fixture(async ({ client, url }) => {
     const created = await ensureRuntimeRole(client);
     try {
-      await rehearseWebReadiness(client, url);
+      await fixture(({ client: botOwner, url: botUrl }) =>
+        rehearseWebReadiness(client, url, botOwner, botUrl),
+      );
     } finally {
       await dropRuntimeRoleIfCreated(client, created);
     }
