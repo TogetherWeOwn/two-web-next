@@ -925,16 +925,25 @@ test("a passive ledger zip read failure is refused without exposing provider dat
 test("a passive ledger zip exactly at the size limit is accepted", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "passive-ledger-limit-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  // The inclusive boundary: the guard rejects over the limit, not at it.
-  // Trailing spaces survive the stub unzip and trim away, so the payload is
-  // exactly the limit while still naming the candidate.
+  // Split the candidate SHA across chunks. Trailing spaces fill the exact limit
+  // and survive the stub unzip before the gate trims the commit file.
+  const bytes = Buffer.from(SHA.padEnd(PASSIVE_LEDGER_MAX_BYTES));
+  const split = SHA.length / 2;
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(bytes.subarray(0, split));
+      controller.enqueue(bytes.subarray(split));
+      controller.close();
+    },
+  });
   const result = await fetchLedgers({
     runs: [e2eRun(9)],
     artifacts: [{ id: 77, name: "staging-passive-ledger-9", expired: false }],
-    commit: `${SHA}${" ".repeat(PASSIVE_LEDGER_MAX_BYTES - SHA.length)}`,
     dir,
+    zipResponse: new Response(body),
   });
   assert.deepEqual(result, { runId: 9, artifactId: 77 });
+  assert.ok(readFileSync(join(dir, "ledger.zip")).equals(bytes));
 });
 
 test("staging soak sample sums every tagged version over one window", async () => {
