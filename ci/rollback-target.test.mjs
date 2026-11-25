@@ -1520,10 +1520,13 @@ test("a red latest staging rollback drill holds promotion; none yet does not", a
 test("staging lane CLI requires trustworthy run listings", async (t) => {
   const sentinel = "PRIVATE_FIXTURE_BODY";
   const empty = { workflow_runs: [] };
-  const occupied = { workflow_runs: [{ id: 7 }, { id: 7 }] };
+  const occupied = { workflow_runs: [{ id: 1 }, { id: 1 }, { id: Number.MAX_SAFE_INTEGER }] };
+  const occupiedMessage =
+    "Staging lane busy: e2e-staging.yml run 1, e2e-staging.yml run 1, " +
+    `e2e-staging.yml run ${Number.MAX_SAFE_INTEGER}\n`;
   const cases = [
     { name: "empty", body: empty, busy: false },
-    { name: "occupied with duplicates", body: occupied, busy: true },
+    { name: "occupied with boundary IDs and duplicates", body: occupied, busy: true },
     { name: "absent listing", body: { details: sentinel } },
     { name: "null listing", body: { workflow_runs: null } },
     { name: "string listing", body: { workflow_runs: sentinel } },
@@ -1566,12 +1569,7 @@ test("staging lane CLI requires trustworthy run listings", async (t) => {
         assert.equal(result.status, 0, result.stderr);
         assert.equal(result.stderr, "");
         assert.equal(readFileSync(output, "utf8"), `busy=${busy}\n`);
-        assert.equal(
-          result.stdout,
-          busy
-            ? "Staging lane busy: e2e-staging.yml run 7, e2e-staging.yml run 7\n"
-            : "Staging lane idle\n",
-        );
+        assert.equal(result.stdout, busy ? occupiedMessage : "Staging lane idle\n");
       }
     });
   }
