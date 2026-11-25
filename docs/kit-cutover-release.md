@@ -82,8 +82,9 @@ It reads a hashed stylesheet the browser loaded from Ember and checks its
 immutable cache policy and build bytes. Fresh requests from the still-open
 document must get a non-cacheable, `nosniff` 404 for the old stylesheet and the
 same logo bytes that Ember served before the switch. Reloading Home must
-return the Hono document. Use the hosted job log for this result. The manual
-cutover packet contains the separate version and public-route smoke evidence.
+return the Hono document. Use the hosted job log for this result. For a
+manual rehearsal, get the serving version and public-route smoke results
+from `kit-cutover-proof-<attempt>` in the isolated cutover job.
 Existing browser cache entries can outlive the switch, and the fixture tests
 fresh requests without depending on edge asset retention or browser cache
 eviction.
