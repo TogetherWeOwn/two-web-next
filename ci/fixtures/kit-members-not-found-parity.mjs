@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
+import { createHash, randomBytes } from "node:crypto";
 import { signedCookieHeader } from "../../src/http/signed-cookie.ts";
 import { SESSION_COOKIE } from "../../src/session-cookie.ts";
-import { hashToken, newSessionToken } from "../../src/sessions.ts";
 import postgres from "postgres";
 
 const owner = "900000000000091960";
@@ -48,16 +48,21 @@ export async function assertMembersNotFoundParity({ hono, off, on, databaseUrl, 
   const sql = postgres(databaseUrl, { max: 1 });
   const sessions = await Promise.all(
     viewers.map(async (id, index) => {
-      const token = newSessionToken();
+      const token = `two_${randomBytes(32).toString("base64url")}`;
+      const hash = createHash("sha256").update(token).digest("hex");
       const cookie = (await signedCookieHeader(SESSION_COOKIE, token, secret)).split(";", 1)[0];
-      return { id, hash: await hashToken(token), cookie, member: index !== 0, mod: index === 2 };
+      return { id, hash, cookie, member: index !== 0, mod: index === 2 };
     }),
   );
-  const auditRows = () => sql`
-    select route, subject_user_ids from member_data_access_logs where viewer_discord_id in ${sql(viewers)}`;
-  const sessionRows = () => sql`
-    select token_hash, expires_at, roles_checked_at from web_sessions
-    where user_id in ${sql(viewers)} order by user_id`;
+  const auditRows = async () => [
+    ...(await sql`
+      select route, subject_user_ids from member_data_access_logs where viewer_discord_id in ${sql(viewers)}`),
+  ];
+  const sessionRows = async () => [
+    ...(await sql`
+      select token_hash, expires_at, roles_checked_at from web_sessions
+      where user_id in ${sql(viewers)} order by user_id`),
+  ];
   let seeded = false;
   try {
     await sql.begin(async (tx) => {
