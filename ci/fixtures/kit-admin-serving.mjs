@@ -1360,6 +1360,19 @@ export async function assertKitAdminServing({
       assert.equal(parameter.headers.get("location"), "/auth/discord");
     }
     console.log("PASS installed Worker legacy event-create redirect with Kit ownership off and on");
+    // Check the original draft before the edit fallback changes its title.
+    // Missing routes may cache suggestions, so run this before publishing
+    // temporary public events as well.
+    await assertKitEventEditRedirectServing({
+      kit,
+      nativeEdit,
+      off,
+      hono,
+      cookie: () => session(sql, moderatorId, true),
+      member,
+      eventPath,
+    });
+
     // Draft edits have no Discord mirror; the queue stub serves publish requests only.
     assert.ok(kitEdit, "the installed Kit editor was reached");
     await assertEventEditFallback({
@@ -1374,16 +1387,6 @@ export async function assertKitAdminServing({
     });
 
     await assertAdminPublish({ kit, off, hono, sql, moderatorId, member });
-
-    await assertKitEventEditRedirectServing({
-      kit,
-      nativeEdit,
-      off,
-      hono,
-      cookie: () => session(sql, moderatorId, true),
-      member,
-      eventPath,
-    });
   } finally {
     try {
       // Audit rows are append-only and are isolated by the synthetic actor.
