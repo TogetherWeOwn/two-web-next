@@ -77,17 +77,7 @@ export function registerDetailRoutes(
         return recordAccess(db, entry);
       },
       async () => {
-        const notFound = async () => {
-          c.header("x-robots-tag", "noindex, nofollow");
-          // Same per-isolate, DB-source-scoped cached guest snapshot as
-          // ordinary 404s: one fill per TTL, never one Postgres
-          // transaction per probe.
-          return bufferedMemberHtml(
-            c,
-            <NotFoundPage suggestions={await cachedNotFoundSuggestions(c.env, c.req.path)} />,
-            404,
-          );
-        };
+        const notFound = () => bufferedMemberHtml(c, "", 404);
         const render = async () => {
           const key = c.req.param("key") ?? "";
           // One canonical key form per event: ULIDs are stored uppercase, so
@@ -271,6 +261,15 @@ export function registerDetailRoutes(
       },
       databaseUnavailable,
     );
+    if (c.res.status === 404) {
+      // The miss has passed the member-read boundary. The optional public
+      // suggestions may still have a query running when their deadline wins.
+      c.header("x-robots-tag", "noindex, nofollow");
+      c.res = await c.html(
+        <NotFoundPage suggestions={await cachedNotFoundSuggestions(c.env, c.req.path)} />,
+        404,
+      );
+    }
     // Consume only after the keyed boundary allows a visible response.
     if (c.res.status === 200) await takeJoinResult(c);
     return c.res;
