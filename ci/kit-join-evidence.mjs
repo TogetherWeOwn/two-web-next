@@ -89,9 +89,10 @@ const model = ${JSON.stringify(model)};
     };
     return `<script>
 import EventGone from '#lib/EventGone.svelte';
+import EventLayout from '../e/[key]/+layout.svelte';
 const model = ${JSON.stringify(model)};
 </script>
-<EventGone {model} />`;
+<EventLayout><EventGone {model} /></EventLayout>`;
   }
   const data = {
     inviteUrl: "https://discord.gg/invite",

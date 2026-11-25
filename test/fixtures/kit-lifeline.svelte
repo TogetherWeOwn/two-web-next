@@ -2,6 +2,7 @@
 import { withEventDetailHtml } from "../../src/events/detail-leaves";
 import type { KitEventDetailModel } from "../../src/events/kit-detail";
 import EventDetail from "../../web/src/lib/EventDetail.svelte";
+import EventLayout from "../../web/src/routes/e/[key]/+layout.svelte";
 import { composeLifeline, type LifelineFacts } from "../../web/src/lib/lifeline";
 
 let {
@@ -121,4 +122,4 @@ const _steps = $derived(
 );
 </script>
 
-<EventDetail model={_model} lifeline={_steps} />
+<EventLayout><EventDetail model={_model} lifeline={_steps} /></EventLayout>

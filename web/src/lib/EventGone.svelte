@@ -16,6 +16,7 @@ let { model }: { model: EventGoneModel } = $props();
   title={model.title}
   robots="noindex, nofollow"
   theme="event"
+  mainClass="kit-event-cancelled"
   activeNav="event"
   hideAccount
 >
@@ -88,59 +89,3 @@ let { model }: { model: EventGoneModel } = $props();
   <JsonLd testid="event-jsonld" json={model.jsonLd} />
   <JsonLd testid="site-jsonld" json={model.siteJsonLd} />
 </Shell>
-
-<style>
-  .event-head { grid-area: head; min-width: 0; }
-  .event-rail { grid-area: rail; min-width: 0; display: grid; gap: var(--space-4); }
-  .event-recovery { grid-area: recovery; min-width: 0; }
-  .event-layout { display: grid; gap: var(--space-4); grid-template-areas: "head" "rail" "recovery"; }
-  .scheduled { border-top: 1px solid var(--color-hair1); padding-top: var(--space-5); display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); }
-  .scheduled > time { font-size: var(--text-figure); line-height: 1; font-variant-numeric: tabular-nums; }
-  .scheduled p { margin: 0; }
-  .anchor { font: var(--text-label) / var(--leading-label) var(--font-data); color: var(--color-t3); }
-  .record, .event-facts { border: 0; border-radius: var(--radius-l); background: var(--color-g2); }
-  .record { padding: var(--space-inset-card); }
-  .record-head { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: var(--space-2); }
-  .record-head h2 { margin: 0; font-size: var(--text-title); font-weight: var(--font-weight-semibold); line-height: var(--leading-title); }
-  .record p { margin: var(--space-inset-tight) 0; font-size: var(--text-small); color: var(--color-t2); }
-  /* Keep the full-width ghost pill in the cancelled view's stylesheet. */
-  .next-date-link {
-    display: inline-flex;
-    vertical-align: middle;
-    align-items: center;
-    justify-content: center;
-    box-sizing: border-box;
-    width: 100%;
-    min-height: 44px;
-    padding: 0 var(--space-5);
-    border: 0;
-    border-radius: var(--radius-pill);
-    background: transparent;
-    box-shadow: inset 0 0 0 1px var(--color-hair2);
-    color: var(--t1);
-    font-family: var(--font-ui);
-    font-size: var(--text-ui);
-    font-weight: var(--font-weight-semibold);
-    font-stretch: var(--font-width-button);
-    cursor: pointer;
-    text-decoration: none;
-  }
-  .next-date-link:focus-visible { outline: var(--focus-width) solid var(--focus-ring); outline-offset: var(--focus-offset); }
-  @media (hover: hover) {
-    .next-date-link:hover { background: var(--g2); }
-  }
-  @media (forced-colors: active) {
-    .next-date-link { border: 1px solid ButtonText; }
-  }
-  .event-facts { padding: var(--space-2) var(--space-inset-card); }
-  .event-facts dl { margin: 0; }
-  .event-facts dl > div { display: flex; justify-content: space-between; gap: var(--space-4); padding: var(--space-inset-tight) 0; }
-  .event-facts dl > div + div { border-top: 1px solid var(--color-hair1); }
-  .event-facts dt { color: var(--color-t3); font: var(--text-label) / var(--leading-label) var(--font-data); letter-spacing: var(--tracking-label); text-transform: uppercase; }
-  .event-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; text-align: right; }
-  /* Kit breakpoint.compact-max, layout.rail.seat, and layout.sticky-offset. */
-  @media (min-width: 821px) {
-    .event-layout { grid-template-columns: minmax(0, 1fr) 380px; grid-template-areas: "head rail" "recovery rail"; column-gap: var(--space-9); align-items: start; }
-    .event-rail { position: sticky; top: 92px; }
-  }
-</style>

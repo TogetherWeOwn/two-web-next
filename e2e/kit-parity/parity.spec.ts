@@ -1780,6 +1780,13 @@ test("Kit guest seat card keeps its no-JS action at desktop and mobile widths", 
         path: screenshot,
         contentType: "image/png",
       });
+      if (viewport.width === 390) {
+        await bar.getByRole("link", { name: "Add to calendar" }).focus();
+        await page.keyboard.press("Tab");
+        const signIn = bar.getByRole("link", { name: "Log in with Discord" });
+        await expect(signIn).toBeFocused();
+        await expect(signIn).toHaveCSS("outline-style", "solid");
+      }
       if (viewport.width === 1280) {
         const rail = card.locator("..");
         await expect(rail).toHaveCSS("position", "sticky");
@@ -4049,6 +4056,13 @@ test("Kit cancelled event renders its record and next date without JavaScript", 
           const path = test.info().outputPath(`${name}.png`);
           await page.screenshot({ path, fullPage: true, animations: "disabled", caret: "hide" });
           await test.info().attach(name, { path, contentType: "image/png" });
+          if (!fallback) {
+            const back = page.getByRole("navigation", { name: "Event calendar" });
+            await back.getByRole("link", { name: "All events" }).focus();
+            await page.keyboard.press("Tab");
+            await expect(next).toBeFocused();
+            await expect(next).toHaveCSS("outline-style", "solid");
+          }
         }
       } finally {
         await context.close();
