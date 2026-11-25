@@ -138,6 +138,10 @@ export function runFixture(dir, workflow, steps, dispatcher, overrides) {
         export MANUAL_GUARD_DIR="$(sed -n 's/^guard_dir=//p' "$GITHUB_OUTPUT")"
         export DEPLOY_SHA="\${pinned#sha=}"
         ${scriptsCheckout.run}
+        if [ "$(git rev-parse HEAD)" != "$DEPLOY_SHA" ]; then
+          echo "Fixture never reached the selected rollback scripts" >&2
+          exit 1
+        fi
         : > "$GITHUB_OUTPUT"
         ${guard.run}
         if [ "$(cat "$GITHUB_OUTPUT")" = "action=rollback" ]; then
