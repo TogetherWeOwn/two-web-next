@@ -1700,11 +1700,17 @@ describe("event-detail gone presentation", () => {
     expect(outcome.model.title).toBe("Chess night");
   });
 
-  it("renders the branded cancellation, not the generic error shell", async () => {
-    const { outcome } = await resolve(
-      KEY,
-      fakeStore({ event: { ...row({ status: "cancelled" }), goingCount: 3 } as PublicEvent }),
-    );
+  it("renders the branded cancellation with a native next-date link", async () => {
+    const upcoming = RELATED[0]!;
+    const { outcome } = await resolve(KEY, {
+      ...fakeStore({
+        event: {
+          ...row({ status: "cancelled", recurrenceIndex: 1 }),
+          goingCount: 3,
+        } as PublicEvent,
+      }),
+      seriesFn: async () => ({ hosts: [], previous: null, next: null, upcoming }),
+    });
     if (outcome.kind !== "gone") throw new Error("unreachable");
     const { renderGone } = await buildKitEventDetailBundle();
     const html = renderGone(outcome.model as unknown as Record<string, unknown>);
@@ -1715,6 +1721,8 @@ describe("event-detail gone presentation", () => {
     expect(html).toContain('data-testid="event-jsonld"');
     expect(html).not.toContain('data-testid="event-attendees"');
     expect(html).not.toContain('data-testid="join-result"');
+    const nextDateLink = html.match(/<a\b([^>]*)>See the next date<\/a>/);
+    expect(nextDateLink?.[1]).toContain(`href="/e/${upcoming.eventKey}"`);
   });
 
   it("maps the gone outcome onto the 410 branded error payload", async () => {
