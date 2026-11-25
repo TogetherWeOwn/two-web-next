@@ -2007,7 +2007,13 @@ test("rollback selection requires ordered provider timestamps", () => {
     assertRefuses(tied, /Cannot determine the newest rollback deployment/);
     assertRefuses(tied.reverse(), /Cannot determine the newest rollback deployment/);
   }
-  for (const timestamp of [undefined, 0, "2026-02-30T06:00:00Z", `${utc}\n`]) {
+  for (const timestamp of [
+    undefined,
+    0,
+    "2026-02-30T06:00:00Z",
+    "2026-11-01T06:00:00.0000000001Z",
+    `${utc}\n`,
+  ]) {
     assertRefuses([full(V2, utc), full(V3, timestamp)], /Invalid rollback deployment timestamp/);
   }
   const ordered = [full(V1, utc), full(V2, later)];
