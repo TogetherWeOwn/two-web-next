@@ -421,20 +421,17 @@ The `unownedByFamily` field groups the same findings by the route map's family
 and exact legacy method, including `ALL` for wildcard method fallbacks. Entries
 without a family, including page cutover rows, appear under `unresolved`.
 
-`honoRemoval` connects the SSR findings to removal work. Start with a finding
-in `chunks` and follow its `entrypoints` to the first Kit source modules on the
-emitted module import paths. Each entrypoint lists the `targets` that retain it.
-The `units` list expands each target to its exact legacy registrations and their
-recorded family, slice or owner. Page targets include their `+page.server.ts`
-companion. The Hono bridge and catch-all are explicit API-10 fallback sources.
-`lazyChunks` lists an emitted dynamic import's target and importing chunks when
-the target or any of its static dependencies appears in `chunks`.
+`honoRemoval.chunks` connects each SSR dependency to the first Kit sources on
+its emitted import paths. `entrypoints` links those sources to `units` with exact
+targets, registrations and recorded families, slices or owners. Page targets
+include their `+page.server.ts` companions. The Hono bridge and catch-all map to
+API-10. `lazyChunks` names dynamic targets, their importers and any Hono-bearing
+chunks reached through static imports, including the target itself.
 
-`unownedImporters` names Kit sources where an import path ends without a mapped
-target. A chunk finding has `unowned: true` when an observed dependency has a
-path without a Kit entrypoint. Both can appear alongside known owners. Chunk
-names describe the emitted build and import edges describe module reachability.
-Removing a target still requires checking shared exports and route parity.
+`unownedImporters` names Kit sources without a mapped target. Chunk findings flag
+paths without a Kit entrypoint as `unowned`. Both can appear alongside known
+owners. Import edges describe module reachability. Removing a unit still requires
+checking shared exports and route parity.
 
 With locked dependencies installed, run `KIT_RETIREMENT_GUARD=strict npm run build --prefix web`
 to fail before generating new adapter output when either blocker remains.

@@ -34,10 +34,9 @@ export function requireKitRetirementReport(output, mode) {
       report.unownedByFamily &&
       typeof report.unownedByFamily === "object" &&
       !Array.isArray(report.unownedByFamily) &&
-      Array.isArray(report.honoRemoval?.entrypoints) &&
-      Array.isArray(report.honoRemoval.chunks) &&
-      Array.isArray(report.honoRemoval.lazyChunks) &&
-      Array.isArray(report.honoRemoval.units),
+      ["entrypoints", "chunks", "lazyChunks", "units"].every((key) =>
+        Array.isArray(report.honoRemoval?.[key]),
+      ),
     "incomplete Kit retirement report",
   );
   return report;
@@ -128,32 +127,25 @@ function traceKitEntrypoints(origins, importers) {
 
 function describeEntrypoints(ids, importers, rows) {
   const { bySource, units } = removalUnits(rows);
-  const entrypoints = new Map();
+  const entrypoints = [];
   const usedUnits = new Set();
-  for (const id of ids) {
-    const source = kitSource(id);
-    if (!entrypoints.has(source)) {
-      entrypoints.set(source, { targets: new Set(), unownedImporters: new Set() });
+  const byPath = Map.groupBy(ids, kitSource);
+  for (const source of [...byPath.keys()].sort()) {
+    const targets = new Set();
+    const unowned = new Set();
+    for (const id of byPath.get(source)) {
+      const owners = entrypointOwners(id, importers, bySource);
+      for (const target of owners.units) targets.add(target);
+      for (const importer of owners.unownedImporters) unowned.add(importer);
     }
-    const entry = entrypoints.get(source);
-    const owners = entrypointOwners(id, importers, bySource);
-    for (const target of owners.units) {
-      entry.targets.add(target);
-      usedUnits.add(target);
-    }
-    for (const importer of owners.unownedImporters) entry.unownedImporters.add(importer);
+    for (const target of targets) usedUnits.add(target);
+    entrypoints.push({
+      source,
+      targets: [...targets].sort(),
+      unownedImporters: [...unowned].sort(),
+    });
   }
-  return {
-    entrypoints: [...entrypoints.keys()].sort().map((source) => {
-      const { targets, unownedImporters } = entrypoints.get(source);
-      return {
-        source,
-        targets: [...targets].sort(),
-        unownedImporters: [...unownedImporters].sort(),
-      };
-    }),
-    units: [...usedUnits].sort().map((target) => units.get(target)),
-  };
+  return { entrypoints, units: [...usedUnits].sort().map((target) => units.get(target)) };
 }
 
 function inspectLazyChunks(chunksByFile, dependencyChunks) {
@@ -206,11 +198,9 @@ export function inspectSsrBundle(bundle, getModuleInfo, rows) {
   const chunksByFile = new Map(chunks.map((chunk) => [chunk.fileName, chunk]));
   for (const chunk of chunks) {
     const emitted = new Set(Object.keys(chunk.modules));
-    const findings = new Map();
-    for (const id of [...emitted, ...chunk.imports, ...chunk.dynamicImports]) {
-      const dependency = honoDependency(id);
-      if (dependency) addToSet(findings, dependency, id);
-    }
+    const ids = new Set([...emitted, ...chunk.imports, ...chunk.dynamicImports]);
+    const findings = Map.groupBy(ids, honoDependency);
+    findings.delete(undefined);
     if (!findings.size) continue;
 
     const dependencies = [];
@@ -341,19 +331,11 @@ export function kitRetirementBuild(adapter, mode, load = loadInventory) {
       ...adapter,
       adapt(builder) {
         assert.ok(evidence, "missing Kit SSR dependency evidence");
-        const { inventory, rows, honoDependencies, honoRemoval } = evidence;
+        const { inventory, rows, ...ssrEvidence } = evidence;
         const { checked, unowned } = inspectRoutes(builder.routes, inventory, rows);
-        const ready = honoDependencies.length === 0 && unowned.length === 0;
+        const ready = ssrEvidence.honoDependencies.length === 0 && unowned.length === 0;
         const unownedByFamily = groupUnownedRoutes(unowned, rows);
-        const report = {
-          mode,
-          ready,
-          checked,
-          honoDependencies,
-          unowned,
-          unownedByFamily,
-          honoRemoval,
-        };
+        const report = { mode, ready, checked, unowned, unownedByFamily, ...ssrEvidence };
         console.log(reportPrefix + JSON.stringify(report));
         assert.ok(mode === "report" || ready, "Kit retirement guard found blockers");
         return adapter.adapt(builder);
