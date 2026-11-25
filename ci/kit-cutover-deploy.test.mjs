@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { verifyOrdinaryLedger } from "./check-production-secrets.mjs";
 import { verifyReady } from "./kit-cutover-evidence.mjs";
@@ -16,6 +17,13 @@ const undoDigest = "c".repeat(64);
 const hono = "11111111-1111-1111-1111-111111111111";
 const kit = "22222222-2222-2222-2222-222222222222";
 const identity = { sourceSha, runId: "21", runAttempt: "3", digest };
+const emberUndoVersion = {
+  id: kit,
+  annotations: {
+    "workers/tag": `${sourceSha}-99-1`,
+    "workers/message": `two-web-cutover-kit:${undoDigest}`,
+  },
+};
 
 test("cutover requires explicit protected selection and the paired Hono UUID", () => {
   const active = {
@@ -71,14 +79,7 @@ test("admin rollback admits only the recorded production Ember version with admi
     text("APP_URL", "https://togetherweown.com"),
     text("KIT_ROUTE_EMBER_PAGES", "true"),
   ];
-  const version = {
-    id: kit,
-    annotations: {
-      "workers/tag": `${sourceSha}-99-1`,
-      "workers/message": `two-web-cutover-kit:${undoDigest}`,
-    },
-    resources: { bindings },
-  };
+  const version = { ...emberUndoVersion, resources: { bindings } };
   const withBindings = (bindings) => ({ ...version, resources: { bindings } });
   verifyEmberUndoVersion(version, pin, sourceSha);
   verifyEmberUndoVersion(
@@ -135,11 +136,21 @@ test("only undo preparation may admit confirmed deferred migrations", () => {
   );
 });
 
-test("ordinary promotion from cutover checks the live ledger even for equal journals", async () => {
+test("ordinary promotion requires the full ledger for an Ember undo version", async (t) => {
   const version = { annotations: { "workers/message": `two-web-cutover-kit:${digest}` } };
+  await assert.rejects(verifyOrdinaryLedger(version, async () => []), /full ledger/);
+
+  const { entries } = JSON.parse(
+    readFileSync(new URL("../drizzle/meta/_journal.json", import.meta.url), "utf8"),
+  );
+  const ledger = entries.map(({ when }) => when);
   await assert.rejects(
-    verifyOrdinaryLedger(version, async () => []),
+    verifyOrdinaryLedger(emberUndoVersion, async () => ledger.slice(0, -1)),
     /full ledger/,
   );
+  const readLedger = t.mock.fn(async () => ledger);
+  await verifyOrdinaryLedger(emberUndoVersion, readLedger);
+  assert.equal(readLedger.mock.callCount(), 1);
+
   await verifyOrdinaryLedger({}, () => assert.fail("ordinary rollback target must not probe"));
 });
