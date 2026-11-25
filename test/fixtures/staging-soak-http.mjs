@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { STAGING_ORIGIN } from "../../ci/operator-constants.mjs";
@@ -130,12 +130,15 @@ export function trustedReads({ fetchImpl }, { deployments, run, skipped = false 
   };
 }
 
-export function installSoakCliReads() {
+export function installSoakCliReads({ finalReadUnavailable }) {
   Date.now = () => Date.parse(fixture.receipt.floorAt);
+  const reads = [];
+  let allocationReads = 0;
   globalThis.fetch = trustedReads(
     {
       fetchImpl: async (input) => {
         const url = String(input);
+        reads.push(url);
         if (url === `${STAGING_ORIGIN}/version`) return Response.json({ sha, deployedAt });
         if (url === `${STAGING_ORIGIN}/up`) {
           return Response.json(
@@ -164,14 +167,35 @@ export function installSoakCliReads() {
         });
       },
     },
-    { deployments: () => [first], run: preRollback },
+    {
+      deployments: () => {
+        reads.push("deployments");
+        allocationReads += 1;
+        if (finalReadUnavailable && allocationReads === 2) {
+          throw new Error("synthetic private provider transport detail");
+        }
+        return [first];
+      },
+      run: preRollback,
+    },
   );
+  // Check outside the transport so the provider error handler cannot hide a fixture failure.
+  process.once("exit", () => {
+    const serving = [`${STAGING_ORIGIN}/version`, `${STAGING_ORIGIN}/up`];
+    assert.deepEqual(reads, [
+      "deployments",
+      ...serving,
+      "https://api.cloudflare.com/client/v4/graphql",
+      ...serving,
+      "deployments",
+    ]);
+  });
 }
 
-export function assertSoakCli() {
+export function assertSoakCli({ finalReadUnavailable = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "staging-soak-cli-"));
   const output = join(dir, "outputs");
-  const preload = `import { installSoakCliReads } from ${JSON.stringify(import.meta.url)}; installSoakCliReads();`;
+  const preload = `import { installSoakCliReads } from ${JSON.stringify(import.meta.url)}; installSoakCliReads({ finalReadUnavailable: ${finalReadUnavailable} });`;
   try {
     const result = spawnSync(
       process.execPath,
@@ -193,10 +217,18 @@ export function assertSoakCli() {
         },
       },
     );
+    if (finalReadUnavailable) {
+      assert.equal(result.status, 1, result.error?.message ?? result.stderr);
+      assert.equal(result.stdout, "");
+      assert.equal(result.stderr, "::error::Cannot read staging provider evidence\n");
+      assert.deepEqual(readdirSync(dir), []);
+      return;
+    }
     assert.equal(result.status, 0, result.error?.message ?? result.stderr);
     const receipt = JSON.parse(readFileSync(join(dir, "staging-soak.json"), "utf8"));
     assert.equal(receipt.schema, "staging-soak/2");
     assert.equal(receipt.allocationId, first.id);
+    assert.deepEqual(receipt.sample, fixture.receipt.sample);
     assert.equal(
       readFileSync(output, "utf8"),
       "requests=250\nerrors=2\ne2e_run_id=101\nsoak_attempt=1\n",

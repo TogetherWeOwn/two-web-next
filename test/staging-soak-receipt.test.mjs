@@ -27,6 +27,9 @@ const otherVersion = "22222222-2222-2222-2222-222222222222";
 const revision = { commit: sha, version_id: workerVersion };
 const byFloor = Date.parse(floorAt);
 test("the staging soak CLI writes allocation evidence and outputs", () => assertSoakCli());
+test("the staging soak CLI emits no evidence when the final allocation read is unavailable", () => {
+  assertSoakCli({ finalReadUnavailable: true });
+});
 const graphUrl = "https://api.cloudflare.com/client/v4/graphql";
 const tag = (version = workerVersion, requests = 250, errors = 2) => ({
   dimensions: { scriptVersion: version },
