@@ -75,8 +75,9 @@ export async function assertEventReadsParity({
   const workers = [hono, unset, eventJsonOn, publicApiOn, feedOn];
   const ips = new Map(workers.map((worker, index) => [worker, `192.0.2.${150 + index}`]));
   const buckets = [...ips.values()].map((ip) => `events-read:${ip}`);
-  // The combined rollout checks run after the per-mode counters are verified.
-  ips.set(combinedOn, ips.get(feedOn));
+  const combinedIp = "192.0.2.155";
+  const combinedBucket = `events-read:${combinedIp}`;
+  ips.set(combinedOn, combinedIp);
   const sessions = [];
   const memberId = "900000000000013200";
   const moderatorId = "900000000000013201";
@@ -108,9 +109,9 @@ export async function assertEventReadsParity({
     return { response, body: await response.text() };
   }
 
-  async function hitCounts() {
+  async function hitCounts(selectedBuckets = buckets) {
     const rows = await sql`select bucket, count(*)::int as hits from web_throttle_hits
-      where bucket in ${sql(buckets)} group by bucket order by bucket`;
+      where bucket in ${sql(selectedBuckets)} group by bucket order by bucket`;
     return rows.map(({ bucket, hits }) => ({ bucket, hits }));
   }
 
@@ -411,10 +412,11 @@ export async function assertEventReadsParity({
     await compare(publicEvent(published.toLowerCase()), 422, { cache: "no-store, private" });
     const calendarPath = `${event(published)}.ics`;
     const [calendar] = await compare(calendarPath, 200);
-    for (const [path, expected, headers] of [
+    const combinedCases = [
       [calendarPath, calendar],
       [event(published), detail[0], member],
-    ]) {
+    ];
+    for (const [index, [path, expected, headers]] of combinedCases.entries()) {
       const result = await read(combinedOn, path, { headers });
       assert.equal(result.response.status, 200, path);
       assert.equal(result.response.headers.get("x-two-renderer"), "kit", path);
@@ -424,6 +426,11 @@ export async function assertEventReadsParity({
         path,
       );
       assert.equal(result.body, expected.body, path);
+      assert.deepEqual(
+        await hitCounts([combinedBucket]),
+        [{ bucket: combinedBucket, hits: index + 1 }],
+        `${path}: combined rollout charges the shared read bucket once`,
+      );
     }
     const { response } = await read(eventJsonOn, "/events/past");
     assert.equal(response.status, 200);
@@ -458,7 +465,7 @@ export async function assertEventReadsParity({
     try {
       if (seeded) await sql`delete from events where event_key in ${sql([published, draft])}`;
       if (sessions.length) await sql`delete from web_sessions where token_hash in ${sql(sessions)}`;
-      await sql`delete from web_throttle_hits where bucket in ${sql(buckets)}`;
+      await sql`delete from web_throttle_hits where bucket in ${sql([...buckets, combinedBucket])}`;
     } finally {
       await sql.end();
     }
