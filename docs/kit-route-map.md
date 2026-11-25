@@ -191,11 +191,6 @@ qualifies through the [production release gate](../CONTRIBUTING.md#production-re
 the operator overrides endpoint on canonical staging or HTTP loopback. The
 operator endpoint uses its bearer independently of the moderator cookie. The
 existing Hono guard serves legacy redirects and other unowned admin paths.
-The exact `GET /admin/events/create` endpoint also has a disabled manifest
-entry. When enabled within the admin dispatcher, it requires a moderator and
-returns `301 Location: /admin/events/new` with no query. HEAD uses the same
-redirect without rotating the session. The disabled entry still takes
-precedence over the parameterized edit form.
 
 `POST /admin/featured/:id/unpublish` stays on Hono when Admin ownership is
 enabled. The installed Worker fixture opts in on HTTP loopback with
@@ -203,6 +198,17 @@ enabled. The installed Worker fixture opts in on HTTP loopback with
 Kit form to the shared Hono controller and checks moderator admission, the
 action body cap, the list redirect, the saved state and its activity receipt,
 and replay or a missing target through both owners.
+
+The exact `GET /admin/events/create` endpoint also has a disabled manifest
+entry. When enabled within the admin dispatcher, it requires a moderator and
+returns `301 Location: /admin/events/new` with no query. HEAD uses the same
+redirect without rotating the session. The disabled entry still takes
+precedence over the parameterized edit form.
+
+The event editor's `POST /admin/events/:key/duplicate` has an exact dispatcher
+entry gated by `KIT_ROUTE_ADMIN`. With that flag enabled, Kit invokes the
+shared moderator copy-to-draft controller and returns its redirect or source
+validation response. Hono handles the same POST by default.
 
 ### Security disclosure endpoint
 
