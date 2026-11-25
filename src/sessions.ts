@@ -271,6 +271,15 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
       type LiveRow = { user_id: string; member: boolean; remaining_ms: number };
       // Only the proof depends on the role stamp column. Ordinary liveness
       // reads retain compatibility with schemas from before the role recheck.
+      const readLive = () => sql<LiveRow[]>`
+        with db_clock as (select clock_timestamp() as observed_at)
+        select user_id, member,
+          floor(extract(epoch from (least(expires_at,
+            created_at + make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})) - observed_at))
+            * 1000)::double precision as remaining_ms
+        from web_sessions cross join db_clock
+        where token_hash = ${tokenHash} and revoked_at is null and expires_at > observed_at
+          and created_at > observed_at - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})`;
       const [row] = options?.requireFreshRoles
         ? await sql<LiveRow[]>`
           with db_clock as (select clock_timestamp() as observed_at)
@@ -282,15 +291,7 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
           where token_hash = ${tokenHash} and revoked_at is null and expires_at > observed_at
             and created_at > observed_at - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})
             and coalesce(roles_checked_at, created_at) > observed_at - make_interval(secs => ${SESSION_ROLE_RECHECK_SECONDS})`
-        : await sql<LiveRow[]>`
-          with db_clock as (select clock_timestamp() as observed_at)
-          select user_id, member,
-            floor(extract(epoch from (least(expires_at,
-              created_at + make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})) - observed_at))
-              * 1000)::double precision as remaining_ms
-          from web_sessions cross join db_clock
-          where token_hash = ${tokenHash} and revoked_at is null and expires_at > observed_at
-            and created_at > observed_at - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})`;
+        : await readLive();
       return row
         ? { userId: row.user_id, member: row.member === true, remainingMs: row.remaining_ms }
         : null;

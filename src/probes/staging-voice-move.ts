@@ -92,7 +92,7 @@ function moveResponse(c: Context<Web>, answer: Receipt, fixtureSource: string): 
   return c.json({ ok: false, request_id: requestId, error }, status);
 }
 
-async function matchStagingVoiceSession(c: Context<Web>): Promise<Response> {
+async function matchSession(c: Context<Web>): Promise<Response> {
   const fixture = stagingVoiceFixture(c.env);
   const { revision } = revisionReadiness(c.env.CF_VERSION_METADATA);
   if (
@@ -106,9 +106,7 @@ async function matchStagingVoiceSession(c: Context<Web>): Promise<Response> {
   if (new URL(c.req.url).search) return jsonRefusal(c, "invalid", 400);
   if (!isJsonMediaType(c.req.header("content-type")))
     return jsonRefusal(c, "unsupported_media_type", 415);
-  const body = await c.req
-    .json<{ discord_id?: unknown; channel_ids?: unknown }>()
-    .catch(() => null);
+  const body = await c.req.json<Record<string, unknown>>().catch(() => null);
   if (
     !body ||
     Object.keys(body).length !== 2 ||
@@ -136,10 +134,11 @@ async function matchStagingVoiceSession(c: Context<Web>): Promise<Response> {
 }
 
 export function registerStagingVoiceMove(app: Hono<Web>): void {
+  const actionLimit = requestBodyLimit("action");
   app.post(
     "/__probe/voice-move",
     stagingVoiceGate,
-    requestBodyLimit("action"),
+    actionLimit,
     throttle("staging-voice-move", AUTH_THROTTLE_PER_MINUTE),
     async (c) => {
       const { BOT_ENDPOINT_URL: url, BOT_SHARED_SECRET: secret, BOT_KEY_ID: keyId } = c.env;
@@ -178,10 +177,5 @@ export function registerStagingVoiceMove(app: Hono<Web>): void {
       }
     },
   );
-  app.post(
-    "/__probe/voice-move/session",
-    stagingVoiceGate,
-    requestBodyLimit("action"),
-    matchStagingVoiceSession,
-  );
+  app.post("/__probe/voice-move/session", stagingVoiceGate, actionLimit, matchSession);
 }

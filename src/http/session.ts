@@ -188,26 +188,25 @@ export async function readSession(
   const tokenHash = await hashToken(token);
   const storedRow = await store.get(tokenHash);
   if (!storedRow) return null;
-  const currentMember = typeof mode === "object" ? mode : null;
-  // A dedicated principal must match before any Discord role lookup.
-  if (currentMember && storedRow.userId !== currentMember.currentMemberId) return null;
+  // A dedicated write principal must match before any Discord role lookup.
+  if (typeof mode === "object" && storedRow.userId !== mode.currentMemberId) return null;
   // Mid-session role recheck: bits older than the cadence re-derive from
   // Discord before they authorize (src/session-role-refresh.ts). A row that
   // stopped being live during the refresh reads as no session.
-  const row = currentMember?.requireFreshRoles
+  const requireFreshRoles = typeof mode === "object" && mode.requireFreshRoles;
+  const row = requireFreshRoles
     ? storedRow
     : await refreshSessionRoles(store, tokenHash, storedRow, roleRecheckConfigFor(env));
   if (!row) return null;
-  // Dedicated probe requests require the exact live bearer without rotation.
-  // The read-only proof checks role freshness in the final liveness read.
-  if (currentMember) {
-    const { currentMemberId, requireFreshRoles } = currentMember;
-    if (!row.member || row.userId !== currentMemberId) return null;
+  // Recheck liveness after role refresh. Only the current bearer can submit
+  // the dedicated write, and an aborted action must not rotate that bearer.
+  if (typeof mode === "object") {
+    if (!row.member || row.userId !== mode.currentMemberId) return null;
     const live = await store.getLive(
       tokenHash,
       requireFreshRoles ? { requireFreshRoles } : undefined,
     );
-    if (!live?.member || live.userId !== currentMemberId) return null;
+    if (!live?.member || live.userId !== mode.currentMemberId) return null;
     return { store, row, renewal: null };
   }
   // Abortable calendar fragments validate expiry/revocation but must not delete
