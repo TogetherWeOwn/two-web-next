@@ -1615,6 +1615,7 @@ jobs:
 
   # The pinned actionlint checker does not support YAML aliases. Keep the
   # three Kit browser job setups explicit; coverage-command.test.mjs checks parity.
+  # Their Playwright launches use the default Chromium headless shell.
   kit-browser-fixture:
     name: kit-browser-fixture
     needs: [scope]
@@ -1639,7 +1640,7 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Install Kit parity Chromium
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps --only-shell chromium
       # Skip the calendar cases explicitly: a negative name pattern also
       # matches the file ancestor and can run all of its descendants.
       - name: Kit disposable browser fixture (non-calendar)
@@ -1669,7 +1670,7 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Install Kit parity Chromium
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps --only-shell chromium
       - name: Kit disposable browser fixture (calendar)
         run: node --test --test-timeout=300000 --test-name-pattern='^calendar ' ci/kit-browser-fixture.test.mjs
 
@@ -1699,7 +1700,7 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Install Kit parity Chromium
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps --only-shell chromium
       - name: Kit Lifeline browser fixture
         run: node --test ci/kit-lifeline-browser.test.mjs
       - name: Verify Lifeline screenshots

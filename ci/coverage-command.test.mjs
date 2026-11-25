@@ -44,6 +44,10 @@ test("Kit browser shards partition the fixture workload and fail closed in ci-ok
     ref: "${{ github.sha }}",
     "persist-credentials": false,
   });
+  assert.deepEqual(fixture.steps[5], {
+    name: "Install Kit parity Chromium",
+    run: "npx playwright install --with-deps --only-shell chromium",
+  });
   for (const [id, variable, testCommand] of shards) {
     const shard = jobs[id];
     assert.deepEqual(shard.needs, ["scope"]);
