@@ -682,6 +682,7 @@ test("real Git accepts only the current checkout despite a container owner misma
         NODE_OPTIONS: `--import=${join(dir, "fetch.mjs")}`,
         GITHUB_EVENT_NAME: ctx.eventName,
         GITHUB_EVENT_PATH: join(dir, "event.json"),
+        GITHUB_OUTPUT: join(dir, "outputs.txt"),
         GITHUB_REPOSITORY: repository,
         GITHUB_REF: ctx.ref,
         GITHUB_SHA: checkoutSha,
@@ -690,6 +691,10 @@ test("real Git accepts only the current checkout despite a container owner misma
     });
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, new RegExp(`Staging gate passed: ${checkoutSha}`));
+    assert.equal(
+      readFileSync(join(dir, "outputs.txt"), "utf8"),
+      `sha=${checkoutSha}\nrun_id=42\nrun_attempt=${evidence.current.run_attempt}\n`,
+    );
     // Trust is command-scoped: the next bare Git call still refuses this repo.
     assert.equal(spawnSync("git", ["rev-parse", "HEAD"], { cwd: dir, env }).status, 128);
   } finally {

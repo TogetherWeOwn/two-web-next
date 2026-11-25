@@ -6,8 +6,9 @@ import { pathToFileURL } from "node:url";
 import { versionMismatch } from "../bin/version-check.mjs";
 
 const SHA = /^[0-9a-f]{40}$/;
-const isSha = (value) => typeof value === "string" && value.length === 40 && SHA.test(value);
+export const isSha = (value) => typeof value === "string" && value.length === 40 && SHA.test(value);
 const DEPLOY_TITLE = /^deploy ([0-9a-f]{40})$/;
+export const STAGING_ORIGIN = "https://next.togetherweown.com";
 
 export function resolveStagingCandidate({ eventName, event, sha, ref, repository }) {
   if (eventName === "workflow_dispatch") {
@@ -47,9 +48,8 @@ export function validateStagingIdentityPair(expected, before, after, now = Date.
   }
 }
 
-export async function observeStaging({ expected, previous, fetchImpl = fetch, now = Date.now() }) {
-  if (!isSha(expected)) throw new Error("Invalid staging candidate");
-  const response = await fetchImpl("https://next.togetherweown.com/version", {
+export async function readStagingIdentity({ fetchImpl = fetch, now = Date.now() } = {}) {
+  const response = await fetchImpl(`${STAGING_ORIGIN}/version`, {
     redirect: "error",
     headers: { "cache-control": "no-cache" },
     signal: AbortSignal.timeout(10_000),
@@ -63,11 +63,20 @@ export async function observeStaging({ expected, previous, fetchImpl = fetch, no
   } catch {
     throw new Error("Staging identity is not JSON");
   }
-  if (versionMismatch(data, expected, now)) {
+  if (!isSha(data?.sha) || versionMismatch(data, data.sha, now)) {
+    throw new Error("Staging identity is malformed");
+  }
+  return { sha: data.sha, deployedAt: data.deployedAt };
+}
+
+export async function observeStaging({ expected, previous, fetchImpl, now = Date.now() }) {
+  if (!isSha(expected)) throw new Error("Invalid staging candidate");
+  const data = await readStagingIdentity({ fetchImpl, now });
+  if (data.sha !== expected) {
     throw new Error("Staging identity does not prove the candidate");
   }
   if (previous !== undefined) validateStagingIdentityPair(expected, previous, data, now);
-  return { sha: data.sha, deployedAt: data.deployedAt };
+  return data;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
