@@ -108,6 +108,33 @@ describe("dormant Kit members directory boundary", () => {
     expect(await response.text()).toBe("Member data is temporarily unavailable.");
   });
 
+  it("serves exactly 20 distinct rows and audits all 20 owners", async () => {
+    const candidates = Array.from({ length: 20 }, (_, index) => ({
+      ...listed,
+      id: String(2_000_000_000 + index),
+    }));
+    const deps = setup(candidates);
+    const response = await memberDirectoryResponse(deps);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toHaveLength(20);
+    expect(deps.writeAudit.mock.lastCall?.[0].subjectUserIds).toEqual(
+      candidates.map(({ id }) => id),
+    );
+  });
+
+  it("serves empty and self-only results without writing an audit row", async () => {
+    const deps = setup([]);
+    const empty = await memberDirectoryResponse(deps);
+    expect(empty.status).toBe(200);
+    expect(await empty.json()).toEqual([]);
+
+    deps.source.mockResolvedValueOnce([{ ...listed, id: viewerId }]);
+    const self = await memberDirectoryResponse(deps);
+    expect(self.status).toBe(200);
+    expect(await self.json()).toEqual([{ name: listed.name, profileHref: `/members/${viewerId}` }]);
+    expect(deps.writeAudit).not.toHaveBeenCalled();
+  });
+
   it("rejects oversized, ambiguous, and malformed source results before rendering", async () => {
     const deps = setup();
     for (const candidates of [

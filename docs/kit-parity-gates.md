@@ -70,10 +70,11 @@ Neither establishes current directory membership or permission to list a profile
 The [unmounted directory boundary](../web/src/lib/server/members-directory.ts)
 requires a member session and an injected source and audit sink. It projects
 only display name and a link to the existing profile for explicitly listed,
-current members. It makes one capped read and releases the response only after
-the audit of fetched subjects succeeds. The synthetic SvelteKit build exercises
-the boundary and the existing directory component. The serving Worker fixture
-checks that the scratch route and both retired `/members` forms return 404.
+current members. It makes one capped read and requires an audit of fetched
+owners other than the viewer before releasing the response. An empty or
+self-only read needs no audit row. The synthetic SvelteKit build exercises the
+boundary and the existing directory component. The serving Worker fixture checks
+that the scratch route and both retired `/members` forms return 404.
 
 Activation needs a separately authorized, current membership and directory
 eligibility source that applies visibility before a storage-side limit and
