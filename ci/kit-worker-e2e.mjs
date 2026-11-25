@@ -214,6 +214,36 @@ try {
     listen(hono.child, hono.origin, () => hono.log),
   ]);
 
+  const opsEntry = join(scratch, "kit-ops.mjs");
+  const opsFixture = fileURLToPath(new URL("./fixtures/kit-ops-worker.mjs", import.meta.url));
+  const opsProbePath = "/__fixture/ops-parity";
+  await writeFile(
+    opsEntry,
+    `import inner from ${JSON.stringify(worker)};
+import { opsFixtureWorker } from ${JSON.stringify(opsFixture)};
+export default opsFixtureWorker(inner, ${JSON.stringify(opsProbePath)});\n`,
+  );
+  const ops = await startWorker("kit-ops", opsEntry, assets, FIXTURE_SECRETS.SESSION_SECRET, {
+    DATABASE_URL: undefined,
+  });
+  await listen(ops.child, ops.origin, () => ops.log);
+  const opsParity = await fetch(`${ops.origin}${opsProbePath}`, {
+    signal: AbortSignal.timeout(20_000),
+  });
+  assert.equal(opsParity.status, 200, "ops parity probes passed");
+  assert.deepEqual(await opsParity.json(), {
+    violations: 2,
+    malformed: 2,
+    oversized: 4,
+    failed: 0,
+    alerts: 1,
+    outbound: 0,
+    queued: 2,
+  });
+  console.log(
+    "PASS Kit ops ownership, health and version, CSP bounds and sampling, and alert admission",
+  );
+
   if (args.length) {
     const disabled = await fetch(`${origin}/internal/discord-live/v1/ingest`, {
       method: "POST",

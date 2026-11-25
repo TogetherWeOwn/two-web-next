@@ -498,7 +498,7 @@ app.post("/api/agent-events", requestBodyLimit("agent"), agentEventsAdmission, a
 // set it (same pattern as SESSION_STORE/ROSTER_STORE above).
 type EnvWithDepth = Env & { QUEUE_DEPTH_STORE?: ReturnType<typeof postgres> };
 
-app.get("/up", async (c) => {
+export async function upRoute(c: Context<{ Bindings: Env }>): Promise<Response> {
   // Fixed app identity for the cutover probe, including unknown/degraded reads.
   c.header("x-two-origin", "two-web-next");
   const injected = (c.env as EnvWithDepth).QUEUE_DEPTH_STORE;
@@ -550,13 +550,17 @@ app.get("/up", async (c) => {
       }
     }
   }
-});
+}
+
+app.get("/up", upRoute);
 
 // `GET /version` — the live deploy commit and upload time (src/version.ts).
 // DB-free and session-free; `no-store` so a reader never sees a cached deploy.
-app.get("/version", (c) =>
-  c.json(versionBody(c.env.CF_VERSION_METADATA), 200, { "cache-control": "no-store" }),
-);
+export function versionRoute(c: Context<{ Bindings: Env }>): Response {
+  return c.json(versionBody(c.env.CF_VERSION_METADATA), 200, { "cache-control": "no-store" });
+}
+
+app.get("/version", versionRoute);
 
 // Branded error pages (N2: TOG-9906) — DB-free, never echo internals.
 registerErrorHandlers(app);

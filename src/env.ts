@@ -120,6 +120,8 @@ export type Env = AgentEventsEnv & {
   KIT_ROUTE_ADMIN?: string;
   // Owner-only profile PATCH and native form POST. Only "true" opts in.
   KIT_ROUTE_PROFILE_WRITES?: string;
+  // Health, version, CSP sink and alert probe. Only "true" opts in.
+  KIT_ROUTE_OPS?: string;
   // B1 read-only WebMCP pilot: only the exact strings "true"/"1" inject the
   // model-context island on the four pilot pages; unset or anything else
   // leaves pages byte-identical. No session, cookie or database read.

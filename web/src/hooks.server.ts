@@ -25,6 +25,7 @@ import { dispatchHotzonesRequest } from "../../src/kit-hotzones";
 import { dispatchPastArchiveRequest } from "../../src/kit-past-events";
 import { KIT_PROFILE_WRITE_ROUTES } from "../../src/profiles/kit-write-route";
 import { authOriginRefusal, KIT_AUTH_ROUTES } from "#lib/server/auth.ts";
+import { kitOpsFamily } from "#lib/server/ops.ts";
 import { honoFetch, honoRecoveryFetch } from "#lib/server/hono.ts";
 import { resolveProfileWrite } from "#lib/server/profile-write.ts";
 
@@ -79,6 +80,7 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
         routes: KIT_PROFILE_WRITE_ROUTES,
         crossOriginRefusal: authOriginRefusal,
       },
+      kitOpsFamily(),
     ],
     versionMetadata: env.CF_VERSION_METADATA,
     featuredImageHosts: env.FEATURED_IMAGE_HOSTS,
