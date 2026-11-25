@@ -1,10 +1,19 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { PLANETSCALE_PRODUCTION_BRANCH_ID, PLANETSCALE_PRODUCTION_HOST } from "./db-migrate.mjs";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { drizzle } from "drizzle-orm/postgres-js";
+import { migrate } from "drizzle-orm/postgres-js/migrator";
+import { build } from "esbuild";
+import {
+  assertMigrationPrefix,
+  PLANETSCALE_PRODUCTION_BRANCH_ID,
+  PLANETSCALE_PRODUCTION_HOST,
+} from "./db-migrate.mjs";
 import { runRepair } from "./db-permissions-repair.mjs";
+import { runReadinessProjection } from "./db-readiness-projection.mjs";
 import { runExecutorAuthority } from "./db-repair-executor.mjs";
 import {
   bootstrap,
@@ -30,6 +39,13 @@ import {
   setPassword,
   webRoles,
 } from "./fixtures/db-restore-replay/seed.mjs";
+import {
+  prepareServingIsolation,
+  probeServingLedger,
+  readServingLedger,
+} from "./fixtures/web-serving-isolation.mjs";
+import { assertRuntimeDefaultAcl } from "./migration-runtime-rights.mjs";
+import { readLedgerState } from "./production-deploy-gate.mjs";
 
 const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
 const hash = (input) => createHash("sha256").update(input).digest("hex");
@@ -53,13 +69,16 @@ function changes(before, after, removed, added) {
   assert.deepEqual(difference(after, before), encoded(added));
 }
 
+async function assertLogin(sql, role, database) {
+  const [identity] = await sql`select session_user::text as login, current_user::text as effective,
+      current_database()::text as database`;
+  assert.deepEqual(identity, { login: role, effective: role, database });
+}
+
 async function readAs(connect, role, database, readRows) {
   return withClient(connect(role, database), (sql) =>
     sql.begin("read only", async (tx) => {
-      const [identity] =
-        await tx`select session_user::text as login, current_user::text as effective,
-        current_database()::text as database`;
-      assert.deepEqual(identity, { login: role, effective: role, database });
+      await assertLogin(tx, role, database);
       return readRows(tx);
     }),
   );
@@ -87,12 +106,12 @@ async function botReads(connect) {
   });
 }
 
-async function webReads(connect, repaired) {
+async function webReads(connect, repaired, ledgerRows = 34) {
   await readAs(connect, app, "postgres", async (tx) => {
     const [counts] = await tx`select (select count(*)::int from public.events) as events,
       (select count(*)::int from public.rsvps) as rsvps, (select count(*)::int from public.queue_jobs) as jobs,
       (select count(*)::int from drizzle.__drizzle_migrations) as ledger`;
-    assert.deepEqual(counts, { events: 2, rsvps: 1, jobs: 1, ledger: 34 });
+    assert.deepEqual(counts, { events: 2, rsvps: 1, jobs: 1, ledger: ledgerRows });
   });
   await readAs(connect, backup, "postgres", async (tx) => {
     const rows = await tx`select id from public.events order by id`;
@@ -100,14 +119,16 @@ async function webReads(connect, repaired) {
       rows.map(({ id }) => id),
       [1, 2],
     );
-    const [row] =
-      await tx`select has_table_privilege(current_user, 'public.events', 'INSERT') as writes`;
-    assert.equal(row.writes, false);
+    const [row] = await tx`select
+      has_table_privilege(current_user, 'public.events', 'INSERT') as writes,
+      has_column_privilege(current_user, 'public.web_session_grace', 'id', 'SELECT') as grace_column,
+      has_table_privilege(current_user, 'public.web_session_grace', 'SELECT') as grace_table`;
+    assert.deepEqual(row, { writes: false, grace_column: true, grace_table: false });
   });
   await readAs(connect, migrator, "postgres", async (tx) => {
     if (repaired) {
       const [{ count }] = await tx`select count(*)::int as count from drizzle.__drizzle_migrations`;
-      assert.equal(count, 34);
+      assert.equal(count, ledgerRows);
     } else {
       await denies(tx.savepoint((sp) => sp`select id from drizzle.__drizzle_migrations`));
     }
@@ -123,6 +144,20 @@ const inspect = (connect) =>
   readAs(connect, executor, "postgres", async (tx) => {
     await tx`set local search_path = pg_catalog`;
     return observeRepair(tx);
+  });
+
+const readRelationGrants = (connect, names) =>
+  readAs(connect, executor, "postgres", async (tx) => {
+    // GRANT can materialize a NULL relation ACL as explicit owner defaults.
+    // Compare both representations as the same grants.
+    const rows = await tx`select n.nspname || '.' || c.relname as name,
+      array(select item::text from unnest(coalesce(c.relacl, acldefault(
+        case when c.relkind = 'S' then 's'::"char" else 'r'::"char" end,
+        c.relowner
+      ))) as items(item) order by item::text) as grants
+      from pg_class c join pg_namespace n on n.oid = c.relnamespace
+      where (n.nspname || '.' || c.relname) = any(${names}::text[]) order by name`;
+    return [...rows];
   });
 
 function namedRepairScope({ state }) {
@@ -204,6 +239,197 @@ const run = (connect, direction, before, after) => {
     () => connect(executor),
   );
 };
+
+const originalEnd = "1033_session-roles-checked-at";
+const expansion = [
+  "1034_event-echoes",
+  "1035_bot-reconciliation-intents",
+  "1036_event-sync-claim-started",
+  "1037_waitlist-offers",
+];
+const expandedEnd = expansion.at(-1);
+
+function writeWebSlice(directory, originalLength) {
+  const journal = JSON.parse(read("../drizzle/meta/_journal.json"));
+  const entries = journal.entries.slice(0, originalLength + expansion.length);
+  assert.deepEqual(
+    entries.slice(originalLength).map(({ tag }) => tag),
+    expansion,
+  );
+  const migrationsFolder = join(directory, "web-slice");
+  mkdirSync(join(migrationsFolder, "meta"), { recursive: true });
+  writeFileSync(
+    join(migrationsFolder, "meta/_journal.json"),
+    JSON.stringify({ ...journal, entries }),
+  );
+  for (const { tag } of entries) {
+    copyFileSync(
+      new URL(`../drizzle/${tag}.sql`, import.meta.url),
+      join(migrationsFolder, `${tag}.sql`),
+    );
+  }
+  return migrationsFolder;
+}
+
+async function rehearseRepairedServing(restore, fresh, directory, t) {
+  const jobs = "fixture_jobs";
+  const grantor = "fixture_serving_grantor";
+  const jobsPassword = newPassword();
+  await withClient(restore.admin(), async (sql) => {
+    await sql`create role ${sql(jobs)} login`;
+    await setPassword(sql, jobs, jobsPassword);
+    await sql`grant ${sql(app)} to ${sql(jobs)} with inherit true, set false`;
+    await sql`create role ${sql(grantor)} nologin`;
+    await sql`grant pg_read_all_data, pg_write_all_data to ${sql(grantor)}
+      with admin true, inherit false, set false`;
+    await sql.begin(async (tx) => {
+      await tx`set local role ${tx(grantor)}`;
+      await tx`grant pg_read_all_data, pg_write_all_data to ${tx(app)} granted by current_user`;
+    });
+    // The migrator needs SET on the original grantors for the inverse.
+    // The repair executor's temporary membership in the migrator was revoked.
+    await sql`grant ${sql(executor)} to ${sql(migrator)} with inherit false, set true`;
+    await sql`grant ${sql(grantor)} to ${sql(migrator)} with inherit false, set true`;
+  });
+  const connectMigrator = () => fresh(migrator);
+  const getLedger = (end) =>
+    withClient(connectMigrator(), async (sql) => {
+      const timestamps = await assertMigrationPrefix(sql, end);
+      const [row] = await sql`select to_regclass('public.announcement_send_claims') as deferred`;
+      assert.equal(row.deferred, null);
+      return { timestamps, rows: await readServingLedger(sql) };
+    });
+  const base = await getLedger(originalEnd);
+  const plan = JSON.stringify({
+    operation: "forward",
+    ledger: originalEnd,
+    servingRole: app,
+    identity: identity(migrator),
+    webVersion: null,
+  });
+  await runReadinessProjection(
+    "forward",
+    {
+      PRODUCTION_DB_READINESS_PLAN: plan,
+      PRODUCTION_DB_READINESS_PLAN_SHA256: hash(plan),
+      PRODUCTION_DB_READINESS_DATABASE_URL: planUrl,
+    },
+    { connect: connectMigrator },
+  );
+
+  const migrationsFolder = writeWebSlice(directory, base.rows.length);
+  const outfile = join(directory, "database-readiness.mjs");
+  await build({
+    entryPoints: [fileURLToPath(new URL("../src/up-database.ts", import.meta.url))],
+    outfile,
+    bundle: true,
+    platform: "node",
+    format: "esm",
+    define: { __TWO_WEB_1033_COMPAT__: "true" },
+    plugins: [
+      {
+        name: "historical-web-journal",
+        setup(bundle) {
+          // Use the same canonical prefix for the historical readiness build
+          // and the expansion. Later required migrations belong to newer builds.
+          bundle.onResolve({ filter: /^\.\.\/drizzle\/meta\/_journal\.json$/ }, () => ({
+            path: join(migrationsFolder, "meta/_journal.json"),
+          }));
+        },
+      },
+    ],
+  });
+  const { databaseReadiness } = await import(pathToFileURL(outfile).href);
+  const { run: isolate, version } = await withClient(restore.admin(), (owner) =>
+    prepareServingIsolation({
+      owner,
+      login: app,
+      database: "postgres",
+      migrationRole: migrator,
+      connect: connectMigrator,
+      firstEnd: originalEnd,
+      timestamps: base.timestamps,
+    }),
+  );
+
+  const probe = (ledger, isolated) =>
+    withClient(restore.admin(), async (owner) => {
+      let webReadiness;
+      for (const [role, open] of [
+        [app, () => fresh(app)],
+        [jobs, () => restore.connect(jobs, jobsPassword)],
+      ]) {
+        await withClient(open(), async (sql) => {
+          await assertLogin(sql, role, "postgres");
+          await probeServingLedger(owner, role, sql, ledger.rows, isolated);
+          if (!isolated) {
+            const rows = await sql`select last_value from drizzle.__drizzle_migrations_id_seq`;
+            assert.equal(rows.length, 1);
+          }
+          const [workload] = await sql`select
+          (select count(*)::int from public.events) as events,
+          (select count(*)::int from public.queue_jobs) as jobs`;
+          assert.deepEqual(workload, { events: 2, jobs: 1 });
+          if (role === app) await sql`update public.events set id = id where false`;
+          else await sql`update public.queue_jobs set id = id where false`;
+          const readiness = await databaseReadiness(sql);
+          assert.deepEqual(readLedgerState(readiness), ledger.timestamps);
+          if (role === app) webReadiness = readiness;
+        });
+      }
+      await botReads(fresh);
+      return webReadiness;
+    });
+
+  const { state: baseline } = await inspect(fresh);
+  assert.equal(baseline.migrator_ready, true);
+  const originalObjects = Object.keys(baseline.inventory);
+  const originalGrants = await readRelationGrants(fresh, originalObjects);
+  assert.equal(originalGrants.length, originalObjects.length);
+  const roles = () => withClient(restore.admin(), roleCatalog);
+  const baselineRoles = await roles();
+  const readiness = await probe(base, false);
+  t.diagnostic("Web, Jobs and both Bot logins passed on the repaired 1033 baseline.");
+  assert.equal(
+    await isolate("forward", { readiness: { ...readiness, revision: { version_id: version } } }),
+    "committed",
+  );
+  await probe(base, true);
+  t.diagnostic("Isolated 1033 preserved workload access and projected readiness.");
+  await withClient(connectMigrator(), async (sql) => {
+    await assertRuntimeDefaultAcl(sql);
+    await migrate(drizzle(sql), { migrationsFolder });
+  });
+  const expanded = await getLedger(expandedEnd);
+  assert.equal(await isolate("readback", { end: expandedEnd }), "after");
+  await probe(expanded, true);
+  t.diagnostic("Isolated 1037 preserved workload access and projected readiness.");
+
+  assert.equal(await isolate("undo", { end: expandedEnd }), "committed");
+  assert.equal(await isolate("readback", { end: expandedEnd }), "before");
+  assert.deepEqual(await getLedger(expandedEnd), expanded);
+  await probe(expanded, false);
+  await webReads(fresh, true, expanded.rows.length);
+  assert.deepEqual(await roles(), baselineRoles);
+  const { state: afterUndo } = await inspect(fresh);
+  assert.deepEqual(
+    Object.fromEntries(originalObjects.map((name) => [name, afterUndo.inventory[name]])),
+    baseline.inventory,
+  );
+  assert.deepEqual(await readRelationGrants(fresh, originalObjects), originalGrants);
+  assert.deepEqual(
+    afterUndo.object_acl.filter(
+      ({ name, column_number }) => column_number > 0 && Object.hasOwn(baseline.inventory, name),
+    ),
+    baseline.object_acl.filter(({ column_number }) => column_number > 0),
+  );
+  for (const key of ["defaults", "schema_db_acl", "drizzle_access", "migrator_ready"]) {
+    assert.deepEqual(afterUndo[key], baseline[key], key);
+  }
+  t.diagnostic(
+    "Repaired 1033 → isolated 1033 → isolated 1037 → inverse: Web/Jobs readiness and Bot reads passed. The inverse restored repaired rights and retained the 1037 ledger. 1038 stayed absent.",
+  );
+}
 
 test("PostgreSQL 18 branch replay preserves repair and Bot scope with alternate ADMIN authority", async (t) => {
   const directory = mkdtempSync("/tmp/two-web-replay-");
@@ -347,6 +573,8 @@ test("PostgreSQL 18 branch replay preserves repair and Bot scope with alternate 
     t.diagnostic(
       "Forward, exact undo, both revocations, scoped catalog and Bot read parity passed.",
     );
+    phase = "isolation and inverse on the repaired restore";
+    await rehearseRepairedServing(restore, fresh, directory, t);
   } catch (error) {
     // PostgreSQL errors can include the failed statement, including ALTER ROLE.
     if (error.code === "ERR_ASSERTION") throw error;
