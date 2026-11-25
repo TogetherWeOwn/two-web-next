@@ -103,3 +103,96 @@ The sanctioned live apply path is the `db-migrate` workflow
 - Staging Worker deploys apply the same script for `staging` inside the
   deploy job; live production execution always needs its own
   authorization and is never part of a Worker deploy.
+
+## Current runbook for Web ledger isolation
+
+Use the [production release gate](../CONTRIBUTING.md#production-release-gate)
+for each operation. The release thread records the observed ledger, serving
+version, approvals and watch results.
+
+1. **Finish the migrator permissions repair at `1033`.** Use the protected
+   [executor and repair workflows](runbook.md#repair-production-migrator-permissions-at-the-1033-prefix)
+   with their approved source, separate scoped credentials and exact plan
+   digests in the `production` Environment. Confirm the repaired catalog,
+   unchanged 34-entry canonical ledger and retained Web, Jobs and Bot access.
+   Keep the original executor edge and inverse pins through the 30-minute
+   repair watch and recovery window. Then verify the protected executor
+   `revoke` and cleanup before handing off to ledger isolation.
+2. **Put the readiness bridge in service before revoking serving access.**
+   Install the [projection](db-migrations.md#install-or-remove-the-readiness-projection)
+   while direct ledger access still works. Qualify the compatible Hono build
+   and its exact fallback, then use the [protected Worker release](kit-cutover-release.md#protected-release-and-recovery)
+   for `cutover_mode: hono` with the approved `sha` and `cutover_pin` and both
+   undo inputs empty. When preparing Hono as Ember's rollback, use the
+   Ember-profile packet's `sha` and `cutover_pin` for this Hono dispatch.
+   Confirm the approved Hono UUID, source and
+   manifest at 100% traffic. Verify a fresh, healthy `/up` response reports
+   the exact canonical `1033` timestamp set through the projection. Even a
+   healthy response with stale or missing timestamps blocks the revoke.
+   Verify the actual Web and Jobs bindings and the separate Bot read scopes.
+3. **Isolate at `1033`, then advance the schema to `1037`.** Rehearse the exact
+   catalog delta and inverse with the approved executor's grantor authority in
+   both directions. Dispatch [`db-serving-ledger-isolation`](../.github/workflows/db-serving-ledger-isolation.yml)
+   on protected `main` with `operation: forward` and
+   `ledger: 1033_session-roles-checked-at`. The `production` Environment holds
+   `PRODUCTION_DB_ISOLATION_APPROVED_SHA`, `PRODUCTION_DB_ISOLATION_DATABASE_URL`,
+   `PRODUCTION_DB_ISOLATION_PLAN` and `PRODUCTION_DB_ISOLATION_PLAN_SHA256`.
+   Forward also uses `PRODUCTION_DB_ISOLATION_CF_ACCOUNT_ID` and
+   `PRODUCTION_DB_ISOLATION_CF_READ_TOKEN`. Verify direct ledger denial,
+   projected readiness and retained Web, Jobs and Bot access, then finish the
+   isolation watch. Under separate approval and verified schema recovery,
+   dispatch `db-migrate` with `target: production` and `readback_only: false`.
+   Pin the exact dispatch SHA and migrator identity in the
+   [migration Environment](runbook.md#neon-web-schema-migrations-separate-operator-action).
+   Pin `1034_event-echoes`, `1035_bot-reconciliation-intents`,
+   `1036_event-sync-claim-started` and `1037_waitlist-offers` in that order.
+   Record the `verify-scope` result for the 38-entry canonical ledger and
+   keep `1038_announcement-send-claims` deferred for this cutover. Finish the
+   migration watch.
+4. **Keep recovery tied to the observed prefix.** For the schema advance, use
+   a fresh PlanetScale backup restored to an isolated temporary branch. Verify
+   the ordered ledger and affected objects at the real access levels, rehearse
+   the approved recovery with outbound activity disabled, and verify same-day
+   branch and credential cleanup. Retain only redacted results. For an
+   uncertain isolation result, use `readback` against the actual canonical end
+   and resolve any unclassified state before retrying. For a grant
+   regression, run the protected `undo` with the same plan and authority and
+   select the actual end, `1033_session-roles-checked-at` or
+   `1037_waitlist-offers`. `readback` and `undo` can use the approved `main`
+   ancestor while the dispatcher and its selector are unchanged. Verify that
+   undo restored the exact pre-isolation grants and direct ledger access while
+   preserving the permissions repair and the observed ledger. If required,
+   use [`rollback-production`](../.github/workflows/rollback-production.yml)
+   with `environment: production`, the recorded direct-ledger Hono UUID as
+   `version_id`, and the serving UUID as `expected_current_version_id`.
+   Verify the fallback serves all traffic and `/up` reads the ledger directly
+   before running the separate projection inverse. Use the
+   [migration recovery procedure](runbook.md#migration-rollback-and-recovery)
+   for uncertain schema commits or schema regression. The grant inverse leaves
+   the applied schema in place. After undo at `1037`, re-isolation requires a
+   separately reviewed operation because `forward` only admits `1033`.
+5. **Hand off explicitly to the Ember release.** After the repair, isolation
+   and migration watches pass, pass along the observed `1037` ledger and `1038`
+   deferral, healthy `/up`, effective access results, database recovery receipts,
+   and the serving Hono commit, UUID and manifest binding. For a bridge prepared
+   with an all-off packet, prepare the paired Hono version from the Ember
+   packet in the Ember release before switching. Verify the live Hono rollback
+   UUID matches the Ember packet's source and manifest digest. Under separate
+   Ember release approval, dispatch `cutover_mode: ember` with the same `sha`
+   and `cutover_pin` used to prepare that Hono and its UUID as
+   `cutover_undo_version`. Leave
+   `cutover_undo_digest` empty and `migrations_applied` off for Ember. Follow the
+   [Kit cutover and recovery runbook](kit-cutover-release.md#protected-release-and-recovery).
+
+The [grant runner](https://github.com/TogetherWeOwn/two-web-next/pull/2753) and
+[protected dispatcher](https://github.com/TogetherWeOwn/two-web-next/pull/2757)
+define the isolation operations. Hosted fixtures exercise cross-version grant
+undo and stale or absent readiness timestamps
+([#2782](https://github.com/TogetherWeOwn/two-web-next/pull/2782)), and refusal
+when `/up` shows `1037` but omits the required `1033` timestamp
+([#2790](https://github.com/TogetherWeOwn/two-web-next/pull/2790)). The
+[PostgreSQL 18 restore replay](https://github.com/TogetherWeOwn/two-web-next/actions/runs/45618685153/job/139220728278)
+in [#2816](https://github.com/TogetherWeOwn/two-web-next/pull/2816) exercises
+repair, isolation, expansion and grant undo on one synthetic restore. It
+verifies repaired ownership and grants survive undo with the exact `1037`
+ledger intact and `1038` absent.
