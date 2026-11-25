@@ -144,7 +144,7 @@ async function assertRows(section, expected, state, width) {
   }
 }
 
-async function assertNowLine(page, open, capture, compact) {
+async function assertNowLine(page, auditPage, open, capture, compact) {
   const line = page.getByRole("region", { name: "Now Line" });
   const fixture = { state: "frozen", showLifeline: false };
   const observation = line.locator("p.observation");
@@ -203,7 +203,10 @@ async function assertNowLine(page, open, capture, compact) {
           );
         }, compact),
       );
-      const { violations } = await new AxeBuilder({ page }).include(".now-line").analyze();
+      await auditPage.goto(response.url());
+      const { violations } = await new AxeBuilder({ page: auditPage })
+        .include(".now-line")
+        .analyze();
       assert.deepEqual(
         violations.filter(({ impact }) => impact === "critical" || impact === "serious"),
         [],
@@ -256,11 +259,19 @@ test("EventDetail places the read-only Lifeline after the seat rail and preserve
     props = fixtureProps;
     return page.goto(`${origin}${eventPath}`);
   };
+  // Axe needs a script-enabled context and a second page for results. Keep
+  // application scripts out of that context and the fixture itself no-JS.
+  const auditContext = await browser.newContext();
+  const auditPage = await auditContext.newPage();
+  await stubRequests(auditPage, origin);
+  await auditPage.route("**/*", (route) =>
+    route.request().resourceType() === "script" ? route.abort() : route.fallback(),
+  );
   for (const width of [1280, 390]) {
     const compact = width === 390;
     const viewport = { width, height: compact ? 844 : 800 };
-    const context = await browser.newContext({ viewport, javaScriptEnabled: false });
-    const page = await context.newPage();
+    const page = await browser.newPage({ viewport, javaScriptEnabled: false });
+    await auditPage.setViewportSize(viewport);
     await stubRequests(page, origin);
     const section = page.getByRole("region", { name: "Lifeline" });
     const capture = async (state) => {
@@ -335,7 +346,7 @@ test("EventDetail places the read-only Lifeline after the seat rail and preserve
       for (const value of attendance.privateValues) assert.ok(!html.includes(value));
       await capture(state);
     }
-    await assertNowLine(page, open, capture, compact);
+    await assertNowLine(page, auditPage, open, capture, compact);
     assert.ok((await page.consoleMessages()).every((message) => message.type() !== "error"));
     await open(page, { state: "upcoming" });
     const going = compact
@@ -361,8 +372,9 @@ test("EventDetail places the read-only Lifeline after the seat rail and preserve
     assert.equal(await currentPage.innerText(), "Page 2");
     await open(page, { state: "upcoming", savedSeat: true });
     await assertRows(section, examples.upcoming.replace(plannedSeat, seat), "saved seat", width);
-    await context.close();
+    await page.close();
   }
+  await auditContext.close();
 
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   await stubRequests(page, origin, true);
