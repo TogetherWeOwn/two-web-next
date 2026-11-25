@@ -130,8 +130,11 @@ the intended renderer ownership. Ordinary promotion requires the full target
 ledger and uses its own build path.
 
 On regression, use [`rollback-production`](../.github/workflows/rollback-production.yml)
-with `environment: production`. Set `expected_current_version_id` to the
-promoted production UUID being undone. For Ember or all-off Kit, set
+from protected `main` with `environment: production`. Set `ref` to a supported
+scripts SHA with green main push CI, as described in the
+[rollback runbook](runbook.md#production-one-click-workflow). Set
+`expected_current_version_id` to the promoted production UUID being undone.
+For Ember or all-off Kit, set
 `version_id` to the paired Hono UUID. For admin, set it to the recorded
 admin-off Ember UUID. Verify the restored UUID and commit, database readiness,
 and the fallback renderer ownership. The admin undo returns Admin to Hono
