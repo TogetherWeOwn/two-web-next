@@ -137,41 +137,43 @@ export async function assertEventCreateFormParity({ hono, off, on, databaseUrl }
 
     // Create commits a local draft and its audit. The loopback workers have no sync queue binding.
     const keys = [];
+    const successCases = [
+      [form, "valid unpadded form"],
+      [atLimit, "valid form at the 32 KiB limit"],
+    ];
     for (const worker of [hono, off, on]) {
-      const { context, payload } = await post(worker, {
-        label: "valid form at the 32 KiB limit",
-        body: atLimit,
-        status: 201,
-      });
-      const key = payload.data?.event_key;
-      assert.match(key ?? "", /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/, context);
-      keys.push(key);
-      assert.deepEqual(
-        payload,
-        {
-          data: {
-            event_key: key,
-            title: form.title,
-            game: null,
-            description: null,
-            starts_at: "2099-07-01T17:30:00.000Z",
-            ends_at: "2099-07-01T19:00:00.000Z",
-            starts_at_local: form.starts_at,
-            ends_at_local: form.ends_at,
-            timezone: form.timezone,
-            location: null,
-            capacity: 8,
-            going_count: 0,
-            going_occupancy: 0,
-            status: "draft",
-            rsvp_open: true,
-            synced_to_discord: false,
+      for (const [body, label] of successCases) {
+        const { context, payload } = await post(worker, { label, body, status: 201 });
+        const key = payload.data?.event_key;
+        assert.match(key ?? "", /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/, context);
+        keys.push(key);
+        assert.deepEqual(
+          payload,
+          {
+            data: {
+              event_key: key,
+              title: form.title,
+              game: null,
+              description: null,
+              starts_at: "2099-07-01T17:30:00.000Z",
+              ends_at: "2099-07-01T19:00:00.000Z",
+              starts_at_local: form.starts_at,
+              ends_at_local: form.ends_at,
+              timezone: form.timezone,
+              location: null,
+              capacity: 8,
+              going_count: 0,
+              going_occupancy: 0,
+              status: "draft",
+              rsvp_open: true,
+              synced_to_discord: false,
+            },
           },
-        },
-        context,
-      );
+          context,
+        );
+      }
     }
-    assert.equal(new Set(keys).size, 3, "each successful form creates a fresh draft");
+    assert.equal(new Set(keys).size, keys.length, "each successful form creates a fresh draft");
     keys.sort();
     assert.deepEqual(
       await eventRows(),
