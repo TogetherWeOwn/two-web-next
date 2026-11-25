@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { parse, serialize } from "parse5";
 
 export const BEACON_URL = "https://static.cloudflareinsights.com/beacon.min.js";
-export const COLLECTOR_PATH = "/cdn-cgi/rum";
+const COLLECTOR_PATH = "/cdn-cgi/rum";
 
 function isBeaconScript(url) {
   return (
@@ -18,18 +18,15 @@ function scanHtml(html, documentUrl, prepareReplay = false) {
     const attributes = new Map(node.attrs?.map(({ name, value }) => [name, value]));
     const source = attributes.get("src") ?? attributes.get("href");
     const url = source ? URL.parse(source, documentUrl) : null;
-    const beacon = url !== null && isBeaconScript(url);
     if (node.tagName === "script") counts.scripts++;
-    if (node.tagName === "script" && beacon) {
+    if (node.tagName === "script" && url && isBeaconScript(url)) {
       counts.beacons++;
-      // The original SRI hash pins the vendor bytes. The replay supplies our
-      // own script, after the unmodified HTML has been inspected separately.
+      // The original integrity hash pins the vendor bytes. Replay uses fake bytes.
       if (prepareReplay) node.attrs = node.attrs.filter(({ name }) => name !== "integrity");
     } else if (
       attributes.has("data-cf-beacon") ||
       (url &&
-        (url.hostname === "cloudflareinsights.com" ||
-          url.hostname.endsWith(".cloudflareinsights.com") ||
+        (/(^|\.)cloudflareinsights\.com$/.test(url.hostname) ||
           /^\/cdn-cgi\/(?:rum|zaraz)(?:\/|$)/i.test(url.pathname)))
     ) {
       counts.otherTracking++;
@@ -41,12 +38,16 @@ function scanHtml(html, documentUrl, prepareReplay = false) {
   return { counts, html: prepareReplay ? serialize(document) : html };
 }
 
-export function inspectAnalyticsHtml(html, documentUrl) {
-  return scanHtml(html, documentUrl).counts;
+export function assertScriptInventory(counts, scripts, beacons = scripts) {
+  assert.equal(counts.scripts, scripts, "Script elements");
+  assert.equal(counts.beacons, beacons, "Beacon elements");
+  assert.equal(counts.otherTracking, 0, "Other tracking markup");
 }
 
-// Both the script and its POST are fulfilled in Chromium. No route continues
-// out of the browser. This is deliberately not the provider's script or receipt.
+export function inspectAnalyticsHtml(html, url) {
+  return scanHtml(html, url).counts;
+}
+
 const fakeBeacon = `
   const root = document.documentElement;
   root.dataset.fakeBeaconExecutions = String(Number(root.dataset.fakeBeaconExecutions || 0) + 1);
@@ -55,93 +56,80 @@ const fakeBeacon = `
   });
 `;
 
-export async function observeAnalytics(browser, { url, html, javaScriptEnabled, allowed }) {
+export async function observeAnalytics(
+  browser,
+  { url, html, javaScriptEnabled = true, allowed = false },
+) {
   const context = await browser.newContext({ javaScriptEnabled, serviceWorkers: "block" });
-  const counts = { loads: 0, executions: 0, collections: 0, blocked: 0, errors: 0 };
+  const counts = { loads: 0, collections: 0, blocked: 0, errors: 0 };
   const target = new URL(url);
   try {
     const replay = allowed ? scanHtml(html, url, true).html : html;
-    await context.routeWebSocket("**/*", async (socket) => {
+    await context.routeWebSocket("**/*", (socket) => {
       counts.blocked++;
-      await socket.close();
+      return socket.close();
     });
-    await context.route("**/*", async (route) => {
+    await context.route("**/*", (route) => {
       const request = route.request();
       const requested = new URL(request.url());
       const method = request.method();
       const type = request.resourceType();
       if (method === "GET" && type === "document" && requested.href === target.href) {
-        await route.fulfill({ contentType: "text/html; charset=utf-8", body: replay });
-      } else if (allowed && method === "GET" && type === "script" && isBeaconScript(requested)) {
+        return route.fulfill({ contentType: "text/html; charset=utf-8", body: replay });
+      }
+      if (allowed && method === "GET" && type === "script" && isBeaconScript(requested)) {
         counts.loads++;
-        await route.fulfill({
+        return route.fulfill({
           contentType: "text/javascript",
           headers: { "access-control-allow-origin": "*" },
           body: fakeBeacon,
         });
-      } else if (
-        allowed &&
-        method === "POST" &&
-        requested.href === target.origin + COLLECTOR_PATH
-      ) {
+      }
+      const collector = requested.href === target.origin + COLLECTOR_PATH;
+      if (allowed && method === "POST" && collector) {
         counts.collections++;
-        await route.fulfill({ status: 204 });
-      } else if (
+        return route.fulfill({ status: 204 });
+      }
+      if (
         method === "GET" &&
         requested.origin === target.origin &&
         !requested.pathname.toLowerCase().startsWith("/cdn-cgi/") &&
         ["stylesheet", "image", "font"].includes(type)
       ) {
-        await route.fulfill({ status: 204 });
-      } else {
-        counts.blocked++;
-        await route.abort("blockedbyclient");
+        return route.fulfill({ status: 204 });
       }
+      counts.blocked++;
+      return route.abort("blockedbyclient");
     });
     const page = await context.newPage();
     page.on("pageerror", () => counts.errors++);
     await page.goto(url, { timeout: 10_000 });
     if (allowed) {
-      await page.waitForFunction(
-        () => document.documentElement.dataset.fakeCollectorAnswered === "yes",
-        {
-          timeout: 5_000,
-        },
-      );
+      await page
+        .locator('html[data-fake-collector-answered="yes"]')
+        .waitFor({ state: "attached", timeout: 5_000 });
     }
-    const executions = await page.locator("html").getAttribute("data-fake-beacon-executions");
-    counts.executions = Number(executions ?? 0);
-    const inventory = inspectAnalyticsHtml(await page.content(), url);
     if (target.pathname === "/privacy") {
-      await page
-        .getByRole("heading", { level: 1, name: "Privacy policy", exact: true })
-        .waitFor({ timeout: 5_000 });
-      await page
-        .getByRole("heading", { level: 2, name: "Who we are, and what this covers", exact: true })
-        .waitFor({ timeout: 5_000 });
-      await page
-        .getByRole("heading", { level: 2, name: "Cookies and tracking", exact: true })
-        .waitFor({ timeout: 5_000 });
+      for (const name of ["Privacy policy", "Cookies and tracking"]) {
+        await page.getByRole("heading", { name, exact: true }).waitFor({ timeout: 5_000 });
+      }
     }
+    const root = page.locator("html");
     return {
       ...counts,
-      ...inventory,
-      initializations: Number(
-        (await page.locator("html").getAttribute("data-analytics-initializations")) ?? 0,
-      ),
+      ...inspectAnalyticsHtml(await page.content(), url),
+      executions: Number(await root.getAttribute("data-fake-beacon-executions")),
+      initializations: Number(await root.getAttribute("data-analytics-initializations")),
     };
   } finally {
     await context.close();
   }
 }
 
-export function assertAnalyticsObservation(observed, allowed) {
-  const expected = allowed ? 1 : 0;
-  assert.equal(observed.beacons, expected, "Beacon elements in the browser");
-  assert.equal(observed.otherTracking, 0, "Other Analytics or Zaraz markup in the browser");
-  assert.equal(observed.loads, expected, "Fake beacon script loads");
-  assert.equal(observed.executions, expected, "Fake beacon executions");
-  assert.equal(observed.collections, expected, "Fake collector POSTs");
+export function assertAnalyticsObservation(observed, expected, expectedScripts = expected) {
+  assertScriptInventory(observed, expectedScripts, expected);
+  for (const key of ["loads", "executions", "collections"])
+    assert.equal(observed[key], expected, key);
   assert.equal(observed.blocked, 0, "Blocked browser requests");
   assert.equal(observed.errors, 0, "Browser script errors");
 }

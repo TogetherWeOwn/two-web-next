@@ -1,46 +1,15 @@
-import assert from "node:assert/strict";
 import { chromium } from "playwright";
-import {
-  assertAnalyticsObservation,
-  inspectAnalyticsHtml,
-  observeAnalytics,
-} from "../e2e/analytics-isolation.mjs";
-import {
-  ELIGIBLE_PATH,
-  PRIVACY_PATH,
-  readAnalyticsDocument,
-  requireAnalyticsTarget,
-} from "../e2e/analytics-target.mjs";
+import * as analytics from "../e2e/analytics-isolation.mjs";
+import * as staging from "../e2e/analytics-target.mjs";
 
-let stage = "isolated target admission and HTML retrieval";
-
-async function run(target) {
-  const eligible = await readAnalyticsDocument(target, ELIGIBLE_PATH);
-  const privacy = await readAnalyticsDocument(target, PRIVACY_PATH);
+async function check(target) {
+  const eligible = await staging.readAnalyticsDocument(target, staging.ELIGIBLE_PATH);
+  const privacy = await staging.readAnalyticsDocument(target, staging.PRIVACY_PATH);
   const cases = [
-    {
-      path: ELIGIBLE_PATH,
-      html: eligible,
-      javaScriptEnabled: true,
-      allowed: target.jurisdiction === "allowed",
-    },
-    { path: PRIVACY_PATH, html: privacy, javaScriptEnabled: true, allowed: false },
-    { path: PRIVACY_PATH, html: privacy, javaScriptEnabled: false, allowed: false },
+    [staging.ELIGIBLE_PATH, eligible, true, target.jurisdiction === "allowed"],
+    [staging.PRIVACY_PATH, privacy, true, false],
+    [staging.PRIVACY_PATH, privacy, false, false],
   ];
-  for (const { path, html, allowed } of cases) {
-    stage = `original HTML inventory for ${path}`;
-    const expected = allowed ? 1 : 0;
-    assert.deepEqual(
-      inspectAnalyticsHtml(html, target.origin + path),
-      {
-        scripts: expected,
-        beacons: expected,
-        otherTracking: 0,
-      },
-      "Unexpected script inventory in the original HTML",
-    );
-  }
-  stage = "starting isolated Chromium";
   const browser = await chromium.launch({
     args: [
       "--proxy-server=http://127.0.0.1:9",
@@ -51,27 +20,18 @@ async function run(target) {
     ],
   });
   try {
-    for (const { path, html, javaScriptEnabled, allowed } of cases) {
-      stage = `browser observations for ${path} (JavaScript ${javaScriptEnabled ? "on" : "off"})`;
-      const observed = await observeAnalytics(browser, {
-        url: target.origin + path,
+    for (const [path, html, javaScriptEnabled, allowed] of cases) {
+      const url = target.origin + path;
+      analytics.assertScriptInventory(analytics.inspectAnalyticsHtml(html, url), Number(allowed));
+      const observed = await analytics.observeAnalytics(browser, {
+        url,
         html,
         javaScriptEnabled,
         allowed,
       });
-      assertAnalyticsObservation(observed, allowed);
-      assert.equal(observed.scripts, allowed ? 1 : 0, "Unexpected script inventory in the browser");
+      analytics.assertAnalyticsObservation(observed, Number(allowed));
       console.log(
-        JSON.stringify({
-          jurisdiction: target.jurisdiction,
-          path,
-          javaScriptEnabled,
-          beaconElements: observed.beacons,
-          fakeLoads: observed.loads,
-          fakeExecutions: observed.executions,
-          fakePosts: observed.collections,
-          blocked: observed.blocked,
-        }),
+        JSON.stringify({ jurisdiction: target.jurisdiction, path, javaScriptEnabled, ...observed }),
       );
     }
   } finally {
@@ -81,17 +41,10 @@ async function run(target) {
 
 let target;
 try {
-  target = requireAnalyticsTarget(process.argv.slice(2));
+  target = staging.requireAnalyticsTarget(process.argv.slice(2));
+  await check(target);
 } catch (error) {
-  console.error(error.message);
+  // Browser and transport errors can embed the staging URL or response.
+  console.error(target ? "Isolated Analytics check failed before all cases passed" : error.message);
   process.exitCode = 1;
-}
-if (target) {
-  try {
-    await run(target);
-  } catch {
-    // Transport/browser errors can embed the staging URL, HTML or headers.
-    console.error(`Isolated Analytics check failed during ${stage}`);
-    process.exitCode = 1;
-  }
 }

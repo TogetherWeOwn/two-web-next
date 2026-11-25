@@ -5,6 +5,7 @@ import {
 } from "../test/helpers/privacy-published-history";
 import {
   assertAnalyticsObservation,
+  assertScriptInventory,
   BEACON_URL,
   inspectAnalyticsHtml,
   observeAnalytics,
@@ -13,49 +14,31 @@ import { ELIGIBLE_PATH, requireAnalyticsTarget } from "./analytics-target.mjs";
 
 const origin = "https://analytics-synthetic.example.test";
 const url = origin + ELIGIBLE_PATH;
-const document = (scripts = "") =>
+const fixturePage = (scripts = "") =>
   `<!doctype html><html lang="en"><meta charset="utf-8"><title>Analytics fixture</title><main><h1>Analytics fixture</h1></main>${scripts}</html>`;
 
 const cases = [
-  { name: "EU", edge: { country: "DE", isEU: true }, allowed: false },
-  { name: "UK", edge: { country: "GB", isEU: false }, allowed: false },
-  { name: "unknown (XX)", edge: { country: "XX", isEU: false }, allowed: false },
-  { name: "unknown (missing EU classification)", edge: { country: "US" }, allowed: false },
-  { name: "unknown (missing country)", edge: { isEU: false }, allowed: false },
-  { name: "allowed (US)", edge: { country: "US", isEU: false }, allowed: true },
+  { name: "EU", country: "DE", eu: true, allowed: false },
+  { name: "UK", country: "GB", eu: false, allowed: false },
+  { name: "unknown (XX)", country: "XX", eu: false, allowed: false },
+  { name: "unknown (missing EU classification)", country: "US", allowed: false },
+  { name: "unknown (missing country)", eu: false, allowed: false },
+  { name: "allowed (US)", country: "US", eu: false, allowed: true },
 ];
 
-// The fixture models the trusted edge metadata described in the runbook.
-// US is the single positive control, so this fixture needs no country list.
-function fixtureHtml(edge: { country?: string; isEU?: boolean }) {
-  const allow = edge.isEU === false && edge.country === "US";
-  return document(
-    allow
-      ? `<script defer src="${BEACON_URL}/v123" crossorigin="anonymous" integrity="sha256-AA==" data-cf-beacon="{}"></script>`
-      : "",
-  );
-}
-
-for (const { name, edge, allowed } of cases) {
-  test(`${name} uses the regional Analytics decision before the browser runs`, async ({
-    browser,
-  }) => {
-    const html = fixtureHtml(edge);
+for (const { name, country, eu, allowed } of cases) {
+  test(`${name} regional Analytics decision`, async ({ browser }) => {
+    // US is the positive control. The fixture has no general country allowlist.
+    const beacon = `<script defer src="${BEACON_URL}/v123" crossorigin="anonymous" integrity="sha256-AA==" data-cf-beacon="{}"></script>`;
+    const html = fixturePage(country === "US" && eu === false ? beacon : "");
     const expected = Number(allowed);
-    expect(inspectAnalyticsHtml(html, url)).toEqual({
-      scripts: expected,
-      beacons: expected,
-      otherTracking: 0,
-    });
-    assertAnalyticsObservation(
-      await observeAnalytics(browser, { url, html, javaScriptEnabled: true, allowed }),
-      allowed,
-    );
+    assertScriptInventory(inspectAnalyticsHtml(html, url), expected);
+    assertAnalyticsObservation(await observeAnalytics(browser, { url, html, allowed }), expected);
   });
 }
 
 test("three initialization calls inject only one fake beacon", async ({ browser }) => {
-  const html = document(`<script>
+  const html = fixturePage(`<script>
     function initializeAnalytics() {
       const root = document.documentElement;
       root.dataset.analyticsInitializations = String(Number(root.dataset.analyticsInitializations || 0) + 1);
@@ -65,38 +48,26 @@ test("three initialization calls inject only one fake beacon", async ({ browser 
       script.src = ${JSON.stringify(BEACON_URL)};
       document.head.append(script);
     }
-    initializeAnalytics();
-    initializeAnalytics();
-    initializeAnalytics();
+    for (let call = 0; call < 3; call++) initializeAnalytics();
   </script>`);
-  expect(inspectAnalyticsHtml(html, url).beacons).toBe(0);
-  const observed = await observeAnalytics(browser, {
-    url,
-    html,
-    javaScriptEnabled: true,
-    allowed: true,
-  });
+  assertScriptInventory(inspectAnalyticsHtml(html, url), 1, 0);
+  const observed = await observeAnalytics(browser, { url, html, allowed: true });
   expect(observed.initializations).toBe(3);
-  assertAnalyticsObservation(observed, true);
+  assertAnalyticsObservation(observed, 1, 2);
 });
 
 test("blocked vendor and same-origin Zaraz requests count as failures", async ({ browser }) => {
-  const html = document(
+  const html = fixturePage(
     `<script src="${BEACON_URL}"></script><script src="/cdn-cgi/zaraz/s.js"></script>`,
   );
   expect(inspectAnalyticsHtml(html, url)).toEqual({ scripts: 2, beacons: 1, otherTracking: 1 });
-  const observed = await observeAnalytics(browser, {
-    url,
-    html,
-    javaScriptEnabled: true,
-    allowed: false,
-  });
+  const observed = await observeAnalytics(browser, { url, html });
   expect(observed.blocked).toBe(2);
   expect([observed.loads, observed.executions, observed.collections]).toEqual([0, 0, 0]);
-  expect(() => assertAnalyticsObservation(observed, false)).toThrow();
+  expect(() => assertAnalyticsObservation(observed, 0)).toThrow();
 });
 
-test("both server-rendered privacy pages display policy headings with JavaScript disabled", async ({
+test("both privacy renderers expose policy headings with JavaScript disabled", async ({
   browser,
 }) => {
   const fixture = await compilePrivacyHistory();
@@ -104,21 +75,11 @@ test("both server-rendered privacy pages display policy headings with JavaScript
     const { status, html, touches } = await renderPrivacyHistory(fixture, twin);
     expect(status).toBe(200);
     expect(touches).toEqual([]);
-    const privacyUrl = `${origin}/privacy`;
-    expect(inspectAnalyticsHtml(html, privacyUrl)).toEqual({
-      scripts: 0,
-      beacons: 0,
-      otherTracking: 0,
-    });
+    const url = `${origin}/privacy`;
+    assertScriptInventory(inspectAnalyticsHtml(html, url), 0);
     for (const javaScriptEnabled of [true, false]) {
-      const observed = await observeAnalytics(browser, {
-        url: privacyUrl,
-        html,
-        javaScriptEnabled,
-        allowed: false,
-      });
-      expect(observed.scripts).toBe(0);
-      assertAnalyticsObservation(observed, false);
+      const observed = await observeAnalytics(browser, { url, html, javaScriptEnabled });
+      assertAnalyticsObservation(observed, 0);
     }
   }
 });

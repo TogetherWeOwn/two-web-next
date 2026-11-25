@@ -13,15 +13,10 @@ export function requireAnalyticsTarget(args) {
   const url = URL.parse(rawOrigin);
   const host = url?.hostname ?? "";
   const excludedZones = ["togetherweown.com", "workers.dev", "pages.dev"];
-  if (
-    rawOrigin !== `https://${host}` ||
-    host.length > 253 ||
-    !/^analytics-synthetic\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(host) ||
-    excludedZones.some((zone) => host === zone || host.endsWith(`.${zone}`))
-  ) {
-    throw new Error(
-      "Target must be a canonical analytics-synthetic HTTPS origin in a separate zone",
-    );
+  const dnsName = /^analytics-synthetic\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+  const excluded = excludedZones.some((zone) => host.endsWith(`.${zone}`));
+  if (rawOrigin !== `https://${host}` || host.length > 253 || !dnsName.test(host) || excluded) {
+    throw new Error("Target must be a canonical analytics-synthetic HTTPS origin");
   }
   if (!JURISDICTIONS.includes(jurisdiction)) {
     throw new Error("Expected jurisdiction must be eu, uk, unknown or allowed");
@@ -29,45 +24,29 @@ export function requireAnalyticsTarget(args) {
   return { origin: rawOrigin, jurisdiction };
 }
 
-export async function readAnalyticsDocument(target, path) {
-  // Validate at the actual network boundary too. There are just two GETs,
-  // with no credentials, cookies, geolocation overrides or redirect handling.
-  const { origin, jurisdiction } = requireAnalyticsTarget([
-    "--target",
-    target.origin,
-    "--expect",
-    target.jurisdiction,
-  ]);
+export async function readAnalyticsDocument({ origin, jurisdiction }, path) {
+  // The CLI validates origin before calling this reader. Only direct GETs.
   if (path !== ELIGIBLE_PATH && path !== PRIVACY_PATH) throw new Error("Unsupported fixture path");
+  const options = {
+    agent: false,
+    rejectUnauthorized: true,
+    signal: AbortSignal.timeout(10_000),
+    headers: { accept: "text/html", "cache-control": "no-cache" },
+  };
   const response = await new Promise((resolve, reject) => {
-    const request = get(
-      `${origin}${path}`,
-      {
-        agent: false,
-        rejectUnauthorized: true,
-        signal: AbortSignal.timeout(10_000),
-        headers: { accept: "text/html", "cache-control": "no-cache" },
-      },
-      resolve,
-    );
-    request.on("error", reject);
+    get(`${origin}${path}`, options, resolve).on("error", reject);
   });
-
   try {
-    if (
-      response.statusCode !== 200 ||
-      !/^text\/html(?:\s*;|$)/i.test(response.headers["content-type"] ?? "")
-    ) {
+    const { headers, statusCode } = response;
+    if (statusCode !== 200 || !/^text\/html(?:\s*;|$)/i.test(headers["content-type"] ?? "")) {
       throw new Error("Expected a direct 200 HTML response from the synthetic target");
     }
     if (
-      response.headers["x-two-analytics-fixture"] !== "isolated-v1" ||
-      response.headers["x-two-analytics-jurisdiction"] !== jurisdiction ||
-      response.headers["set-cookie"] !== undefined
+      headers["x-two-analytics-fixture"] !== "isolated-v1" ||
+      headers["x-two-analytics-jurisdiction"] !== jurisdiction ||
+      headers["set-cookie"] !== undefined
     ) {
-      throw new Error(
-        "Missing isolation marker, mismatched edge jurisdiction or unexpected cookie",
-      );
+      throw new Error("Synthetic target response failed admission");
     }
     const chunks = [];
     let bytes = 0;
