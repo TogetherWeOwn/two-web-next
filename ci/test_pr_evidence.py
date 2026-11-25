@@ -18,7 +18,7 @@ class EvidenceTest(unittest.TestCase):
     def setUp(self):
         self.pr = deepcopy(FIXTURES["pull"])
         self.comments, self.timeline, self.runs, self.jobs, self.siblings = [], [], [], [], []
-        self.destinations, self.writes = [self.pr], []
+        self.writes = []
         self.reads = self.move_on_read = 0
         self.publish = partial(publish, self.api, self.pr["base"]["repo"]["full_name"], 42)
 
@@ -48,7 +48,7 @@ class EvidenceTest(unittest.TestCase):
         self.assertTrue(paginate)
         if path.startswith("/commits/"):
             self.assertRegex(path, rf"^/commits/({HEAD}|{NEXT})/pulls\?per_page=100$")
-            return [self.destinations]
+            return [[self.pr]]
         if path.startswith("/issues/42/"):
             return [self.comments if "comments?" in path else self.timeline]
         if path == "/pulls?state=all&head=contributor%3Atopic&per_page=100":
@@ -105,15 +105,20 @@ class EvidenceTest(unittest.TestCase):
 
     def test_completion_routes_only_to_open_exact_head_prs(self):
         head = self.pr["head"]
-        self.destinations += [self.pr, self.pr | {"number": 43, "state": "closed"},
-                              self.pr | {"number": 44, "head": head | {"sha": NEXT}},
-                              self.pr | {"number": 45, "head": head | {"repo": {"id": 3}}},
-                              self.pr | {"number": 46, "base": {"ref": "other"}}]
-        self.assertEqual(route(self.api, {"number": 42}), [42])
-        self.assertEqual(route(self.api, completion()), [42])
-        self.assertEqual(route(self.api, completion(event="pull_request_review")), [42])
+        rejected = [self.pr | {"number": 43, "state": "closed"},
+                    self.pr | {"number": 44, "head": head | {"sha": NEXT}},
+                    self.pr | {"number": 45, "head": head | {"repo": {"id": 3}}},
+                    self.pr | {"number": 46, "base": {"ref": "other"}}]
+
+        def api(method, path, *, paginate):
+            self.assertEqual((method, path, paginate), ("GET", f"/commits/{HEAD}/pulls?per_page=100", True))
+            return [rejected, [self.pr, self.pr]]
+
+        self.assertEqual(route(api, {"number": 42}), [42])
+        self.assertEqual(route(api, completion()), [42])
+        self.assertEqual(route(api, completion(event="pull_request_review")), [42])
         with self.assertRaisesRegex(ValueError, "Invalid workflow run head"):
-            route(self.api, completion(head_sha="bad"))
+            route(api, completion(head_sha="bad"))
 
     def test_ignored_events_and_direct_fallback_need_no_commit_lookup(self):
         def no_lookup(*args, **kwargs):
@@ -126,6 +131,10 @@ class EvidenceTest(unittest.TestCase):
                       completion(head_repository=None)):
             with self.subTest(event=event):
                 self.assertEqual(route(no_lookup, event), [])
+        for invalid_id in (0, -1, True, "2"):
+            with self.subTest(invalid_id=invalid_id):
+                with self.assertRaisesRegex(ValueError, "Invalid workflow run head repository"):
+                    route(no_lookup, completion(head_repository={"id": invalid_id}))
 
     def test_direct_then_completions_refresh_final_attempt_without_duplicate_writes(self):
         self.records(run_attempt=2, status="in_progress")
