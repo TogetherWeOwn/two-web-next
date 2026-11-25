@@ -1,7 +1,6 @@
 <script lang="ts">
 import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
-import Tag from "#lib/Tag.svelte";
 import { EXISTING_RESPONSES_TESTID, existingResponsesText } from "../../../src/islands/contracts";
 import type { EventGoneModel } from "../../../src/kit-event-states";
 
@@ -43,7 +42,7 @@ let { model }: { model: EventGoneModel } = $props();
       <section class="record" aria-labelledby="event-cancelled-record-heading" data-testid="event-cancelled-record">
         <div class="record-head">
           <h2 id="event-cancelled-record-heading">Cancelled</h2>
-          <Tag>Cancelled</Tag>
+          <span class="event-tag">Cancelled</span>
         </div>
         <p data-testid={EXISTING_RESPONSES_TESTID}>{existingResponsesText(model.existingResponses)}</p>
         {#if model.nextDate}
@@ -90,6 +89,24 @@ let { model }: { model: EventGoneModel } = $props();
 </Shell>
 
 <style>
+  .event-tag {
+    display: inline-flex;
+    align-items: center;
+    padding: var(--space-inset-tag-y) var(--space-inset-tag-x);
+    border-radius: var(--radius-s);
+    box-shadow: inset 0 0 0 1px var(--color-hair2);
+    color: var(--t2);
+    font-family: var(--font-data);
+    font-size: var(--text-label);
+    letter-spacing: var(--tracking-label);
+    line-height: 1;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  @media (forced-colors: active) {
+    .event-tag { outline: 1px solid CanvasText; outline-offset: -1px; }
+  }
+
   .event-head { grid-area: head; min-width: 0; }
   .event-rail { grid-area: rail; min-width: 0; display: grid; gap: var(--space-4); }
   .event-recovery { grid-area: recovery; min-width: 0; }

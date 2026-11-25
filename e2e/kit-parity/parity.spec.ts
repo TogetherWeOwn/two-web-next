@@ -1740,6 +1740,15 @@ for (const target of targets) {
   }
 }
 
+async function expectEventStylesheets(page: Page, status: 200 | 410) {
+  const assets = await page
+    .locator('link[rel="stylesheet"][href*="/_app/immutable/"]')
+    .evaluateAll((links) => links.map((link) => new URL((link as HTMLLinkElement).href).pathname));
+  expect(assets.length).toBeGreaterThan(0);
+  expect(assets.filter((path) => path.startsWith("/_app/immutable/assets/Tag."))).toEqual([]);
+  console.log(`Kit event ${status} immutable CSS: ${JSON.stringify(assets)}`);
+}
+
 test("Kit guest seat card keeps its no-JS action at desktop and mobile widths", async ({
   browser,
 }) => {
@@ -1755,6 +1764,7 @@ test("Kit guest seat card keeps its no-JS action at desktop and mobile widths", 
       const response = await page.goto(`${KIT_ORIGIN}${eventPath}`);
       expect(response?.status()).toBe(200);
       expect(response?.headers()["x-two-renderer"]).toBe("kit");
+      await expectEventStylesheets(page, 200);
       const card = page.getByTestId("kit-seat-card");
       await expect(card.getByRole("heading", { name: "Log in to RSVP" })).toBeVisible();
       await expect(card.getByRole("link", { name: "Log in with Discord" })).toHaveAttribute(
@@ -1939,7 +1949,10 @@ test("Kit member seat card captures open, saved and full states", async ({ brows
         }
         if (state.name === "open") {
           await expect(card.getByRole("heading", { name: "0 of 2 in" })).toBeVisible();
-          await expect(card.getByText("Sign-ups open")).toBeVisible();
+          const openTag = card.getByText("Sign-ups open", { exact: true });
+          await expect(openTag).toBeVisible();
+          await expect(openTag).toHaveCSS("display", "inline-flex");
+          await expect(openTag).toHaveCSS("text-transform", "uppercase");
           await expect(card.getByRole("button", { name: "I'm in" })).toBeVisible();
           await expect(card.getByRole("link", { name: "Add to calendar" })).toHaveAttribute(
             "href",
@@ -3022,6 +3035,10 @@ test("Kit saved live snapshot expires without changing the RSVP", async ({ brows
       const time = noJs.getByTestId("kit-event-time").locator('> .time-block[data-state="live"]');
       const seat = noJs.getByTestId("kit-seat-card");
       await expect(noJs.getByTestId("event-ongoing")).toHaveText("Live");
+      await expect(noJs.getByTestId("event-ongoing").locator("span")).toHaveCSS(
+        "display",
+        "inline-flex",
+      );
       await expect(time.locator("[data-live-fresh]:visible").last()).toHaveText("as of");
       await assertScheduledTime(noJs);
       await expect(seat.getByRole("heading", { name: "You're in." })).toBeVisible();
@@ -3068,6 +3085,7 @@ test("Kit saved live snapshot expires without changing the RSVP", async ({ brows
       if (viewport.width === 390) await assertMobileSeatOrder(page);
       await assertScheduledTime(page);
       await expect(time.getByText("Stale", { exact: true })).toBeInViewport();
+      await expect(time.getByText("Stale", { exact: true })).toHaveCSS("display", "inline-flex");
       await capture(page, `kit-review-event-stale-${viewport.width}`);
     }
     const refreshed = page.waitForResponse(
@@ -4013,6 +4031,11 @@ test("Kit cancelled event renders its record and next date without JavaScript", 
           await expect(alternatives.getByRole("link", { name: "Other event" })).toBeVisible();
           const next = page.getByRole("link", { name: "See the next date" });
           const record = page.getByTestId("event-cancelled-record");
+          const cancelledTag = record.locator("span", { hasText: /^Cancelled$/ });
+          // The inline-flex badge is a flex item, so its outer display is blockified.
+          await expect(cancelledTag).toHaveCSS("display", "flex");
+          await expect(cancelledTag).toHaveCSS("text-transform", "uppercase");
+          await expectEventStylesheets(page, 410);
           if (fallback) {
             await expect(next).toHaveCount(0);
             await expect(record.locator("time")).toHaveCount(0);
@@ -4049,6 +4072,10 @@ test("Kit cancelled event renders its record and next date without JavaScript", 
           const path = test.info().outputPath(`${name}.png`);
           await page.screenshot({ path, fullPage: true, animations: "disabled", caret: "hide" });
           await test.info().attach(name, { path, contentType: "image/png" });
+          await page.emulateMedia({ forcedColors: "active" });
+          await expect(cancelledTag).toHaveCSS("outline-style", "solid");
+          await expect(cancelledTag).toHaveCSS("outline-width", "1px");
+          await page.emulateMedia({ forcedColors: "none" });
         }
       } finally {
         await context.close();
