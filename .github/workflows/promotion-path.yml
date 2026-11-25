@@ -5,11 +5,17 @@ on:
     types: [opened, reopened, synchronize, edited]
 permissions: {}
 concurrency:
-  group: promotion-path-${{ github.event.pull_request.number }}
-  cancel-in-progress: false
+  group: promotion-path-refresh-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   label:
+    # Keep serializing against runs started by the previous workflow revision.
+    concurrency:
+      group: promotion-path-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    # Let the runner re-evaluate individual steps when the workflow is canceled.
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -27,7 +33,17 @@ jobs:
           node-version: "24"
           package-manager-cache: false
       - name: Classify current PR file metadata
-        timeout-minutes: 4 # 3-minute classification budget, then 15 seconds for cleanup
+        id: classify
+        timeout-minutes: 4 # 3-minute classification budget
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node ci/promotion-path.mjs
+        run: node ci/promotion-path.mjs classify
+      - name: Publish advisory labels and exact-ref verdict
+        # Finish any label writes and cleanup before releasing the per-PR lock.
+        # A canceled read-only classification has nothing to publish or clean up.
+        if: ${{ always() && (steps.classify.outcome == 'success' || steps.classify.outcome == 'failure') }}
+        timeout-minutes: 2 # 90-second publication budget, then 15 seconds for cleanup
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLASSIFICATION: ${{ steps.classify.outputs.classification }}
+        run: node ci/promotion-path.mjs publish

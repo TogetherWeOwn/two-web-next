@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { setImmediate } from "node:timers/promises";
-import { isPromotionPath, labelPromotionPath } from "./promotion-path.mjs";
+import { classifyPromotionPath, isPromotionPath, publishPromotionPath } from "./promotion-path.mjs";
 
 const pull = "/pulls/42";
 const issueLabels = "/issues/42/labels";
@@ -19,7 +20,7 @@ const docs = (length) => Array.from({ length }, (_, i) => file(`docs/${i}.md`));
 const ordinary = docs(101);
 
 function github(rows, options = {}) {
-  const labels = new Set(["unrelated", ...(options.labels ?? [])]);
+  const labels = options.labelState ?? new Set(["unrelated", ...(options.labels ?? [])]);
   const summary = [];
   const pages = [];
   const writes = [];
@@ -57,16 +58,21 @@ function github(rows, options = {}) {
     }
     if (method === "DELETE" && path.startsWith(`${issueLabels}/`)) {
       const deleted = labels.delete(decodeURIComponent(path.slice(issueLabels.length + 1)));
+      await options.after?.(method, path);
       return http(deleted ? 200 : 404);
     }
     if (method === "POST" && path === issueLabels) {
       for (const label of body.labels) labels.add(label);
+      await options.after?.(method, path);
       return http();
     }
     assert.fail(`Unexpected fixture request: ${method} ${path}`);
   };
-  const run = () => labelPromotionPath(api, 42, (entry) => summary.push(entry), options.signal);
-  return { labels, pages, writes, summary, run };
+  const classify = (signal) => classifyPromotionPath(api, 42, signal);
+  const publish = (classification, signal) =>
+    publishPromotionPath(api, 42, classification, (entry) => summary.push(entry), signal);
+  const run = async () => publish(await classify(options.signal));
+  return { labels, pages, writes, summary, classify, publish, run };
 }
 
 test("only promotion surfaces match, including directly called tooling", () => {
@@ -158,4 +164,99 @@ test("ref changes prevent publication, including same-SHA retarget and a race du
   await assert.rejects(moved.run(), /refs or file count changed/);
   assert.deepEqual([...moved.labels], ["unrelated"]);
   assert.ok(moved.summary[0].includes("verdict **unknown**"));
+});
+
+test("a PR event burst cancels superseded reads and drains in-flight label writes", async () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/promotion-path.yml", import.meta.url),
+    "utf8",
+  );
+  const cancelRunning = /^  cancel-in-progress: true$/m.test(workflow);
+  // Model Actions' per-group running slot and replaceable pending slot. Only
+  // the publication condition stays true when Actions re-evaluates steps.
+  const drainWrites =
+    workflow.includes("    if: ${{ always() }}\n") &&
+    workflow.includes(
+      "if: ${{ always() && (steps.classify.outcome == 'success' || steps.classify.outcome == 'failure') }}",
+    );
+  const newestHead = "c".repeat(40);
+  const newestBase = "d".repeat(40);
+  const newest = { head: { sha: newestHead }, base: { sha: newestBase, ref: "stable" } };
+
+  for (const point of ["read", "delete", "add"]) {
+    const reading = new AbortController();
+    const publishing = new AbortController();
+    const paused = Promise.withResolvers();
+    const resume = Promise.withResolvers();
+    let parked = false;
+    const pause = async () => {
+      if (parked) return;
+      parked = true;
+      paused.resolve();
+      await resume.promise;
+    };
+    let live = {};
+    const first = github(docs(1), {
+      labels: [yes],
+      revision: () => live,
+      async before(method, path) {
+        if (point === "read" && method === "GET" && path.startsWith(`${pull}/files?`))
+          await pause();
+      },
+      async after(method) {
+        if ((point === "delete" && method === "DELETE") || (point === "add" && method === "POST"))
+          await pause();
+      },
+    });
+    const oldRun = (async () => {
+      const classification = await first.classify(reading.signal);
+      if (reading.signal.aborted) return "cancelled";
+      await first.publish(classification, publishing.signal);
+      return "success";
+    })().catch((error) => error.message);
+
+    await Promise.race([paused.promise, oldRun]);
+    assert.ok(parked, `first run reached ${point}`);
+    assert.deepEqual(first.summary, [], `no verdict while paused at ${point}`);
+    if (point === "delete") assert.deepEqual([...first.labels], ["unrelated"]);
+    if (point === "add") assert.deepEqual([...first.labels], ["unrelated", no]);
+
+    // A base edit queues a run. A synchronize event replaces that pending run.
+    live = { base: { sha: base, ref: "stable" } };
+    let pending = github(docs(1), { labelState: first.labels, revision: () => live });
+    const edited = pending;
+    if (cancelRunning) {
+      reading.abort();
+      if (!drainWrites) publishing.abort();
+    }
+    live = newest;
+    pending = github([file(".github/workflows/ci.yml")], {
+      labelState: first.labels,
+      revision: () => live,
+    });
+    resume.resolve();
+
+    const oldConclusion = await oldRun;
+    if (point === "read") {
+      assert.equal(oldConclusion, "cancelled");
+      assert.deepEqual(first.writes, []);
+      assert.deepEqual(first.summary, []);
+    } else {
+      assert.match(oldConclusion, /refs or file count changed/);
+      assert.match(first.summary[0], /verdict \*\*unknown\*\*/);
+      assert.deepEqual([...first.labels], ["unrelated"]);
+    }
+    await pending.run();
+    assert.deepEqual(edited.pages, []);
+    assert.deepEqual([...pending.labels], ["unrelated", yes]);
+    assert.ok(
+      pending.summary[0].includes(
+        `head \`${newestHead}\` · base \`${newestBase}\` · verdict **yes**`,
+      ),
+    );
+  }
+  assert.match(
+    workflow,
+    /^      group: promotion-path-\$\{\{ github\.event\.pull_request\.number \}\}\n      cancel-in-progress: false$/m,
+  );
 });
