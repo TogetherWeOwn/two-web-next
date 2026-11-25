@@ -5,11 +5,8 @@ import { STAGING_APP_URL } from "../qa";
 import { crossOriginRefusal } from "../same-origin";
 import { adminGuard } from "./guard";
 import type { QueuePreviewVars } from "./queue-preview";
-import {
-  QUEUE_REDISPATCH_PATH,
-  queueRedispatchAction,
-  queueRedispatchAdmission,
-} from "./queue-redispatch";
+import { QUEUE_REDISPATCH_PATH, queueRedispatchAdmission } from "./queue-redispatch";
+import { queueRedispatchAction } from "./routes";
 
 const path = `/admin${QUEUE_REDISPATCH_PATH}`;
 const routes = [

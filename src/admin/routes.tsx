@@ -37,7 +37,11 @@ import { requestBodyLimit } from "../body-limit";
 import { Hono } from "hono";
 import type { Context, MiddlewareHandler } from "hono";
 import { queuePreviewAdmission, queuePreviewHandler, type QueuePreviewVars } from "./queue-preview";
-import { QUEUE_REDISPATCH_PATH, queueRedispatchAction } from "./queue-redispatch";
+import {
+  QUEUE_REDISPATCH_PATH,
+  queueRedispatchHandler,
+  queueRedispatchPreThrottleRefusal,
+} from "./queue-redispatch";
 import {
   SOURCE_EVIDENCE_REFUSED_METHODS,
   sourceEvidenceBodyLimit,
@@ -300,6 +304,15 @@ function refusedFeaturedSave(
     />,
   );
 }
+
+// Both owners install this chain after staging and moderator admission. The
+// cap and I/O-free refusals precede the shared admin-write throttle.
+export const queueRedispatchAction = [
+  requestBodyLimit("action"),
+  queueRedispatchPreThrottleRefusal,
+  throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
+  queueRedispatchHandler,
+] as const;
 
 /**
  * Optional overrides (tests only — production resolves through the seams).

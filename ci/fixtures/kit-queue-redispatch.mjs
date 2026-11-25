@@ -128,8 +128,12 @@ export async function assertKitQueueRedispatchServing({ worker, scratch, databas
         returning *`;
       return row;
     }
-    const queue = () => sql`select job_id, kind, key from queue_jobs order by job_id`;
-    const locks = () => sql`select key, owner_token from job_unique_locks order by key`;
+    const queue = async () => [
+      ...(await sql`select job_id, kind, key from queue_jobs order by job_id`),
+    ];
+    const locks = async () => [
+      ...(await sql`select key, owner_token from job_unique_locks order by key`),
+    ];
     const receipts = () => sql`select log_name, description, subject_type, subject_id,
       causer_type, causer_id, event, properties from activity_log
       where causer_id = ${operatorId} order by id`;
@@ -141,7 +145,7 @@ export async function assertKitQueueRedispatchServing({ worker, scratch, databas
       const [source] = await sql`insert into events
         (event_key, title, starts_at, ends_at, status, discord_event_id, sync_revision, synced_revision)
         values (${eventKey}, 'Redispatch fixture', now(), now() + interval '1 hour',
-          'published', 'mapped', 2, 1)
+          'published', ${`redispatch-fixture-${eventKey}`}, 2, 1)
         returning *`;
       const dead = await deadRow(eventKey);
       const missingSource = await deadRow(`01${randomBytes(12).toString("hex").toUpperCase()}`);
@@ -300,11 +304,13 @@ export async function assertKitQueueRedispatchServing({ worker, scratch, databas
         leases.find((row) => row.key === ledgerKey),
         { key: ledgerKey, owner_token: leaseToken },
       );
-      assert.deepEqual(await sql`select * from events where event_key = ${eventKey}`, [source]);
-      assert.deepEqual(await sql`select * from queue_failed_jobs where id = ${dead.id}`, [dead]);
-      assert.deepEqual(await sql`select * from queue_failed_jobs where id = ${missingSource.id}`, [
-        missingSource,
-      ]);
+      const [storedSource] = await sql`select * from events where event_key = ${eventKey}`;
+      const [storedDead] = await sql`select * from queue_failed_jobs where id = ${dead.id}`;
+      const [storedRefusal] =
+        await sql`select * from queue_failed_jobs where id = ${missingSource.id}`;
+      assert.deepEqual(storedSource, source);
+      assert.deepEqual(storedDead, dead);
+      assert.deepEqual(storedRefusal, missingSource);
       console.log(
         `PASS installed Worker queue redispatch ${owner} ownership, zero denied sends, one audited stub intent`,
       );
