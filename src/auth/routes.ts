@@ -350,6 +350,10 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     return recoveryLanding(c);
   });
 
+  registerQaAuthRoute(app, hooks);
+}
+
+export function registerQaAuthRoute(app: Hono<{ Bindings: Env }>, hooks: AuthHooks) {
   // Staging-only QA seam. 404 everywhere that is not the staging host with
   // QA_AUTH_TOKEN set. Unknown identity and bad token are byte-identical 404s.
   app.post(

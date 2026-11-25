@@ -44,7 +44,7 @@ import {
 export function registerJoinCallbackRoutes(
   app: Hono<{ Bindings: Env }>,
   hooks: JoinSessionHooks,
-  render: JoinRender,
+  recovery: JoinRender["recovery"],
 ) {
   app.get("/join/callback", async (c) => {
     // Inbound length bound, decided before the shared join throttle spend:
@@ -118,11 +118,7 @@ export function registerJoinCallbackRoutes(
             ? `/join/discord?source=${encodeURIComponent(source)}`
             : "/join/discord";
     const recover = (title: string, message: string, status: 200 | 503 = 200) =>
-      render.recovery(
-        c,
-        { title, message, retryUrl, retryLabel: "Try again", inviteUrl: invite },
-        status,
-      );
+      recovery(c, { title, message, retryUrl, retryLabel: "Try again", inviteUrl: invite }, status);
 
     const rawExpected = await getSignedCookie(c, c.env.SESSION_SECRET, JOIN_STATE_COOKIE);
     const expected = typeof rawExpected === "string" ? rawExpected : null;

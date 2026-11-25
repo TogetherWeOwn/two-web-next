@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { chromium } from "@playwright/test";
+import { PRODUCTION_APEX } from "../../src/http/robots.ts";
 import { signedCookieHeader, verifySignedCookie } from "../../src/http/signed-cookie.ts";
 import { OAUTH_CODE_STATE_MAX_LENGTH } from "../../src/oauth-code-state-length.ts";
+import { QA_HEADER, STAGING_APP_URL } from "../../src/qa.ts";
 import { SESSION_COOKIE } from "../../src/session-cookie.ts";
 
 const statusName = "__Host-two_session_status";
@@ -9,6 +11,12 @@ const nextName = "__Host-two_login_next";
 const expiredName = "__Host-two_expired_write";
 const stateName = "__Host-two_oauth_state";
 const callback = "/auth/discord/callback";
+const joinStart = "/join/discord";
+const joinCallback = "/join/callback";
+const joinStateName = "__Host-two_join_state";
+const joinSourceName = "__Host-two_join_source";
+const joinNextName = "__Host-two_join_next";
+const joinQuery = "next=%2Fevents&source=fixture";
 const ray = "0123456789abcdef-LHR";
 const cookiePair = (line) => line.split(";", 1)[0];
 
@@ -37,17 +45,18 @@ async function assertNoJavaScript(origin) {
     // Playwright routes only the first request in a redirect chain. Fetch
     // the real login start without following its outbound Location.
     await context.route(
-      (url) => url.origin === origin && url.pathname === "/auth/discord",
+      (url) => url.origin === origin && ["/auth/discord", joinStart].includes(url.pathname),
       async (route) => {
+        const joining = new URL(route.request().url()).pathname === joinStart;
         const response = await route.fetch({ maxRedirects: 0 });
         assert.equal(response.status(), 302);
         const headers = response.headers();
         const url = new URL(headers.location);
         assert.equal(url.origin + url.pathname, "https://discord.com/oauth2/authorize");
         const redirect = new URL(url.searchParams.get("redirect_uri"));
-        assert.equal(redirect.href, origin + callback);
+        assert.equal(redirect.href, origin + (joining ? joinCallback : callback));
         redirect.search = new URLSearchParams({
-          code: "fixture-code",
+          ...(joining ? { error: "access_denied" } : { code: "fixture-code" }),
           state: url.searchParams.get("state"),
         });
         await route.fulfill({ response, headers: { ...headers, location: redirect.href } });
@@ -65,6 +74,15 @@ async function assertNoJavaScript(origin) {
     assert.equal(response.status(), 303);
     assert.equal(response.headers()["x-two-renderer"], "kit");
     await page.getByTestId("signin").waitFor();
+    await page.goto(`${origin}/join?${joinQuery}`);
+    const recovered = page.waitForResponse((r) => new URL(r.url()).pathname === joinCallback);
+    await page.getByTestId("join-oneclick").click();
+    assert.equal((await recovered).headers()["x-two-renderer"], "kit");
+    assert.equal(
+      await page.getByTestId("recovery-retry").getAttribute("href"),
+      `${joinStart}?${joinQuery}`,
+    );
+    await page.getByTestId("recovery-invite").waitFor();
   } finally {
     await browser.close();
   }
@@ -118,8 +136,6 @@ export async function assertAuthParity(origin, secret, browser) {
     ["GET", "/auth/%73tatus"],
     ["GET", "/auth/status/__data.json"],
     ["POST", "/auth/status"],
-    ["POST", "/auth/qa/unknown"],
-    ["GET", "/join/callback"],
   ]) {
     const init = { method, headers: { origin } };
     const direct = await request(path, { ...init, flag: "false" });
@@ -240,7 +256,9 @@ export async function assertAuthParity(origin, secret, browser) {
   await status(other, true);
   if (browser) {
     await assertNoJavaScript(origin);
-    console.log("PASS Kit auth native sign-in and sign-out with JavaScript disabled");
+    console.log(
+      "PASS Kit auth native sign-in, sign-out and Join recovery with JavaScript disabled",
+    );
   }
 
   const spent = await post("/logout", {
@@ -253,7 +271,191 @@ export async function assertAuthParity(origin, secret, browser) {
   assert.equal(limited.headers.get("retry-after"), "30");
   assert.equal(limited.headers.has("set-cookie"), false);
   assert.deepEqual(await limited.json(), await spent.json());
+  await assertJoinParity(origin, secret, request, hits, location);
+  await assertQaParity(request, post, hits);
   console.log(
     "PASS Kit auth ownership, OAuth handoff and replay, session status and logout refusals",
   );
+}
+
+async function assertJoinParity(origin, secret, request, hits, location) {
+  const overlong = "x".repeat(OAUTH_CODE_STATE_MAX_LENGTH + 1);
+  for (const [method, path] of [
+    ["POST", joinStart],
+    ["GET", `${joinCallback}/?code=${overlong}`],
+    ["GET", `/join/%63allback?code=${overlong}`],
+    ["GET", `${joinCallback}/__data.json`],
+  ]) {
+    const init = { method, headers: { origin } };
+    const hono = await request(path, { ...init, flag: "false" });
+    const enabled = await request(path, init);
+    owns(enabled, hono.status, false);
+    assert.equal(location(enabled)?.split("?")[0], location(hono)?.split("?")[0]);
+    assert.equal(enabled.headers.has("set-cookie"), false);
+  }
+  const production = await request(`${joinCallback}?code=${overlong}`, {
+    flag: "unset",
+    headers: { "x-fixture-auth-app": "production" },
+  });
+  owns(production, 200, false);
+  assert.equal(production.headers.has("set-cookie"), false);
+  for (const flag of ["unset", "true"]) {
+    const document = await request(`/join?${joinQuery}`, { flag });
+    owns(document, 200, true);
+    assert.match(await document.text(), /data-testid="join-oneclick"/);
+  }
+  const foreign = await request(joinStart, { headers: { "x-fixture-foreign-host": "1" } });
+  owns(foreign, 404, false);
+  assert.equal(foreign.headers.has("set-cookie"), false);
+  const head = await request(joinCallback, { method: "HEAD" });
+  owns(head, 200, true);
+  assert.equal(await head.text(), "");
+  assert.equal(head.headers.has("set-cookie"), false);
+
+  let last;
+  for (const flag of ["unset", "true"]) {
+    const start = await request(`${joinStart}?${joinQuery}`, { flag });
+    owns(start, 302, flag === "true");
+    assert.equal(start.headers.get("cache-control"), "no-store, private");
+    const authorize = new URL(location(start));
+    assert.equal(authorize.origin + authorize.pathname, "https://discord.com/oauth2/authorize");
+    assert.equal(authorize.searchParams.get("redirect_uri"), origin + joinCallback);
+    assert.equal(authorize.searchParams.get("scope"), "identify guilds.join");
+    const state = authorize.searchParams.get("state");
+    const values = [
+      [joinStateName, state],
+      [joinNextName, "/events"],
+      [joinSourceName, "fixture"],
+    ];
+    const jar = [];
+    for (const [name, value] of values) {
+      const pair = cookie(start, name, 600);
+      assert.equal(await verifySignedCookie(pair.slice(name.length + 1), secret), value);
+      jar.push(pair);
+    }
+    const cookies = jar.join("; ");
+    const callbackUrl = `${joinCallback}?${new URLSearchParams({ state, code: "fixture-code" })}`;
+    const oversized = await request(
+      `${joinCallback}?${new URLSearchParams({
+        state,
+        code: overlong,
+      })}`,
+      { cookies },
+    );
+    owns(oversized, 200, true);
+    assert.equal(oversized.headers.has("set-cookie"), false);
+    assert.equal(hits(oversized, "join"), hits(start, "join"));
+    assert.match(await oversized.text(), /Join link expired/);
+    const response = await request(callbackUrl, {
+      flag: flag === "true" ? "false" : "true",
+      cookies,
+    });
+    owns(response, 302, flag !== "true");
+    assert.equal(location(response), "/events");
+    assert.equal(hits(response, "join"), hits(start, "join") + 1);
+    for (const [name] of values) cookie(response, name, 0);
+    cookie(response, SESSION_COOKIE, 7200);
+    cookie(response, statusName, 7200);
+    cookie(response, "__Host-two_join_result", 600);
+    assert.equal(
+      Number(response.headers.get("x-fixture-exchanges")),
+      Number(start.headers.get("x-fixture-exchanges")) + 1,
+    );
+    assert.equal(
+      Number(response.headers.get("x-fixture-join-attempts")),
+      Number(start.headers.get("x-fixture-join-attempts")) + 1,
+    );
+    last = { callbackUrl, cookies, response };
+  }
+  const replay = await request(last.callbackUrl, { cookies: last.cookies });
+  owns(replay, 200, true);
+  assert.equal(replay.headers.get("cache-control"), "no-store, private");
+  assert.equal(replay.headers.has("set-cookie"), false);
+  assert.equal(
+    replay.headers.get("x-fixture-exchanges"),
+    last.response.headers.get("x-fixture-exchanges"),
+  );
+  assert.equal(
+    replay.headers.get("x-fixture-join-attempts"),
+    last.response.headers.get("x-fixture-join-attempts"),
+  );
+  assert.match(await replay.text(), /data-testid="recovery-retry"/);
+  console.log("PASS Kit Join OAuth ownership, signed cookies, cross-owner handoff and replay");
+}
+
+async function assertQaParity(request, post, hits) {
+  const qa = "/auth/qa/qa-member";
+  const credential = "synthetic-qa-proof".repeat(2);
+  const qaHeaders = {
+    origin: STAGING_APP_URL,
+    "x-fixture-auth-app": "staging",
+    "x-fixture-qa-config": credential,
+    [QA_HEADER]: credential,
+  };
+  const unknown = await post("/auth/qa/unknown", { headers: qaHeaders });
+  owns(unknown, 404, true);
+  const refusal = await unknown.text();
+  for (const [flag, headers, status, kit] of [
+    ["true", { [QA_HEADER]: "wrong" }, 404, true],
+    ["true", { [QA_HEADER]: "" }, 404, true],
+    ["true", { "x-fixture-qa-config": "" }, 404, true],
+    ["false", { [QA_HEADER]: "wrong" }, 404, false],
+    [
+      "true",
+      { "x-fixture-auth-app": "production", origin: `https://${PRODUCTION_APEX}` },
+      404,
+      false,
+    ],
+    ["true", { "x-fixture-foreign-host": "1" }, 404, false],
+    [
+      "true",
+      { origin: "https://foreign.example.test", "sec-fetch-site": "same-origin" },
+      403,
+      true,
+    ],
+  ]) {
+    const response = await post(qa, { flag, headers: { ...qaHeaders, ...headers } });
+    owns(response, status, kit);
+    if (status === 404) assert.equal(await response.text(), refusal);
+    assert.equal(response.headers.has("set-cookie"), false);
+    assert.equal(response.headers.has("x-fixture-issued"), false);
+    assert.equal(hits(response, "qa-login"), 0);
+  }
+  for (const [method, path] of [
+    ["GET", qa],
+    ["HEAD", qa],
+    ["POST", `${qa}/`],
+    ["POST", `${qa}/__data.json`],
+    ["POST", "/auth/qa/%71a-member"],
+  ]) {
+    const headers = { ...qaHeaders, [QA_HEADER]: "wrong" };
+    const direct = await request(path, { method, headers, flag: "unset" });
+    const enabled = await request(path, { method, headers });
+    owns(enabled, direct.status, false);
+    assert.equal(enabled.headers.has("set-cookie"), false);
+    assert.equal(hits(enabled, "qa-login"), 0);
+  }
+  const oversized = await post(qa, { headers: qaHeaders, body: "x".repeat(4097) });
+  owns(oversized, 413, true);
+  assert.equal(hits(oversized, "qa-login"), 0);
+  assert.equal(oversized.headers.has("set-cookie"), false);
+  for (const [path, flag, issued, count] of [
+    [qa, "unset", "900000000000001396:true:false", 1],
+    ["/auth/qa/qa-moderator", "true", "900000000000001397:true:true", 2],
+  ]) {
+    const response = await post(path, { flag, headers: qaHeaders });
+    owns(response, 204, flag === "true");
+    assert.equal(response.headers.get("x-fixture-issued"), issued);
+    assert.equal(hits(response, "qa-login"), count);
+    const bearer = cookie(response, SESSION_COOKIE, 7200);
+    cookie(response, statusName, 7200);
+    assert.equal(await response.text(), "");
+    const status = await request("/auth/status", {
+      cookies: bearer,
+      flag: "false",
+      headers: qaHeaders,
+    });
+    assert.deepEqual(await status.json(), { authenticated: true });
+  }
+  console.log("PASS Kit staging QA ownership, guarded session issuance and production refusal");
 }

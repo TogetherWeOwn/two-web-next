@@ -54,8 +54,8 @@ export const PARITY_ROUTES = [
     cachePattern: /^public, max-age=(?:[1-9]|[1-5]\d|60)$/,
     compareSection: null,
   },
-  // GET /join only: /join/discord + /join/callback stay Hono-owned, so the
-  // funnel keeps one OAuth authority. No byte section compare: the widget
+  // GET /join only. The installed auth fixture covers the OAuth endpoints.
+  // No byte section compare: the widget
   // zone is environment-dependent (the guild id — and therefore facade vs
   // presence vs fallback — differs per worker), so preview proves the
   // structural contract on both sides instead of equal bytes.

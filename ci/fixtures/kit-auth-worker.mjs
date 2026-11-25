@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { withEnv } from "cloudflare:workers";
 import { signedCookieHeader } from "../../src/http/signed-cookie.ts";
+import { PRODUCTION_APEX } from "../../src/http/robots.ts";
+import { STAGING_APP_URL } from "../../src/qa.ts";
 import { SESSION_COOKIE } from "../../src/session-cookie.ts";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../../src/sessions.ts";
 import { withThrottleTx } from "../../test/helpers/throttle-tx-double.ts";
@@ -14,11 +16,13 @@ export function authFixtureWorker(inner) {
   const store = createMemorySessionStore();
   const hits = new Map();
   let exchanges = 0;
+  let joinAttempts = 0;
   const sql = withThrottleTx(async (strings, bucket) => {
     const query = strings.join("?");
     if (query.includes("SELECT count(*)")) return [{ n: hits.get(bucket) ?? 0, wait: 30 }];
     if (query.includes("INSERT INTO web_throttle_hits"))
       hits.set(bucket, (hits.get(bucket) ?? 0) + 1);
+    if (query.includes("INSERT INTO join_attempts")) joinAttempts++;
     return [];
   });
   globalThis.fetch = async (input, init) => {
@@ -40,6 +44,8 @@ export function authFixtureWorker(inner) {
     }
     if (request.method === "PUT" && url.pathname.endsWith(`/members/${member}`))
       return new Response(null, { status: 204 });
+    if (request.method === "GET" && url.pathname.endsWith("/widget.json"))
+      return new Response(null, { status: 404 });
     throw new Error("Unexpected outbound auth fixture request");
   };
 
@@ -66,6 +72,18 @@ export function authFixtureWorker(inner) {
         return Response.json(cookies);
       }
       const flag = incoming.headers.get("x-fixture-auth-flag") ?? "true";
+      // Loopback transport with a synthetic HTTPS URL at the Worker boundary.
+      const target = incoming.headers.get("x-fixture-auth-app");
+      const appUrl =
+        target === "staging"
+          ? STAGING_APP_URL
+          : target === "production"
+            ? `https://${PRODUCTION_APEX}`
+            : env.APP_URL;
+      const canonical = new URL(appUrl);
+      url.protocol = canonical.protocol;
+      url.host = canonical.host;
+      url.port = canonical.port;
       if (incoming.headers.has("x-fixture-foreign-host")) url.hostname = "foreign.example.test";
       const request = new Request(url, incoming);
       request.headers.set("host", url.host);
@@ -74,20 +92,33 @@ export function authFixtureWorker(inner) {
       const unavailable = async () => {
         throw new Error("Synthetic revocation outage");
       };
+      let issued;
       const bindings = {
         ...env,
+        APP_URL: appUrl,
         DATABASE_URL: undefined,
+        QA_AUTH_TOKEN: incoming.headers.get("x-fixture-qa-config") ?? undefined,
         KIT_ROUTE_AUTH: flag === "unset" ? undefined : flag,
         THROTTLE_STORE: async () => sql,
-        SESSION_STORE: request.headers.has("x-fixture-revoke-outage")
-          ? { ...store, revokeUserSessions: unavailable }
-          : store,
+        JOIN_DEPS: { store: async () => sql },
+        SESSION_STORE: {
+          ...store,
+          revokeUserSessions: request.headers.has("x-fixture-revoke-outage")
+            ? unavailable
+            : store.revokeUserSessions,
+          async create(row) {
+            await store.create(row);
+            issued = `${row.userId}:${row.member}:${row.moderator}`;
+          },
+        },
         DISCORD_EVENTS: { upcoming: async () => [] },
       };
       const response = await withEnv(bindings, () => inner.fetch(request, bindings, ctx));
       const headers = new Headers(response.headers);
       headers.set("x-fixture-exchanges", String(exchanges));
-      for (const bucket of ["login-callback", "events-read", "logout"])
+      headers.set("x-fixture-join-attempts", String(joinAttempts));
+      if (issued) headers.set("x-fixture-issued", issued);
+      for (const bucket of ["login-callback", "events-read", "logout", "join", "qa-login"])
         headers.set(`x-fixture-${bucket}-hits`, String(hits.get(`${bucket}:${ip}`) ?? 0));
       return new Response(response.body, {
         status: response.status,

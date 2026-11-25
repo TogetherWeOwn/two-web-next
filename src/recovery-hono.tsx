@@ -6,8 +6,11 @@
 // The bytes, statuses, headers and cookie writes are unchanged — only who
 // renders the bytes changes. A Svelte SSR adapter consumes the same model
 // (web/src/lib/Recovery.svelte); only the injected renderer differs.
-import type { RecoveryModel } from "./recovery-outcome";
+import { renderHtmlOutcome } from "./html-outcome";
+import type { JoinRender } from "./join/route-shared";
 import { Recovery } from "./pages";
+import { type RecoveryModel, recoveryOutcome } from "./recovery-outcome";
+import { safeRequestId } from "./request-log";
 
 /** Render one recovery model to Hono JSX bytes (buffered by the caller). */
 export const honoRecoveryRenderer = (model: RecoveryModel) => (
@@ -20,3 +23,13 @@ export const honoRecoveryRenderer = (model: RecoveryModel) => (
     supportReference={model.supportReference}
   />
 );
+
+export const renderJoinRecovery: JoinRender["recovery"] = (c, props, status = 200) =>
+  renderHtmlOutcome(
+    c,
+    recoveryOutcome(
+      { ...props, supportReference: safeRequestId(c.get("requestId")) },
+      honoRecoveryRenderer,
+      { status },
+    ),
+  );
