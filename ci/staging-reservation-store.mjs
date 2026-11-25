@@ -14,6 +14,8 @@ const MAX_RECORD_LENGTH = 256;
  * absence. Failed reads and uncertain commits must reject. Every writer must
  * use the same transaction boundary.
  *
+ * After an uncertain commit, read the slot again to reconcile the attempted
+ * change before retrying. A corrupt record requires authorized backend recovery.
  * Authorization, expiry and staging admission belong to the caller. Issuance
  * must not reuse a lease identity, even when the previous record is absent.
  */

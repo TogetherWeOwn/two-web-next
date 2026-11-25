@@ -118,12 +118,29 @@ test("staging reservation store refuses failed and corrupt reads", async () => {
   await assert.rejects(adapter(unavailable).compareAndSwapLease(null, lease), readError);
   assert.deepEqual(unavailable.mutations, []);
 
-  for (const value of [false, "{", "null", "x".repeat(257)]) {
+  for (const value of [false, "", "{", "null"]) {
     const corrupt = backingStore({ value });
     await assert.rejects(adapter(corrupt).readLease(), /invalid/i);
     await assert.rejects(adapter(corrupt).compareAndSwapLease(null, lease), /invalid/i);
     assert.deepEqual(corrupt.mutations, []);
   }
+});
+
+test("staging reservation store enforces the size bound on reads and writes", async () => {
+  // Widen the fixture SHA to exercise the adapter limit independently of the parser.
+  const padding = "a".repeat(256 - JSON.stringify(lease).length);
+  const atLimit = { ...lease, sha: lease.sha + padding };
+  const overLimit = { ...atLimit, sha: `${atLimit.sha}a` };
+  const store = backingStore();
+  const reservations = adapter(store);
+  await assert.rejects(reservations.compareAndSwapLease(null, overLimit), /too large/);
+  assert.deepEqual(store.mutations, []);
+  assert.equal(await reservations.compareAndSwapLease(null, atLimit), true);
+  assert.equal(store.mutations[0].length, 256);
+  assert.deepEqual(await reservations.readLease(), atLimit);
+
+  const oversized = adapter(backingStore({ value: JSON.stringify(overLimit) }));
+  await assert.rejects(oversized.readLease(), /invalid stored staging reservation/i);
 });
 
 test("staging reservation store propagates an uncertain commit and supports readback", async () => {
