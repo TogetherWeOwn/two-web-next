@@ -339,11 +339,15 @@ without running the Kit browser-session bridge.
 - Preserve the shared 32 KiB POST cap for both advertised and actual streamed
   bytes before parsing, budget charges or side effects. Keep 413 on overflow
   and 400 on a failed upload read. MCP spends the shared public-read budget
-  once before JSON parsing and batch rejection. Ingress bounds the upload
-  before its own admission. Preserve statuses, media types, cache policy,
-  `Retry-After` and correlation IDs, including MCP's JSON-RPC and SSE responses
-  and ingress's JSON refusal envelope. See the [shared bounds](../src/http/body-limit.ts)
-  and [machine error contracts](machine-errors.md).
+  once before JSON parsing and batch rejection. MCP upload refusals use
+  JSON-RPC. Ingress upload refusals occur before ingress admission and use the
+  generic API JSON shapes, `{ error: "bad_request", message }` for 400 and
+  `{ reason: "payload_too_large", message, request_id }` for 413. Admitted
+  requests keep their route-native responses, including MCP SSE and the agent
+  ingress JSON refusal envelope. Preserve media types, cache policy,
+  `Retry-After` and correlation IDs for each branch. See the
+  [upload response builders](../src/error-responses.tsx) and
+  [machine error contracts](machine-errors.md).
 - Correlate diagnostics by registered route, method, status, validated or minted
   request ID and sanitized error class. Preserve the ingress shield's bounded
   counters and keep ordinary client refusals out of paging. Exclude bearer
@@ -368,14 +372,17 @@ refusal and replay. The installed Kit Worker fixtures exercise Hono-owned
 machine routes at this baseline. The [streaming fixture](../ci/fixtures/kit-machine-parity.mjs)
 checks synthetic ingress JSON, one complete MCP SSE frame through EOF, and
 reader cancellation. The [disconnect fixture](../ci/fixtures/kit-machine-disconnect.mjs)
-resets a real loopback socket during a held read and observes incoming abort,
-read settlement and `waitUntil` cleanup.
+resets a real loopback socket during a held read. The fixture wrapper listens
+to `request.signal` directly and observes incoming abort, fake-read settlement
+and the wrapper's `waitUntil` cleanup.
 
 Each follow-on must extend installed-Worker evidence on its exact head. Check
 unset, off and on settings, Hono fallback for unlisted pairs, unchanged
 admission and error branches, MCP stream and disconnect cleanup, and ingress
-refusal and replay across ownership changes. Use synthetic credentials and
-rows, intercept outbound fetch and queue calls, and assert zero real sends.
+refusal and replay across ownership changes. Prove downstream abort through
+the MCP handler by having a held operation observe the signal it receives from
+the handler. Use synthetic credentials and rows, intercept outbound fetch and
+queue calls, and assert zero real sends.
 Keep transport and ingress fixture results independently attributable.
 
 Before shared-dispatch integration or a production family flip, refresh and
