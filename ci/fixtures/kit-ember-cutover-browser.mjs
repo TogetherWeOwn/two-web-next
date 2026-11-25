@@ -138,12 +138,13 @@ async function follow(page, link, path, renderer) {
   return response;
 }
 
-async function assertEventsAudience(page, response, signedIn) {
+async function assertEventsAudience(page, response, renderer, signedIn = false) {
   const cache = await response.headerValue("cache-control");
-  if (signedIn) {
-    assert.equal(cache, "private, no-store");
-  } else {
-    assert.match(cache ?? "", /^public, max-age=(?:[1-9]|[1-5]\d|60)$/);
+  // The Ember rollout prevents browser caching even for guests so an undo
+  // reaches the Worker. Flag-off Hono retains its public guest policy.
+  if (renderer === "kit" || signedIn) assert.equal(cache, "private, no-store");
+  else assert.match(cache ?? "", /^public, max-age=(?:[1-9]|[1-5]\d|60)$/);
+  if (!signedIn) {
     assert.equal(await response.headerValue("set-cookie"), null, "guest Events sets no cookie");
     assert.ok(!(await response.text()).includes(viewer), "guest Events does not expose the viewer");
   }
@@ -175,7 +176,7 @@ async function guestJourney(page, renderer) {
   await expect(page.locator("h1#home-heading")).toBeVisible();
   const events = await openEvents(page, renderer);
   await expect(page.locator("h1#events-heading")).toBeVisible();
-  await assertEventsAudience(page, events, false);
+  await assertEventsAudience(page, events, renderer);
   await follow(
     page,
     page.locator(".schedule-heading").getByRole("link", { name: "Join the Discord", exact: true }),
@@ -216,13 +217,12 @@ export async function verifyEmberCutoverJourney({
       // fixture document and asset GETs and rejects CONNECT.
       proxy: { server: proxy.origin, bypass: "<-loopback>" },
     });
-    const options = {
+    const context = await browser.newContext({
       baseURL: proxy.origin,
       javaScriptEnabled: false,
       serviceWorkers: "block",
       viewport: { width: 1280, height: 800 },
-    };
-    const context = await browser.newContext(options);
+    });
     context.setDefaultTimeout(10_000);
 
     const page = await context.newPage();
@@ -230,10 +230,9 @@ export async function verifyEmberCutoverJourney({
     console.log(
       "PASS installed Ember browser: Home to Events to Join and frozen directory recovery",
     );
-    const warmReads = proxy.eventReads;
-    assert.equal(warmReads, 1, "guest Events reached the installed Worker once");
-    await assertEventsAudience(page, await openEvents(page, "kit"), false);
-    assert.equal(proxy.eventReads, warmReads, "Chromium reused the cached guest Events document");
+    assert.equal(proxy.eventReads, 1, "guest Events reached the installed Worker once");
+    await assertEventsAudience(page, await openEvents(page, "kit"), "kit");
+    assert.equal(proxy.eventReads, 2, "Chromium fetched the private Ember guest document again");
     await page.goto("/");
 
     // A signed-in non-member exposes a synthetic account label on both
@@ -252,23 +251,37 @@ export async function verifyEmberCutoverJourney({
       },
     ]);
     const signedKit = await openEvents(page, "kit");
-    await assertEventsAudience(page, signedKit, true);
-    assert.equal(proxy.eventReads, warmReads + 1, "session bypassed Chromium's guest cache");
+    await assertEventsAudience(page, signedKit, "kit", true);
 
     proxy.switchBackend(fallbackOrigin);
     const signedHono = await page.reload();
     await assertDocument(page, signedHono, "/events", null);
-    await assertEventsAudience(page, signedHono, true);
-    assert.equal(proxy.eventReads, warmReads + 2, "signed-in refresh reached Hono");
-    await context.close();
-    // A still-fresh public Kit document is eligible for reuse. A fresh guest
-    // context proves the Hono documents independently of that cached entry.
-    const guest = await browser.newContext(options);
-    guest.setDefaultTimeout(10_000);
-    await guestJourney(await guest.newPage(), null);
+    await assertEventsAudience(page, signedHono, null, true);
+    const currentSession = (await context.cookies(proxy.origin)).find(
+      ({ name }) => name === SESSION_COOKIE,
+    );
+    assert.ok(currentSession, "synthetic browser session survives fallback");
+    await context.clearCookies();
+    await guestJourney(page, null);
     console.log("PASS flag-off Hono browser fallback: same links and frozen directory recovery");
+
+    const warmReads = proxy.eventReads;
+    await assertEventsAudience(page, await openEvents(page, null), null);
+    assert.equal(
+      proxy.eventReads,
+      warmReads,
+      "Chromium reused Hono's public guest Events document",
+    );
+    await page.goto("/");
+    await context.addCookies([currentSession]);
+    await assertEventsAudience(page, await openEvents(page, null), null, true);
+    assert.equal(
+      proxy.eventReads,
+      warmReads + 1,
+      "the synthetic session bypassed Hono's guest cache",
+    );
     console.log(
-      "PASS cutover Events cache boundary: Chromium reused guest HTML; a session bypassed it and stayed private across fallback",
+      "PASS cutover Events cache boundary: Ember stayed private; Hono reused guest HTML and bypassed it for the synthetic session",
     );
   } finally {
     try {
