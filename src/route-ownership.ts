@@ -49,6 +49,8 @@ import {
   admitsKitAdmin,
   kitAdminAdmission,
   KIT_ADMIN_OPS_ROUTES,
+  KIT_QUEUE_PREVIEW_ID,
+  KIT_QUEUE_PREVIEW_ROUTE,
   privateAdminResponse,
   usesKitDefaultAction,
 } from "./admin/kit-serving";
@@ -1127,19 +1129,32 @@ async function dispatchOwnedRequest(
     return deps.honoFetch(event.request);
   }
   const admin = deps.admin;
-  if (
+  const queuePreview =
     admin &&
+    event.request.method === "GET" &&
+    event.route?.id === KIT_QUEUE_PREVIEW_ID &&
     admitsKitAdmin(
       event.request,
       event.url,
       event.isDataRequest,
       deps.appUrl,
-      admin.env.KIT_ROUTE_ADMIN,
-      deps.kitRouteEmberPages === "true" &&
-        (deps.appUrl === PRODUCTION_APP_URL || ISOLATED_CUTOVER_ORIGIN.test(deps.appUrl)),
-    )
+      admin.env.KIT_ROUTE_ADMIN_QUEUE_PREVIEW,
+    ) &&
+    decideRoute(event.request, [KIT_QUEUE_PREVIEW_ROUTE], event.url);
+  if (
+    admin &&
+    (queuePreview ||
+      admitsKitAdmin(
+        event.request,
+        event.url,
+        event.isDataRequest,
+        deps.appUrl,
+        admin.env.KIT_ROUTE_ADMIN,
+        deps.kitRouteEmberPages === "true" &&
+          (deps.appUrl === PRODUCTION_APP_URL || ISOLATED_CUTOVER_ORIGIN.test(deps.appUrl)),
+      ))
   ) {
-    const response = await dispatchKitAdminRequest(event, deps, admin);
+    const response = await dispatchKitAdminRequest(event, deps, admin, queuePreview || undefined);
     if (response) return response;
   }
   return dispatchFromManifest(
@@ -1190,6 +1205,7 @@ async function dispatchKitAdminRequest(
   event: HookEventLike,
   deps: HookDispatchDeps,
   { env, completeForm }: NonNullable<HookDispatchDeps["admin"]>,
+  queuePreview?: OwnedRoute,
 ): Promise<Response | null> {
   const { request, url } = event;
   const operator = familyRouteFor(event, ROUTE_MANIFEST, [
@@ -1199,7 +1215,7 @@ async function dispatchKitAdminRequest(
     request.method === "POST" && adminFormPath(url.pathname, event.route?.id ?? null);
   const page = decideRoute(request, KIT_ADMIN_READS, url);
   const read = page && event.route?.id === page.path.replace(/:(\w+)/g, "[$1]") ? page : undefined;
-  const route = operator?.route.path ?? (formPath || read?.path);
+  const route = queuePreview?.path ?? operator?.route.path ?? (formPath || read?.path);
   // Keep fixture-only reconciliation in its manifest and pass the other
   // unowned routes to their existing Hono guards.
   if (!route) return null;
@@ -1223,6 +1239,10 @@ async function dispatchKitAdminRequest(
   };
   const originRefused = await sameOrigin(context, async () => {});
   if (originRefused) return finish(originRefused);
+  if (queuePreview) {
+    event.locals = { ...(event.locals as object), requestId };
+    return finish(await deps.resolve(event));
+  }
   if (operator) return finish(await deps.resolve(event));
 
   const admission = await kitAdminAdmission(context, () => deps.sessionFor?.(event));

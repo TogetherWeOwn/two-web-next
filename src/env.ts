@@ -134,6 +134,8 @@ export type Env = AgentEventsEnv & {
   KIT_ROUTE_SECURITY_TXT?: string;
   // Admin serving integration is accepted only on canonical staging or loopback.
   KIT_ROUTE_ADMIN?: string;
+  // Exact queue preview GET on canonical staging or HTTP loopback. Default off.
+  KIT_ROUTE_ADMIN_QUEUE_PREVIEW?: string;
   // Owner-only profile PATCH and native form POST. Only "true" opts in.
   KIT_ROUTE_PROFILE_WRITES?: string;
   // Health, version, CSP sink and alert probe. Only "true" opts in.

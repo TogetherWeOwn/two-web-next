@@ -176,6 +176,14 @@ the operator overrides endpoint on canonical staging or HTTP loopback. The
 operator endpoint uses its bearer independently of the moderator cookie. The
 existing Hono guard serves legacy redirects and other unowned admin paths.
 
+`KIT_ROUTE_ADMIN_QUEUE_PREVIEW=true` selects Kit for the exact queue preview GET
+on canonical staging or HTTP loopback. With the binding absent or false, Hono
+owns the request. HEAD, other methods, encoded paths, trailing slashes and Kit
+data requests continue through Hono. The queue preview's separate staging-only
+admission, moderator session, dedicated operator check and operational audit
+apply under both owners. Keep the ownership binding unset in deployed Workers
+until a separate qualification.
+
 ### Security disclosure endpoint
 
 `KIT_ROUTE_SECURITY_TXT=true` admits trusted GET and HEAD on the literal
@@ -440,11 +448,13 @@ It checks that `/admin/events/new` selects the create form, a seeded `/admin/eve
 selects the edit form for a moderator and refuses a non-moderator, and the exact
 `/admin/events/create` alias still selects the Hono redirect with its query dropped.
 For API-5, it compares the disabled queue preview guard with the earlier
-source-evidence handler. The two distinct JSON refusals confirm which branch
-answered before the moderator gate. Native queue preview, source evidence and
-the legacy create redirect remain blocked on Kit ownership. The fixture covers
-their Hono fallback responses and leaves enabled queue admission and audit,
-the remaining middleware registrations, and named matcher targets open.
+source-evidence handler. The installed Worker also compares native queue
+preview with direct Hono using synthetic sessions and a disposable database.
+It checks the exact owner, default-off fallback, admission and refusal
+responses, one operational audit receipt per successful preview, and refusal
+when the audit insert fails. Source evidence and the legacy create redirect
+use Hono. The remaining middleware registrations and named matcher targets
+still need installed Worker evidence.
 
 Retirement follows the [all-off cutover and Hono undo](kit-cutover-release.md),
 M0 and production parity for every live page and API family. Record each

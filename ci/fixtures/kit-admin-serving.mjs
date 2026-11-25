@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { generateSignedCookie } from "hono/cookie";
 import postgres from "postgres";
 import { EMBER_CUTOVER_VARS } from "../kit-cutover-evidence.mjs";
+import { STAGING_ORIGIN } from "../operator-constants.mjs";
 import { FIXTURE_SECRETS, SESSION_COOKIE } from "../parity/fixture.mjs";
 
 const editor = "/admin/events/new";
@@ -83,6 +84,283 @@ async function visit(
   assert.match(response.headers.get("content-security-policy") ?? "", /form-action 'self'/, label);
   if (method === "HEAD") assert.equal(text.length, 0, label);
   return { headers: response.headers, text };
+}
+
+async function prepareQueuePreviewFixture(worker, entry, operatorId) {
+  // The TCP connection stays on loopback. Both Workers see the canonical URL
+  // and explicit Origin required by the real queue gate, with synthetic bindings.
+  await writeFile(
+    entry,
+    `
+import { withEnv } from "cloudflare:workers";
+import worker from ${JSON.stringify(worker)};
+const profiles = {
+  unset: {},
+  off: { KIT_ROUTE_ADMIN_QUEUE_PREVIEW: "false" },
+  on: { KIT_ROUTE_ADMIN_QUEUE_PREVIEW: "true" },
+  disabled: { KIT_ROUTE_ADMIN_QUEUE_PREVIEW: "true", QUEUE_RECONCILE_PREVIEW_ENABLED: "false" },
+};
+let unexpectedHttp = false;
+globalThis.fetch = async () => {
+  unexpectedHttp = true;
+  throw new Error("Unexpected outbound queue preview fixture request");
+};
+export default {
+  async fetch(incoming, env, context) {
+    const local = new URL(incoming.url);
+    if (local.pathname === "/favicon.ico") return worker.fetch(incoming, env, context);
+    const profile = incoming.headers.get("x-fixture-preview-profile");
+    if (!Object.hasOwn(profiles, profile)) return new Response(null, { status: 400 });
+    const bindings = {
+      ...env, APP_URL: ${JSON.stringify(STAGING_ORIGIN)}, KIT_ROUTE_ADMIN: "true",
+      QUEUE_RECONCILE_PREVIEW_ENABLED: "true",
+      QUEUE_RECONCILE_OPERATOR_ID: ${JSON.stringify(operatorId)}, ...profiles[profile],
+    };
+    const url = new URL(bindings.APP_URL);
+    url.pathname = local.pathname;
+    url.search = local.search;
+    const request = new Request(url, incoming);
+    request.headers.delete("x-fixture-preview-profile");
+    request.headers.set("host", url.host);
+    const origin = request.headers.get("origin");
+    if (origin === local.origin) request.headers.set("origin", url.origin);
+    else if (origin === "") request.headers.delete("origin");
+    const response = await withEnv(bindings, () => worker.fetch(request, bindings, context));
+    if (unexpectedHttp) throw new Error("Queue preview fixture attempted outbound HTTP");
+    return response;
+  },
+};\n`,
+  );
+}
+
+export async function assertKitQueuePreviewServing({
+  worker,
+  honoWorker,
+  scratch,
+  databaseUrl,
+  start,
+}) {
+  const actor = 900000000000000000n + BigInt(`0x${randomBytes(7).toString("hex")}`);
+  const operatorId = String(actor);
+  const otherModerator = String(actor + 1n);
+  const member = String(actor + 2n);
+  const jobId = randomUUID();
+  const sourceKey = `sync-event:01${randomBytes(12).toString("hex").toUpperCase()}`;
+  const sql = postgres(databaseUrl, { max: 1 });
+  const requestId = "0123456789abcdef";
+  const contractHeaders = [
+    "cache-control",
+    "content-type",
+    "location",
+    "vary",
+    "etag",
+    "allow",
+    "content-security-policy",
+    "x-frame-options",
+    "x-robots-tag",
+    "referrer-policy",
+  ];
+  function contract(result) {
+    return contractHeaders.map((name) => result.headers.get(name));
+  }
+
+  let failureId;
+  try {
+    const [failure] = await sql`insert into queue_failed_jobs (job_id, kind, key, reason)
+      values (${jobId}, 'sync-event', ${sourceKey}, 'synthetic private diagnostics')
+      returning id::text, failed_at`;
+    failureId = failure.id;
+    const path = `/admin/queue/failed/${failureId}/preview`;
+    const targets = {};
+    for (const [name, entrypoint] of [
+      ["hono", honoWorker],
+      ["kit", worker],
+    ]) {
+      const entry = join(scratch, `queue-preview-${name}.mjs`);
+      await prepareQueuePreviewFixture(entrypoint, entry, operatorId);
+      targets[name] = await start(name, entry);
+    }
+    async function read(
+      target,
+      profile,
+      status,
+      { url = path, actor, method, origin, accept = "application/json", owned = false } = {},
+    ) {
+      const cookie = actor ? await session(sql, actor, actor !== member) : undefined;
+      const response = await visit(target, url, status, {
+        method,
+        owned,
+        headers: {
+          accept,
+          "cf-ray": requestId,
+          "if-none-match": "*",
+          "x-fixture-preview-profile": profile,
+          ...(cookie ? { cookie } : {}),
+          ...(origin === undefined ? {} : { origin }),
+        },
+      });
+      assert.equal(response.headers.get("x-request-id"), requestId);
+      assert.equal(response.headers.get("etag"), null);
+      return { ...response, cookie };
+    }
+    async function compareRefusal(profile, status, options, error, cookies = "none") {
+      const baseline = await read(targets.hono, profile, status, options);
+      const candidate = await read(targets.kit, profile, status, { ...options, owned: true });
+      assert.deepEqual(contract(candidate), contract(baseline));
+      assert.equal(candidate.text, baseline.text);
+      if (error) assert.deepEqual(JSON.parse(candidate.text), { error });
+      for (const result of [baseline, candidate]) {
+        assert.equal(result.headers.getSetCookie().length, cookies === "none" ? 0 : 1);
+        if (cookies === "renewed") assertRenewed(result);
+      }
+      if (cookies === "intended") {
+        assert.equal(candidate.headers.get("location"), "/auth/discord");
+        assert.ok(candidate.headers.getSetCookie()[0].startsWith("__Host-two_login_intended="));
+        assert.ok(candidate.headers.getSetCookie()[0] === baseline.headers.getSetCookie()[0]);
+      }
+    }
+    function assertRenewed(result) {
+      assert.ok(renewedModerator(result.headers) !== result.cookie);
+      const attributes = result.headers.getSetCookie()[0].split(";").slice(1);
+      assert.deepEqual(attributes, [
+        " Max-Age=7200",
+        " Path=/",
+        " HttpOnly",
+        " Secure",
+        " SameSite=Lax",
+      ]);
+    }
+    const receipts =
+      () => sql`select log_name, description, causer_type, causer_id, event, properties
+      from activity_log where subject_type = 'queue_failed_jobs' and subject_id = ${failureId} order by id`;
+
+    await compareRefusal("disabled", 404, { actor: operatorId }, "preview_disabled");
+    await compareRefusal("on", 403, { actor: operatorId, origin: "" }, "cross_origin");
+    await compareRefusal("on", 302, {}, undefined, "intended");
+    await compareRefusal("on", 403, { actor: member });
+    await compareRefusal("on", 403, { actor: member, accept: "text/html" });
+    await compareRefusal("on", 403, { actor: otherModerator }, "operator_required", "renewed");
+    await compareRefusal(
+      "on",
+      422,
+      { actor: operatorId, url: `${path}?extra=1` },
+      "invalid_failure_id",
+      "renewed",
+    );
+    await compareRefusal(
+      "on",
+      422,
+      { actor: operatorId, url: path.replace(`/${failureId}/`, `/0${failureId}/`) },
+      "invalid_failure_id",
+      "renewed",
+    );
+    await compareRefusal(
+      "on",
+      404,
+      { actor: operatorId, url: path.replace(`/${failureId}/`, "/9007199254740991/") },
+      "failure_not_found",
+      "renewed",
+    );
+    assert.equal((await receipts()).length, 0, "refusals leave no operational receipt");
+    console.log("PASS installed Kit queue preview admission, refusal and cache match direct Hono");
+
+    const encodedId = `%${failureId.charCodeAt(0).toString(16)}${failureId.slice(1)}`;
+    for (const [method, url] of [
+      ["HEAD", path],
+      ["POST", path],
+      ["OPTIONS", path],
+      ["GET", `${path}/`],
+      ["GET", `${path}/__data.json`],
+      ["GET", path.replace("/failed/", "/%66ailed/")],
+      ["GET", path.replace(`/${failureId}/`, `/${encodedId}/`)],
+      ["GET", path.replace(`/${failureId}/`, `/${failureId}%2F1/`)],
+      ["GET", path.replace(`/${failureId}/`, `/${failureId}/1/`)],
+    ]) {
+      const options = { url, method };
+      const baseline = await read(targets.hono, "disabled", 404, options);
+      const fallback = await read(targets.kit, "disabled", 404, options);
+      assert.deepEqual(contract(fallback), contract(baseline));
+      assert.equal(fallback.text, baseline.text);
+    }
+
+    let baselineHeaders;
+    let expectedReceipts = 0;
+    for (const [name, profile, owned] of [
+      ["hono", "on", false],
+      ["kit", "unset", false],
+      ["kit", "off", false],
+      ["kit", "on", true],
+    ]) {
+      const result = await read(targets[name], profile, 200, { actor: operatorId, owned });
+      baselineHeaders ??= contract(result);
+      assert.deepEqual(contract(result), baselineHeaders);
+      assert.equal(result.headers.get("cache-control"), "private, no-store");
+      assert.equal(result.headers.getSetCookie().length, 1);
+      assertRenewed(result);
+      const body = JSON.parse(result.text);
+      assert.equal(new Date(body.observedAt).toISOString(), body.observedAt);
+      assert.deepEqual(body, {
+        previewOnly: true,
+        failure: {
+          id: Number(failureId),
+          kind: "sync-event",
+          failedAt: failure.failed_at.toISOString(),
+        },
+        observedAt: body.observedAt,
+        disposition: {
+          action: "keep",
+          reason: "source is missing; preserve dead row for operator review",
+        },
+      });
+      const logged = await receipts();
+      assert.equal(
+        logged.length,
+        ++expectedReceipts,
+        "exactly one operational receipt per success",
+      );
+      assert.deepEqual(logged.at(-1), {
+        log_name: "operations",
+        description: "queue.failed.preview",
+        causer_type: "User",
+        causer_id: operatorId,
+        event: "view",
+        properties: {
+          disposition: { before: null, after: "keep" },
+          observedAt: { before: null, after: body.observedAt },
+        },
+      });
+    }
+    // This job owns the disposable DB. Reject only new operational preview
+    // receipts during these two requests, then restore the fixture schema.
+    await sql`alter table activity_log add constraint fixture_queue_preview_audit_failure
+      check (description is distinct from 'queue.failed.preview') not valid`;
+    try {
+      await compareRefusal("on", 503, { actor: operatorId }, "preview_unavailable", "renewed");
+    } finally {
+      await sql`alter table activity_log drop constraint fixture_queue_preview_audit_failure`;
+    }
+    assert.equal((await receipts()).length, expectedReceipts);
+    const [retained] = await sql`select id::text, kind, key, reason, failed_at
+      from queue_failed_jobs where job_id = ${jobId}`;
+    assert.deepEqual(retained, {
+      ...failure,
+      kind: "sync-event",
+      key: sourceKey,
+      reason: "synthetic private diagnostics",
+    });
+    console.log(
+      "PASS installed Kit queue preview owns only the exact GET, preserves Hono fallback, and refuses on audit failure",
+    );
+  } finally {
+    try {
+      await sql`delete from activity_log where subject_type = 'queue_failed_jobs'
+        and subject_id = ${failureId ?? ""} and causer_id = ${operatorId}`;
+      await sql`delete from queue_failed_jobs where job_id = ${jobId}`;
+      await sql`delete from web_sessions where user_id in (${operatorId}, ${otherModerator}, ${member})`;
+    } finally {
+      await sql.end();
+    }
+  }
 }
 
 export async function assertMixedAdminAuthRollback({ worker, scratch, databaseUrl, start }) {

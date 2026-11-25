@@ -15,6 +15,7 @@ import { STAGING_STATIC_DOCUMENT_READY } from "../src/kit-staging-static.ts";
 import {
   assertKitAdminServing,
   assertKitAttendanceDisabled,
+  assertKitQueuePreviewServing,
   assertMixedAdminAuthRollback,
   prepareAdminFixture,
 } from "./fixtures/kit-admin-serving.mjs";
@@ -858,6 +859,22 @@ export default {
       off: kitWithSession,
       hono: honoWithSession,
       databaseUrl,
+    });
+    await assertKitQueuePreviewServing({
+      worker,
+      honoWorker: join(repo, "src/worker.ts"),
+      scratch,
+      databaseUrl,
+      start: async (name, entry) => {
+        const instance = await startWorker(
+          `queue-preview-${name}`,
+          entry,
+          name === "hono" ? join(repo, "public") : assets,
+          secret,
+        );
+        await listen(instance.child, instance.origin, () => instance.log);
+        return instance;
+      },
     });
 
     async function observeDataRedirect(worker, path) {

@@ -11,6 +11,13 @@ export const KIT_ADMIN_OPS_ROUTES = ["GET", "POST", "PUT", "PATCH", "DELETE", "O
   (method) => ({ method, path: "/admin/ops-overrides", enabled: true, reads: "public" as const }),
 );
 
+export const KIT_QUEUE_PREVIEW_ROUTE = {
+  method: "GET",
+  path: "/admin/queue/failed/:id/preview",
+  enabled: true,
+} as const;
+export const KIT_QUEUE_PREVIEW_ID = "/admin/queue/failed/[id]/preview";
+
 const formPaths = [
   ["/admin/events", "/admin/events"],
   ["/admin/featured", "/admin/featured"],
