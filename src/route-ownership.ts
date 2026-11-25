@@ -1293,7 +1293,9 @@ async function dispatchFromManifest(
   if (route && !eventMarkdownShadowsPage(event, route))
     return dispatchKitRequest(event, deps, route);
   const selection = familyRouteFor(event, manifest, deps.apiFamilies);
-  if (!selection) return deps.honoFetch(event.request);
+  if (!selection) {
+    return (await dispatchLegacySuffixRead(event, deps, manifest)) ?? deps.honoFetch(event.request);
+  }
   const { route: apiRoute, family } = selection;
   const started = performance.now();
   setReleaseMetadata(deps.versionMetadata);
@@ -1640,6 +1642,11 @@ interface KitApiFamily {
   flag: string | undefined;
   routes: readonly KitApiRoute[];
   crossOriginRefusal?: (request: Request, requestId: string) => Response | Promise<Response>;
+  legacySuffix?: {
+    path: string;
+    keyFor: (request: Request, raw: string, decoded: string | null) => string | undefined;
+    read: (request: Request, key: string, requestId: string) => Promise<Response | null>;
+  };
 }
 
 interface KitApiRoute extends OwnedRoute {
@@ -1658,6 +1665,53 @@ function eventMarkdownShadowsPage(event: HookEventLike, page: OwnedRoute): boole
   // separation even with only the Kit HTML page enabled: declined Markdown
   // requests must fall through to Hono instead of entering the page boundary.
   return page.path === "/e/:key" && event.route?.id === EVENT_MARKDOWN_ENDPOINT_ID;
+}
+
+async function dispatchLegacySuffixRead(
+  event: HookEventLike,
+  deps: HookDispatchDeps,
+  manifest: OwnedRoute[],
+): Promise<Response | undefined> {
+  const { request } = event;
+  if (
+    (request.method !== "GET" && request.method !== "HEAD") ||
+    event.isDataRequest ||
+    !deps.apiFamilies?.some(({ flag, legacySuffix }) => flag === "true" && legacySuffix)
+  )
+    return;
+
+  const { pathname } = new URL(request.url);
+  const decoded = normalizePath(pathname, false);
+  // Kit can call the hook with no route ID after a decoding failure. A
+  // suffix registration still has to match Hono's original request path.
+  const path = decoded ?? decodeTwinPath(pathname);
+  if (isReservedPath(path) || path.endsWith(DATA_SUFFIX) || isInNamespace(path, KIT_ASSET_ROOT)) {
+    return;
+  }
+  let selected: { route: NonNullable<KitApiFamily["legacySuffix"]>; key: string } | undefined;
+  for (const { flag, legacySuffix } of deps.apiFamilies) {
+    if (flag !== "true" || !legacySuffix) continue;
+    const key = legacySuffix.keyFor(request, pathname, decoded);
+    if (key === undefined) continue;
+    if (selected) return;
+    selected = { route: legacySuffix, key };
+  }
+  if (!selected) return;
+  const { route, key } = selected;
+  const overlaps = (entry: OwnedRoute) =>
+    entry.method.toUpperCase() === "GET" &&
+    matchPattern(entry.path, path) &&
+    !(route.path === EVENT_MARKDOWN_PATH && entry.path === "/e/:key");
+  if (manifest.some(overlaps) || ROUTE_MANIFEST.some(overlaps)) return;
+
+  const started = performance.now();
+  setReleaseMetadata(deps.versionMetadata);
+  const requestId = safeRequestId(request.headers.get("cf-ray")) ?? newRequestId();
+  const response = await route.read(request, key, requestId);
+  if (!response) return;
+  const decorated = await finishKitResponse(response, event, deps, requestId);
+  writeHttpRequestLog(request, requestId, route.path, decorated.status, started);
+  return decorated;
 }
 
 function familyRouteFor(
