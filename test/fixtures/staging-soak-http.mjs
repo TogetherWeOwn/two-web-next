@@ -168,7 +168,7 @@ export function installSoakCliReads() {
   );
 }
 
-export function assertSoakCliWritesProof() {
+export function assertSoakCli() {
   const dir = mkdtempSync(join(tmpdir(), "staging-soak-cli-"));
   const output = join(dir, "outputs");
   const preload = `import { installSoakCliReads } from ${JSON.stringify(import.meta.url)}; installSoakCliReads();`;
