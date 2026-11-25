@@ -571,7 +571,9 @@ async function assertFeaturedAuditFallback({
   return fallbackModerator;
 }
 
-async function assertAdminPublish({ kit, off, hono, sql, moderatorId, moderator, member }) {
+async function assertAdminPublish({ kit, off, hono, sql, moderatorId, member }) {
+  // The preceding GET checks rotate their own moderator session.
+  const moderator = await session(sql, moderatorId, true);
   const keys = [];
   const title = "Synthetic publish draft";
   async function seed(location, key = newEventKey()) {
@@ -656,7 +658,11 @@ async function assertAdminPublish({ kit, off, hono, sql, moderatorId, moderator,
 
       const beforeReview = await snapshot(reviewed.key);
       const publicPath = `/e/${reviewed.key}`;
-      const stale = await post(reviewed.path, 303, { review: "1" });
+      const staleRevision = new Date(Date.parse(reviewed.updatedAt) - 1_000).toISOString();
+      const stale = await post(reviewed.path, 303, {
+        review: "1",
+        reviewed_updated_at: staleRevision,
+      });
       assert.equal(stale.headers.get("location"), `${publicPath}?review=1&publish_error=stale`);
       assert.deepEqual(await snapshot(reviewed.key), beforeReview);
 
@@ -942,6 +948,7 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
       });
     }
     console.log("PASS installed Worker admin event route precedence and moderator admission");
+
     const offAlias = await visit(off, `${legacyCreate}?ignored=1`, 301, {
       owned: false,
       headers: { cookie: await session(sql, moderatorId, true) },
@@ -962,7 +969,7 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
     }
     console.log("PASS installed Worker legacy event-create redirect with Kit ownership off and on");
 
-    await assertAdminPublish({ kit, off, hono, sql, moderatorId, moderator, member });
+    await assertAdminPublish({ kit, off, hono, sql, moderatorId, member });
   } finally {
     try {
       // Audit rows are append-only and are isolated by the synthetic actor.
