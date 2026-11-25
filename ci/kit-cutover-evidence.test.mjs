@@ -159,6 +159,41 @@ test("isolated cutover repeats readiness and smoke when rollback is still propag
   ]);
 });
 
+test("isolated cutover refuses six stale readiness observations at the 1037 rollback target", async () => {
+  const origin = "https://cutover.example.invalid";
+  const prefixes = ledgerPrefixes(ledgerJournal);
+  const stale = {
+    db: "ok",
+    pending_migrations: 0,
+    migration_ledger: prefixes["1037"],
+    revision: { version_id: kit, commit: sourceSha },
+  };
+  const calls = [];
+  await assert.rejects(
+    verifyServed(origin, prefixes, identity, hono, "1037", "hono", {
+      probeReady: async (url, ledger, expected) => {
+        calls.push(["readiness", url, ledger, expected]);
+        return verifyReady(200, stale, ledger, expected);
+      },
+      probeRoutes: async (_origin, { onRoute }) => {
+        calls.push(["smoke"]);
+        onRoute("/", 0);
+        return true;
+      },
+      wait: async (ms) => {
+        calls.push(["wait", ms]);
+      },
+    }),
+    { message: "staging failed exact version and ledger verification" },
+  );
+  const expected = { version: hono, commit: sourceSha, state: "1037" };
+  const readiness = ["readiness", origin, prefixes, expected];
+  assert.deepEqual(calls, [
+    ...Array.from({ length: 5 }, () => [readiness, ["wait", 10_000]]).flat(),
+    readiness,
+  ]);
+});
+
 test("isolated cutover refuses persistent smoke failures after six attempts", async () => {
   const calls = [];
   await assert.rejects(
@@ -190,6 +225,34 @@ test("isolated cutover refuses persistent smoke failures after six attempts", as
     "readiness",
     "smoke",
   ]);
+});
+
+test("isolated cutover refuses successful smoke with no route checks", async () => {
+  const calls = [];
+  await assert.rejects(
+    verifyServed(
+      "https://cutover.example.invalid",
+      ledgerPrefixes(ledgerJournal),
+      identity,
+      hono,
+      "1037",
+      "hono",
+      {
+        probeReady: async () => {
+          calls.push("readiness");
+        },
+        probeRoutes: async () => {
+          calls.push("smoke");
+          return true;
+        },
+        wait: async () => {
+          calls.push("wait");
+        },
+      },
+    ),
+    { message: "isolated route smoke ran no checks" },
+  );
+  assert.deepEqual(calls, ["readiness", "smoke"]);
 });
 
 test("isolated cutover proof requires both exact versions and six healthy transitions", () => {
