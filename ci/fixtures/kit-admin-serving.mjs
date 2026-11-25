@@ -9,6 +9,7 @@ import { STAGING_ORIGIN } from "../operator-constants.mjs";
 import { FIXTURE_SECRETS, SESSION_COOKIE } from "../parity/fixture.mjs";
 
 const editor = "/admin/events/new";
+const legacyCreate = "/admin/events/create";
 const operator = "/admin/ops-overrides";
 const html = { accept: "text/html" };
 
@@ -797,7 +798,7 @@ async function assertFeaturedAuditFallback({
   return fallbackModerator;
 }
 
-export async function assertKitAdminServing({ kit, off, hono, databaseUrl }) {
+export async function assertKitAdminServing({ kit, nativeCreate, off, hono, databaseUrl }) {
   const actor = 900000000000000000n + BigInt(`0x${randomBytes(7).toString("hex")}`);
   const moderatorId = String(actor);
   const memberId = String(actor + 1n);
@@ -833,7 +834,7 @@ export async function assertKitAdminServing({ kit, off, hono, databaseUrl }) {
       headers: { cookie: moderator },
     });
     assert.equal(evidenceWrite.headers.get("allow"), "GET");
-    for (const path of ["/admin", editor, "/admin/no-such-page", "/admin/events/create"]) {
+    for (const path of ["/admin", editor, "/admin/no-such-page", legacyCreate]) {
       const owned = path === "/admin" || path === editor;
       const guest = await visit(kit, path, 302, { owned });
       assert.equal(guest.headers.get("location"), "/auth/discord");
@@ -962,12 +963,10 @@ export async function assertKitAdminServing({ kit, off, hono, databaseUrl }) {
     assert.equal(writes, 6, "six accepted actions each audit once; refusals do not write");
 
     // A seeded key makes the parameter route observable next to the static
-    // form and the exact legacy alias, which must win even with Kit admin on.
-    for (const [target, cookie] of [
-      [kit, moderator],
-      [hono, await session(sql, moderatorId, true)],
-    ]) {
-      const owned = target === kit;
+    // form and exact alias. Both installed modes keep the other forms in Kit.
+    for (const target of [kit, nativeCreate, hono]) {
+      const owned = target !== hono;
+      const cookie = target === kit ? moderator : await session(sql, moderatorId, true);
       const denied = await visit(target, eventPath, 403, {
         owned,
         headers: { ...html, cookie: member },
@@ -984,13 +983,71 @@ export async function assertKitAdminServing({ kit, off, hono, databaseUrl }) {
       });
       assert.match(existing.text, /<h1[^>]*>Edit Fixture admin draft<\/h1>/);
       assert.ok(existing.text.includes(`action="${eventPath}"`));
-      const legacy = await visit(target, "/admin/events/create?ignored=1", 301, {
-        owned: false,
-        headers: { cookie: renewedModerator(existing.headers) },
+      const current = renewedModerator(existing.headers);
+      const ownedRedirect = target === nativeCreate;
+      const alias = `${legacyCreate}?ignored=1&next=%2Felsewhere`;
+      const login = await visit(target, alias, 302, { owned: ownedRedirect });
+      assert.equal(login.headers.get("location"), "/auth/discord");
+      assert.ok(
+        login.headers
+          .getSetCookie()[0]
+          ?.startsWith(`__Host-two_login_intended=${encodeURIComponent(alias)}.`),
+        "the login cookie preserves the requested path and query",
+      );
+      const refusal = await visit(target, alias, 403, {
+        owned: ownedRedirect,
+        headers: { ...html, cookie: member },
       });
+      assert.equal(refusal.headers.get("location"), null);
+      assert.equal(refusal.headers.getSetCookie().length, 0);
+      const head = await visit(target, alias, 301, {
+        method: "HEAD",
+        owned: ownedRedirect,
+        headers: { ...html, cookie: current },
+      });
+      assert.equal(head.headers.get("location"), editor);
+      assert.equal(head.headers.getSetCookie().length, 0);
+      const legacy = await visit(target, alias, 301, {
+        owned: ownedRedirect,
+        headers: { ...html, cookie: current },
+      });
+      assert.equal(legacy.text, "");
       assert.equal(legacy.headers.get("location"), editor);
+      assert.match(legacy.headers.get("content-type") ?? "", /^text\/plain\b/);
+      const renewed = renewedModerator(legacy.headers);
+      const legacyEdit = await visit(target, `${eventPath}/edit?ignored=1`, 301, {
+        owned: false,
+        headers: { cookie: renewed },
+      });
+      assert.equal(legacyEdit.headers.get("location"), eventPath);
+      await visit(target, legacyCreate, 413, {
+        ...form,
+        owned,
+        body: "x".repeat(65537),
+        headers: { ...form.headers, cookie: renewedModerator(legacyEdit.headers) },
+      });
     }
     console.log("PASS installed Worker admin event route precedence and moderator admission");
+
+    const offAlias = await visit(off, `${legacyCreate}?ignored=1`, 301, {
+      owned: false,
+      headers: { cookie: await session(sql, moderatorId, true) },
+    });
+    assert.equal(offAlias.headers.get("location"), editor);
+    for (const target of [kit, nativeCreate]) {
+      for (const path of [
+        `${legacyCreate}/`,
+        `${legacyCreate}/__data.json`,
+        "/admin/events/%63reate",
+        "/admin/events/cre%ZZate",
+      ]) {
+        const boundary = await visit(target, path, 302, { owned: false });
+        assert.equal(boundary.headers.get("location"), "/auth/discord");
+      }
+      const parameter = await visit(target, "/admin/events/Create", 302);
+      assert.equal(parameter.headers.get("location"), "/auth/discord");
+    }
+    console.log("PASS installed Worker legacy event-create redirect with Kit ownership off and on");
   } finally {
     try {
       // Audit rows are append-only and are isolated by the synthetic actor.

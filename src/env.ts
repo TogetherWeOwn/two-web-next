@@ -102,6 +102,8 @@ export type Env = AgentEventsEnv & {
   KIT_PARITY_FIXTURE_ADMIN_DASHBOARD?: string;
   // Loopback Kit parity fixture only; serves the synthetic attendance record.
   KIT_PARITY_FIXTURE_ADMIN_ATTENDANCE?: string;
+  // Loopback installed Worker fixture only; enables the exact legacy redirect.
+  KIT_PARITY_FIXTURE_ADMIN_EVENT_CREATE_REDIRECT?: string;
   // Generated local capture build only; no deployed config defines the build gate.
   SSR_CAPTURE_FIXTURE?: string;
   // Archive and static are default-off Kit rollout controls for the canonical

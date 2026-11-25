@@ -56,6 +56,7 @@ import {
 } from "./admin/kit-serving";
 import { fetchKitAdminForm } from "./admin/kit-form-fetch";
 import type { Env } from "./env";
+import { fixtureRequest } from "./fixture-origin";
 
 export type RouteOwner = "kit" | "hono";
 
@@ -80,6 +81,8 @@ export interface RouteDecision {
   method: string;
   path: string;
 }
+
+const ADMIN_EVENT_CREATE_REDIRECT = "/admin/events/create";
 
 // The archive page, events list, hot-zone heatmaps, member board and the
 // about/faq, join and recovery leaves render natively. Privacy and rules are
@@ -185,14 +188,20 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   // POST /admin/events stays Hono-owned, so draft-first creation, weekly
   // recurrence (max 52), wall-time/timezone validation, body cap, throttle,
   // error aggregation, retained values and the 303 keep one authority until
-  // the write slice lands. The guarded /admin/events/create legacy redirect
-  // stays Hono-owned; the manifest carries this GET entry only. Off until
-  // the enablement review.
+  // the write slice lands. Off until the enablement review.
   {
     method: "GET",
     path: "/admin/events/new",
     enabled: false,
     reads: { resource: "events", action: "view", route: "admin.events.create" },
+  },
+  // Only the admin dispatcher can serve this redirect. The exact entry wins
+  // over the edit form's :key pattern even while disabled.
+  {
+    method: "GET",
+    path: "/admin/events/create",
+    enabled: false,
+    reads: { resource: "events", action: "view", route: "admin.events.legacy-create" },
   },
   // Moderator event-edit form: same declaration as the Hono handler
   // (admin.events.edit, src/admin/routes.tsx). Only this GET migrates:
@@ -201,15 +210,6 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   // Hono-owned, so wall-time UTC carriers, future recurrence propagation,
   // bounded roster paging and postcommit writeback keep one authority until
   // the write slice lands. Off until the enablement review.
-  // The legacy /admin/events/create bookmark pins to Hono with the exact
-  // disabled entry below: exact entries beat :param patterns in bestMatch,
-  // so without it the :key pattern would capture /create once enabled and
-  // Kit would 404 instead of Hono's redirect to /admin/events/new.
-  {
-    method: "GET",
-    path: "/admin/events/create",
-    enabled: false,
-  },
   {
     method: "GET",
     path: "/admin/events/:key",
@@ -1061,13 +1061,8 @@ function releasedEventDetailRenewsSession(
 // Rotating renewal for Kit-served admin reads: the post-release twin of Hono's
 // admin-guard re-stamp (src/admin/guard.ts mints a fresh bearer with a fresh
 // 120-minute window on a current bearer only). Only a released
-// successful-or-missing HTML GET document
-// with an authenticated moderator bridge decision renews: the manifest owns the
-// route choice (any enabled admin family entry), so a future admin path renews with
-// zero renewal-code changes. 404s renew like Hono (the guard attaches on 404s
-// when the bearer survives rendering); guest bounces, 403s (unlike the
-// event-detail draft 403 — Hono never renews a refused viewer), 503s,
-// redirects and non-HTML responses never renew. Not in the loader: that would
+// successful-or-missing HTML GET document or the authorized legacy create
+// redirect renews. The same Hono guard renews both. Not in the loader: that would
 // renew before the audit can refuse, spending the window on a response the
 // boundary throws away.
 function releasedAdminRenewsSession(
@@ -1077,8 +1072,11 @@ function releasedAdminRenewsSession(
 ): boolean {
   if (route.path !== "/admin" && !route.path.startsWith("/admin/")) return false;
   if (event.request.method !== "GET") return false;
-  if (response.status !== 200 && response.status !== 404) return false;
-  if (!response.headers.get("content-type")?.includes("text/html")) return false;
+  const redirect = route.path === ADMIN_EVENT_CREATE_REDIRECT && response.status === 301;
+  const document =
+    (response.status === 200 || response.status === 404) &&
+    response.headers.get("content-type")?.includes("text/html");
+  if (!redirect && !document) return false;
   const locals = event.locals as Partial<KitLocals> | undefined;
   return locals?.status === "authenticated" && locals.session?.moderator === true;
 }
@@ -1195,10 +1193,18 @@ async function dispatchOwnedRequest(
   );
 }
 
-// Open the existing admin GET entries that declare an audited read. Static
-// aliases carry no read declaration and still win over parameter matches.
+// The admin family opts into audited GET pages. The legacy endpoint keeps
+// its own switch, and its exact entry wins even when disabled.
 const KIT_ADMIN_READS = ROUTE_MANIFEST.filter(({ path }) => isInNamespace(path, "/admin")).map(
-  (entry) => ({ ...entry, enabled: entry.method === "GET" && typeof entry.reads === "object" }),
+  (entry) =>
+    entry.path === ADMIN_EVENT_CREATE_REDIRECT
+      ? entry
+      : { ...entry, enabled: entry.method === "GET" && typeof entry.reads === "object" },
+);
+const KIT_ADMIN_FIXTURE_READS = KIT_ADMIN_READS.map((entry) =>
+  entry.method === "GET" && entry.path === ADMIN_EVENT_CREATE_REDIRECT
+    ? { ...entry, enabled: true }
+    : entry,
 );
 
 async function dispatchKitAdminRequest(
@@ -1211,10 +1217,18 @@ async function dispatchKitAdminRequest(
   const operator = familyRouteFor(event, ROUTE_MANIFEST, [
     { flag: env.KIT_ROUTE_ADMIN, routes: KIT_ADMIN_OPS_ROUTES },
   ]);
+  const routeId = event.route?.id ?? null;
+  const legacyCreate = routeId === ADMIN_EVENT_CREATE_REDIRECT && url.pathname === routeId;
+  // The static endpoint shadows [key] in Kit's route IDs. POST to the
+  // bookmark still selects the existing parameterized form controller.
   const formPath =
-    request.method === "POST" && adminFormPath(url.pathname, event.route?.id ?? null);
-  const page = decideRoute(request, KIT_ADMIN_READS, url);
-  const read = page && event.route?.id === page.path.replace(/:(\w+)/g, "[$1]") ? page : undefined;
+    request.method === "POST" &&
+    adminFormPath(url.pathname, legacyCreate ? "/admin/events/[key]" : routeId);
+  const fixture =
+    env.KIT_PARITY_FIXTURE_ADMIN_EVENT_CREATE_REDIRECT === "true" &&
+    fixtureRequest(request, deps.appUrl);
+  const page = decideRoute(request, fixture ? KIT_ADMIN_FIXTURE_READS : KIT_ADMIN_READS, url);
+  const read = page && routeId === page.path.replace(/:(\w+)/g, "[$1]") ? page : undefined;
   const route = queuePreview?.path ?? operator?.route.path ?? (formPath || read?.path);
   // Keep fixture-only reconciliation in its manifest and pass the other
   // unowned routes to their existing Hono guards.
@@ -1261,7 +1275,7 @@ async function dispatchKitAdminRequest(
   }
 
   const submit = () => fetchKitAdminForm(request, env, admission.actor, requestId);
-  if (!usesKitDefaultAction(request)) return finish(await submit());
+  if (legacyCreate || !usesKitDefaultAction(request)) return finish(await submit());
   let outcome: Promise<Response> | undefined;
   Object.assign(event.locals as object, {
     runAdminForm: async () => {
@@ -1283,6 +1297,9 @@ async function dispatchFromManifest(
 ): Promise<Response> {
   // Use the tested Request-to-decision path for both the method and URL.
   const route = decideRoute(event.request, manifest, event.url);
+  // This endpoint has no page layout. Only dispatchKitAdminRequest can
+  // release it, after literal-path checks and moderator admission.
+  if (route?.path === ADMIN_EVENT_CREATE_REDIRECT) return deps.honoFetch(event.request);
   if (route && !eventMarkdownShadowsPage(event, route))
     return dispatchKitRequest(event, deps, route);
   const selection = familyRouteFor(event, manifest, deps.apiFamilies);
