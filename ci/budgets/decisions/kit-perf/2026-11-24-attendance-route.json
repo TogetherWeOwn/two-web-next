@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "scope": "kit-immutable-route-closure-v1",
+  "routes": {
+    "/admin/attendance": {
+      "js": {
+        "maxRawBytes": 154112,
+        "maxGzipBytes": 60672,
+        "maxFiles": 22
+      },
+      "css": {
+        "maxRawBytes": 3584,
+        "maxGzipBytes": 1280,
+        "maxFiles": 3
+      }
+    }
+  }
+}

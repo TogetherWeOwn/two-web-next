@@ -20,6 +20,7 @@ import { ROUTE_BUDGET, ROUTE_SCOPE } from "./check-kit-route-perf.mjs";
 import {
   approvedClientBudget,
   approvedRouteBudget,
+  ATTENDANCE_ROUTE_DECISION,
   initialRouteBudget,
   INITIAL_CLIENT_BUDGET,
   INITIAL_ROUTE_DECISION,
@@ -632,6 +633,7 @@ test("successive asymmetric generated CSS ratchets pass the unchanged shipping g
 function beforeReconciliationAdmission(source) {
   return (
     !source.endsWith(`/${RECONCILIATION_ROUTE_DECISION}`) &&
+    !source.endsWith(`/${ATTENDANCE_ROUTE_DECISION}`) &&
     !/\/auto-client-ratchet-[a-f0-9]{12}\.md$/.test(source)
   );
 }
@@ -649,6 +651,20 @@ test("initial measured route admission remains pinned independently of the live 
     JSON.parse(readFileSync(join(repo, ROUTE_BUDGET), "utf8")),
     approvedRouteBudget(repo),
   );
+});
+
+test("reviewed attendance admission adds only its route after reconciliation", (t) => {
+  const root = decisionRoot(t);
+  const dir = "ci/budgets/decisions/kit-perf";
+  const copyAdmission = (name) =>
+    cpSync(new URL(`../${dir}/${name}`, import.meta.url), join(root, dir, name));
+  copyAdmission(RECONCILIATION_ROUTE_DECISION);
+  const prior = approvedRouteBudget(root);
+  copyAdmission(ATTENDANCE_ROUTE_DECISION);
+  const admission = JSON.parse(readFileSync(join(root, dir, ATTENDANCE_ROUTE_DECISION), "utf8"));
+  assert.deepEqual(Object.keys(admission.routes), ["/admin/attendance"]);
+  assert.deepEqual(approvedRouteBudget(root).routes, { ...prior.routes, ...admission.routes });
+  assert.deepEqual(approvedClientBudget(root), INITIAL_CLIENT_BUDGET);
 });
 
 test("reviewed reconciliation admission extends history before and after lower-only decisions", (t) => {

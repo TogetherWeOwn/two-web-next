@@ -15,6 +15,7 @@ export const INITIAL_CLIENT_BUDGET = {
 export const INITIAL_ROUTE_DECISION =
   "ci/budgets/decisions/kit-perf/2026-11-04-route-client-closure-and-ratchet.md";
 export const RECONCILIATION_ROUTE_DECISION = "2026-11-23-reconciliation-routes.json";
+export const ATTENDANCE_ROUTE_DECISION = "2026-11-24-attendance-route.json";
 const plan = (files) => ({
   client: {
     js: files[CLIENT_FILES[0]].client.js,
@@ -61,23 +62,21 @@ export function approvedClientPlan(root) {
     client: structuredClone(INITIAL_CLIENT_BUDGET),
     routeBudget: initialRouteBudget(root),
   };
-  let admitReconciliation = decisions.includes(RECONCILIATION_ROUTE_DECISION);
-  while (pending.length || admitReconciliation) {
+  const admissions = [RECONCILIATION_ROUTE_DECISION, ATTENDANCE_ROUTE_DECISION].filter((name) =>
+    decisions.includes(name),
+  );
+  while (pending.length || admissions.length) {
     const index = pending.findIndex((record) => isDeepStrictEqual(record.before, approved));
     if (index >= 0) {
       const [record] = pending.splice(index, 1);
       approved = record.after;
       continue;
     }
-    assert.ok(
-      admitReconciliation,
-      "measured client decisions do not extend the approved ceiling chain",
-    );
+    const name = admissions.shift();
+    assert.ok(name, "measured client decisions do not extend the approved ceiling chain");
     // Replay prior lowerings first. The reviewed admission only adds rows, then
     // later lowerings must match the expanded plan in full.
-    const admission = validateRouteBudget(
-      JSON.parse(readDecision(root, `${dir}/${RECONCILIATION_ROUTE_DECISION}`)),
-    );
+    const admission = validateRouteBudget(JSON.parse(readDecision(root, `${dir}/${name}`)));
     for (const [id, route] of Object.entries(admission.routes)) {
       assert.ok(!Object.hasOwn(approved.routeBudget.routes, id), "route already approved");
       for (const kind of ["js", "css"])
@@ -85,7 +84,6 @@ export function approvedClientPlan(root) {
           assert.ok(limit <= approved.client[kind][metric], "route ceiling exceeds aggregate");
       approved.routeBudget.routes[id] = route;
     }
-    admitReconciliation = false;
   }
   return approved;
 }
