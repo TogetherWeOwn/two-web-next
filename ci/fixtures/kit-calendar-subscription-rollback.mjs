@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { EMBER_CUTOVER_VARS } from "../kit-cutover-evidence.mjs";
@@ -91,14 +92,18 @@ export default {
     assert.equal(response.headers.get("content-disposition"), 'inline; filename="events.ics"');
     assert.equal(response.headers.get("cache-control"), feedCache);
     assert.equal(response.headers.get("set-cookie"), null);
-    return { body: await response.text(), etag: response.headers.get("etag") };
+    return { bytes: Buffer.from(await response.arrayBuffer()), etag: response.headers.get("etag") };
   }
 
   const before = await readFeed(member);
-  assert.match(before.etag ?? "", /^"[a-f0-9]{64}"$/);
-  assert.ok(before.body.startsWith("BEGIN:VCALENDAR\r\n"));
-  assert.ok(before.body.endsWith("END:VCALENDAR\r\n"));
-  const lines = before.body.replace(/\r\n[ \t]/g, "").split("\r\n");
+  const digest = createHash("sha256").update(before.bytes).digest("hex");
+  assert.equal(before.etag, `"${digest}"`);
+  const calendarBody = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+    before.bytes,
+  );
+  assert.ok(calendarBody.startsWith("BEGIN:VCALENDAR\r\n"));
+  assert.ok(calendarBody.endsWith("END:VCALENDAR\r\n"));
+  const lines = calendarBody.replace(/\r\n[ \t]/g, "").split("\r\n");
   assert.deepEqual(
     lines.filter((line) => line.startsWith("UID:")),
     [`UID:${event.key}@${appUrl.host}`],
@@ -119,7 +124,7 @@ export default {
   assert.equal(cached.headers.get("content-type"), null);
   assert.equal(cached.headers.get("content-disposition"), null);
   assert.equal(cached.headers.get("set-cookie"), null);
-  assert.equal(await cached.text(), "");
+  assert.equal((await cached.arrayBuffer()).byteLength, 0);
   console.log(
     "PASS installed Ember subscription URL retains the same public feed after Hono rollback",
   );
