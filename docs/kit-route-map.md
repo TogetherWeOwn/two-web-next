@@ -175,6 +175,11 @@ qualifies through the [production release gate](../CONTRIBUTING.md#production-re
 the operator overrides endpoint on canonical staging or HTTP loopback. The
 operator endpoint uses its bearer independently of the moderator cookie. The
 existing Hono guard serves legacy redirects and other unowned admin paths.
+The exact `GET /admin/events/create` endpoint also has a disabled manifest
+entry. When enabled within the admin dispatcher, it requires a moderator and
+returns `301 Location: /admin/events/new` with no query. HEAD uses the same
+redirect without rotating the session. The disabled entry still takes
+precedence over the parameterized edit form.
 
 ### Security disclosure endpoint
 
@@ -435,16 +440,17 @@ and 11 method fallbacks. Six middleware registrations, matcher behavior, assets,
 content negotiation and error handling need separate built-Worker parity evidence.
 
 The [installed Worker admin fixture](../ci/fixtures/kit-admin-serving.mjs) compares
-direct Hono and the installed Kit Worker with admin ownership enabled on loopback.
-It checks that `/admin/events/new` selects the create form, a seeded `/admin/events/:key`
-selects the edit form for a moderator and refuses a non-moderator, and the exact
-`/admin/events/create` alias still selects the Hono redirect with its query dropped.
+direct Hono with the installed Kit Worker on loopback. It checks the static
+create form and seeded edit form alongside the exact `/admin/events/create`
+redirect in both ownership modes. The loopback-only override exercises the
+native 301, query dropping, moderator admission and session renewal. The fixture
+also checks the legacy edit redirect, the existing POST controller, and the
+trailing-slash, data suffix, percent-encoded, malformed and case-variant paths.
 For API-5, it compares the disabled queue preview guard with the earlier
 source-evidence handler on Hono fallback. The two distinct JSON refusals
-confirm which branch answered before the moderator gate. This fixture also
-covers Hono fallback for the legacy create redirect and leaves enabled queue
-preview admission and audit, the remaining middleware registrations, and named
-matcher targets open.
+confirm which branch answered before the moderator gate. Enabled queue preview
+admission and audit, the remaining middleware registrations, and named matcher
+targets remain open.
 
 The separate [installed source-evidence fixture](../ci/fixtures/kit-source-evidence.mjs)
 adds the native comparison for `/admin/queue/source-evidence/:id`, with direct

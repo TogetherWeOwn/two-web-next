@@ -575,7 +575,12 @@ describe("decideRoute", () => {
         enabled: false,
         reads: { resource: "events", action: "view", route: "admin.events.create" },
       },
-      { method: "GET", path: "/admin/events/create", enabled: false },
+      {
+        method: "GET",
+        path: "/admin/events/create",
+        enabled: false,
+        reads: { resource: "events", action: "view", route: "admin.events.legacy-create" },
+      },
       {
         method: "GET",
         path: "/admin/events/:key",
