@@ -10,24 +10,24 @@ import {
   other,
   previous,
   red,
+  rollbackRouting,
   runFixture,
   stubWrangler,
+  tooOld,
 } from "./fixtures/manual-rollback.mjs";
 
 test("protected manual rollback proves admission and live-version refusals before mutation", async (t) => {
-  const { jobs, env } = parse(readFileSync(".github/workflows/rollback-production.yml", "utf8"));
+  const workflow = parse(readFileSync(".github/workflows/rollback-production.yml", "utf8"));
+  const { jobs } = workflow;
   const rollback = jobs["rollback-production"];
   const [dispatchGuard, checkout, , resolve] = jobs.preflight.steps;
-  const [dispatcherCheckout, , recheck, scriptsCheckout, checkoutGuard] = rollback.steps;
+  const [dispatcherCheckout, setupNode, recheck, scriptsCheckout, checkoutGuard] = rollback.steps;
   const guard = rollback.steps.find((step) => step.id === "guard");
   const mutation = rollback.steps.find((step) => step.id === "rollback");
   const approvedSha = "${{ needs.preflight.outputs.sha }}";
-  assert.match(
-    env.MANUAL_PRODUCTION_ROLLBACK,
-    /github\.event_name == 'workflow_dispatch' && github\.workflow_ref == format\(/,
-  );
   assert.equal(checkout.with.ref, "${{ env.LEGACY_SCRIPTS_REF }}");
   assert.equal(dispatcherCheckout.with.ref, "${{ github.sha }}");
+  assert.equal(setupNode.with["package-manager-cache"], false);
   assert.equal(resolve.env.DEPLOY_SHA, "${{ inputs.ref }}");
   assert.equal(jobs.preflight.outputs.sha, "${{ steps.manual-scripts.outputs.sha }}");
   assert.equal(rollback.needs, "preflight");
@@ -49,19 +49,41 @@ test("protected manual rollback proves admission and live-version refusals befor
     },
   ).trim();
   assert.notEqual(dispatcher, green);
+  assert.deepEqual(rollbackRouting(workflow, dispatcher), {
+    manual: true,
+    trusted: true,
+    legacyRef: dispatcher,
+  });
+  assert.deepEqual(rollbackRouting(workflow, dispatcher, { ENVIRONMENT: "staging" }), {
+    manual: false,
+    trusted: true,
+    legacyRef: dispatcher,
+  });
+  for (const WORKFLOW of ["deploy-production", "staging-rollback-drill"]) {
+    assert.deepEqual(rollbackRouting(workflow, dispatcher, { WORKFLOW }), {
+      manual: false,
+      trusted: true,
+      legacyRef: green,
+    });
+  }
   const cases = [
     ["green ancestor while dispatch-tip CI is pending", {}],
     ["already restored", { LIVE: previous }],
     ["recover a known partial promotion", { SPLIT: previous }],
     ["refuse an unknown split", { SPLIT: other }, /split traffic must serve only/],
     ["wrong currently serving UUID", { LIVE: other }, /is neither the expected/],
-    ["unknown dispatch workflow", { TRUSTED_WORKFLOW: "false" }, /Unknown rollback dispatch/],
+    ["unknown dispatch workflow", { WORKFLOW: "unknown" }, /Unknown rollback dispatch/],
     ["off-main dispatch", { GITHUB_REF: "refs/heads/topic" }, /protected main/],
     ["unprotected main", { GITHUB_REF_PROTECTED: "false" }, /protected main/],
     ["missing scripts SHA", { DEPLOY_SHA: "" }, /full lowercase 40-hex SHA/],
     ["malformed scripts SHA", { DEPLOY_SHA: `${green}\n` }, /full lowercase 40-hex SHA/],
     ["nonancestor scripts SHA", { DEPLOY_SHA: "d".repeat(40) }, /not an ancestor/],
     ["red scripts CI", { DEPLOY_SHA: red }, /Full CI has not completed successfully/],
+    [
+      "green SHA predates rollback tooling",
+      { DEPLOY_SHA: tooOld },
+      /predates the supported rollback tooling/,
+    ],
     ["CI turned red after preflight", { RERUN: "true" }, /Full CI has not completed successfully/],
     ["missing current UUID", { EXPECTED_CURRENT_VERSION_ID: "" }, /lowercase UUID/],
     ["same current and prior UUID", { EXPECTED_CURRENT_VERSION_ID: previous }, /must differ/],
@@ -73,7 +95,7 @@ test("protected manual rollback proves admission and live-version refusals befor
   const steps = { dispatchGuard, resolve, recheck, guard, mutation };
   for (const [name, overrides, error] of cases) {
     await t.test(name, () => {
-      const { result, calls, commands } = runFixture(dir, steps, dispatcher, overrides);
+      const { result, calls, commands } = runFixture(dir, workflow, steps, dispatcher, overrides);
       assert.ifError(result.error);
       assert.equal(result.status, error ? 1 : 0, result.stdout + result.stderr);
       if (error) assert.match(result.stderr + result.stdout, error);

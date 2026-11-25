@@ -6,6 +6,8 @@ const repository = "TogetherWeOwn/two-web-next";
 // Protected main push CI runs 45628441721 (green) and 45613104834 (red).
 export const green = "4afdce3da8ed9b5c5df1647f1d055eb700a7b5db";
 export const red = "b7e08dad6cc34864709f9d76a01ef80a062d13a1";
+export const tooOld = "62abf8c28d216771950490b406560f2a154d51b2";
+const scriptsFloor = "77de045d40bcf597dce813ce62b8de69029b2412";
 export const previous = "77777777-7777-4777-8777-777777777777";
 const expected = "88888888-8888-4888-8888-888888888888";
 export const other = "99999999-9999-4999-8999-999999999999";
@@ -34,7 +36,7 @@ function ciResponses(sha, id, status, conclusion) {
 }
 
 function githubResponses(sha, dispatcher, rerun) {
-  const ancestor = [red, green].includes(sha);
+  const ancestor = [red, green, tooOld].includes(sha);
   const preflight = [
     {
       match: "/environments/production",
@@ -56,8 +58,20 @@ function githubResponses(sha, dispatcher, rerun) {
         merge_base_commit: { sha: ancestor ? sha : red },
       },
     },
+    {
+      match: `/compare/${scriptsFloor}...${sha}`,
+      body: {
+        status: sha === tooOld ? "behind" : "ahead",
+        behind_by: sha === tooOld ? 1 : 0,
+        ahead_by: 2,
+        total_commits: 2,
+        base_commit: { sha: scriptsFloor },
+        merge_base_commit: { sha: scriptsFloor },
+      },
+    },
     ...ciResponses(green, 45628441721, "completed", "success"),
     ...ciResponses(red, 45613104834, "completed", "failure"),
+    ...ciResponses(tooOld, 2, "completed", "success"),
     ...ciResponses(dispatcher, 1, "in_progress", null),
   ];
   const recheck = rerun
@@ -81,11 +95,41 @@ case "$*" in
 esac
 `;
 
+// The selectors here use only boolean operators, equality, and format().
+// Exercise their YAML expressions against representative Actions contexts.
+export function rollbackRouting(workflow, dispatcher, overrides = {}) {
+  const { env, jobs } = workflow;
+  const ref = overrides.GITHUB_REF ?? "refs/heads/main";
+  const entry = overrides.WORKFLOW ?? "rollback-production";
+  const inputs = { environment: overrides.ENVIRONMENT ?? "production", ref: green };
+  const github = {
+    repository,
+    ref,
+    sha: dispatcher,
+    event_name: "workflow_dispatch",
+    workflow_ref: `${repository}/.github/workflows/${entry}.yml@${ref}`,
+  };
+  const format = (template, ...args) => template.replace(/\{(\d+)\}/g, (_, index) => args[index]);
+  const select = (expression) =>
+    new Function("inputs", "github", "format", `return (${expression.slice(3, -2)})`)(
+      inputs,
+      github,
+      format,
+    );
+  return {
+    manual: select(env.MANUAL_PRODUCTION_ROLLBACK),
+    trusted: select(jobs.preflight.steps[0].env.TRUSTED_WORKFLOW),
+    legacyRef: select(env.LEGACY_SCRIPTS_REF),
+  };
+}
+
 // Provide a fresh set of canned responses and command logs to each case.
-export function runFixture(dir, steps, dispatcher, overrides) {
+export function runFixture(dir, workflow, steps, dispatcher, overrides) {
   const { dispatchGuard, resolve, recheck, guard, mutation } = steps;
+  const routing = rollbackRouting(workflow, dispatcher, overrides);
   const script = `
         ${dispatchGuard.run}
+        test "$MANUAL_PRODUCTION_ROLLBACK" = true
         ${resolve.run}
         read -r pinned < "$GITHUB_OUTPUT"
         test "$pinned" = "sha=$DEPLOY_SHA"
@@ -120,8 +164,8 @@ export function runFixture(dir, steps, dispatcher, overrides) {
       GITHUB_REPOSITORY: repository,
       GITHUB_SHA: dispatcher,
       GITHUB_TOKEN: "fixture",
-      TRUSTED_WORKFLOW: "true",
-      MANUAL_PRODUCTION_ROLLBACK: "true",
+      TRUSTED_WORKFLOW: String(routing.trusted),
+      MANUAL_PRODUCTION_ROLLBACK: String(routing.manual),
       PRODUCTION_DEPLOY_ENABLED: "true",
       DEPLOY_SHA: sha,
       ROLLBACK_VERSION_ID: previous,

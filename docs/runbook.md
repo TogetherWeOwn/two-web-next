@@ -837,8 +837,9 @@ workflow, branch `main`, `environment` `production` (the default),
 `version_id` set to the recorded known-good Worker Version ID, and
 `expected_current_version_id` set to the currently serving Worker Version ID.
 Supply distinct lowercase UUIDs and set `ref` to the full lowercase 40-hex
-SHA whose rollback scripts should run. Pick a protected `main` ancestor with
-successful push CI on that exact SHA. The dispatch can run from protected
+SHA whose rollback scripts should run. Pick a protected `main` ancestor at or
+after [the rollback drill rollout](https://github.com/TogetherWeOwn/two-web-next/pull/1991)
+with successful push CI on that exact SHA. The dispatch can run from protected
 `main` while unrelated CI for its tip is pending or red. The dispatcher
 verifies ancestry and CI before checking out the selected scripts and repeats
 the checks inside the protected job. The current-version guard skips the
@@ -1091,8 +1092,8 @@ for approval already holds the `production-worker-mutation` lock, and a second
 job in the group cannot be approved until the first is approved or cancelled,
 so an unapproved promotion blocks the rollback indefinitely. Confirm the
 active run has stopped and check again for newly queued runs, then confirm the
-Worker version that is live and dispatch `rollback-production` with the
-recorded known-good version ID.
+Worker version that is live and follow the
+[production rollback instructions](#production-one-click-workflow).
 Serialization queues a promotion and a rollback behind each other but cancels
 neither and promises no FIFO order: after stopping a bad promotion, also
 cancel any queued `deploy-production` runs, or the queued promotion will run
@@ -1764,10 +1765,10 @@ under that declaration's terms; watch exit alone does not lift a freeze.
 
 **On a Sev-1** (pager storm, `/up` non-200 or `db:error`/pending nonzero,
 a red after-gate, or member-visible breakage): contain per the queue and
-outage sections above, then roll back with the one-click
-[rollback-production](../.github/workflows/rollback-production.yml)
-workflow to the version ID recorded before the release. A Worker rollback
-does not undo schema, data or Discord side effects. The 48h clock restarts
+outage sections above, then [dispatch production rollback](#production-one-click-workflow)
+with the recorded prior UUID, the expected live UUID, and a supported green
+scripts SHA. A Worker rollback does not undo schema, data or Discord side
+effects. The 48h clock restarts
 after the re-flip.
 
 ## Read `/up` without mistaking liveness for readiness

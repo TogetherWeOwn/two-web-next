@@ -109,42 +109,11 @@ export function isAlreadyLive(deploySha, liveSha) {
   );
 }
 
-function isForwardComparison(comparison, baseSha) {
-  // Exact SHA refs bind the requested head. Require consistent identities and
-  // counts without relying on the possibly paginated commits array.
-  return (
-    comparison?.status === "ahead" &&
-    Number.isSafeInteger(comparison.ahead_by) &&
-    comparison.ahead_by > 0 &&
-    comparison.behind_by === 0 &&
-    comparison.total_commits === comparison.ahead_by &&
-    comparison.base_commit?.sha === baseSha &&
-    comparison.merge_base_commit?.sha === baseSha
-  );
-}
-
-async function compareCommits(env, base, head, fetchImpl) {
-  const response = await fetchImpl(
-    `https://api.github.com/repos/${env.GITHUB_REPOSITORY}/compare/${base}...${head}`,
-    {
-      headers: {
-        Authorization: `Bearer ${env.GITHUB_TOKEN}`,
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-      },
-      redirect: "error",
-      signal: AbortSignal.timeout(10_000),
-    },
-  );
-  if (!response.ok) throw new Error(`GitHub ancestry lookup failed (HTTP ${response.status})`);
-  return response.json();
-}
-
 // Default selection is monotonic even when staging eligibility falls back to
 // an older green. Run from the workflow-head checkout before candidate code.
 // An explicit dispatch only selects the existing recovery route; it grants no
 // authorization and does not replace any of that route's other gates.
-export async function checkPromotionAncestry(env, { fetchImpl = fetch } = {}) {
+export async function checkPromotionAncestry(env, { fetchImpl = fetch, refusal } = {}) {
   const targetSha = env.DEPLOY_SHA;
   if (!/^[0-9a-f]{40}$/.test(targetSha)) {
     throw new Error("Promotion ancestry requires a full 40-hex DEPLOY_SHA");
@@ -168,9 +137,37 @@ export async function checkPromotionAncestry(env, { fetchImpl = fetch } = {}) {
     throw new Error("Promotion ancestry requires GITHUB_REPOSITORY owner/repo");
   }
   if (!env.GITHUB_TOKEN) throw new Error("Promotion ancestry requires GITHUB_TOKEN");
-  if (!isForwardComparison(await compareCommits(env, liveSha, targetSha, fetchImpl), liveSha)) {
+  const response = await fetchImpl(
+    `https://api.github.com/repos/${env.GITHUB_REPOSITORY}/compare/${liveSha}...${targetSha}`,
+    {
+      headers: {
+        Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      redirect: "error",
+      signal: AbortSignal.timeout(10_000),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`Promotion ancestry lookup failed (HTTP ${response.status})`);
+  }
+  const comparison = await response.json();
+  // Exact SHA refs bind the requested head. Require the base and merge-base
+  // identities plus consistent counts, not a status string alone. Do not use
+  // the commits array: GitHub can paginate/truncate it for large comparisons.
+  if (
+    comparison?.status !== "ahead" ||
+    !Number.isSafeInteger(comparison.ahead_by) ||
+    comparison.ahead_by <= 0 ||
+    comparison.behind_by !== 0 ||
+    comparison.total_commits !== comparison.ahead_by ||
+    comparison.base_commit?.sha !== liveSha ||
+    comparison.merge_base_commit?.sha !== liveSha
+  ) {
     throw new Error(
-      `Default promotion refused: ${targetSha} is not a verified forward descendant of live ${liveSha} (behind, divergent or invalid ancestry evidence)`,
+      refusal ??
+        `Default promotion refused: ${targetSha} is not a verified forward descendant of live ${liveSha} (behind, divergent or invalid ancestry evidence)`,
     );
   }
   return "ahead";
@@ -1114,13 +1111,24 @@ export async function checkProductionGate(env, fetchEnvironment = fetch, options
   assertProductionProtection(await response.json(), { autoApprove });
   if (rollback && options.beforeScriptsCheckout) {
     const sha = env.DEPLOY_SHA;
-    const dispatcher = env.GITHUB_SHA;
-    if (
-      sha !== dispatcher &&
-      !isForwardComparison(await compareCommits(env, sha, dispatcher, fetchEnvironment), sha)
-    ) {
-      throw new Error("Rollback scripts ref is not an ancestor of the protected main dispatch");
-    }
+    // The same compare proof binds two exact SHAs. Clear explicit promotion
+    // input so rollback always verifies ancestry through this shared guard.
+    const requireAncestor = (base, head, refusal) =>
+      checkPromotionAncestry(
+        { ...env, INPUT_SHA: "", LIVE_SHA: base, DEPLOY_SHA: head },
+        { fetchImpl: fetchEnvironment, refusal },
+      );
+    await requireAncestor(
+      sha,
+      env.GITHUB_SHA,
+      "Rollback scripts ref is not an ancestor of the protected main dispatch",
+    );
+    // The first revision with the rollback target resolver and identity smoke.
+    await requireAncestor(
+      "77de045d40bcf597dce813ce62b8de69029b2412",
+      sha,
+      "Rollback scripts ref predates the supported rollback tooling (#1991)",
+    );
     return requireSuccessfulMainPushCi(
       { repository: env.GITHUB_REPOSITORY, sha },
       { token: env.GITHUB_TOKEN, fetchImpl: fetchCi },
