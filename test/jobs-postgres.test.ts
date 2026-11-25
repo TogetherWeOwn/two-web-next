@@ -21,6 +21,9 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
   let sql: postgres.Sql;
   const own = (prefix: string) => `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
   const unavailable = { kind: "unavailable" };
+  const retry = { retryInSeconds: 120 };
+  const advanceRetry = (key: string) => sql`update announcement_send_claims
+    set claim_until = clock_timestamp() - interval '1 second' where idempotency_key = ${key}`;
   beforeAll(async () => {
     fixture = await createJobsFixture(process.env.DATABASE_URL!, { max: 4 });
     sql = fixture.client;
@@ -42,19 +45,72 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
       if (attempts > 1)
         expect(await store.finishAnnouncement(key, attempts - 1, "closed")).toBe(false);
       if (attempts < CALL_INTERNAL_ACTION.tries) {
-        expect(await store.finishAnnouncement(key, attempts, "retryable")).toBe(true);
+        expect(await store.finishAnnouncement(key, attempts, retry)).toBe(true);
+        await advanceRetry(key);
         // A different alias cannot acquire even an otherwise eligible slot.
         expect(await store.claimAnnouncement(key, "other-channel", queuedAt)).toEqual(unavailable);
       }
     }
     const attempts = CALL_INTERNAL_ACTION.tries;
-    await expect(store.finishAnnouncement(key, attempts, "retryable")).rejects.toThrow(
+    await expect(store.finishAnnouncement(key, attempts, retry)).rejects.toThrow(
       "Invalid announcement claim settlement",
     );
     expect(await claim()).toMatchObject({ kind: "sending", attempts });
-    expect(await store.finishAnnouncement(key, attempts, "closed")).toBe(true);
+    const jobId = crypto.randomUUID();
+    await pgQueueLedger(sql).enqueued({
+      jobId,
+      kind: "announcement",
+      key: null,
+      availableAt: queuedAt,
+    });
+    expect(await store.finishAnnouncement(key, attempts, { done: true, jobId })).toBe(true);
     expect(await claim()).toMatchObject({ kind: "closed", attempts });
-    expect(await store.finishAnnouncement(key, attempts - 1, "retryable")).toBe(false);
+    expect(await sql`select 1 from queue_jobs where job_id = ${jobId}`).toEqual([]);
+    expect(await store.finishAnnouncement(key, attempts - 1, retry)).toBe(false);
+  });
+
+  it("holds duplicate announcements until the committed retry deadline", async () => {
+    const store = pgReconciliationStore(sql);
+    const key = crypto.randomUUID();
+    const queuedAt = new Date();
+    const claim = () => store.claimAnnouncement(key, "fixture-channel", queuedAt);
+    expect(await claim()).toMatchObject({ kind: "claimed", attempts: 1 });
+    expect(await store.finishAnnouncement(key, 1, retry)).toBe(true);
+
+    const [[current], ...duplicates] = await Promise.all([
+      sql`select send_attempts, claim_until > clock_timestamp() + interval '110 seconds' as delayed
+        from announcement_send_claims where idempotency_key = ${key}`,
+      claim(),
+      claim(),
+    ]);
+    expect(current).toEqual({ send_attempts: 1, delayed: true });
+    for (const duplicate of duplicates) {
+      if (duplicate.kind !== "waiting") throw new Error("expected a retry deadline");
+      expect(duplicate.attempts).toBe(1);
+      expect(duplicate.retryInSeconds).toBeGreaterThan(110);
+      expect(duplicate.retryInSeconds).toBeLessThanOrEqual(120);
+    }
+
+    await advanceRetry(key);
+    const due = await Promise.all([claim(), claim()]);
+    expect(due.map((result) => result.kind).sort()).toEqual(["claimed", "sending"]);
+    for (const result of due) expect(result).toMatchObject({ attempts: 2 });
+  });
+
+  it("admits the maximum integer retry delay and rejects invalid bounds", async () => {
+    const store = pgReconciliationStore(sql);
+    const key = crypto.randomUUID();
+    const claim = () => store.claimAnnouncement(key, "fixture-channel", new Date());
+    expect(await claim()).toMatchObject({ kind: "claimed", attempts: 1 });
+    for (const retryInSeconds of [0, 1.5, 86_401])
+      await expect(store.finishAnnouncement(key, 1, { retryInSeconds })).rejects.toThrow(
+        "Invalid announcement claim settlement",
+      );
+    expect(await store.finishAnnouncement(key, 1, { retryInSeconds: 86_400 })).toBe(true);
+    const waiting = await claim();
+    if (waiting.kind !== "waiting") throw new Error("expected a retry deadline");
+    expect(waiting.retryInSeconds).toBeGreaterThan(86_390);
+    expect(waiting.retryInSeconds).toBeLessThanOrEqual(86_400);
   });
 
   it("does not count a rejected database reservation", async () => {
@@ -63,7 +119,8 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
     const queuedAt = new Date();
     const claim = () => store.claimAnnouncement(key, "fixture-channel", queuedAt);
     expect(await claim()).toMatchObject({ kind: "claimed", attempts: 1 });
-    expect(await store.finishAnnouncement(key, 1, "retryable")).toBe(true);
+    expect(await store.finishAnnouncement(key, 1, retry)).toBe(true);
+    await advanceRetry(key);
     await sql`alter table announcement_send_claims add constraint fixture_reject_second_send
       check (send_attempts <> 2) not valid`;
     try {
@@ -83,7 +140,7 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
     const locked = new Promise<void>((resolve) => {
       markLocked = resolve;
     });
-    const settling = locked.then(() => store.finishAnnouncement(key, 1, "retryable"));
+    const settling = locked.then(() => store.finishAnnouncement(key, 1, retry));
     const holding = sql.begin(async (tx) => {
       const [holder] = await tx<{ pid: number; claim_until: Date }[]>`
         select pg_backend_pid() as pid, claim_until
@@ -130,7 +187,7 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
     await sql`update announcement_send_claims set claim_until = now() - interval '31 days'
       where idempotency_key = ${key}`;
     expect(await claim()).toMatchObject({ kind: "abandoned", attempts: 1 });
-    expect(await store.finishAnnouncement(key, 1, "retryable")).toBe(false);
+    expect(await store.finishAnnouncement(key, 1, retry)).toBe(false);
     await expect(store.recordAnnouncement(key, 1, evidence)).rejects.toThrow("claim changed");
     await store.recordAnnouncement(key, 1, null);
     expect(await claim()).toMatchObject({ kind: "closed", attempts: 1 });

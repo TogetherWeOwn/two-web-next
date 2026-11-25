@@ -1,14 +1,16 @@
 import { alertQueueFailing } from "../alerts";
 import { AlertProbeError } from "../alert-probe-error";
 import { safeRequestId } from "../request-log";
-import { CALL_INTERNAL_ACTION, SYNC_EVENT, backoffFor } from "./constants";
+import { handleCallInternalAction } from "./call-internal-action";
 import {
   ANNOUNCEMENT_RECONCILIATION_REASON,
-  handleCallInternalAction,
-} from "./call-internal-action";
+  CALL_INTERNAL_ACTION,
+  SYNC_EVENT,
+  backoffFor,
+} from "./constants";
 import { toQueueMessage } from "./envelope";
 import { INTERNAL_ACTION_DEADLINE_MS } from "./internal-action-deadline";
-import type { pgReconciliationStore } from "./reconciliation";
+import { type pgReconciliationStore, validAnnouncementIdentity } from "./reconciliation";
 import { queueExceptionClass, sanitizeQueueScope } from "./queue-error";
 import { SYNC_RETRY_PERSISTENCE_REASON, SyncRetryPersistenceError } from "./types";
 import { projectSyncRetryDiagnostic, type SyncRetryDiagnostic } from "./sync-retry-diagnostic";
@@ -262,6 +264,7 @@ export async function consume(
       console.warn("sync retry classified", projectSyncRetryDiagnostic(receipt));
     };
     let outcome: Outcome;
+    let terminalLedgerSettled = false;
     try {
       if (body.kind === "alert-probe") {
         // Poison only the synthetic job, only when the runtime's QA gate is on.
@@ -272,16 +275,21 @@ export async function consume(
         const store = deps.announcementClaims;
         if (!m.timestamp) throw new Error("Missing announcement carrier timestamp");
         const { idempotencyKey: id, action } = body;
-        const claim = await requireAnnouncementStore(
-          store.claimAnnouncement(id, action.channelKey, m.timestamp),
-        );
+        const claim = validAnnouncementIdentity(id, action.channelKey)
+          ? await requireAnnouncementStore(
+              store.claimAnnouncement(id, action.channelKey, m.timestamp),
+            )
+          : { kind: "unavailable" as const };
         if (claim.kind === "unavailable") {
           outcome = { failed: "announcement.post carrier unavailable" };
+        } else if (claim.kind === "waiting") {
+          outcome = { retryInSeconds: claim.retryInSeconds };
         } else if (claim.kind === "closed") {
           outcome = { done: true };
         } else if (claim.kind === "abandoned") {
           // A failed settlement leaves the send fenced. Do not infer a wire outcome.
-          await requireAnnouncementStore(store.recordAnnouncement(id, claim.attempts, null));
+          await requireAnnouncementStore(store.recordAnnouncement(id, claim.attempts, null, jobId));
+          terminalLedgerSettled = true;
           outcome = { failed: ANNOUNCEMENT_RECONCILIATION_REASON };
         } else {
           const remainingMs = claim.claimUntil.getTime() - (deps.now?.() ?? new Date()).getTime();
@@ -294,17 +302,18 @@ export async function consume(
             const result = await handleCallInternalAction(body, claim.attempts, deps.bot, true);
             if ("announcementEvidence" in result) {
               await requireAnnouncementStore(
-                store.recordAnnouncement(id, claim.attempts, result.announcementEvidence),
+                store.recordAnnouncement(id, claim.attempts, result.announcementEvidence, jobId),
               );
             } else {
-              const state = "retryInSeconds" in result ? "retryable" : "closed";
+              const settlement = "retryInSeconds" in result ? result : { ...result, jobId };
               if (
                 !(await requireAnnouncementStore(
-                  store.finishAnnouncement(id, claim.attempts, state),
+                  store.finishAnnouncement(id, claim.attempts, settlement),
                 ))
               )
                 throw new Error("Announcement claim changed before settlement");
             }
+            terminalLedgerSettled = !("retryInSeconds" in result);
             outcome = result;
           }
         }
@@ -448,8 +457,9 @@ export async function consume(
       }
       console.error("job failed", body.kind, outcome.failed);
       alertFailing(body.kind, m.attempts, outcome.failed, { requestId }, syncRetry);
-      if (jobId) await bounded("failed", deps.ledger.failed(jobId, body.kind, key, outcome.failed));
-    } else if (jobId) {
+      if (jobId && !terminalLedgerSettled)
+        await bounded("failed", deps.ledger.failed(jobId, body.kind, key, outcome.failed));
+    } else if (jobId && !terminalLedgerSettled) {
       await bounded("dequeued", deps.ledger.dequeued(jobId));
     }
     if (body.kind === "sync-event") {

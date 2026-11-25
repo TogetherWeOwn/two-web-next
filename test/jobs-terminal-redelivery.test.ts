@@ -218,7 +218,8 @@ describe.skipIf(!process.env.DATABASE_URL).each([
     expect(await pgQueueDepth(sql)).toEqual({ ...emptyLiveDepth, failed: 1 });
   });
 
-  it("acknowledges a terminal consumer delivery with one durable failure across redelivery", async () => {
+  it.each(["legacy", "claim", "lost"])("deduplicates refusal: %s", async (mode) => {
+    const claimed = mode !== "legacy";
     const id = randomUUID();
     const idempotencyKey = randomUUID();
     const ledger = pgQueueLedger(sql);
@@ -228,17 +229,23 @@ describe.skipIf(!process.env.DATABASE_URL).each([
       key: null,
       availableAt: new Date(Date.now() - 1000),
     });
-    const bot = {
-      postAnnouncement: async () => {
-        throw new BotTerminalError("synthetic terminal failure");
-      },
-    } as unknown as BotClient;
+    const postAnnouncement = vi.fn(async () => {
+      throw new BotTerminalError("synthetic terminal failure");
+    });
+    const bot = { postAnnouncement } as unknown as BotClient;
+    const announcementClaims = pgReconciliationStore(sql);
+    const finish = announcementClaims.finishAnnouncement;
+    if (mode === "lost")
+      vi.spyOn(announcementClaims, "finishAnnouncement").mockImplementationOnce(async (...args) => {
+        await finish(...args);
+        throw new Error("commit response lost");
+      });
     const deps = {
       bot,
       events: {} as EventStore,
       lock: {} as UniqueLock,
       ledger,
-      announcementReconciliation: pgReconciliationStore(sql),
+      announcementClaims: claimed ? announcementClaims : undefined,
     };
     const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -259,8 +266,9 @@ describe.skipIf(!process.env.DATABASE_URL).each([
           retry: vi.fn(),
         };
         await consume({ messages: [message] }, deps);
-        expect(message.ack).toHaveBeenCalledOnce();
-        expect(message.retry).not.toHaveBeenCalled();
+        const responseLost = mode === "lost" && delivery === 0;
+        expect(message.ack).toHaveBeenCalledTimes(responseLost ? 0 : 1);
+        expect(message.retry).toHaveBeenCalledTimes(responseLost ? 1 : 0);
         const rows = await failures();
         expect(rows).toHaveLength(1);
         expect(rows[0]).toMatchObject({ job_id: id, kind: "announcement", key: null });
@@ -268,11 +276,74 @@ describe.skipIf(!process.env.DATABASE_URL).each([
         else expect(rows).toEqual(original);
         expect(await pgQueueDepth(sql)).toEqual({ ...emptyLiveDepth, failed: 1 });
       }
+      expect(postAnnouncement).toHaveBeenCalledTimes(claimed ? 1 : 2);
       expect(warnings).not.toHaveBeenCalled();
     } finally {
       warnings.mockRestore();
       errors.mockRestore();
     }
+  });
+
+  it("rolls back a refused claim when the ledger rejects it, then reconciles redelivery", async () => {
+    const id = randomUUID();
+    const idempotencyKey = randomUUID();
+    const timestamp = new Date();
+    const ledger = pgQueueLedger(sql);
+    await ledger.enqueued({ jobId: id, kind: "announcement", key: null, availableAt: timestamp });
+    const postAnnouncement = vi.fn(async () => {
+      throw new BotTerminalError("synthetic refusal");
+    });
+    const deps = {
+      bot: { postAnnouncement } as unknown as BotClient,
+      events: {} as EventStore,
+      lock: {} as UniqueLock,
+      ledger,
+      announcementClaims: pgReconciliationStore(sql),
+    };
+    const deliver = async (attempts: number) => {
+      const message = {
+        body: {
+          kind: "announcement",
+          idempotencyKey,
+          jobId: id,
+          action: { channelKey: "fixture", body: "synthetic" },
+        },
+        timestamp,
+        attempts,
+        ack: vi.fn(),
+        retry: vi.fn(),
+      };
+      await consume({ messages: [message] }, deps);
+      return message;
+    };
+    await sql`alter table queue_failed_jobs add constraint fixture_refuses_announcement
+      check (kind <> 'announcement')`;
+    try {
+      const refused = await deliver(1);
+      expect(refused.ack).not.toHaveBeenCalled();
+      expect(refused.retry).toHaveBeenCalledOnce();
+      expect(await failures()).toEqual([]);
+      expect(
+        await deps.announcementClaims.claimAnnouncement(idempotencyKey, "fixture", timestamp),
+      ).toMatchObject({ kind: "sending", attempts: 1 });
+    } finally {
+      await sql`alter table queue_failed_jobs drop constraint fixture_refuses_announcement`;
+    }
+
+    await sql`update announcement_send_claims set claim_until = clock_timestamp()
+      where idempotency_key = ${idempotencyKey}`;
+    const recovered = await deliver(2);
+    expect(recovered.ack).toHaveBeenCalledOnce();
+    expect(recovered.retry).not.toHaveBeenCalled();
+    expect(postAnnouncement).toHaveBeenCalledOnce();
+    expect(await failures()).toMatchObject([
+      { job_id: id, reason: "announcement.post requires reconciliation" },
+    ]);
+    expect(await pgQueueDepth(sql)).toEqual({ ...emptyLiveDepth, failed: 1 });
+    expect(
+      await sql`select attempts, last_code, last_status from bot_reconciliation_intents
+      where idempotency_key = ${idempotencyKey}`,
+    ).toEqual([{ attempts: 1, last_code: null, last_status: null }]);
   });
 
   it("upgrades historical duplicates, preserving the first row and same-key dispatches", async () => {

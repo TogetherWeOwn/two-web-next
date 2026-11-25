@@ -16,6 +16,8 @@ export const CALL_INTERNAL_ACTION = {
   backoffSeconds: [5, 15, 60, 180], // :78 BACKOFF
 } as const;
 
+export const ANNOUNCEMENT_RECONCILIATION_REASON = "announcement.post requires reconciliation";
+
 // routes/console.php + config/member_access_log.php:14
 export const MEMBER_ACCESS_LOG_RETENTION_DAYS = 90;
 export const AGENT_EVENT_AUDIT_RETENTION_DAYS = 90;

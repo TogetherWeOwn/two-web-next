@@ -472,6 +472,7 @@ describe("CallInternalAction", () => {
         ann.idempotencyKey,
         attempt,
         { lastCode: failure.code, lastStatus: failure.status },
+        null,
       );
       expect(announcementClaims.finishAnnouncement).not.toHaveBeenCalled();
       announcementClaims.claimAnnouncement.mockResolvedValueOnce({
@@ -511,9 +512,41 @@ describe("CallInternalAction", () => {
     expect(announcementClaims.finishAnnouncement).toHaveBeenCalledExactlyOnceWith(
       ann.idempotencyKey,
       1,
-      "retryable",
+      { retryInSeconds: 5 },
     );
     expect(postAnnouncement).toHaveBeenCalledExactlyOnceWith(ann.action, ann.idempotencyKey);
+    announcementClaims.claimAnnouncement.mockResolvedValueOnce({
+      kind: "waiting",
+      attempts: 1,
+      retryInSeconds: 87,
+    });
+    const early = msg(ann, 7, timestamp);
+    await consume({ messages: [early] }, deps);
+    expect(early.retried).toBe(87);
+    expect(early.acked).toBe(false);
+    expect(postAnnouncement).toHaveBeenCalledOnce();
+  });
+
+  it("discards invalid announcement keys and aliases before acquiring a claim", async () => {
+    const announcementClaims = announcementStore();
+    const postAnnouncement = vi.fn();
+    const deliveries = [
+      msg({ ...ann, idempotencyKey: "invalid-key" }),
+      msg({ ...ann, action: { ...ann.action, channelKey: "a".repeat(65) } }),
+    ];
+    await consume(
+      { messages: deliveries },
+      {
+        bot: { postAnnouncement } as unknown as BotClient,
+        events: store(),
+        lock: memLock(),
+        ledger: memLedger(),
+        announcementClaims,
+      },
+    );
+    expect(deliveries.map((delivery) => delivery.acked)).toEqual([true, true]);
+    expect(announcementClaims.claimAnnouncement).not.toHaveBeenCalled();
+    expect(postAnnouncement).not.toHaveBeenCalled();
   });
 
   it("recovers an expired claim after a hard-stop write error without another send", async () => {
@@ -540,8 +573,8 @@ describe("CallInternalAction", () => {
     await consume({ messages: [redelivery] }, deps);
     expect(redelivery.acked).toBe(true);
     expect(announcementClaims.recordAnnouncement.mock.calls).toEqual([
-      [ann.idempotencyKey, 1, { lastCode: "needs_reconciliation", lastStatus: 409 }],
-      [ann.idempotencyKey, 1, null],
+      [ann.idempotencyKey, 1, { lastCode: "needs_reconciliation", lastStatus: 409 }, null],
+      [ann.idempotencyKey, 1, null, null],
     ]);
     expect(postAnnouncement).toHaveBeenCalledExactlyOnceWith(ann.action, ann.idempotencyKey);
   });
