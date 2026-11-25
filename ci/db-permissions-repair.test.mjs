@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import { PLANETSCALE_PRODUCTION_BRANCH_ID, PLANETSCALE_PRODUCTION_HOST } from "./db-migrate.mjs";
 import { runRepair } from "./db-permissions-repair.mjs";
+import { runExecutorAuthority } from "./db-repair-executor.mjs";
 import { runServingIsolation } from "./db-serving-ledger-isolation.mjs";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
@@ -439,4 +440,41 @@ test("executor dispatch scopes its credential and suppresses subprocess output",
       code ? "Executor membership operation did not confirm an outcome.\n" : "",
     );
   }
+});
+
+test("executor authority refuses changed plan bytes before connecting", async (t) => {
+  const hash = (value) => createHash("sha256").update(value).digest("hex");
+  const operation = "provision";
+  const identity = hash("postgres\0repair_provisioner");
+  const plan = JSON.stringify({ operation, executor: "repair_executor", identity });
+  const approvedDigest = hash(plan);
+  const env = {
+    PRODUCTION_DB_EXECUTOR_PLAN: plan,
+    PRODUCTION_DB_EXECUTOR_PLAN_SHA256: approvedDigest,
+    PRODUCTION_DB_EXECUTOR_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:synthetic@${PLANETSCALE_PRODUCTION_HOST}/postgres?sslmode=verify-full`,
+  };
+  const admitted = new Error("Fixture reached the transaction boundary");
+  const connect = t.mock.fn((config) => {
+    assert.equal(config.identity, identity);
+    return {
+      async begin() {
+        throw admitted;
+      },
+      async end() {},
+    };
+  });
+
+  // A trailing space preserves the parsed plan and changes the approved bytes.
+  const changedPlan = `${plan} `;
+  await assert.rejects(
+    runExecutorAuthority(operation, { ...env, PRODUCTION_DB_EXECUTOR_PLAN: changedPlan }, connect),
+    { code: "ERR_ASSERTION", actual: hash(changedPlan), expected: approvedDigest },
+  );
+  assert.equal(connect.mock.callCount(), 0);
+
+  await assert.rejects(
+    runExecutorAuthority(operation, env, connect),
+    (error) => error === admitted,
+  );
+  assert.equal(connect.mock.callCount(), 1);
 });
