@@ -175,6 +175,9 @@ qualifies through the [production release gate](../CONTRIBUTING.md#production-re
 the operator overrides endpoint on canonical staging or HTTP loopback. The
 operator endpoint uses its bearer independently of the moderator cookie. The
 existing Hono guard serves legacy redirects and other unowned admin paths.
+The `POST /admin/events/:key/rsvp-pause` and `POST /admin/events/:key/rsvp-reopen`
+endpoints use the shared Hono moderator guard and transition controller. With
+Admin ownership off, the Hono app serves both POSTs directly.
 
 ### Security disclosure endpoint
 

@@ -47,6 +47,7 @@ import { isTrustedHost } from "./trust-hosts";
 import {
   adminFormPath,
   admitsKitAdmin,
+  isKitAdminRsvpForm,
   kitAdminAdmission,
   KIT_ADMIN_OPS_ROUTES,
   privateAdminResponse,
@@ -1196,7 +1197,7 @@ async function dispatchKitAdminRequest(
     { flag: env.KIT_ROUTE_ADMIN, routes: KIT_ADMIN_OPS_ROUTES },
   ]);
   const formPath =
-    request.method === "POST" && adminFormPath(url.pathname, event.route?.id ?? null);
+    request.method === "POST" ? adminFormPath(url.pathname, event.route?.id ?? null) : undefined;
   const page = decideRoute(request, KIT_ADMIN_READS, url);
   const read = page && event.route?.id === page.path.replace(/:(\w+)/g, "[$1]") ? page : undefined;
   const route = operator?.route.path ?? (formPath || read?.path);
@@ -1224,6 +1225,11 @@ async function dispatchKitAdminRequest(
   const originRefused = await sameOrigin(context, async () => {});
   if (originRefused) return finish(originRefused);
   if (operator) return finish(await deps.resolve(event));
+  if (isKitAdminRsvpForm(formPath)) {
+    // The endpoint delegates moderator admission and the write to Hono.
+    event.locals = { ...(event.locals as object), requestId };
+    return finish(await deps.resolve(event));
+  }
 
   const admission = await kitAdminAdmission(context, () => deps.sessionFor?.(event));
   if (admission.kind === "refused") return finish(admission.response);

@@ -18,6 +18,10 @@ import {
   assertMixedAdminAuthRollback,
   prepareAdminFixture,
 } from "./fixtures/kit-admin-serving.mjs";
+import {
+  assertKitAdminRsvpControls,
+  prepareAdminRsvpFixture,
+} from "./fixtures/kit-admin-rsvp-controls.mjs";
 import { assertEventReadsParity } from "./fixtures/kit-event-reads-parity.mjs";
 import { assertResponseContracts } from "./fixtures/kit-response-contracts.mjs";
 import { assertStaticFeedParity } from "./fixtures/kit-static-feed-parity.mjs";
@@ -857,6 +861,26 @@ export default {
       kit: admin,
       off: kitWithSession,
       hono: honoWithSession,
+      databaseUrl,
+    });
+
+    const rsvpKitEntry = join(scratch, "kit-admin-rsvp.mjs");
+    const rsvpHonoEntry = join(scratch, "hono-admin-rsvp.mjs");
+    await prepareAdminRsvpFixture(worker, rsvpKitEntry);
+    await prepareAdminRsvpFixture(join(repo, "src/worker.ts"), rsvpHonoEntry);
+    const [rsvpKit, rsvpHono] = await Promise.all([
+      startWorker("kit-rsvp-controls", rsvpKitEntry, assets, secret),
+      startWorker("hono-rsvp-controls", rsvpHonoEntry, join(repo, "public"), secret),
+    ]);
+    await Promise.all(
+      [rsvpKit, rsvpHono].map((instance) =>
+        listen(instance.child, instance.origin, () => instance.log),
+      ),
+    );
+    await assertKitAdminRsvpControls({
+      on: { name: "kit admin on", origin: rsvpKit.origin },
+      off: { name: "kit admin off", origin: rsvpKit.origin },
+      hono: rsvpHono,
       databaseUrl,
     });
 
