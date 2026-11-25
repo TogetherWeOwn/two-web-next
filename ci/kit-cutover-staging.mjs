@@ -130,28 +130,28 @@ function verifyStagedBindings(version, id, config) {
   }
 }
 
-function context() {
+function context(env) {
   assert.ok(
-    process.env.GITHUB_ACTIONS === "true" &&
-      process.env.RUNNER_ENVIRONMENT === "github-hosted" &&
-      process.env.GITHUB_REF === "refs/heads/main" &&
-      process.env.GITHUB_EVENT_NAME === "workflow_dispatch",
+    env.GITHUB_ACTIONS === "true" &&
+      env.RUNNER_ENVIRONMENT === "github-hosted" &&
+      env.GITHUB_REF === "refs/heads/main" &&
+      env.GITHUB_EVENT_NAME === "workflow_dispatch",
     "isolated staging requires the protected main dispatch",
   );
-  const runId = process.env.GITHUB_RUN_ID;
-  const runAttempt = process.env.GITHUB_RUN_ATTEMPT;
+  const runId = env.GITHUB_RUN_ID;
+  const runAttempt = env.GITHUB_RUN_ATTEMPT;
   assert.ok(cutoverProfile === "all-off" || ember || admin, "invalid isolated cutover profile");
   const names = fixtureNames(runId, runAttempt);
   return {
     identity: {
-      sourceSha: process.env.GITHUB_SHA,
+      sourceSha: env.GITHUB_SHA,
       runId,
       runAttempt,
-      digest: process.env.CUTOVER_PACKET_DIGEST,
+      digest: env.CUTOVER_PACKET_DIGEST,
     },
     names,
     worker: `${STAGING_WORKER}-${names.suffix}`,
-    claim: join(process.env.RUNNER_TEMP, "kit-cutover-claimed.json"),
+    claim: join(env.RUNNER_TEMP, "kit-cutover-claimed.json"),
   };
 }
 
@@ -162,7 +162,7 @@ function databaseUrl() {
   );
 }
 
-async function cleanup({ claim, worker, names }, api, database) {
+async function cleanup({ claim, worker, names }, api, database, dropFixture) {
   const marker = await readFile(claim, "utf8").catch((error) => {
     if (error.code === "ENOENT") return null;
     throw error;
@@ -176,7 +176,7 @@ async function cleanup({ claim, worker, names }, api, database) {
       assert.equal(await api(`${target}/settings`), null, "isolated Worker cleanup failed");
     }
   } finally {
-    await removeFixture(database, names);
+    await dropFixture(database, names);
   }
   await rm(claim);
 }
@@ -330,15 +330,28 @@ async function qualify(dir, proofPath, ctx) {
   );
 }
 
-if (import.meta.main) {
-  const ctx = context();
-  if (process.argv[2] === "--cleanup") {
+export async function runIsolatedCutover(
+  [packet, proofPath],
+  env,
+  { qualifyPacket, openApi, openDatabase, dropFixture },
+) {
+  const ctx = context(env);
+  if (packet === "--cleanup") {
     try {
-      await cleanup(ctx, cloudflare(), databaseUrl());
+      await cleanup(ctx, openApi(), openDatabase(), dropFixture);
     } catch {
       throw new Error("Could not verify isolated Worker, database and login cleanup");
     }
   } else {
-    await qualify(process.argv[2], process.argv[3], ctx);
+    await qualifyPacket(packet, proofPath, ctx);
   }
+}
+
+if (import.meta.main) {
+  await runIsolatedCutover(process.argv.slice(2), process.env, {
+    qualifyPacket: qualify,
+    openApi: cloudflare,
+    openDatabase: databaseUrl,
+    dropFixture: removeFixture,
+  });
 }
