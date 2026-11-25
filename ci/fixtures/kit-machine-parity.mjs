@@ -250,24 +250,30 @@ async function checkMcpAdmission(send, owner, appUrl) {
   }
 
   let budgetReads = 0;
+  const budgetBuckets = [];
+  const budgetHeaders = { "cf-connecting-ip": "192.0.2.180" };
   const spentBudget = {
     async THROTTLE_STORE() {
       budgetReads++;
-      return withThrottleTx(async (strings) => {
+      return withThrottleTx(async (strings, bucket) => {
         const statement = strings.join("?");
-        if (statement.includes("SELECT count(*)")) return [{ n: 60, wait: 37 }];
+        if (statement.includes("SELECT count(*)")) {
+          budgetBuckets.push(bucket);
+          return [{ n: 60, wait: 37 }];
+        }
         if (statement.includes("DELETE FROM web_throttle_hits")) return [];
         throw new Error("Unexpected MCP budget fixture statement");
       });
     },
   };
-  const overCap = await post(" ".repeat(BODY_LIMIT_BYTES.mcp + 1), {}, spentBudget);
+  const overCap = await post(" ".repeat(BODY_LIMIT_BYTES.mcp + 1), budgetHeaders, spentBudget);
   await checkMcpRefusal(overCap, owner, 413, "Reduce the size");
   assert.equal(budgetReads, 0, "the body cap runs before budget admission");
-  const refused = await post("[]", {}, spentBudget);
+  const refused = await post("[]", budgetHeaders, spentBudget);
   assert.equal(refused.headers.get("retry-after"), "37");
   await checkMcpRefusal(refused, owner, 429, "Too many requests. Try again in 37 seconds.");
   assert.equal(budgetReads, 1, "budget admission runs before batch refusal");
+  assert.deepEqual(budgetBuckets, ["events-read:192.0.2.180"], "MCP shares the public read bucket");
 }
 
 async function checkMarkdownErrors(read, expectedOwner) {
