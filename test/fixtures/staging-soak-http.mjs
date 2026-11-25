@@ -147,7 +147,20 @@ export function installSoakCliReads() {
         }
         assert.equal(url, "https://api.cloudflare.com/client/v4/graphql");
         return Response.json({
-          data: { viewer: { accounts: [{ workersInvocationsAdaptive: [] }] } },
+          data: {
+            viewer: {
+              accounts: [
+                {
+                  workersInvocationsAdaptive: [
+                    {
+                      dimensions: { scriptVersion: workerVersion },
+                      sum: { requests: 250, errors: 2 },
+                    },
+                  ],
+                },
+              ],
+            },
+          },
         });
       },
     },
@@ -184,7 +197,10 @@ export function assertSoakCliWritesProof() {
     const receipt = JSON.parse(readFileSync(join(dir, "staging-soak.json"), "utf8"));
     assert.equal(receipt.schema, "staging-soak/2");
     assert.equal(receipt.allocationId, first.id);
-    assert.match(readFileSync(output, "utf8"), /^e2e_run_id=101\nsoak_attempt=1$/m);
+    assert.equal(
+      readFileSync(output, "utf8"),
+      "requests=250\nerrors=2\ne2e_run_id=101\nsoak_attempt=1\n",
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
