@@ -316,6 +316,28 @@ export default {
   ]);
 
   if (args.length) {
+    const { assertMemberBoardRollback } = await import("./fixtures/kit-member-board-rollback.mjs");
+    const secret = FIXTURE_SECRETS.SESSION_SECRET;
+    await assertMemberBoardRollback({
+      databaseUrl,
+      scratch,
+      secret,
+      worker,
+      startKit: async (entry, vars) => {
+        const instance = await startWorker(
+          "kit-member-board-rollback",
+          entry,
+          assets,
+          secret,
+          vars,
+        );
+        await listen(instance.child, instance.origin, () => instance.log);
+        return instance;
+      },
+    });
+  }
+
+  if (args.length) {
     const { assertHotzoneSignalParity } = await import("./fixtures/kit-hotzone-signal-parity.mjs");
     const on = await startWorker("kit-hotzone-signal", worker, assets, undefined, {
       KIT_ROUTE_HOTZONE_SIGNAL: "true",
