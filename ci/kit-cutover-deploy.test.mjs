@@ -101,7 +101,7 @@ test("admin rollback admits only the recorded production Ember version with admi
   }
 });
 
-test("only exact successful main XFS dispatch metadata can produce a cutover packet", async () => {
+test("only exact successful main XFS dispatch metadata can produce a cutover packet", async (t) => {
   const own = { full_name: "TogetherWeOwn/two-web-next", fork: false, id: 23 };
   const run = {
     id: 21,
@@ -123,11 +123,28 @@ test("only exact successful main XFS dispatch metadata can produce a cutover pac
     verifyProducer(identity, "synthetic", async () => Response.json({ ...run, run_attempt: 2 })),
     /attempt metadata/,
   );
-  for (const event of ["push", "pull_request"]) {
-    await assert.rejects(
-      verifyProducer(identity, "synthetic", async () => Response.json({ ...run, event })),
-      /attempt metadata/,
-    );
+
+  const mismatches = {
+    "wrong source SHA": { head_sha: "d".repeat(40) },
+    "wrong source branch": { head_branch: "release" },
+    "different workflow": { path: ".github/workflows/archive-hono-recovery.yml" },
+    "XFS workflow on another ref": { path: `${run.path}@release` },
+    "push event": { event: "push" },
+    "pull request event": { event: "pull_request" },
+    "foreign run repository": { repository: { ...own, full_name: "Elsewhere/repo" } },
+    "forked head repository": { head_repository: { ...own, fork: true } },
+    "different head repository ID": { head_repository: { ...own, id: 24 } },
+    "unfinished run": { status: "in_progress" },
+    "cancelled run": { conclusion: "cancelled" },
+  };
+
+  for (const [label, mismatch] of Object.entries(mismatches)) {
+    await t.test(`refuses ${label}`, async () => {
+      await assert.rejects(
+        verifyProducer(identity, "synthetic", async () => Response.json({ ...run, ...mismatch })),
+        { message: "pure Hono recovery run refused: inconsistent GitHub attempt metadata" },
+      );
+    });
   }
 });
 
