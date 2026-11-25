@@ -57,6 +57,10 @@ export default {
     if (request.method !== "POST" || path !== "/admin/events/" + key + "/publish") {
       return inner.fetch(request, env, ctx);
     }
+    // The Workers share Postgres throttle counters. Use a fixture client
+    // distinct from the other admin cases and keep the real throttle in place.
+    const input = new Request(request);
+    input.headers.set("cf-connecting-ip", "192.0.2.198");
     const attempts = [];
     const bindings = { ...env, SYNC_EVENT_QUEUE: {
       async send(message, options) {
@@ -76,7 +80,7 @@ export default {
         }
       },
     }};
-    const response = await withEnv(bindings, () => inner.fetch(request, bindings, ctx));
+    const response = await withEnv(bindings, () => inner.fetch(input, bindings, ctx));
     const headers = new Headers(response.headers);
     headers.set("x-fixture-publish-queue", JSON.stringify(attempts));
     return new Response(response.body, { status: response.status, headers });
