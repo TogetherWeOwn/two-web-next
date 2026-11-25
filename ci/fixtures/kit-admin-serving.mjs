@@ -533,8 +533,23 @@ export async function assertKitAdminServing({ kit, off, hono, databaseUrl }) {
     await visit(off, editor, 302, { owned: false });
     await visit(off, operator, 404, { owned: false });
     const evidencePath = "/admin/queue/source-evidence/1";
-    const evidence = await visit(kit, evidencePath, 404, { owned: false, headers: operatorAuth });
-    assert.deepEqual(JSON.parse(evidence.text), { error: "evidence_disabled" });
+    // The evidence handler answers before either mounted guard. The preview
+    // must instead stop at the queue guard, before the guest login redirect.
+    for (const target of [hono, kit]) {
+      const evidence = await visit(target, evidencePath, 404, {
+        owned: false,
+        headers: operatorAuth,
+      });
+      assert.deepEqual(JSON.parse(evidence.text), { error: "evidence_disabled" });
+      const preview = await visit(target, "/admin/queue/failed/1/preview", 404, { owned: false });
+      assert.deepEqual(JSON.parse(preview.text), { error: "preview_disabled" });
+      for (const { headers } of [evidence, preview]) {
+        assert.match(headers.get("content-type") ?? "", /^application\/json\b/);
+        assert.equal(headers.get("location"), null);
+        assert.equal(headers.getSetCookie().length, 0);
+      }
+    }
+    console.log("PASS installed Worker preserves Hono queue guard and evidence-handler order");
     const evidenceWrite = await visit(kit, evidencePath, 405, {
       method: "POST",
       owned: false,
@@ -669,14 +684,36 @@ export async function assertKitAdminServing({ kit, off, hono, databaseUrl }) {
     assert.equal(events, 2, "event create and duplicate each persist once");
     assert.equal(writes, 6, "six accepted actions each audit once; refusals do not write");
 
-    const doc = await visit(kit, editor, 200, { headers: { cookie: moderator } });
-    assert.match(doc.text, /<form[^>]+method="post"[^>]+action="\/admin\/events"/);
-    moderator = renewedModerator(doc.headers);
-    const legacy = await visit(kit, "/admin/events/create?ignored=1", 301, {
-      owned: false,
-      headers: { cookie: moderator },
-    });
-    assert.equal(legacy.headers.get("location"), editor);
+    // A seeded key makes the parameter route observable next to the static
+    // form and the exact legacy alias, which must win even with Kit admin on.
+    for (const [target, cookie] of [
+      [kit, moderator],
+      [hono, await session(sql, moderatorId, true)],
+    ]) {
+      const owned = target === kit;
+      const denied = await visit(target, eventPath, 403, {
+        owned,
+        headers: { ...html, cookie: member },
+      });
+      assert.match(denied.text, /You do not have access to this/);
+      assert.doesNotMatch(denied.text, /Fixture admin draft|data-event-editor/);
+      assert.equal(denied.headers.getSetCookie().length, 0);
+
+      const doc = await visit(target, editor, 200, { owned, headers: { ...html, cookie } });
+      assert.match(doc.text, /<form[^>]+method="post"[^>]+action="\/admin\/events"/);
+      const existing = await visit(target, eventPath, 200, {
+        owned,
+        headers: { ...html, cookie: renewedModerator(doc.headers) },
+      });
+      assert.match(existing.text, /<h1[^>]*>Edit Fixture admin draft<\/h1>/);
+      assert.ok(existing.text.includes(`action="${eventPath}"`));
+      const legacy = await visit(target, "/admin/events/create?ignored=1", 301, {
+        owned: false,
+        headers: { cookie: renewedModerator(existing.headers) },
+      });
+      assert.equal(legacy.headers.get("location"), editor);
+    }
+    console.log("PASS installed Worker admin event route precedence and moderator admission");
   } finally {
     try {
       // Audit rows are append-only and are isolated by the synthetic actor.
