@@ -19,10 +19,12 @@ import {
   assertMigrationPrefix,
   PLANETSCALE_PRODUCTION_BRANCH_ID,
   PLANETSCALE_PRODUCTION_HOST,
+  webMigrationLockKey,
 } from "./db-migrate.mjs";
 import { runRepair } from "./db-permissions-repair.mjs";
 import { runReadinessProjection } from "./db-readiness-projection.mjs";
 import { runExecutorAuthority } from "./db-repair-executor.mjs";
+import { planServingIsolation, runServingIsolation } from "./db-serving-ledger-isolation.mjs";
 import {
   bootstrap,
   fixtureCluster,
@@ -54,6 +56,7 @@ import {
 } from "./fixtures/web-serving-isolation.mjs";
 import { assertRuntimeDefaultAcl } from "./migration-runtime-rights.mjs";
 import { readLedgerState } from "./production-deploy-gate.mjs";
+import { addedAfter1033, publicServingRights } from "./web-readiness-scoped-acl.mjs";
 
 const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
 const hash = (input) => createHash("sha256").update(input).digest("hex");
@@ -453,6 +456,105 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
     "Repaired 1033 → isolated 1033 → isolated 1037 → inverse: Web/Jobs readiness and Bot reads passed. The inverse restored repaired rights and retained the 1037 ledger. 1038 stayed absent.",
   );
 }
+
+test("serving isolation rejects the wrong database before write locks or ACL work", async () => {
+  const objects = new Map();
+  for (const { kind, name, column } of publicServingRights) {
+    if (addedAfter1033.has(name)) continue;
+    objects.set(`${kind}/${name}/${column}`, { kind, name, column, owner: migrator, direct: [] });
+  }
+  const membership = ["pg_read_all_data", "pg_write_all_data"].map((role) => ({
+    role,
+    grantor: migrator,
+    admin: false,
+    inherit: true,
+    set: false,
+  }));
+  const plan = JSON.stringify(
+    await planServingIsolation(
+      async ([sql]) => {
+        if (sql.startsWith("with objects as")) return [...objects.values()];
+        if (sql.includes("from pg_auth_members m")) return membership;
+        assert.fail(`Unexpected plan query: ${sql}`);
+      },
+      identity(migrator),
+      "97ff7cb6-896b-4a53-9130-ee4f3f31d278",
+      { sourceSha: "b".repeat(40), digest: "c".repeat(64) },
+      app,
+    ),
+  );
+  const env = {
+    PRODUCTION_DB_ISOLATION_PLAN: plan,
+    PRODUCTION_DB_ISOLATION_PLAN_SHA256: hash(plan),
+    PRODUCTION_DB_ISOLATION_DATABASE_URL: planUrl,
+  };
+  const settings = [
+    "set local search_path = pg_catalog, pg_temp",
+    "set local lock_timeout = '500ms'",
+    "set local statement_timeout = '5s'",
+    "set local transaction_timeout = '25s'",
+  ];
+  const identityQuery =
+    "select pg_catalog.current_database()::text as database, session_user::text as authenticated, current_user::text as effective";
+  const advisoryLockQuery = "select pg_try_advisory_xact_lock(?) as acquired";
+  const ledgerLockQuery = "lock table drizzle.__drizzle_migrations in share mode nowait";
+  const ledgerLock = new Error("Fixture stops at the ledger lock");
+  async function runWithDatabase(database, rejectsWith) {
+    const trace = [];
+    const tx = async (strings, ...values) => {
+      const sql = strings.join("?").replace(/\s+/g, " ").trim();
+      trace.push(sql);
+      if (settings.includes(sql)) return [];
+      if (sql === identityQuery) return [{ database, authenticated: migrator, effective: migrator }];
+      if (sql === advisoryLockQuery) {
+        assert.deepEqual(values, [webMigrationLockKey]);
+        return [{ acquired: true }];
+      }
+      if (sql === ledgerLockQuery) throw ledgerLock;
+      assert.fail(`Unexpected serving isolation query: ${sql}`);
+    };
+    await assert.rejects(
+      runServingIsolation("forward", originalEnd, env, {
+        login: app,
+        fetchImpl: () => assert.fail("Unexpected serving isolation traffic check"),
+        connect(_config, options) {
+          assert.deepEqual(options, { readOnly: false });
+          trace.push("connect");
+          return {
+            async begin(mode, work) {
+              assert.equal(mode, "isolation level read committed");
+              trace.push("begin");
+              try {
+                return await work(tx);
+              } finally {
+                trace.push("leave transaction");
+              }
+            },
+            async end(options) {
+              assert.deepEqual(options, { timeout: 5 });
+              trace.push("close");
+            },
+          };
+        },
+      }),
+      rejectsWith,
+    );
+    return trace;
+  }
+
+  const throughIdentity = ["connect", "begin", ...settings, identityQuery];
+  const cleanup = ["leave transaction", "close"];
+  assert.deepEqual(
+    await runWithDatabase("fixture_wrong_database", {
+      message: "Production migration database or role identity did not match; values withheld.",
+    }),
+    [...throughIdentity, ...cleanup],
+  );
+  assert.deepEqual(
+    await runWithDatabase("postgres", (error) => error === ledgerLock),
+    [...throughIdentity, advisoryLockQuery, ledgerLockQuery, ...cleanup],
+  );
+});
 
 test("PostgreSQL 18 branch replay preserves repair and Bot scope with alternate ADMIN authority", async (t) => {
   const directory = mkdtempSync("/tmp/two-web-replay-");
