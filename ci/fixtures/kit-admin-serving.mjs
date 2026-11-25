@@ -1000,15 +1000,22 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
         assert.match(rejected.text, /<div\b[^>]*role="alert"[^>]*data-testid="form-errors"/);
         assert.match(rejected.text, /<a href="#f-title">Headline: Give it a headline\.<\/a>/);
         assert.match(rejected.text, /<p\b[^>]*id="f-title-error"[^>]*>Give it a headline\.<\/p>/);
-        const titleInput = rejected.text.match(/<input\b[^>]*name="title"[^>]*>/)?.[0] ?? "";
+        const draft = rejected.text.match(
+          /<form\b([^>]*\bdata-event-editor=""[^>]*)>([\s\S]*?)<\/form>/,
+        );
+        assert.ok(draft, "validation returns the featured editor form");
+        assert.equal(draft[1].match(/\smethod="([^"]*)"/)?.[1], "post");
+        assert.equal(draft[1].match(/\saction="([^"]*)"/)?.[1], path);
+        const formBody = draft[2];
+        const titleInput = formBody.match(/<input\b[^>]*name="title"[^>]*>/)?.[0] ?? "";
         assert.match(titleInput, /\baria-invalid="true"/);
         assert.match(titleInput, /\baria-describedby="f-title-error"/);
         assert.match(
-          rejected.text,
+          formBody,
           /<textarea\b[^>]*name="body"[^>]*>\s*Keep this featured draft\s*<\/textarea>/,
         );
         if (path === featuredPath) {
-          assert.ok(rejected.text.includes(`name="saved_baseline" value="${baseline}"`));
+          assert.ok(formBody.includes(`name="saved_baseline" value="${baseline}"`));
         }
       }
     }
