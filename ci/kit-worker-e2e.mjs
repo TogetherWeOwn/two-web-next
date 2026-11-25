@@ -17,6 +17,7 @@ import {
   assertKitAttendanceDisabled,
   assertMixedAdminAuthRollback,
   prepareAdminFixture,
+  prepareAdminPublishFixture,
 } from "./fixtures/kit-admin-serving.mjs";
 import {
   assertKitAdminRsvpControls,
@@ -340,6 +341,16 @@ export default {
     listen(hono.child, hono.origin, () => hono.log),
   ]);
 
+  if (args.length) {
+    const { assertHotzoneSignalParity } = await import("./fixtures/kit-hotzone-signal-parity.mjs");
+    const on = await startWorker("kit-hotzone-signal", worker, assets, undefined, {
+      KIT_ROUTE_HOTZONE_SIGNAL: "true",
+    });
+    await listen(on.child, on.origin, () => on.log);
+    await assertHotzoneSignalParity({ hono, off: kit, on, databaseUrl });
+    on.child.kill("SIGTERM");
+  }
+
   const opsEntry = join(scratch, "kit-ops.mjs");
   const opsFixture = fileURLToPath(new URL("./fixtures/kit-ops-worker.mjs", import.meta.url));
   const opsProbePath = "/__fixture/ops-parity";
@@ -510,6 +521,35 @@ function fetch(request, env, context) {
         return instance.origin;
       },
     });
+    const { assertKitSourceEvidence } = await import("./fixtures/kit-source-evidence.mjs");
+    const evidenceWorkers = [];
+    try {
+      await assertKitSourceEvidence({
+        worker,
+        honoWorker: join(repo, "src/worker.ts"),
+        scratch,
+        databaseUrl,
+        start: async (name, entry, vars) => {
+          const instance = await startWorker(
+            `source-evidence-${name}`,
+            entry,
+            name === "hono" ? join(repo, "public") : assets,
+            FIXTURE_SECRETS.SESSION_SECRET,
+            vars,
+          );
+          evidenceWorkers.push(instance);
+          await listen(instance.child, instance.origin, () => instance.log);
+          return instance;
+        },
+      });
+    } finally {
+      await Promise.all(evidenceWorkers.map(stopWorker));
+      assert.ok(
+        evidenceWorkers.every(({ stopped }) => stopped),
+        "source-evidence Workers did not stop",
+      );
+    }
+    console.log("PASS source-evidence loopback Workers stopped");
   }
 
   const manifest = await readFile(join(repo, "src/route-ownership.ts"), "utf8");
@@ -895,13 +935,23 @@ export default {
   }
 
   const secret = FIXTURE_SECRETS.SESSION_SECRET;
+  const honoEntry = join(repo, "src/worker.ts");
   const honoWithSession = await startWorker(
     "hono-session",
-    join(repo, "src/worker.ts"),
+    args.length
+      ? await prepareAdminPublishFixture(honoEntry, join(scratch, "hono-publish.mjs"))
+      : honoEntry,
     join(repo, "public"),
     secret,
   );
-  const kitWithSession = await startWorker("kit-session", worker, assets, secret);
+  const kitWithSession = await startWorker(
+    "kit-session",
+    args.length
+      ? await prepareAdminPublishFixture(worker, join(scratch, "kit-off-publish.mjs"))
+      : worker,
+    assets,
+    secret,
+  );
   await Promise.all(
     [honoWithSession, kitWithSession].map((instance) =>
       listen(instance.child, instance.origin, () => instance.log),
@@ -936,7 +986,8 @@ export default {
   if (args.length) {
     const entry = join(scratch, "kit-admin.mjs");
     const vars = await prepareAdminFixture(worker, entry);
-    const admin = await startWorker("kit-admin", entry, assets, secret, vars);
+    const publishEntry = await prepareAdminPublishFixture(entry, join(scratch, "kit-publish.mjs"));
+    const admin = await startWorker("kit-admin", publishEntry, assets, secret, vars);
     const nativeCreate = await startWorker("kit-admin-native-create", entry, assets, secret, {
       ...vars,
       KIT_PARITY_FIXTURE_ADMIN_EVENT_CREATE_REDIRECT: "true",

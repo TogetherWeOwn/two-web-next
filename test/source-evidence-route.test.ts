@@ -6,11 +6,17 @@
 // route-inventory: PUT /admin/queue/source-evidence/:id
 import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { KIT_SOURCE_EVIDENCE_ROUTES } from "../src/admin/kit-source-evidence-route";
 import { adminApp } from "../src/admin/routes";
-import { STATEMENT_SET_HASH } from "../src/admin/source-evidence";
+import {
+  fetchSourceEvidence,
+  refuseSourceEvidenceOrigin,
+  STATEMENT_SET_HASH,
+} from "../src/admin/source-evidence";
 import { BODY_LIMIT_BYTES } from "../src/body-limit";
 import type { Env } from "../src/env";
 import { STAGING_APP_URL } from "../src/qa";
+import { dispatchHookRequest } from "../src/route-ownership";
 import { createMemorySessionStore, type SessionStore } from "../src/sessions";
 
 const mocks = vi.hoisted(() => ({
@@ -162,6 +168,56 @@ describe("evidence-only source/cache verifier admission", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.resetAllMocks();
+  });
+
+  it("dispatches only opted-in source-evidence requests through the Kit adapter", async () => {
+    const honoFetch = vi.fn(async () => new Response(null, { status: 404 }));
+    const sessionFor = vi.fn();
+    const url = new URL("/admin/queue/source-evidence/7", STAGING_APP_URL);
+    const requestId = "0123456789abcdef";
+    function dispatch(method: string, origin: string, flag?: string) {
+      const request = new Request(url, {
+        method,
+        headers: {
+          accept: "application/json",
+          authorization: `Bearer ${token}`,
+          origin,
+          "cf-ray": requestId,
+        },
+      });
+      return dispatchHookRequest(
+        { request, url, route: { id: "/admin/queue/source-evidence/[id]" } },
+        {
+          appUrl: STAGING_APP_URL,
+          honoFetch,
+          sessionFor,
+          apiFamilies: [
+            {
+              flag,
+              routes: KIT_SOURCE_EVIDENCE_ROUTES,
+              crossOriginRefusal: (request, id) => refuseSourceEvidenceOrigin(request, env, id),
+            },
+          ],
+          resolve: ({ request }) => fetchSourceEvidence(request, env, "7", requestId),
+        },
+      );
+    }
+    expect((await dispatch("GET", STAGING_APP_URL)).status).toBe(404);
+    expect(honoFetch).toHaveBeenCalledOnce();
+    const refused = await dispatch("POST", "https://elsewhere.example", "true");
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toEqual({ error: "cross_origin", request_id: requestId });
+    const post = await dispatch("POST", STAGING_APP_URL, "true");
+    expect(post.status).toBe(405);
+    expect(post.headers.get("allow")).toBe("GET");
+    expect(mocks.factory).not.toHaveBeenCalled();
+    const head = await dispatch("HEAD", STAGING_APP_URL, "true");
+    expect(head.status).toBe(200);
+    expect(head.headers.get("x-two-renderer")).toBe("kit");
+    expect(await head.text()).toBe("");
+    expect(mocks.begins).toHaveLength(1);
+    expect(mocks.end).toHaveBeenCalledOnce();
+    expect(sessionFor).not.toHaveBeenCalled();
   });
 
   it.each([undefined, "false", "1", "TRUE", "true "])(

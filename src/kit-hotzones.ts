@@ -232,9 +232,8 @@ export async function dispatchHotzonesRequest(
   requestId?: unknown,
 ): Promise<Response> {
   // Season grammar first, mirroring the Hono handlers: a bad season reaches
-  // the load's 400 without spending. Unknown signals never reach this
-  // wrapper: the manifest lists concrete signal paths only, so anything else
-  // falls through to the Hono 404.
+  // the load's 400 without spending. The dispatcher handles generic signal
+  // refusals before this wrapper can charge the shared budget.
   if (!parseSeasonParam(new URL(request.url).searchParams.get("season"))) return render();
   const limited = await guard(request, env, requestId);
   return limited ?? render();

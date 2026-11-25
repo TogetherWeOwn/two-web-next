@@ -2,8 +2,12 @@ import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { generateSignedCookie } from "hono/cookie";
+import { parse } from "parse5";
 import postgres from "postgres";
+import { newEventKey } from "../../src/admin/validation-event-keys.ts";
+import { attr, elements, submittedFields } from "../../test/helpers/kit-edit-controls.ts";
 import { EMBER_CUTOVER_VARS } from "../kit-cutover-evidence.mjs";
 import { FIXTURE_SECRETS, SESSION_COOKIE } from "../parity/fixture.mjs";
 
@@ -14,11 +18,15 @@ const html = { accept: "text/html" };
 
 export async function prepareAdminFixture(worker, entry) {
   const bot = "https://fixture-operator-bot.invalid";
+  const recurringProbe = fileURLToPath(
+    new URL("./kit-admin-recurring-create-worker.mjs", import.meta.url),
+  );
   await writeFile(
     entry,
     `
 import worker from ${JSON.stringify(worker)};
 import { env } from "cloudflare:workers";
+import { withRecurringCreateProbe } from ${JSON.stringify(recurringProbe)};
 const transport = globalThis.fetch;
 globalThis.fetch = async (input, init) => {
   if (input !== ${JSON.stringify(`${bot}/ops/config`)}) return transport(input, init);
@@ -29,7 +37,7 @@ globalThis.fetch = async (input, init) => {
   return Response.json({ epoch: 42, overrides: { label: "Fixture operator value" },
     baseline: {}, enforcement: "fixture" });
 };
-export default worker;
+export default withRecurringCreateProbe(worker);
 `,
   );
   return {
@@ -38,6 +46,54 @@ export default worker;
     BOT_ENDPOINT_URL: bot,
     OPS_CONTROL_TOKEN: FIXTURE_SECRETS.OPS_CONTROL_TOKEN,
   };
+}
+
+export async function prepareAdminPublishFixture(worker, entry) {
+  const postgresEntry = fileURLToPath(import.meta.resolve("postgres"));
+  await writeFile(
+    entry,
+    `import { withEnv } from "cloudflare:workers";
+import postgres from ${JSON.stringify(postgresEntry)};
+import inner from ${JSON.stringify(worker)};
+
+export default {
+  async fetch(request, env, ctx) {
+    const path = new URL(request.url).pathname;
+    const key = path.split("/")[3];
+    if (request.method !== "POST" || path !== "/admin/events/" + key + "/publish") {
+      return inner.fetch(request, env, ctx);
+    }
+    // The Workers share Postgres throttle counters. Use a fixture client
+    // distinct from the other admin cases and keep the real throttle in place.
+    const input = new Request(request);
+    input.headers.set("cf-connecting-ip", "192.0.2.198");
+    const attempts = [];
+    const bindings = { ...env, SYNC_EVENT_QUEUE: {
+      async send(message, options) {
+        const receipt = { message, delay: options?.delaySeconds, committed: false };
+        attempts.push(receipt);
+        // A separate connection sees only committed event and audit rows.
+        const sql = postgres(env.DATABASE_URL, { max: 1 });
+        try {
+          const [row] = await sql\`
+            select status, (select count(*)::int from activity_log
+              where subject_type = 'Event' and subject_id = \${key}) as audits
+            from events where event_key = \${key}
+          \`;
+          receipt.committed = row?.status === "published" && row.audits === 1;
+        } finally {
+          await sql.end({ timeout: 1 });
+        }
+      },
+    }};
+    const response = await withEnv(bindings, () => inner.fetch(input, bindings, ctx));
+    const headers = new Headers(response.headers);
+    headers.set("x-fixture-publish-queue", JSON.stringify(attempts));
+    return new Response(response.body, { status: response.status, headers });
+  },
+};\n`,
+  );
+  return entry;
 }
 
 function renewedModerator(headers) {
@@ -521,12 +577,280 @@ async function assertFeaturedAuditFallback({
   return fallbackModerator;
 }
 
+async function assertAdminPublish({ kit, off, hono, sql, moderatorId, member }) {
+  // The preceding GET checks rotate their own moderator session.
+  const moderator = await session(sql, moderatorId, true);
+  const keys = [];
+  const title = "Synthetic publish draft";
+  async function seed(location, key = newEventKey()) {
+    keys.push(key);
+    const [row] = await sql`
+      insert into events (event_key, title, starts_at, ends_at, location, created_by)
+      values (${key}, ${title}, now() + interval '1 day', now() + interval '2 days',
+        ${location}, ${moderatorId})
+      returning updated_at
+    `;
+    return { key, updatedAt: row.updated_at.toISOString(), path: `/admin/events/${key}` };
+  }
+
+  async function snapshot(key) {
+    const [event] = await sql`
+      select status, updated_at, sync_revision, discord_event_id from events where event_key = ${key}
+    `;
+    const audit = await sql`
+      select description, causer_id, properties from activity_log
+      where subject_type = 'Event' and subject_id = ${key} order by id
+    `;
+    const ledger = await sql`
+      select job_id, kind from queue_jobs where key = ${`sync-event:${key}`} order by job_id
+    `;
+    return { event, audit: [...audit], ledger: [...ledger] };
+  }
+
+  try {
+    for (const target of [kit, off, hono]) {
+      const draft = await seed("Fixture meeting place");
+      const blank = await seed(null);
+      const reviewed = await seed("Fixture review location");
+      const invalidKey = await seed("Fixture meeting place", `malformed-${newEventKey()}`);
+      const owned = target === kit;
+      async function post(path, status, fields, { headers, sends = 0 } = {}) {
+        const response = await visit(target, `${path}/publish`, status, {
+          method: "POST",
+          headers: { ...html, cookie: moderator, ...headers },
+          owned,
+          body: new URLSearchParams(fields),
+        });
+        const attempts = JSON.parse(response.headers.get("x-fixture-publish-queue"));
+        assert.ok(Array.isArray(attempts), `${target.name} publish queue stub ran`);
+        assert.equal(attempts.length, sends, `${target.name} publish queue send count`);
+        return { ...response, receipt: attempts[0] };
+      }
+
+      const before = await snapshot(draft.key);
+      assert.equal(before.event.status, "draft");
+      const guest = await post(draft.path, 303, {}, { headers: { cookie: "" } });
+      assert.equal(
+        guest.headers.get("location"),
+        `/auth/recover?next=${encodeURIComponent(draft.path)}`,
+      );
+      assert.equal(guest.headers.getSetCookie().length, 1);
+      const denied = await post(draft.path, 403, {}, { headers: { cookie: member } });
+      assert.match(denied.text, /You do not have access to this/);
+      assert.doesNotMatch(denied.text, /Synthetic publish draft/);
+      assert.equal(denied.headers.get("location"), null);
+      assert.equal(denied.headers.getSetCookie().length, 0);
+      const foreign = await post(
+        draft.path,
+        403,
+        {},
+        { headers: { origin: "https://foreign.test" } },
+      );
+      assert.equal(foreign.headers.get("location"), null);
+      assert.deepEqual(await snapshot(draft.key), before);
+
+      const beforeMalformed = await snapshot(invalidKey.key);
+      const malformed = await post(invalidKey.path, 404);
+      assert.match(malformed.text, /Event not found/);
+      assert.equal(malformed.headers.get("location"), null);
+      assert.deepEqual(await snapshot(invalidKey.key), beforeMalformed);
+
+      const beforeBlank = await snapshot(blank.key);
+      const missingLocation = await post(blank.path, 422);
+      assert.match(missingLocation.text, /Add a location before publishing\./);
+      assert.ok(missingLocation.text.includes(`action="${blank.path}"`));
+      assert.equal(missingLocation.headers.get("location"), null);
+      assert.deepEqual(await snapshot(blank.key), beforeBlank);
+
+      const beforeReview = await snapshot(reviewed.key);
+      const publicPath = `/e/${reviewed.key}`;
+      const staleRevision = new Date(Date.parse(reviewed.updatedAt) - 1_000).toISOString();
+      const stale = await post(reviewed.path, 303, {
+        review: "1",
+        reviewed_updated_at: staleRevision,
+      });
+      assert.equal(stale.headers.get("location"), `${publicPath}?review=1&publish_error=stale`);
+      assert.deepEqual(await snapshot(reviewed.key), beforeReview);
+
+      for (const [record, prior, fields, location] of [
+        [draft, before, {}, draft.path],
+        [
+          reviewed,
+          beforeReview,
+          { review: "1", reviewed_updated_at: reviewed.updatedAt },
+          `${publicPath}?published=1`,
+        ],
+      ]) {
+        const published = await post(record.path, 303, fields, { sends: 1 });
+        assert.equal(published.headers.get("location"), location);
+        const committed = await snapshot(record.key);
+        assert.equal(committed.event.status, "published");
+        assert.ok(committed.event.updated_at > prior.event.updated_at);
+        assert.equal(BigInt(committed.event.sync_revision), BigInt(prior.event.sync_revision) + 1n);
+        assert.equal(committed.event.discord_event_id, null);
+        assert.deepEqual(committed.audit, [
+          {
+            description: `published event ${title}`,
+            causer_id: moderatorId,
+            properties: { status: { before: "draft", after: "published" } },
+          },
+        ]);
+        const { message, delay, committed: visibleAtSend } = published.receipt;
+        assert.equal(visibleAtSend, true, "event and audit are committed before the stub send");
+        assert.equal(delay, 10);
+        assert.equal(message.kind, "sync-event");
+        assert.equal(message.eventKey, record.key);
+        assert.equal(message.requestId, published.headers.get("x-request-id"));
+        assert.match(message.idempotencyKey, /^[\da-f-]{36}$/);
+        assert.deepEqual(committed.ledger, [{ kind: "sync-event", job_id: message.jobId }]);
+
+        const refused = await post(record.path, 422);
+        assert.match(refused.text, /Only a draft can be published\./);
+        assert.ok(refused.text.includes(`href="${record.path}"`));
+        assert.doesNotMatch(refused.text, /<form[^>]+action="[^\"]*\/publish"/);
+        assert.equal(refused.headers.get("location"), null);
+        assert.deepEqual(await snapshot(record.key), committed);
+      }
+    }
+  } finally {
+    if (keys.length) {
+      const queueKeys = keys.map((key) => `sync-event:${key}`);
+      await sql`delete from queue_jobs where key in ${sql(queueKeys)}`;
+      await sql`delete from job_unique_locks where key in ${sql(queueKeys)}`;
+    }
+    // The caller removes these actor-owned events and sessions. Append-only
+    // audit rows are discarded with the hosted disposable database.
+  }
+  console.log("PASS installed Worker admin publish admission, transitions, audit, and write-back");
+}
+
+function eventEditFields(html, path) {
+  const forms = elements(parse(html)).filter(
+    (el) => el.tagName === "form" && attr(el, "data-event-editor") !== undefined,
+  );
+  assert.equal(forms.length, 1, "one event editor form");
+  assert.equal(attr(forms[0], "method"), "post");
+  assert.equal(attr(forms[0], "action"), path);
+  return submittedFields(forms[0]);
+}
+
+async function assertEventEditFallback({
+  kit,
+  off,
+  sql,
+  eventPath,
+  editHtml,
+  moderatorId,
+  moderatorCookie,
+  member,
+}) {
+  const key = eventPath.split("/").at(-1);
+  const fields = eventEditFields(editHtml, eventPath);
+  const baseline = fields.saved_baseline;
+  assert.match(baseline ?? "", /^[0-9a-f]{64}$/, "the Kit editor renders a saved baseline");
+  const moderator = { ...html, cookie: moderatorCookie };
+  const title = "Fixture admin draft edited on Kit";
+  const body = new URLSearchParams({ ...fields, title });
+  const post = { method: "POST", body };
+
+  async function snapshot() {
+    const series = await sql`
+      select id, event_key, title, description, status, starts_at, ends_at, timezone, updated_at,
+        recurrence_frequency, recurrence_count, recurrence_ends_on, recurrence_index, parent_event_id
+      from events
+      where event_key = ${key} or parent_event_id = (select id from events where event_key = ${key})
+      order by recurrence_index
+    `;
+    const event = series.find((row) => row.event_key === key);
+    assert.ok(event, "the synthetic event exists");
+    const occurrences = series.filter((row) => row !== event);
+    const activity = await sql`
+      select id, description, causer_id, properties from activity_log
+      where subject_type = 'Event' and subject_id in ${sql(series.map((row) => row.event_key))}
+      order by id
+    `;
+    return { event, occurrences, activity: [...activity] };
+  }
+
+  const before = await snapshot();
+  assert.equal(fields.title, before.event.title, "the Kit editor renders the original title");
+  assert.equal(before.event.recurrence_frequency, "weekly");
+  assert.equal(before.event.recurrence_count, 2);
+  assert.equal(before.event.recurrence_ends_on?.toISOString().slice(0, 10), "2099-10-08");
+  assert.equal(before.event.recurrence_index, 1);
+  assert.deepEqual(
+    before.occurrences.map(({ recurrence_index, parent_event_id }) => [
+      recurrence_index,
+      parent_event_id,
+    ]),
+    [[2, before.event.id]],
+    "one future occurrence belongs to the event",
+  );
+  await visit(kit, eventPath, 403, { ...post, headers: { ...html, cookie: member } });
+  assert.deepEqual(await snapshot(), before, "a member cannot edit the event or append audit");
+
+  const saved = await visit(kit, eventPath, 303, { ...post, headers: moderator });
+  assert.equal(saved.headers.get("location"), `${eventPath}?saved=1`);
+  const committed = await snapshot();
+  const { updated_at: updatedAt, ...event } = committed.event;
+  const { updated_at: previousUpdate, ...previousEvent } = before.event;
+  assert.ok(updatedAt > previousUpdate, "the save advances the event version");
+  assert.deepEqual(
+    event,
+    { ...previousEvent, title },
+    "the edit preserves schedule and recurrence",
+  );
+  assert.deepEqual(committed.occurrences, before.occurrences, "the edit preserves the occurrence");
+  assert.equal(committed.activity.length, before.activity.length + 1, "one audit row for the edit");
+  assert.deepEqual(committed.activity.slice(0, -1), before.activity);
+  const receipt = committed.activity.at(-1);
+  assert.equal(receipt.causer_id, moderatorId);
+  assert.equal(receipt.description, `updated event ${title}`);
+  assert.deepEqual(receipt.properties.title, { before: before.event.title, after: title });
+
+  const fallback = await visit(off, eventPath, 200, { owned: false, headers: moderator });
+  const current = eventEditFields(fallback.text, eventPath);
+  assert.equal(current.title, title, "Hono renders the committed title in the edit control");
+  assert.match(current.saved_baseline ?? "", /^[0-9a-f]{64}$/);
+  assert.notEqual(current.saved_baseline, baseline, "Hono renders a fresh baseline after the edit");
+
+  const unsavedTitle = "Keep this unsaved event title";
+  const unsavedDescription = "Keep these unsaved event notes";
+  const stale = await visit(off, eventPath, 409, {
+    method: "POST",
+    body: new URLSearchParams({
+      ...fields,
+      title: unsavedTitle,
+      description: unsavedDescription,
+      saved_baseline: baseline,
+    }),
+    owned: false,
+    headers: { ...moderator, cookie: renewedModerator(fallback.headers) },
+  });
+  assert.equal(stale.headers.get("location"), null);
+  assert.match(stale.text, /data-testid="stale-save"/);
+  assert.match(stale.text, /data-event-draft=""/);
+  const retained = eventEditFields(stale.text, eventPath);
+  assert.equal(retained.title, unsavedTitle);
+  assert.equal(retained.description, unsavedDescription);
+  assert.equal(retained.saved_baseline, baseline);
+  assert.deepEqual(await snapshot(), committed, "the stale save leaves the event and audit intact");
+}
+
 export async function assertKitAdminServing({ kit, nativeCreate, off, hono, databaseUrl }) {
   const actor = 900000000000000000n + BigInt(`0x${randomBytes(7).toString("hex")}`);
   const moderatorId = String(actor);
   const memberId = String(actor + 1n);
   const sql = postgres(databaseUrl, { max: 1 });
   try {
+    const { assertRecurringCreateParity } = await import("./kit-admin-recurring-create.mjs");
+    await assertRecurringCreateParity({
+      kit,
+      sql,
+      visit,
+      session,
+      actors: { kit: String(actor + 2n), hono: String(actor + 3n) },
+    });
     let moderator = await session(sql, moderatorId, true);
     const member = await session(sql, memberId, false);
     const operatorAuth = { authorization: `Bearer ${FIXTURE_SECRETS.OPS_CONTROL_TOKEN}` };
@@ -628,9 +952,13 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
       ...form,
       body: new URLSearchParams({
         title: "Fixture admin draft",
+        description: "Fixture draft notes\nSecond line & example",
         starts_at: "2099-10-01T12:00",
         ends_at: "2099-10-01T13:00",
         timezone: "UTC",
+        recurrence_frequency: "weekly",
+        recurrence_count: "2",
+        recurrence_ends_on: "2099-10-08",
       }),
     });
     const eventPath = draft.headers.get("location")?.split("?")[0];
@@ -682,11 +1010,12 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
       await sql`select count(*)::int from events where created_by = ${moderatorId}`;
     const [{ count: writes }] =
       await sql`select count(*)::int from activity_log where causer_id = ${moderatorId}`;
-    assert.equal(events, 2, "event create and duplicate each persist once");
-    assert.equal(writes, 6, "six accepted actions each audit once; refusals do not write");
+    assert.equal(events, 3, "the series has two occurrences and duplicate adds one draft");
+    assert.equal(writes, 7, "accepted mutations audit each affected row once");
 
     // A seeded key makes the parameter route observable next to the static
     // form and exact alias. Both installed modes keep the other forms in Kit.
+    let kitEdit;
     for (const target of [kit, nativeCreate, hono]) {
       const owned = target !== hono;
       const cookie = target === kit ? moderator : await session(sql, moderatorId, true);
@@ -743,12 +1072,17 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
         headers: { cookie: renewed },
       });
       assert.equal(legacyEdit.headers.get("location"), eventPath);
+      const latest = renewedModerator(legacyEdit.headers);
       await visit(target, legacyCreate, 413, {
         ...form,
         owned,
         body: "x".repeat(65537),
-        headers: { ...form.headers, cookie: renewedModerator(legacyEdit.headers) },
+        headers: { ...form.headers, cookie: latest },
       });
+      if (target === kit) {
+        kitEdit = existing.text;
+        moderator = latest;
+      }
     }
     console.log("PASS installed Worker admin event route precedence and moderator admission");
 
@@ -771,16 +1105,41 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
       assert.equal(parameter.headers.get("location"), "/auth/discord");
     }
     console.log("PASS installed Worker legacy event-create redirect with Kit ownership off and on");
+    // Draft edits have no Discord mirror; the queue stub serves publish requests only.
+    assert.ok(kitEdit, "the installed Kit editor was reached");
+    await assertEventEditFallback({
+      kit,
+      off,
+      sql,
+      eventPath,
+      editHtml: kitEdit,
+      moderatorId,
+      moderatorCookie: moderator,
+      member,
+    });
+
+    await assertAdminPublish({ kit, off, hono, sql, moderatorId, member });
   } finally {
     try {
       // Audit rows are append-only and are isolated by the synthetic actor.
       // The hosted job discards the disposable database at teardown.
-      await sql`delete from featured_contents where created_by = ${moderatorId}`;
-      await sql`delete from events where created_by = ${moderatorId}`;
-      await sql`delete from web_sessions where user_id in (${moderatorId}, ${memberId})`;
+      await sql.begin(async (tx) => {
+        await tx`delete from featured_contents where created_by = ${moderatorId}`;
+        await tx`delete from events where created_by = ${moderatorId}`;
+        await tx`delete from web_session_grace where user_id in (${moderatorId}, ${memberId})`;
+        await tx`delete from web_sessions where user_id in (${moderatorId}, ${memberId})`;
+        const [remaining] = await tx`select
+          exists(select 1 from events where created_by = ${moderatorId}) as events,
+          exists(select 1 from web_sessions where user_id in (${moderatorId}, ${memberId})) as sessions,
+          exists(select 1 from web_session_grace where user_id in (${moderatorId}, ${memberId})) as grace`;
+        assert.deepEqual(remaining, { events: false, sessions: false, grace: false });
+      });
     } finally {
       await sql.end({ timeout: 1 });
     }
   }
+  console.log(
+    "PASS installed event edit and Hono stale retry preserve one audit row; fixtures cleaned up",
+  );
   console.log("PASS Kit admin ownership, isolated bearers, and native form parity");
 }
