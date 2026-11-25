@@ -218,7 +218,8 @@ describe.skipIf(!process.env.DATABASE_URL).each([
     expect(await pgQueueDepth(sql)).toEqual({ ...emptyLiveDepth, failed: 1 });
   });
 
-  it.each([false, true])("deduplicates failure, claim-backed=%s", async (claimed) => {
+  it.each(["legacy", "claim", "lost"])("deduplicates refusal: %s", async (mode) => {
+    const claimed = mode !== "legacy";
     const id = randomUUID();
     const idempotencyKey = randomUUID();
     const ledger = pgQueueLedger(sql);
@@ -234,7 +235,7 @@ describe.skipIf(!process.env.DATABASE_URL).each([
     const bot = { postAnnouncement } as unknown as BotClient;
     const announcementClaims = pgReconciliationStore(sql);
     const finish = announcementClaims.finishAnnouncement;
-    if (claimed)
+    if (mode === "lost")
       vi.spyOn(announcementClaims, "finishAnnouncement").mockImplementationOnce(async (...args) => {
         await finish(...args);
         throw new Error("commit response lost");
@@ -265,7 +266,7 @@ describe.skipIf(!process.env.DATABASE_URL).each([
           retry: vi.fn(),
         };
         await consume({ messages: [message] }, deps);
-        const responseLost = claimed && delivery === 0;
+        const responseLost = mode === "lost" && delivery === 0;
         expect(message.ack).toHaveBeenCalledTimes(responseLost ? 0 : 1);
         expect(message.retry).toHaveBeenCalledTimes(responseLost ? 1 : 0);
         const rows = await failures();
