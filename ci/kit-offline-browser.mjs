@@ -65,12 +65,14 @@ export function fixedDateBanner(now) {
  * `now` (epoch ms) fixes the server clock; `timezoneId` overrides only the browser timezone.
  * `searches` opts in extra exact query strings of the same path; `open(search)` navigates to one.
  * `headerMenu` admits the exact menu island. Set `csr: true` to also hydrate that fixture.
- * @param {{ source?: string, page: string, search?: string, searches?: string[], now?: number, javaScriptEnabled?: boolean, timezoneId?: string, headerMenu?: boolean, csr?: boolean }} options
+ * `pageServer` installs a server load for the scratch fixture route only.
+ * @param {{ source?: string, page: string, pageServer?: string, search?: string, searches?: string[], now?: number, javaScriptEnabled?: boolean, timezoneId?: string, headerMenu?: boolean, csr?: boolean }} options
  */
 export async function withKitOfflineBrowser(
   {
     source,
     page: fixture,
+    pageServer,
     search = "",
     searches = [],
     now = undefined,
@@ -87,7 +89,7 @@ export async function withKitOfflineBrowser(
     }
   }
   const banner = now === undefined ? undefined : fixedDateBanner(now);
-  const options = { source, page: fixture, csr };
+  const options = { source, page: fixture, pageServer, csr };
   return withKitBrowserFixture(options, async ({ root, output }) => {
     const entry = join(root, "fixture-server.mjs");
     await build({
@@ -108,9 +110,13 @@ export async function withKitOfflineBrowser(
             plugin.onLoad({ filter: /[/\\]entries[/\\]hooks\.server\.js$/ }, () => ({
               contents: "export const handle = ({event, resolve}) => resolve(event);",
             }));
-            plugin.onLoad({ filter: /[/\\]entries[/\\]pages[/\\].*server\.ts\.js$/ }, () => ({
-              contents: "export const load = () => ({});",
-            }));
+            plugin.onLoad(
+              { filter: /[/\\]entries[/\\]pages[/\\].*server\.ts\.js$/ },
+              ({ path }) => {
+                if (pageServer !== undefined && /[/\\]__browser_fixture__[/\\]/.test(path)) return;
+                return { contents: "export const load = () => ({});" };
+              },
+            );
             plugin.onLoad({ filter: /[/\\]entries[/\\]endpoints[/\\]/ }, () => ({
               contents:
                 "export const GET = () => { throw new Error('Endpoint outside fixture'); };",

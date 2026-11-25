@@ -860,6 +860,12 @@ export default {
   }
   console.log("PASS generated Worker GET/HEAD slash parity with direct Hono");
 
+  for (const path of ["/members", "/members/", "/__browser_fixture__?state=server-contract"]) {
+    const result = await assertParity(`retired or fixture-only ${path}`, path);
+    assert.equal(result.status, 404, `${path} must remain unavailable`);
+    assert.doesNotMatch(result.body, /Listed Server Fixture|Hidden Server Fixture/);
+  }
+
   // The strict (non-redirecting) slash contract must hold for the pages Kit
   // owns: the no-slash form is Kit-owned, the slash form is Hono's answer.
   for (const path of ["/about/", "/faq/", "/events/past/"]) {

@@ -28,6 +28,8 @@ const extra = [
   "?state=many",
   "?state=many&page=2",
   "?state=many&page=9",
+  "?state=server-contract",
+  "?state=server-contract&q=hidden",
 ];
 const source = () =>
   readFile(new URL("../test/fixtures/kit-members-directory-route.svelte", import.meta.url), "utf8");
@@ -36,8 +38,12 @@ const names =
 
 test("members directory renders its states without JavaScript", { timeout: 720_000 }, async () => {
   await mkdir(out, { recursive: true });
+  const pageServer = await readFile(
+    new URL("../test/fixtures/kit-members-directory-server-load.mjs", import.meta.url),
+    "utf8",
+  );
   await withKitOfflineBrowser(
-    { page: await source(), searches: [...Object.values(required), ...extra] },
+    { page: await source(), pageServer, searches: [...Object.values(required), ...extra] },
     async ({ page, open }) => {
       const html = {};
       for (const [name, search] of Object.entries(required)) {
@@ -104,6 +110,16 @@ test("members directory renders its states without JavaScript", { timeout: 720_0
       // Follow the server-rendered filter and recovery links.
       const list = page.getByRole("list", { name: "Members", exact: true });
       const filters = page.getByRole("navigation", { name: "Which members" });
+      const serverHtml = await open("?state=server-contract");
+      assert.doesNotMatch(serverHtml, /Hidden Server Fixture|9000000003|directory-private-canary/);
+      assert.equal(await list.getByRole("listitem").count(), 1);
+      assert.equal(
+        await list
+          .getByRole("link", { name: "Listed Server Fixture", exact: true })
+          .getAttribute("href"),
+        "/members/9000000002",
+      );
+      assert.match(await open("?state=server-contract&q=hidden"), /Nobody matches/);
       await open(required.default);
       for (const [start, label, selected, count, member] of [
         [null, /^Everyone\b/, /^Everyone\b/, 8, "Quiet Inactive Fixture"],
