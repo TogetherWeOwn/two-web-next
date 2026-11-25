@@ -125,6 +125,16 @@ test("staging acquisition checks activity after observation and preserves an occ
   assert.deepEqual(state.writes, []);
 });
 
+test("staging acquisition rejects an invalid clock without writing", async () => {
+  for (const nowMs of [NaN, Infinity, issuedAtMs + 0.5, -1]) {
+    const state = fixture();
+    state.nowMs = nowMs;
+    await assert.rejects(state.acquire(), { message: "Invalid staging lease clock" });
+    assert.equal(state.current, null);
+    assert.deepEqual(state.writes, []);
+  }
+});
+
 test("staging acquisition propagates observation and ambiguous commit failures", async () => {
   const state = fixture();
   const error = new Error("synthetic failure");
