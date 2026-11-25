@@ -9,6 +9,7 @@ import {
   mcpListEventsArgs,
   mcpToolCall,
 } from "../../test/helpers/machine-requests.ts";
+import { withThrottleTx } from "../../test/helpers/throttle-tx-double.ts";
 import { FIXTURE_SECRETS, identityCookies } from "../parity/fixture.mjs";
 
 const ulid = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
@@ -146,6 +147,17 @@ async function checkMcpStream(post, owner, cancelReader) {
   }
 }
 
+async function checkMcpRefusal(response, owner, status, message) {
+  checkHeaders(response, status, "application/json");
+  assert.equal(response.headers.get(renderer), owner);
+  const envelope = await response.json();
+  assert.equal(envelope.jsonrpc, "2.0");
+  assert.equal(envelope.id, null);
+  assert.equal(envelope.error.code, -32600);
+  assert.ok(envelope.error.message.startsWith(message));
+  assert.equal(envelope.error.data.request_id, response.headers.get("x-request-id"));
+}
+
 async function checkMcpAdmission(send, owner, appUrl) {
   const endpoint = "/mcp";
   const call = JSON.stringify({ jsonrpc: "2.0", id: 90, method: "tools/list" });
@@ -234,16 +246,28 @@ async function checkMcpAdmission(send, owner, appUrl) {
     [brokenUpload, {}, 400, "Check your request"],
     ["[]", {}, 400, "Invalid Request: batched requests"],
   ]) {
-    const response = await post(body, headers);
-    checkHeaders(response, status, "application/json");
-    assert.equal(response.headers.get(renderer), owner);
-    const envelope = await response.json();
-    assert.equal(envelope.jsonrpc, "2.0");
-    assert.equal(envelope.id, null);
-    assert.equal(envelope.error.code, -32600);
-    assert.ok(envelope.error.message.startsWith(message));
-    assert.equal(envelope.error.data.request_id, response.headers.get("x-request-id"));
+    await checkMcpRefusal(await post(body, headers), owner, status, message);
   }
+
+  let budgetReads = 0;
+  const spentBudget = {
+    async THROTTLE_STORE() {
+      budgetReads++;
+      return withThrottleTx(async (strings) => {
+        const statement = strings.join("?");
+        if (statement.includes("SELECT count(*)")) return [{ n: 60, wait: 37 }];
+        if (statement.includes("DELETE FROM web_throttle_hits")) return [];
+        throw new Error("Unexpected MCP budget fixture statement");
+      });
+    },
+  };
+  const overCap = await post(" ".repeat(BODY_LIMIT_BYTES.mcp + 1), {}, spentBudget);
+  await checkMcpRefusal(overCap, owner, 413, "Reduce the size");
+  assert.equal(budgetReads, 0, "the body cap runs before budget admission");
+  const refused = await post("[]", {}, spentBudget);
+  assert.equal(refused.headers.get("retry-after"), "37");
+  await checkMcpRefusal(refused, owner, 429, "Too many requests. Try again in 37 seconds.");
+  assert.equal(budgetReads, 1, "budget admission runs before batch refusal");
 }
 
 async function checkMarkdownErrors(read, expectedOwner) {
@@ -346,7 +370,7 @@ export function machineParityWorker(inner, probePath, kit) {
 export function machineDisconnectWorker(inner, probePath) {
   const events = [];
   return {
-    async fetch(request, _env, ctx) {
+    async fetch(request, env, ctx) {
       const url = new URL(request.url);
       assert.equal(url.hostname, "127.0.0.1");
       if (request.method === "GET" && url.pathname === probePath) return Response.json(events);
@@ -376,9 +400,10 @@ export function machineDisconnectWorker(inner, probePath) {
         );
         return read;
       });
-      const bindings = { APP_URL: url.origin, ADMIN_DB: adminDb, KIT_ROUTE_MCP: "true" };
+      const flag = env.KIT_ROUTE_MCP;
+      const bindings = { APP_URL: url.origin, ADMIN_DB: adminDb, KIT_ROUTE_MCP: flag };
       const response = await withEnv(bindings, () => inner.fetch(request, bindings, ctx));
-      checkMcpHeaders(response, "kit");
+      checkMcpHeaders(response, flag === "true" ? "kit" : null);
       return response;
     },
   };
