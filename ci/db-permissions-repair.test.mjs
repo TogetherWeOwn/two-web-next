@@ -93,6 +93,127 @@ test("repair dispatch isolates the credential and pins protected main and the sa
   }
 });
 
+test("executor CLI distinguishes acknowledged membership from an unconfirmed transaction", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "executor-close-"));
+  t.after(() => rmSync(dir, { recursive: true }));
+  const migration = new URL("./db-migrate.mjs", import.meta.url);
+  const executor = fileURLToPath(new URL("./db-repair-executor.mjs", import.meta.url));
+  const preload = join(dir, "preload.mjs");
+  const driver = join(dir, "driver.mjs");
+  writeFileSync(
+    preload,
+    `
+    import { registerHooks } from "node:module";
+    import { pathToFileURL } from "node:url";
+    registerHooks({
+      resolve(specifier, context, next) {
+        if (specifier === "postgres" && context.parentURL === ${JSON.stringify(migration.href)}) {
+          return { url: pathToFileURL(${JSON.stringify(driver)}).href, shortCircuit: true };
+        }
+        return next(specifier, context);
+      },
+    });
+  `,
+  );
+  writeFileSync(
+    driver,
+    `
+    import { writeFileSync } from "node:fs";
+    const { FIXTURE_FAILURE, FIXTURE_OPERATION } = process.env;
+    const events = [];
+    process.on("exit", () => writeFileSync(3, JSON.stringify(events)));
+    export default function postgres() {
+      events.push("connect");
+      let present = (FIXTURE_OPERATION === "revoke") !== FIXTURE_FAILURE.includes("no-op");
+      const tx = (strings, value) => {
+        if (typeof strings === "string") return strings;
+        const query = strings.join("?");
+        if (query.startsWith("set local ")) return [];
+        if (query.includes("current_database()")) {
+          return [{ database: "postgres", authenticated: "fixture", effective: "fixture" }];
+        }
+        if (query.includes("pg_try_advisory_xact_lock")) return [{ acquired: true }];
+        if (query.includes("from pg_namespace") && value === "fixture_executor") {
+          events.push("rights:" + present);
+          return [{
+            provisioner: "1", authorized: true, member: present, inherits: present,
+            can_set: present && FIXTURE_FAILURE !== "rights",
+            edges: present ? [["1", false, true, true]] : [],
+          }];
+        }
+        const verb = query.split(" ", 1)[0];
+        if ((verb === "grant" || verb === "revoke") && value === "fixture_executor") {
+          events.push(verb);
+          present = verb === "grant";
+          return [];
+        }
+        throw new Error("unexpected synthetic statement");
+      };
+      return {
+        async begin(options, callback) {
+          events.push(options);
+          await callback(tx);
+          events.push("callback complete");
+          if (FIXTURE_FAILURE.includes("commit")) throw new Error("synthetic commit error");
+          events.push("acknowledged");
+        },
+        async end({ timeout }) {
+          events.push("close:" + timeout);
+          if (FIXTURE_FAILURE.includes("close")) throw new Error("synthetic close error");
+        },
+      };
+    }
+  `,
+  );
+
+  const identity = createHash("sha256").update("postgres\0fixture").digest("hex");
+  for (const [operation, failure, code] of [
+    ["provision", "", 0],
+    ["revoke", "", 0],
+    ["provision", "close", 12],
+    ["revoke", "close", 13],
+    ["provision", "no-op close", 12],
+    ["revoke", "no-op close", 13],
+    ["revoke", "commit", 1],
+    ["provision", "commit and close", 1],
+    ["provision", "rights", 1],
+  ]) {
+    const raw = JSON.stringify({ operation, identity, executor: "fixture_executor" });
+    const label = `${operation} with ${failure || "no failure"}`;
+    const result = spawnSync(process.execPath, ["--import", preload, executor, operation], {
+      env: {
+        FIXTURE_FAILURE: failure,
+        FIXTURE_OPERATION: operation,
+        PRODUCTION_DB_EXECUTOR_PLAN: raw,
+        PRODUCTION_DB_EXECUTOR_PLAN_SHA256: createHash("sha256").update(raw).digest("hex"),
+        PRODUCTION_DB_EXECUTOR_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:fixture-password@${PLANETSCALE_PRODUCTION_HOST}:5432/postgres?sslmode=verify-full`,
+      },
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe", "pipe"],
+      timeout: 5000,
+    });
+    const wanted = operation === "provision";
+    const alreadyCompliant = failure.includes("no-op");
+    assert.ifError(result.error);
+    assert.equal(result.stdout, "", label);
+    assert.equal(result.stderr, "", label);
+    assert.deepEqual(
+      JSON.parse(result.output[3]),
+      [
+        "connect",
+        "isolation level read committed",
+        `rights:${alreadyCompliant ? wanted : !wanted}`,
+        ...(alreadyCompliant ? [] : [wanted ? "grant" : "revoke", `rights:${wanted}`]),
+        ...(failure === "rights" ? [] : ["callback complete"]),
+        ...(failure === "rights" || failure.includes("commit") ? [] : ["acknowledged"]),
+        "close:5",
+      ],
+      label,
+    );
+    assert.equal(result.status, code, label);
+  }
+});
+
 test("database repair recovery pins an unchanged dispatcher and a main ancestor", (t) => {
   const cwd = mkdtempSync(join(tmpdir(), "db-repair-revision-"));
   t.after(() => rmSync(cwd, { recursive: true }));
@@ -426,13 +547,13 @@ test("executor dispatch scopes its credential and suppresses subprocess output",
   assert.equal(run.env.PRODUCTION_DB_EXECUTOR_DATABASE_URL, dsn);
   assert.equal(JSON.stringify(workflow).split(dsn).length, 2);
   assert.ok(!JSON.stringify(workflow).includes("PRODUCTION_DB_REPAIR_DATABASE_URL"));
-  for (const code of [0, 1]) {
+  for (const code of [0, 1, 12, 13]) {
     const result = shell(
       run.run,
       { OPERATION: "revoke" },
       `node() { printf 'fixture credential'; printf 'fixture error' >&2; return ${code}; }`,
     );
-    assert.equal(result.status, code);
+    assert.equal(result.status, code === 0 ? 0 : 1);
     assert.equal(result.stdout, code ? "" : "Approved executor membership state confirmed.\n");
     assert.equal(
       result.stderr,
