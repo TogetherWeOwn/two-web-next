@@ -316,6 +316,16 @@ export default {
     listen(hono.child, hono.origin, () => hono.log),
   ]);
 
+  if (args.length) {
+    const { assertHotzoneSignalParity } = await import("./fixtures/kit-hotzone-signal-parity.mjs");
+    const on = await startWorker("kit-hotzone-signal", worker, assets, undefined, {
+      KIT_ROUTE_HOTZONE_SIGNAL: "true",
+    });
+    await listen(on.child, on.origin, () => on.log);
+    await assertHotzoneSignalParity({ hono, off: kit, on, databaseUrl });
+    on.child.kill("SIGTERM");
+  }
+
   const opsEntry = join(scratch, "kit-ops.mjs");
   const opsFixture = fileURLToPath(new URL("./fixtures/kit-ops-worker.mjs", import.meta.url));
   const opsProbePath = "/__fixture/ops-parity";

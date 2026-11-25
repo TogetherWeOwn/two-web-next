@@ -103,15 +103,13 @@ Consult `src/route-ownership.ts` for the current method-aware manifest and
 ownership entry. Shipped manifest entries marked enabled include GET `/events`,
 `/events/past`, `/about`, `/faq`, `/admin/join-attempts`,
 `/admin/join-attempts/:id`, `/hotzones`, concrete hotzone signal paths, and
-`/leaderboards/members`. The Hono `GET /hotzones/:signal` registration overlaps
-only the enabled concrete signal paths, not every possible parameter value.
+`/leaderboards/members`. With the generic Hotzones flag unset, the Hono
+`GET /hotzones/:signal` registration overlaps only the concrete signal paths.
 Other manifest page entries include disabled admin, profile and event-detail
 reads; these remain prospective overlaps, not enabled Kit ownership. Legacy
 admin redirect entries are explicitly Hono-owned in the current manifest, even
 where a future migration target is proposed. Exact static entries take
-precedence over parameter patterns, and HEAD follows GET. A generic hotzone
-parameter target must not be used as evidence that all signal values are
-currently Kit-owned; the manifest enables only its concrete signal entries.
+precedence over parameter patterns, and HEAD follows GET.
 
 In particular, `GET /events` is enabled in the shipped manifest while the
 separately registered `POST /events` has no matching POST ownership entry and
@@ -139,6 +137,23 @@ require a pathname predicate and an explicit literal-path release to take
 ownership of a reserved path. HEAD follows
 GET. Conflicting claims and overlaps with disabled page ownership entries
 fall back to Hono.
+
+### Generic Hotzones signal matcher
+
+`KIT_ROUTE_HOTZONE_SIGNAL=true` lets Kit own GET and HEAD for an unknown
+single segment on the mounted `/hotzones/[signal]` route. Kit uses the same
+HTML refusal as Hono, checking the season first (400) and then refusing the
+unknown signal (404). Neither refusal spends the public-read budget. The
+three recognized signals (`joins`, `voice`, `games`) use their exact selectors,
+including percent-encoded spellings that resolve to those same names.
+
+The mount and allowlist are case-sensitive. Case variants of a signal are
+unknown signals. A different mount case, trailing slash, empty or extra
+segment, malformed encoding, or another HTTP method keeps the Hono answer.
+The generic flag excludes Kit data requests and encoded data suffixes.
+Existing data requests for the index and exact signals follow their page
+selectors. The installed XFS Worker fixture compares direct Hono, the
+default Kit Worker, and the opt-in worker for these boundaries.
 
 ### Browser authentication endpoints
 

@@ -4,6 +4,7 @@ import { type Handle, sequence } from "@sveltejs/kit/hooks";
 import { env } from "cloudflare:workers";
 import { KIT_EVENT_MARKDOWN_ROUTES } from "../../src/ai-friendly/kit-event-markdown-routes";
 import { recordBoardView, recordQueuedBoardView } from "../../src/hotzones/board-log";
+import { KIT_HOTZONE_SIGNAL_ROUTE } from "../../src/hotzones/kit-signal-route";
 import { prepareKitHomePanels } from "../../src/kit-home-panels";
 import { KIT_SECURITY_TXT_ROUTE } from "../../src/kit-security-txt-route";
 import { KIT_SEO_ROUTES } from "../../src/kit-seo-routes";
@@ -87,6 +88,7 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
       { flag: env.KIT_ROUTE_STATIC_TEXT, routes: KIT_STATIC_TEXT_ROUTES },
       { flag: env.KIT_ROUTE_EVENT_JSON, routes: [KIT_EVENT_JSON_ROUTE] },
       { flag: env.KIT_ROUTE_PUBLIC_API, routes: KIT_PUBLIC_API_ROUTES },
+      { flag: env.KIT_ROUTE_HOTZONE_SIGNAL, routes: [KIT_HOTZONE_SIGNAL_ROUTE] },
       kitMcpFamily(),
       { flag: env.KIT_ROUTE_EVENT_MARKDOWN, routes: KIT_EVENT_MARKDOWN_ROUTES },
       { flag: env.KIT_ROUTE_SEO, routes: KIT_SEO_ROUTES },
