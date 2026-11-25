@@ -27,6 +27,7 @@ import {
 } from "./fixtures/kit-admin-rsvp-controls.mjs";
 import { assertEventReadsParity } from "./fixtures/kit-event-reads-parity.mjs";
 import { assertEventCreateFormParity } from "./fixtures/kit-event-create-form-parity.mjs";
+import { assertFeaturedDeleteParity } from "./fixtures/kit-featured-delete-parity.mjs";
 import { assertResponseContracts } from "./fixtures/kit-response-contracts.mjs";
 import { assertStaticFeedParity } from "./fixtures/kit-static-feed-parity.mjs";
 import { expectedMarkerFor, kitHomeHeadingText } from "./kit-parity-gates.mjs";
@@ -1051,6 +1052,12 @@ export default {
       hono: honoWithSession,
       databaseUrl,
     });
+    const deleteFixture = await startWorker("kit-featured-delete", worker, assets, secret, {
+      KIT_ROUTE_ADMIN: "true",
+      KIT_PARITY_FIXTURE_ADMIN_FEATURED_DELETE: "true",
+    });
+    await listen(deleteFixture.child, deleteFixture.origin, () => deleteFixture.log);
+    await assertFeaturedDeleteParity({ kit: deleteFixture, off: admin, databaseUrl });
 
     await assertInstalledJoinAttemptDetail({
       worker,
