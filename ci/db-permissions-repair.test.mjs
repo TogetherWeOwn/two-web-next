@@ -82,13 +82,14 @@ test("executor authority replays committed provision and revoke without another 
         },
         async end(options) {
           assert.deepEqual(options, { timeout: 5 });
+          events.push("close start");
           await new Promise((resolve) => setImmediate(resolve));
-          events.push("close");
+          events.push("closed");
         },
       };
     });
     assert.equal(committed, operation === "provision");
-    assert.deepEqual(events, ["connect", ...expectedEvents, "commit", "close"]);
+    assert.deepEqual(events, ["connect", ...expectedEvents, "commit", "close start", "closed"]);
   }
 });
 
