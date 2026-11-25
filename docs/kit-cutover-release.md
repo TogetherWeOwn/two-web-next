@@ -1,26 +1,122 @@
-# All-off Kit cutover and Hono undo
+# Kit cutover and recovery
 
-The [XFS qualification workflow](../.github/workflows/xfs-qualification.yml)
-tests the Kit build with every route family off. It preserves the exact facade,
-adapter, and asset bytes from that run together with a pure Hono build compiled
-for the same database readiness profile. The packet manifest binds both file
-trees to the source SHA, root and Kit configuration digests, migration journal,
-run ID, run attempt, and the Hono compiler define and Wrangler pin.
+## Database handoff
 
-On `main`, dispatch XFS qualification with `qualify_cutover: true` to keep
-the packet from that exact attempt for 30 days. Parity replays the packaged
-Kit bytes. Isolated staging must exercise the separately compiled Hono undo
-bytes before protected deployment selection.
+Complete the protected [migrator permissions repair](../.github/workflows/db-permissions-repair.yml)
+and its production watch first. Install the
+[readiness projection](db-migrations.md#install-or-remove-the-readiness-projection)
+while direct ledger access still works. Use the
+[protected release steps below](#protected-release-and-recovery) to dispatch
+`deploy-production` with `cutover_mode: hono`, the approved compatible
+Hono SHA and its qualification pin, and both undo inputs empty. Verify that
+version serves 100% of traffic and reads through the projection on `1033` before
+applying [serving ledger isolation](../.github/workflows/db-serving-ledger-isolation.yml).
+Verify the effective access for the serving Web and jobs roles and finish the
+isolation watch. Apply the approved web schema advance separately through
+[`db-migrate`](../.github/workflows/db-migrate.yml). Hand off to Ember after
+the database releases and their watches pass. Record the serving Worker commit
+and UUID, the canonical ledger prefix through `1037` with `1038` deferred,
+healthy `/up`, and the database recovery receipts. A cutover changes the serving
+Worker version. Use the [database recovery procedure](runbook.md#migration-rollback-and-recovery)
+for a database regression.
+
+Select a cutover build that preserves the code already serving after the
+database handoff, including the shared queue and scheduled handlers. Qualify a
+replacement build if the original candidate would undo a live fix.
+
+## Match the staging evidence to the release
+
+Dispatch [XFS qualification](../.github/workflows/xfs-qualification.yml) from
+`main` with `qualify_cutover: true` and the intended `cutover_profile`.
+Parity runs with all Kit route families off and replays the packaged Kit
+facade, adapter and assets. The packet also includes a separately compiled pure
+Hono build. The manifest binds both file trees to the source SHA, configuration
+and journal digests, run ID and attempt, and the Hono compiler define and
+Wrangler pin.
 
 The `isolated-cutover` job runs on the same main dispatch. It needs
 `KIT_CUTOVER_TEST_DATABASE_HOST` and `KIT_CUTOVER_TEST_DATABASE_URL` in
 the staging Environment for a dedicated synthetic Neon project with the
 `two_web_cutover` control database and `two_web_cutover_owner` login.
-It runs public smoke and exact-version undo on both ledger states, then
-removes the run-owned Worker, database, and expiring login.
-To retry, select **Re-run all jobs** so staging uses a packet from that attempt.
+It checks the exact serving UUID, readiness and route smoke at each transition,
+then removes the run-owned Worker, database and expiring login.
+
+| `cutover_profile` | Isolated rehearsal | Expected renderer evidence |
+| --- | --- | --- |
+| `all-off` | Hono → all-off Kit → same Hono UUID on both `1033` and `1037` | Public smoke stays on Hono throughout. |
+| `ember` | Hono → Ember → same Hono UUID on both `1033` and `1037` | Kit serves Home, Events, Join and the same-origin Events calendar fragment on Ember. Admin and guest profile admission stay on Hono. |
+| `admin` | Admin-off Ember → admin-on Ember → same admin-off Ember UUID on `1037` | Ember pages stay on Kit. Admin ownership switches to Kit and back to Hono. The synthetic checks cover default denial, operator bearer and browser session separation, and ownership after undo. |
+
+In the [route smoke](../bin/smoke.mjs), Kit sends `x-two-renderer: kit` and
+Hono omits the header. Guests must still get HTTP 404 for both `GET /members`
+and `GET /members/`. Keyed profile lookup at `/members/:user` keeps its existing
+access rules. Use the [frozen URL assertions](../test/frozen-url-method-ownership.test.ts)
+for the retired directory contract.
+
+Record the successful isolated job and cleanup, the proof's ledger states and
+version UUIDs, and the packet and proof from the same run attempt. Those
+artifacts are retained for 30 days. The production `cutover_pin` has the form
+`run_id:run_attempt:manifest_sha256`, using the manifest digest from the proof.
+To retry, select **Re-run all jobs** so isolated staging uses that attempt's
+packet.
+
+Pair the isolated packet evidence with the
+[shared staging deploy, smoke, E2E and soak](../CONTRIBUTING.md#merge-and-production-staging-evidence)
+for the same candidate SHA. Use the deployed revision recorded by the jobs
+when the Actions run header identifies the trigger context. Match the
+`sha` and `deployedAt` in the staging E2E before and after receipts to the
+commit tag and upload time of the Cloudflare Worker version identified by
+`/up`'s version UUID. This distinguishes separate uploads of the same SHA.
+Use Cloudflare deployment history for that UUID and the staging E2E completion
+time to verify the version served through the required soak. A replacement
+before the soak finishes leaves the prior candidate unqualified. The isolated
+job exercises the exact packaged bytes, the selected renderer profile and
+its undo.
 
 ## Protected release and recovery
 
-Follow the [separate release gate](../CONTRIBUTING.md#production-release-gate) and pause automatic promotion. Prepare Hono with `deploy-production` and `cutover_mode: hono`, then record its serving UUID.
-Select `kit` with that UUID as `cutover_undo_version` and the same `sha` and `cutover_pin`. Undo with `rollback-production`, specifying Hono as `version_id` and Kit as `expected_current_version_id`. Ordinary promotion requires the full target ledger.
+Follow the [production release gate](../CONTRIBUTING.md#production-release-gate)
+for each separate production operation. Approved PRs can keep merging to
+`main` while production uses the exact approved candidate.
+
+1. Pause automatic promotion with `PRODUCTION_AUTO_PROMOTE_DISABLED=true`
+   for the protected switch. Dispatch
+   [`deploy-production`](../.github/workflows/deploy-production.yml) from
+   `main` with the full approved 40-character `sha` and its `cutover_pin`.
+   Leave `migrations_applied` off. The cutover reads the actual ledger.
+2. For all-off Kit or Ember, first select `cutover_mode: hono` with both undo
+   inputs empty. After protected smoke and the watch pass, verify the prepared
+   Hono UUID is serving 100% of production traffic. Use the **same** `sha` and
+   `cutover_pin` to select `cutover_mode: kit` for all-off or
+   `cutover_mode: ember` for Ember. Set `cutover_undo_version` to that live
+   Hono UUID and leave `cutover_undo_digest` empty. The workflow checks the
+   Hono version tag and its annotation for this packet's manifest digest.
+3. After Ember reaches 100% and its production watch passes, record the
+   serving Ember UUID and commit, the accepted Ember manifest digest,
+   `KIT_ROUTE_EMBER_PAGES=true`, and `KIT_ROUTE_ADMIN` false or absent. Include
+   Hono admin smoke and the watch receipt in the handoff to the admin release.
+4. For admin, select `cutover_mode: admin` with its own approved `sha` and
+   admin-profile `cutover_pin`. Set `cutover_undo_version` to the live admin-off
+   Ember production UUID and `cutover_undo_digest` to that Ember packet's
+   separately approved manifest SHA-256. The workflow verifies the live
+   fallback's commit, tag, digest annotation, production `APP_URL` and Ember
+   and admin bindings. The serving ledger must be `1037`. Use the UUIDs
+   recorded from live production traffic for the undo inputs.
+
+The protected workflow moves traffic through 5%, 50% and 100%, checking
+health and renderer ownership. Confirm the promoted UUID and commit in
+`/up`, retain the smoke result and watch health and errors for at least
+30 minutes. In admin mode the protected live probe also confirms anonymous
+operator requests are refused. The operator panel uses the separate
+[bearer admission and secret procedure](operator-overrides.md#admission-and-custody).
+Before resuming automatic promotion, confirm the approved next artifact keeps
+the intended renderer ownership. Ordinary promotion requires the full target
+ledger and uses its own build path.
+
+On regression, use [`rollback-production`](../.github/workflows/rollback-production.yml)
+with `environment: production`. Set `expected_current_version_id` to the
+promoted production UUID being undone. For Ember or all-off Kit, set
+`version_id` to the paired Hono UUID. For admin, set it to the recorded
+admin-off Ember UUID. Verify the restored UUID and commit, database readiness,
+and the fallback renderer ownership. The admin undo returns Admin to Hono
+while keeping Ember's public pages on Kit.
