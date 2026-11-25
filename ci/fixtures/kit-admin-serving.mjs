@@ -8,6 +8,7 @@ import postgres from "postgres";
 import { newEventKey } from "../../src/admin/validation-event-keys.ts";
 import { EMBER_CUTOVER_VARS } from "../kit-cutover-evidence.mjs";
 import { FIXTURE_SECRETS, SESSION_COOKIE } from "../parity/fixture.mjs";
+import { assertAdminDuplicateServing } from "./kit-admin-duplicate.mjs";
 
 const editor = "/admin/events/new";
 const legacyCreate = "/admin/events/create";
@@ -20,9 +21,17 @@ export async function prepareAdminFixture(worker, entry) {
     entry,
     `
 import worker from ${JSON.stringify(worker)};
-import { env } from "cloudflare:workers";
+import { env, withEnv } from "cloudflare:workers";
 const transport = globalThis.fetch;
+let activeDuplicatePosts = 0;
+let duplicateSends = 0;
+function rejectDuplicateSend() {
+  duplicateSends++;
+  throw new Error("Unexpected outbound copy-to-draft dispatch");
+}
+const duplicateQueue = { send: rejectDuplicateSend, sendBatch: rejectDuplicateSend };
 globalThis.fetch = async (input, init) => {
+  if (activeDuplicatePosts > 0) return rejectDuplicateSend();
   if (input !== ${JSON.stringify(`${bot}/ops/config`)}) return transport(input, init);
   if (init?.method !== "GET" || init.redirect !== "manual" ||
       new Headers(init.headers).get("authorization") !== "Bearer " + env.OPS_CONTROL_TOKEN) {
@@ -31,13 +40,32 @@ globalThis.fetch = async (input, init) => {
   return Response.json({ epoch: 42, overrides: { label: "Fixture operator value" },
     baseline: {}, enforcement: "fixture" });
 };
-export default worker;
+export default {
+  ...worker,
+  async fetch(request, bindings, context) {
+    if (request.method !== "POST" || !/^\\/admin\\/events\\/[^/]+\\/duplicate$/.test(new URL(request.url).pathname)) {
+      return worker.fetch(request, bindings, context);
+    }
+    const before = duplicateSends;
+    const fixture = { ...bindings, SYNC_EVENT_QUEUE: duplicateQueue, INTERNAL_ACTION_QUEUE: duplicateQueue };
+    activeDuplicatePosts++;
+    try {
+      const response = await withEnv(fixture, () => worker.fetch(request, fixture, context));
+      if (duplicateSends !== before) throw new Error("Copy-to-draft attempted an outbound send");
+      return response;
+    } finally {
+      activeDuplicatePosts--;
+    }
+  },
+};
 `,
   );
   return {
     KIT_ROUTE_ADMIN: "true",
     KIT_PARITY_FIXTURE_ADMIN_DASHBOARD: "true",
     BOT_ENDPOINT_URL: bot,
+    BOT_KEY_ID: "fixture-copy-draft",
+    BOT_SHARED_SECRET: "synthetic-copy-draft-fixture",
     OPS_CONTROL_TOKEN: FIXTURE_SECRETS.OPS_CONTROL_TOKEN,
   };
 }
@@ -882,6 +910,17 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
     assert.equal(events, 2, "event create and duplicate each persist once");
     assert.equal(writes, 6, "six accepted actions each audit once; refusals do not write");
 
+    await assertAdminDuplicateServing({
+      kit,
+      off,
+      hono,
+      sql,
+      moderatorId,
+      moderator,
+      member,
+      visit,
+    });
+
     // A seeded key makes the parameter route observable next to the static
     // form and exact alias. Both installed modes keep the other forms in Kit.
     for (const target of [kit, nativeCreate, hono]) {
@@ -903,6 +942,7 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
       });
       assert.match(existing.text, /<h1[^>]*>Edit Fixture admin draft<\/h1>/);
       assert.ok(existing.text.includes(`action="${eventPath}"`));
+      assert.ok(existing.text.includes(`action="${eventPath}/duplicate"`));
       const current = renewedModerator(existing.headers);
       const ownedRedirect = target === nativeCreate;
       const alias = `${legacyCreate}?ignored=1&next=%2Felsewhere`;

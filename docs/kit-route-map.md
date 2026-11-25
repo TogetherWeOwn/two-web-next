@@ -196,6 +196,12 @@ returns `301 Location: /admin/events/new` with no query. HEAD uses the same
 redirect without rotating the session. The disabled entry still takes
 precedence over the parameterized edit form.
 
+The event editor's `POST /admin/events/:key/duplicate` has an exact dispatcher
+entry under this same default-off flag. Kit uses the shared admin form action
+to invoke the moderator copy-to-draft controller and releases its redirect or
+source validation response.
+With Admin ownership off, the same POST goes through the Hono app.
+
 ### Security disclosure endpoint
 
 `KIT_ROUTE_SECURITY_TXT=true` admits trusted GET and HEAD on the literal
