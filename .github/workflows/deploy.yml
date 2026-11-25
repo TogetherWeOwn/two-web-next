@@ -63,14 +63,6 @@ jobs:
       # image line and this note together.
       image: node:24-bookworm@sha256:e7add2a490bb17d97b485b8641bd88455fff7839ade0f5eba493c3508124d413
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # workflow_run's github.sha is main's tip, not the successful CI SHA.
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
-          # Two commits of history: the smoke-scope step below diffs the
-          # deployed HEAD against its parent.
-          fetch-depth: 2
-          persist-credentials: false
       - name: Staging admission hold (before dependencies or mutations)
         # Staging-only containment: only exactly "false" releases the direct
         # staging migration path. Absent, "true" and malformed values all hold.
@@ -84,6 +76,29 @@ jobs:
         run: |
           set -eu
           [ "${STAGING_MIGRATION_HOLD:-}" = false ] || { printf '%s\n' 'Staging migrations are held (STAGING_MIGRATION_HOLD is not exactly "false").' >&2; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Run the guard from the workflow revision, including for older CI events.
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: |
+            ci
+            bin
+          persist-credentials: false
+      - name: Require a forward staging rollout
+        run: node ci/staging-forward.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # workflow_run's github.sha is main's tip, not the successful CI SHA.
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          # Two commits of history: the smoke-scope step below diffs the
+          # deployed HEAD against its parent.
+          fetch-depth: 2
+          persist-credentials: false
       - name: Require successful exact-SHA full CI
         run: node ci/staging-deploy-gate.mjs
         env:

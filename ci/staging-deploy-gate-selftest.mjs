@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { kitRouteFlagsForFamily, requireEnabledEmberRoutes } from "./kit-route-flags.mjs";
 import { deploymentTarget, requireSuccessfulCi } from "./staging-deploy-gate.mjs";
+import { requireForwardStaging } from "./staging-forward.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const repository = "TogetherWeOwn/two-web-next";
@@ -922,16 +923,12 @@ test("workflow wires the tested gate before both mutations and preserves staging
   assert.match(ci, /run: node --test ci\/staging-deploy-gate-selftest.mjs/);
 });
 
-test("main CI runs are never cancelled in progress and finish in push order", () => {
-  // A cancel request marks the run cancelled even when every job then succeeds,
-  // and the deploy trigger above rejects a cancelled conclusion. The group stays
-  // per ref so main runs are serialized: an older SHA cannot finish after, and
-  // deploy over, a newer one.
+test("different main push SHAs cannot replace each other in the single pending queue", () => {
   const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
   const block = ci.match(/^concurrency:\n  group: (.+)\n  cancel-in-progress: \$\{\{ (.+) \}\}\n/m);
   assert(
     block,
-    "ci.yml concurrency must group per-PR-or-ref and exempt main from cancel-in-progress",
+    "ci.yml concurrency must isolate main pushes and exempt them from cancel-in-progress",
   );
   // GitHub expression dereference is null-safe (missing pull_request reads as
   // null); emulate that with optional chaining so main-push contexts evaluate.
@@ -942,23 +939,116 @@ test("main CI runs are never cancelled in progress and finish in push order", ()
     `return \`${nullSafe(block[1]).replaceAll("${{ ", "${").replaceAll(" }}", "}")}\`;`,
   );
   const cancelsOf = new Function("github", `return (${nullSafe(block[2])});`);
-  const main = (sha) => ({ workflow: "ci", event: {}, ref: "refs/heads/main", sha });
+  const main = (sha, event_name = "push") => ({
+    workflow: "ci",
+    event: {},
+    event_name,
+    ref: "refs/heads/main",
+    sha,
+  });
   const pr = (number, ref) => ({
     workflow: "ci",
     event: { pull_request: { number } },
     ref,
     sha: "x",
   });
-  // Main pushes share one group (serialized, in order) and are never cancelled.
-  assert.equal(groupOf(main("aaa")), groupOf(main("bbb")));
-  assert.equal(cancelsOf(main("aaa")), false);
-  // The nightly schedule runs on main's ref but must not share the push group: a
-  // pending nightly would cancel a pending push run, which deploy never sees.
-  const nightly = { ...main("ccc"), event_name: "schedule" };
-  assert.notEqual(groupOf(nightly), groupOf(main("aaa")));
+  const pinned = main(sha);
+  const later = main(otherSha);
+  const nightly = main(sha, "schedule");
+  const dispatch = main(sha, "workflow_dispatch");
+  assert.equal(new Set([pinned, later, nightly, dispatch].map(groupOf)).size, 4);
+  assert.equal(cancelsOf(pinned), false);
+  assert.equal(cancelsOf(later), false);
   assert.equal(cancelsOf(nightly), false);
+  assert.equal(cancelsOf(dispatch), false);
   // PR pushes for the same PR share a group and cancel superseded runs.
   assert.equal(groupOf(pr(7, "refs/pull/7/merge")), groupOf(pr(7, "refs/pull/7/merge")));
   assert.notEqual(groupOf(pr(7, "refs/pull/7/merge")), groupOf(pr(8, "refs/pull/8/merge")));
   assert.equal(cancelsOf(pr(7, "refs/pull/7/merge")), true);
+});
+
+test("staging guard runs from the workflow revision inside the existing lane before writes", () => {
+  assert.match(
+    workflow,
+    /group: deploy-staging\n      cancel-in-progress: false\n      queue: max/,
+  );
+  assert.equal(step("Require a forward staging rollout"), "node ci/staging-forward.mjs");
+  assert.match(
+    workflow,
+    /ref: \$\{\{ github\.workflow_sha \}\}[\s\S]*?- name: Require a forward staging rollout[\s\S]*?DEPLOY_SHA: (\$\{\{ github\.event_name == 'workflow_run' && github\.event\.workflow_run\.head_sha \|\| github\.sha \}\})[\s\S]*?ref: \1/,
+  );
+  assert.ok(
+    workflow.indexOf("- name: Require a forward staging rollout") <
+      workflow.indexOf("- name: Plan staging web migrations"),
+  );
+});
+
+const activeVersion = "12345678-1234-1234-1234-123456789abc";
+const stagingGuardEnv = {
+  DEPLOY_SHA: sha,
+  GITHUB_REPOSITORY: repository,
+  GITHUB_TOKEN: "fake-github",
+  CLOUDFLARE_ACCOUNT_ID: "c".repeat(32),
+  CLOUDFLARE_API_TOKEN: "fake-cloudflare",
+};
+const forward = {
+  status: "ahead",
+  ahead_by: 2,
+  total_commits: 2,
+  behind_by: 0,
+  base_commit: { sha: otherSha },
+  merge_base_commit: { sha: otherSha },
+};
+function stagingReads({ live = otherSha, served = activeVersion, compare = forward } = {}) {
+  return async (url, options) => {
+    switch (String(url)) {
+      case `https://api.cloudflare.com/client/v4/accounts/${stagingGuardEnv.CLOUDFLARE_ACCOUNT_ID}/workers/scripts/two-web-next/deployments`:
+        assert.equal(options.headers.Authorization, "Bearer fake-cloudflare");
+        return Response.json({
+          success: true,
+          result: {
+            deployments: [
+              {
+                created_on: "2026-11-25",
+                versions: [{ version_id: activeVersion, percentage: 100 }],
+              },
+            ],
+          },
+        });
+      case "https://next.togetherweown.com/up":
+        assert.equal(Object.hasOwn(options.headers, "Authorization"), false);
+        return Response.json({ revision: { version_id: served, commit: live } });
+      case `https://api.github.com/repos/${repository}/compare/${otherSha}...${sha}?per_page=1`:
+        assert.equal(options.headers.Authorization, "Bearer fake-github");
+        assert.notEqual(compare, null, "Equal SHA or a mismatched version must avoid comparing");
+        return Response.json(compare);
+      default:
+        assert.fail(`Unexpected request ${url}`);
+    }
+  };
+}
+
+test("staging admits the same SHA or a forward candidate independent of the main tip", async () => {
+  assert.equal(await requireForwardStaging(stagingGuardEnv, stagingReads()), otherSha);
+  assert.equal(
+    await requireForwardStaging(stagingGuardEnv, stagingReads({ live: sha, compare: null })),
+    sha,
+  );
+});
+
+test("staging refuses an older or divergent candidate and a lagging edge", async () => {
+  for (const compare of [
+    { ...forward, status: "behind", ahead_by: 0, behind_by: 2, merge_base_commit: { sha } },
+    { ...forward, status: "diverged", behind_by: 2 },
+    { ...forward, merge_base_commit: { sha } },
+  ]) {
+    await assert.rejects(
+      requireForwardStaging(stagingGuardEnv, stagingReads({ compare })),
+      /not a verified descendant/,
+    );
+  }
+  await assert.rejects(
+    requireForwardStaging(stagingGuardEnv, stagingReads({ served: null, compare: null })),
+    /does not identify the active Cloudflare version/,
+  );
 });

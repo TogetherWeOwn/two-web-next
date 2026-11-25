@@ -28,20 +28,12 @@ env:
   # The policy fixtures and workspace installs must use the same bundled npm.
   ADMISSION_NODE_VERSION: "24.22.3"
 
-# Runs on main are never cancelled in progress: a cancel request marks the run
-# cancelled even when every job then succeeds, and the staging deploy trigger
-# rejects a cancelled conclusion. That left 54 of 60 main runs cancelled on
-# 2026-10-02 and staging never deployed. The group stays per ref, so main runs
-# are serialized (finish in push order; a newer pending run replaces an older
-# pending one before it starts), and an older SHA can never finish after, and
-# deploy over, a newer one. PR pushes still cancel superseded runs (TOG-11811
-# queue economy). The nightly schedule run has its own group: it also runs on
-# main's ref, and a pending nightly would otherwise replace a pending push run,
-# whose cancelled conclusion the staging deploy trigger rejects (it deploys only
-# push-event runs). test/ci-concurrency.test.ts and the staging gate selftest pin
-# this.
+# Give each main push its own pending slot. The default queue replaces waiting
+# runs even with cancellation of running jobs disabled. `queue: max` cannot
+# coexist with this workflow's PR cancellation policy, and queue arrival order
+# is independent of push order. The staging lane checks ancestry before writes.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || (github.event_name == 'schedule' && 'nightly') || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || (github.event_name == 'push' && github.sha) || (github.event_name == 'schedule' && 'nightly') || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'merge_group' }}
 
 jobs:

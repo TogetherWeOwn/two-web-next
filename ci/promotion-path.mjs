@@ -8,7 +8,7 @@ const directPaths = new Set(
    ci/resolve-promotion-sha.mjs ci/production-deploy-gate.mjs ci/rollback-target.mjs ci/drill-scripts-ref.mjs
    ci/post-deploy-watch.mjs ci/check-production-secrets.mjs
    ci/operator-constants.mjs ci/wrangler-config.mjs ci/worker-bundle-evidence.mjs
-   ci/staging-deploy-gate.mjs ci/staging-provenance.mjs ci/check-staging-journeys.mjs ci/web-standards.mjs
+   ci/staging-deploy-gate.mjs ci/staging-forward.mjs ci/staging-provenance.mjs ci/check-staging-journeys.mjs ci/web-standards.mjs
    ci/lighthouse-origin-lib.cjs ci/lighthouserc.cjs ci/quality-budget.json ci/lighthouse-samples.cjs ci/lighthouse-serving-values.cjs ci/lighthouse-preserve-mobile.sh
    ci/change-scope.sh ci/e2e-test-helpers.mjs ci/kit-route-flags.mjs ci/staging-kit-route-check.mjs ci/check-jobs-secrets.mjs
    ci/db-migrate.mjs ci/migration-admission.mjs ci/migration-ownership.mjs ci/migration-runtime-rights.mjs

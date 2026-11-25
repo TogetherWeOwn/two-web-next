@@ -74,7 +74,7 @@ test("only promotion surfaces match, including directly called tooling", () => {
     deep/web/wrangler.production.toml tail/wrangler.jsonc drizzle/meta/_journal.json migrations.lock db/migrations/0001.sql
     ci/resolve-promotion-sha.mjs ci/production-deploy-gate.mjs ci/rollback-target.mjs ci/drill-scripts-ref.mjs
     ci/check-snapshot-chain-selftest.mjs e2e/search-retry.mjs src/worker.ts web/src/hooks.server.ts web/src/lib/server/hono.ts
-    ci/staging-provenance.mjs ci/staging-deploy-gate.mjs ci/web-standards.mjs ci/db-migrate.mjs
+    ci/staging-provenance.mjs ci/staging-deploy-gate.mjs ci/staging-forward.mjs ci/web-standards.mjs ci/db-migrate.mjs
     ci/lighthouse-origin-lib.cjs ci/lighthouserc.cjs ci/quality-budget.json ci/lighthouse-samples.cjs ci/lighthouse-serving-values.cjs ci/lighthouse-preserve-mobile.sh
     ci/migration-runtime-rights.mjs src/up-database.ts bin/version-check.mjs e2e/staging/join.spec.ts
     e2e/watch/guest-journeys.spec.ts playwright.watch.config.ts e2e/watch-guard.mjs e2e/ci-only.mjs
