@@ -39,7 +39,7 @@ export default worker;
 
 function renewedModerator(headers) {
   const cookie = headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`));
-  assert.ok(cookie, "Kit refreshes the shared moderator bearer");
+  assert.ok(cookie, "the response refreshes the shared moderator bearer");
   return cookie.split(";", 1)[0];
 }
 
@@ -178,6 +178,95 @@ export async function assertStagedAdminServing({ origin, owner, secrets, enabled
   assert.equal(events + featured, 0, "denied or invalid forms did not create records");
 }
 
+async function assertFeaturedAuditFallback({
+  kit,
+  off,
+  sql,
+  featuredPath,
+  moderatorId,
+  form,
+  operatorAuth,
+}) {
+  const id = featuredPath.split("/").at(-1);
+  const editor = await visit(kit, featuredPath, 200, { headers: form.headers });
+  const moderator = { ...form.headers, cookie: renewedModerator(editor.headers) };
+  const baseline = editor.text.match(/name="saved_baseline" value="([0-9a-f]{64})"/)?.[1];
+  assert.ok(baseline, "Kit renders the current featured save baseline");
+  const title = `Fixture fallback edit ${moderatorId}`;
+  const description = `updated featured content ${title}`;
+  const body = new URLSearchParams({ saved_baseline: baseline, title });
+
+  async function snapshot() {
+    const [featured] = await sql`
+      select title, updated_at::text from featured_contents where id = ${id}
+    `;
+    const activity = await sql`
+      select id, description, causer_id, created_at, properties from activity_log
+      where subject_type = 'FeaturedContent' and subject_id = ${id} order by id
+    `;
+    return { featured, activity: [...activity] };
+  }
+
+  const before = await snapshot();
+  // The same bearer has already been admitted by the Kit override adapter.
+  // Submit the valid edit body with that bearer alone, then with the moderator cookie.
+  const denied = await visit(kit, featuredPath, 303, {
+    ...form,
+    headers: { ...html, ...operatorAuth },
+    body,
+  });
+  assert.equal(
+    denied.headers.get("location"),
+    `/auth/recover?next=${encodeURIComponent(featuredPath)}`,
+  );
+  assert.deepEqual(await snapshot(), before, "operator bearer cannot edit or append an audit row");
+
+  const saved = await visit(kit, featuredPath, 303, { ...form, body, headers: moderator });
+  assert.equal(saved.headers.get("location"), featuredPath);
+  const committed = await snapshot();
+  assert.equal(committed.featured.title, title);
+  assert.equal(committed.activity.length, before.activity.length + 1, "one new featured audit row");
+  assert.deepEqual(committed.activity.slice(0, -1), before.activity);
+  const receipt = committed.activity.at(-1);
+  assert.equal(receipt.causer_id, moderatorId);
+  assert.equal(receipt.description, description);
+  assert.deepEqual(receipt.properties.title, { before: before.featured.title, after: title });
+
+  // The same installed output with Admin ownership off serves this through Hono.
+  const activityPath = `/admin/activity-log?${new URLSearchParams({ subject: title })}`;
+  const activity = await visit(off, activityPath, 200, { owned: false, headers: moderator });
+  const rows = [...activity.text.matchAll(/<tr\b[^>]*>[\s\S]*?<\/tr>/g)]
+    .map(([row]) => row)
+    .filter((row) => row.includes(`<td>${description}</td>`));
+  assert.equal(rows.length, 1, "Hono displays exactly one Kit edit audit row");
+  assert.ok(rows[0].includes(`<td>${moderatorId}</td>`), "Hono displays the original causer");
+  assert.ok(
+    rows[0].includes(`<td>FeaturedContent ${id}</td>`),
+    "Hono displays the original subject",
+  );
+  assert.ok(
+    rows[0].includes(`datetime="${receipt.created_at.toISOString()}"`),
+    "Hono displays the original audit instant",
+  );
+  const fallbackModerator = renewedModerator(activity.headers);
+
+  await visit(off, featuredPath, 409, {
+    ...form,
+    body,
+    owned: false,
+    headers: { ...moderator, cookie: fallbackModerator },
+  });
+  assert.deepEqual(
+    await snapshot(),
+    committed,
+    "Hono fallback preserves the edit and audit identity on replay",
+  );
+  console.log(
+    "PASS installed Admin preserves the Kit edit and its audit record through Hono fallback",
+  );
+  return fallbackModerator;
+}
+
 export async function assertKitAdminServing({ kit, off, hono, databaseUrl }) {
   const actor = 900000000000000000n + BigInt(`0x${randomBytes(7).toString("hex")}`);
   const moderatorId = String(actor);
@@ -309,13 +398,23 @@ export async function assertKitAdminServing({ kit, off, hono, databaseUrl }) {
     const [{ title }] =
       await sql`select title from featured_contents where created_by = ${moderatorId}`;
     assert.equal(title, "Competing fixture edit");
+    moderator = await assertFeaturedAuditFallback({
+      kit,
+      off,
+      sql,
+      featuredPath,
+      moderatorId,
+      form,
+      operatorAuth,
+    });
+    form.headers.cookie = moderator;
     await visit(kit, `${featuredPath}/delete`, 303, { ...form, body: new URLSearchParams() });
     const [{ count: events }] =
       await sql`select count(*)::int from events where created_by = ${moderatorId}`;
     const [{ count: writes }] =
       await sql`select count(*)::int from activity_log where causer_id = ${moderatorId}`;
     assert.equal(events, 2, "event create and duplicate each persist once");
-    assert.equal(writes, 5, "five accepted actions each audit once; refusals do not write");
+    assert.equal(writes, 6, "six accepted actions each audit once; refusals do not write");
 
     const doc = await visit(kit, editor, 200, { headers: { cookie: moderator } });
     assert.match(doc.text, /<form[^>]+method="post"[^>]+action="\/admin\/events"/);
