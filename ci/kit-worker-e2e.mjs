@@ -770,20 +770,6 @@ export default {
     ),
   );
 
-  if (args.length) {
-    const { assertEventMarkdownParity } = await import("./fixtures/kit-event-markdown-parity.mjs");
-    await assertEventMarkdownParity({
-      hono: honoWithSession,
-      kit: kitWithSession,
-      databaseUrl,
-      startKit: async (name, vars) => {
-        const instance = await startWorker(name, worker, assets, secret, vars);
-        await listen(instance.child, instance.origin, () => instance.log);
-        return instance;
-      },
-    });
-  }
-
   if (!args.length) {
     const profile = await startWorker("kit-profile-write", worker, assets, secret, {
       KIT_ROUTE_PROFILE_WRITES: "true",
@@ -1079,7 +1065,7 @@ export default authFixtureWorker(inner);\n`,
         entry,
         `import inner from ${JSON.stringify(main)};
 import { machineParityWorker } from ${JSON.stringify(fixture)};
-export default machineParityWorker(inner, ${JSON.stringify(probePath)});\n`,
+export default machineParityWorker(inner, ${JSON.stringify(probePath)}, ${name === "kit-machine"});\n`,
       );
       const instance = await startWorker(name, entry, assetsDirectory, undefined, {
         DATABASE_URL: undefined,
@@ -1093,11 +1079,33 @@ export default machineParityWorker(inner, ${JSON.stringify(probePath)});\n`,
         agentCreate: 201,
         mcpComplete: "eof",
         mcpReaderCancel: "cancelled",
+        eventMarkdownErrors: [500, 503],
       });
-      console.log(`PASS ${name} agent JSON success, MCP SSE EOF and in-Worker reader cancellation`);
+      console.log(`PASS ${name} agent JSON, MCP SSE and event Markdown error envelopes`);
     }
     const { verifyKitMachineDisconnect } = await import("./fixtures/kit-machine-disconnect.mjs");
     await verifyKitMachineDisconnect(worker, scratch);
+
+    // The parity reads include branded 404s. Use a fresh Hono isolate so its
+    // suggestions come from the same fixture as the two fresh Kit isolates.
+    const markdownHono = await startWorker(
+      "hono-event-markdown",
+      join(repo, "src/worker.ts"),
+      join(repo, "public"),
+      secret,
+    );
+    await listen(markdownHono.child, markdownHono.origin, () => markdownHono.log);
+    const { assertEventMarkdownParity } = await import("./fixtures/kit-event-markdown-parity.mjs");
+    await assertEventMarkdownParity({
+      hono: markdownHono,
+      kit: kitWithSession,
+      databaseUrl,
+      startKit: async (name, vars) => {
+        const instance = await startWorker(name, worker, assets, secret, vars);
+        await listen(instance.child, instance.origin, () => instance.log);
+        return instance;
+      },
+    });
   }
 } catch (error) {
   failed = true;

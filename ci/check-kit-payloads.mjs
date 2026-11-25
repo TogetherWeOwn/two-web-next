@@ -55,6 +55,16 @@ const CHECK_MATCHERS = [
     testContains: "GET /events/",
   },
   {
+    id: "kit-payload-events-markdown",
+    describe: "Kit event Markdown anonymous payloads",
+    testContains: "GET /events.md",
+  },
+  {
+    id: "kit-payload-event-markdown",
+    describe: "Kit event Markdown anonymous payloads",
+    testContains: "GET /e/",
+  },
+  {
     id: "kit-payload-robots",
     describe: "Kit search indexing anonymous payloads",
     testContains: "GET /robots.txt",

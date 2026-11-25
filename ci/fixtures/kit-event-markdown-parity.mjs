@@ -32,6 +32,7 @@ export async function assertEventMarkdownParity({ hono, kit, startKit, databaseU
       startKit(`kit-event-markdown-${flag}`, {
         APP_URL: hono.origin,
         KIT_ROUTE_EVENT_MARKDOWN: flag,
+        KIT_ROUTE_PUBLIC_API: flag,
         KIT_PARITY_FIXTURE_EVENT_DETAIL: "true",
         E2E_PUBLIC_READ_BUDGET: "3",
       }),
@@ -167,6 +168,10 @@ export async function assertEventMarkdownParity({ hono, kit, startKit, databaseU
     await parity(path.replace("01J", "%301J"), { status: 200 });
     await parity(path.replace(".md", "%2Emd"), { status: 200, native: false });
     await parity(path.replace("/e/", "/%65/"), { status: 200, native: false });
+    const badEscape = await parity(detail("bad%ZZ"), { status: 404, native: false });
+    assert.equal(badEscape.headers.get("content-type"), markdownType);
+    const lineBreak = await parity(detail("bad%0Akey"), { status: 404, native: false });
+    assert.match(lineBreak.headers.get("content-type"), /^text\/html/);
     await parity(path.replace(".md", "/extra.md"), { status: 404, native: false });
     await parity(`${path}/`, { status: 404, native: false });
     await parity(`${path}/__data.json`, { status: 404, native: false });
@@ -201,7 +206,7 @@ export async function assertEventMarkdownParity({ hono, kit, startKit, databaseU
       headers: { ...headers, "if-none-match": "*" },
     });
     await hits(2);
-    await request(off, "/api/public/events", { status: 200, headers });
+    await request(on, "/api/public/events", { status: 200, owner: "kit", headers });
     await hits(3);
     for (const target of [off, on]) {
       const result = await request(target, path, {
