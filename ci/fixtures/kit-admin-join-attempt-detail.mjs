@@ -36,12 +36,12 @@ export default {
     }
     const admin = request.headers.get(${JSON.stringify(profileHeader)});
     if (admin !== "true" && admin !== "false") return new Response(null, { status: 400 });
-    const url = new URL(local.pathname + local.search, env.APP_URL);
+    const bindings = { ...env, KIT_ROUTE_ADMIN: admin, APP_URL: ${JSON.stringify(appUrl)} };
+    const url = new URL(local.pathname + local.search, bindings.APP_URL);
     const document = new Request(url, request);
     document.headers.delete(${JSON.stringify(profileHeader)});
     document.headers.set("host", url.host);
     if (document.headers.get("origin") === local.origin) document.headers.set("origin", url.origin);
-    const bindings = { ...env, KIT_ROUTE_ADMIN: admin };
     const response = await withEnv(bindings, () => worker.fetch(document, bindings, context));
     if (outbound) throw new Error("Join-attempt detail fixture attempted outbound HTTP");
     return response;
@@ -49,7 +49,7 @@ export default {
 };
 `,
   );
-  return start(entry, { ...EMBER_CUTOVER_VARS, APP_URL: appUrl });
+  return start(entry, EMBER_CUTOVER_VARS);
 }
 
 export async function assertJoinAttemptDetailParity({
