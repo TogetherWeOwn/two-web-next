@@ -186,14 +186,12 @@ export async function assertJoinAttemptDetailParity({
       ];
       assert.deepEqual(await accessFor([moderatorId, memberId]), expectedAudit);
 
-      const missing = await read(
-        missingPath,
-        404,
-        renewedModerator(detail.headers),
-        "Join attempt not found",
-      );
-      // The 404 still delivers the renewed bearer.
-      renewedModerator(missing.headers);
+      const afterDetail = renewedModerator(detail.headers);
+      const missing = await read(missingPath, 404, afterDetail, "Join attempt not found");
+      const afterMissing = renewedModerator(missing.headers);
+      assert.notEqual(afterMissing, afterDetail, `${target.name} renews the bearer on 404`);
+      // Reuse the replacement on the missing ID to prove admission without a second audit row.
+      await read(missingPath, 404, afterMissing, "Join attempt not found");
       for (const path of [detailPath, missingPath]) {
         const denied = await read(path, 403, member, "You do not have access to this");
         assert.equal(
