@@ -96,7 +96,7 @@ test("historical isolated cutover binds the selected checkout to the protected d
   };
   const input = { source_sha: sourceSha, qualify_cutover: "true", cutover_profile: "all-off" };
   const writeEvent = (changes) => writeJson(eventPath, { inputs: { ...input, ...changes } });
-  await writeEvent();
+  t.beforeEach(() => writeEvent());
   const context = { sourceSha, runId, runAttempt };
   const digest = await writeManifest(packetDir, context, source);
   const identity = { ...context, digest };
@@ -134,14 +134,11 @@ test("historical isolated cutover binds the selected checkout to the protected d
       ...changes,
     });
 
-  await t.test(
-    "admits the earlier main commit while keeping the dispatcher SHA separate",
-    async () => {
-      assert.notEqual(sourceSha, dispatcherSha);
-      assert.equal(git("rev-parse", "main"), laterSha);
-      assert.deepEqual(await verify(), { dispatcherSha, ...identity });
-    },
-  );
+  await t.test("admits a main ancestor and reports the dispatcher separately", async () => {
+    assert.notEqual(sourceSha, dispatcherSha);
+    assert.equal(git("rev-parse", "main"), laterSha);
+    assert.deepEqual(await verify(), { dispatcherSha, ...identity });
+  });
 
   await t.test("refuses when the provider supplies only successful attempt metadata", async () => {
     const own = { full_name: repository, fork: false, id: 23 };
@@ -163,7 +160,6 @@ test("historical isolated cutover binds the selected checkout to the protected d
       verify({ env: { ...env, GITHUB_EVENT_PATH: undefined } }),
       /dispatch event payload unavailable/,
     );
-    await writeEvent();
   });
 
   await t.test("refuses abbreviated, malformed, missing, and mismatched selections", async () => {
@@ -184,7 +180,6 @@ test("historical isolated cutover binds the selected checkout to the protected d
       await writeFile(eventPath, raw);
       await assert.rejects(verify(), /dispatch event payload unavailable/);
     }
-    await writeEvent();
   });
 
   await t.test("requires explicit qualification opt-in and a recognized profile", async () => {
@@ -197,7 +192,6 @@ test("historical isolated cutover binds the selected checkout to the protected d
       await writeEvent(changes);
       await assert.rejects(verify(), /lacks an isolated cutover profile/);
     }
-    await writeEvent();
   });
 
   await t.test("refuses an unprotected dispatch or a different producer", async () => {
@@ -212,60 +206,47 @@ test("historical isolated cutover binds the selected checkout to the protected d
     }
   });
 
-  await t.test(
-    "refuses a sibling or later main commit even when selected and checked out",
-    async () => {
-      for (const selectedSha of [untrustedSha, laterSha]) {
-        git("checkout", "--detach", selectedSha);
-        await writeEvent({ source_sha: selectedSha });
-        await assert.rejects(verify({ selectedSha }), /not provably in protected main history/);
-      }
-      git("checkout", "--detach", sourceSha);
-      await writeEvent();
-    },
-  );
+  await t.test("refuses commits off main or added to main after dispatch", async () => {
+    for (const selectedSha of [untrustedSha, laterSha]) {
+      git("checkout", "--detach", selectedSha);
+      await writeEvent({ source_sha: selectedSha });
+      await assert.rejects(verify({ selectedSha }), /not provably in protected main history/);
+    }
+    git("checkout", "--detach", sourceSha);
+  });
 
-  await t.test(
-    "refuses the dispatcher checkout, dirty tracked files, and ignored inputs",
-    async () => {
-      git("checkout", "--detach", dispatcherSha);
-      await assert.rejects(verify(), /checked out source tree/i);
-      git("checkout", "--detach", sourceSha);
-      await assert.rejects(verify({ sourceRoot: join(root, "web") }), /checked out source tree/i);
-      await writeJson(journal, { entries: [] });
-      await assert.rejects(verify(), /checked out source tree/i);
-      git("restore", "drizzle/meta/_journal.json");
-      const ignored = join(root, "ignored.txt");
-      await writeFile(ignored, "synthetic ignored input");
-      await assert.rejects(verify(), /checked out source tree/i);
-      await rm(ignored);
-    },
-  );
+  await t.test("refuses a wrong, dirty, or non-root source checkout", async () => {
+    git("checkout", "--detach", dispatcherSha);
+    await assert.rejects(verify(), /checked out source tree/i);
+    git("checkout", "--detach", sourceSha);
+    await assert.rejects(verify({ sourceRoot: join(root, "web") }), /checked out source tree/i);
+    await writeJson(journal, { entries: [] });
+    await assert.rejects(verify(), /checked out source tree/i);
+    git("restore", "drizzle/meta/_journal.json");
+    const ignored = join(root, "ignored.txt");
+    await writeFile(ignored, "synthetic ignored input");
+    await assert.rejects(verify(), /checked out source tree/i);
+    await rm(ignored);
+  });
 
-  await t.test(
-    "refuses mismatched manifest digest, source, source inputs, or attempt",
-    async () => {
-      const refusal = /packet failed manifest or source verification/;
-      await assert.rejects(verify({ manifestDigest: "a".repeat(64) }), refusal);
-      for (const [context, inputs] of [
-        [{ ...identity, sourceSha: dispatcherSha }, source],
-        [{ ...identity, runId: "22" }, source],
-        [{ ...identity, runAttempt: "2" }, source],
-        [identity, { ...source, digests: { ...source.digests, journal: "c".repeat(64) } }],
-      ]) {
-        await rm(join(packetDir, "manifest.json"));
-        const { sourceSha, runId, runAttempt } = context;
-        const digest = await writeManifest(packetDir, { sourceSha, runId, runAttempt }, inputs);
-        const pin = { sourceSha, runId, runAttempt, digest };
-        await assert.rejects(
-          verify({ manifestDigest: digest, proof: { ...proof, identity: pin } }),
-          refusal,
-        );
-      }
-      await rm(join(packetDir, "manifest.json"));
-      assert.equal(await writeManifest(packetDir, context, source), digest);
-    },
-  );
+  await t.test("refuses a packet with mismatched manifest evidence", async () => {
+    const refusal = /packet failed manifest or source verification/;
+    await assert.rejects(verify({ manifestDigest: "a".repeat(64) }), refusal);
+    const manifestPath = join(packetDir, "manifest.json");
+    for (const [manifestContext, inputs] of [
+      [{ ...context, sourceSha: dispatcherSha }, source],
+      [{ ...context, runId: "22" }, source],
+      [{ ...context, runAttempt: "2" }, source],
+      [context, { ...source, digests: { ...source.digests, journal: "c".repeat(64) } }],
+    ]) {
+      await rm(manifestPath);
+      const manifestDigest = await writeManifest(packetDir, manifestContext, inputs);
+      const pin = { ...manifestContext, digest: manifestDigest };
+      await assert.rejects(verify({ manifestDigest, proof: { ...proof, identity: pin } }), refusal);
+    }
+    await rm(manifestPath);
+    assert.equal(await writeManifest(packetDir, context, source), digest);
+  });
 
   await t.test("refuses proof replay from another source, run, attempt or profile", async () => {
     const refusal = /proof failed attempt or profile verification/;
@@ -282,6 +263,5 @@ test("historical isolated cutover binds the selected checkout to the protected d
     }
     await writeEvent({ cutover_profile: "ember" });
     await assert.rejects(verify(), refusal);
-    await writeEvent();
   });
 });
