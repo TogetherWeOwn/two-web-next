@@ -73,16 +73,20 @@ before the soak finishes leaves the prior candidate unqualified. The isolated
 job exercises the exact packaged bytes, the selected renderer profile and
 its undo.
 
-The hosted [installed Worker browser fixture](../ci/fixtures/kit-ember-cutover-browser.mjs)
-also keeps Ember Home open in Chromium while the same loopback origin switches
+On pull requests and pushes to `main`, the
+[XFS qualification job](../.github/workflows/xfs-qualification.yml) runs the
+[installed Worker browser fixture](../ci/fixtures/kit-ember-cutover-browser.mjs).
+It keeps Ember Home open in Chromium while the same loopback origin switches
 from installed Kit output to the Hono entry point with its `public/` asset tree.
 It reads a hashed stylesheet the browser loaded from Ember and checks its
 immutable cache policy and build bytes. Fresh requests from the still-open
 document must get a non-cacheable, `nosniff` 404 for the old stylesheet and the
-same bytes for the shared logo. Reloading Home must return the Hono document.
-The job records those results for the installed fixture. Existing browser
-cache entries can outlive the switch, and the fixture tests fresh requests
-without depending on edge asset retention or browser cache eviction.
+same logo bytes that Ember served before the switch. Reloading Home must
+return the Hono document. Use the hosted job log for this result. The manual
+cutover packet contains the separate version and public-route smoke evidence.
+Existing browser cache entries can outlive the switch, and the fixture tests
+fresh requests without depending on edge asset retention or browser cache
+eviction.
 
 ## Protected release and recovery
 

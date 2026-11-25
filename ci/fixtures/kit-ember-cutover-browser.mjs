@@ -230,12 +230,16 @@ async function verifyOpenEmberAssets(browser, proxy, { kitOrigin, kitAssets, hon
     context.setDefaultTimeout(10_000);
     const page = await context.newPage();
     proxy.switchBackend(kitOrigin);
-    const [stylesheet, ember] = await Promise.all([
+    const logoUrl = new URL(sharedLogo, proxy.origin).href;
+    const [stylesheet, emberLogo, ember] = await Promise.all([
       page.waitForResponse(
         (response) =>
           response.request().resourceType() === "stylesheet" &&
           new URL(response.url()).origin === proxy.origin &&
           immutableStylesheet.test(new URL(response.url()).pathname),
+      ),
+      page.waitForResponse(
+        (response) => response.url() === logoUrl && response.request().resourceType() === "image",
       ),
       page.goto("/"),
     ]);
@@ -256,6 +260,10 @@ async function verifyOpenEmberAssets(browser, proxy, { kitOrigin, kitAssets, hon
       (await stylesheet.body()).equals(await readFile(join(kitAssets, path.slice(1)))),
       `${path}: browser received the installed Kit bytes`,
     );
+    const logo = await readFile(join(kitAssets, sharedLogo.slice(1)));
+    assert.equal(emberLogo.status(), 200, sharedLogo);
+    assert.match((await emberLogo.headerValue("content-type")) ?? "", /^image\/svg\+xml\b/i);
+    assert.ok((await emberLogo.body()).equals(logo), `${sharedLogo}: installed Kit bytes`);
 
     proxy.switchBackend(honoUndoOrigin);
     const refused = await fetchFromOpenDocument(page, path);
@@ -269,9 +277,8 @@ async function verifyOpenEmberAssets(browser, proxy, { kitOrigin, kitAssets, hon
     const shared = await fetchFromOpenDocument(page, sharedLogo);
     assert.equal(shared.status(), 200, sharedLogo);
     assert.match((await shared.headerValue("content-type")) ?? "", /^image\/svg\+xml\b/i);
-    const logo = await shared.body();
     assert.ok(
-      logo.equals(await readFile(join(kitAssets, sharedLogo.slice(1)))),
+      (await shared.body()).equals(logo),
       `${sharedLogo}: Hono and installed Kit serve the same bytes`,
     );
     await expect(page.locator(".ember-home h1#home-heading")).toBeVisible();
