@@ -944,6 +944,8 @@ test("legacy staging soak requires complete bounded history across pages", async
   );
   for (const [response, message] of [
     [oversized, "Staging versions response exceeds the 1 MiB page limit"],
+    [new Response(), "Staging versions response is unreadable or invalid JSON"],
+    [new Response(""), "Staging versions response is unreadable or invalid JSON"],
     [
       new Response("fixture-only malformed JSON"),
       "Staging versions response is unreadable or invalid JSON",
