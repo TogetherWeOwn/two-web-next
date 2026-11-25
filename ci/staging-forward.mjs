@@ -24,7 +24,8 @@ function orderedDeploymentTime(value) {
 // Cloudflare's active version as well as /up so a lagging edge cannot admit a
 // stale deploy. Main's tip is irrelevant to whether the candidate is forward.
 export async function requireForwardStaging(env, fetchImpl = fetch) {
-  const { DEPLOY_SHA: target, GITHUB_REPOSITORY: repository, CLOUDFLARE_ACCOUNT_ID: account } = env;
+  const target = env.CANDIDATE_SHA;
+  const { GITHUB_REPOSITORY: repository, CLOUDFLARE_ACCOUNT_ID: account } = env;
   if (
     !isSha(target) ||
     !/^[\w.-]+\/[\w.-]+$/.test(repository ?? "") ||
@@ -97,7 +98,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try {
     const live = await requireForwardStaging(process.env);
     appendFileSync(process.env.GITHUB_OUTPUT, `live_sha=${live}\n`);
-    console.log(`Staging rollout admitted: ${process.env.DEPLOY_SHA} from ${live}`);
+    console.log(`Staging rollout admitted: ${process.env.CANDIDATE_SHA} from ${live}`);
   } catch (error) {
     console.error(`::error::${error.message}`);
     process.exitCode = 1;

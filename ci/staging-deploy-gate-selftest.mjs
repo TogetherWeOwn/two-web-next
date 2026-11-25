@@ -968,13 +968,13 @@ test("staging guard runs from the workflow revision inside the existing lane bef
   assert.equal(step("Require a forward staging rollout"), "node ci/staging-forward.mjs");
   assert.match(
     workflow,
-    /ref: \$\{\{ github\.workflow_sha \}\}[\s\S]*?- name: Staging admission hold[\s\S]*?- name: Require a forward staging rollout[\s\S]*?DEPLOY_SHA: (\$\{\{ github\.event_name == 'workflow_run' && github\.event\.workflow_run\.head_sha \|\| github\.sha \}\})[\s\S]*?ref: \1/,
+    /ref: \$\{\{ github\.workflow_sha \}\}[\s\S]*?- name: Staging admission hold[\s\S]*?- name: Require a forward staging rollout[\s\S]*?CANDIDATE_SHA: (\$\{\{ github\.event_name == 'workflow_run' && github\.event\.workflow_run\.head_sha \|\| github\.sha \}\})[\s\S]*?ref: \1/,
   );
 });
 
 const activeVersion = "12345678-1234-1234-1234-123456789abc";
 const stagingGuardEnv = {
-  DEPLOY_SHA: sha,
+  CANDIDATE_SHA: sha,
   GITHUB_REPOSITORY: repository,
   GITHUB_TOKEN: "fake-github",
   CLOUDFLARE_ACCOUNT_ID: "c".repeat(32),
