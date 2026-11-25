@@ -333,8 +333,7 @@ export async function stampQueueFailure(
   key: string | null,
   reason: string,
 ): Promise<void> {
-  // Fence even before the additive unique constraint lands. After the lock,
-  // a separate READ COMMITTED statement sees the previous delivery's insert.
+  // After locking, a separate READ COMMITTED statement sees any earlier insert.
   await tx`select pg_advisory_xact_lock(hashtextextended('queue-failed:' || ${jobId}::uuid::text, 0))`;
   await tx`
     insert into queue_failed_jobs (job_id, kind, key, reason)
@@ -342,6 +341,10 @@ export async function stampQueueFailure(
     where not exists (select 1 from queue_failed_jobs where job_id = ${jobId}::uuid)`;
   // Keep the first failure, but retire any live row. Insert errors abort before delete.
   await tx`delete from queue_jobs where job_id = ${jobId}::uuid`;
+}
+
+export async function deleteQueueJob(client: TxClient, jobId: string): Promise<void> {
+  await client`delete from queue_jobs where job_id = ${jobId}::uuid`;
 }
 
 /**
@@ -385,9 +388,7 @@ export function pgQueueLedger(sql: Sql): QueueLedger {
       });
     },
     async dequeued(jobId) {
-      await withLedgerTimeout(sql, async (client) => {
-        await client`delete from queue_jobs where job_id = ${jobId}::uuid`;
-      });
+      await withLedgerTimeout(sql, (client) => deleteQueueJob(client, jobId));
     },
     async failed(jobId, kind, key, reason) {
       await sql.begin("isolation level read committed", async (tx) => {

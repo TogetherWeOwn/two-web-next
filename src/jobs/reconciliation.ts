@@ -6,7 +6,7 @@ import {
   CALL_INTERNAL_ACTION,
   LEDGER_DB_TIMEOUT_MS,
 } from "./constants";
-import { stampQueueFailure } from "./postgres";
+import { deleteQueueJob, stampQueueFailure } from "./postgres";
 import { MAX_RETRY_DELAY_SECONDS } from "./retry-delay";
 import type { TxClient } from "./types";
 
@@ -231,12 +231,10 @@ export function pgReconciliationStore(sql: ReturnType<typeof postgres>) {
         if ((await settleClaim(tx, key, attempts, retry?.retryInSeconds ?? null)) === undefined)
           return false;
         if (refusal) {
-          // Tracked deliveries use the original ledger ID. Legacy carriers have only the key.
           const jobId = refusal.jobId && UUID.test(refusal.jobId) ? refusal.jobId : key;
           await stampQueueFailure(tx, jobId, "announcement", null, refusal.failed);
         }
-        if (success?.jobId && UUID.test(success.jobId))
-          await tx`delete from queue_jobs where job_id = ${success.jobId}::uuid`;
+        if (success?.jobId && UUID.test(success.jobId)) await deleteQueueJob(tx, success.jobId);
         return true;
       });
     },

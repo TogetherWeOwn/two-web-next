@@ -316,7 +316,6 @@ describe.skipIf(!process.env.DATABASE_URL).each([
       await consume({ messages: [message] }, deps);
       return message;
     };
-
     await sql`alter table queue_failed_jobs add constraint fixture_refuses_announcement
       check (kind <> 'announcement')`;
     try {
