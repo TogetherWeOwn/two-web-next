@@ -147,6 +147,9 @@ describe("staging one-row guarded re-dispatch admission", () => {
       REDISPATCH_DEPS: { loadCandidate, dispatch },
     };
     const bearer = await cookie(store);
+    const resolve = vi.fn(async ({ request }: { request: Request }) =>
+      fetchKitQueueRedispatch(request, bindings, requestId),
+    );
 
     async function throughHook(
       pathname: string,
@@ -165,7 +168,7 @@ describe("staging one-row guarded re-dispatch admission", () => {
           appUrl: configuration.APP_URL,
           apiFamilies: [kitQueueRedispatchFamily(configuration)],
           honoFetch: async () => new Response(null, { status: 204 }),
-          resolve: async () => fetchKitQueueRedispatch(input, bindings, requestId),
+          resolve,
         },
       );
     }
@@ -185,6 +188,7 @@ describe("staging one-row guarded re-dispatch admission", () => {
     const crossOrigin = await throughHook(path, enabled, "POST", "https://outside.invalid");
     expect(crossOrigin.status).toBe(403);
     expect(await crossOrigin.json()).toEqual({ error: "cross_origin", request_id: requestId });
+    expect(resolve).not.toHaveBeenCalled();
     expect(loadCandidate).not.toHaveBeenCalled();
     expect(dispatch).not.toHaveBeenCalled();
 
@@ -193,6 +197,7 @@ describe("staging one-row guarded re-dispatch admission", () => {
     expect(admitted.headers.get("x-two-renderer")).toBe("kit");
     expect(admitted.headers.get("x-request-id")).toBe(requestId);
     expect(await admitted.json()).toEqual({ redispatched: true, ...replayCandidate.preview });
+    expect(resolve).toHaveBeenCalledTimes(1);
     expect(loadCandidate).toHaveBeenCalledExactlyOnceWith(bindings, 7);
     expect(dispatch).toHaveBeenCalledExactlyOnceWith(replayCandidate.eventKey, expect.any(String));
     expect(mocks.audit).toHaveBeenCalledTimes(1);
