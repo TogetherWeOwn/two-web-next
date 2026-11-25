@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import AxeBuilder from "@axe-core/playwright";
 import { build } from "esbuild";
 import { chromium } from "playwright";
 import { compileKitFixture, listenOnLoopback } from "./kit-hydration-harness.mjs";
@@ -143,6 +144,86 @@ async function assertRows(section, expected, state, width) {
   }
 }
 
+async function assertNowLine(page, open, capture, compact) {
+  const line = page.getByRole("region", { name: "Now Line" });
+  const fixture = { state: "frozen", showLifeline: false };
+  const observation = line.locator("p.observation");
+  const marker = line.locator("svg[aria-hidden=true] .marker");
+  const publicText = new Map();
+
+  for (const member of [false, true]) {
+    const audience = member ? "member" : "guest";
+    const show = (nowLineCase, state = fixture.state) =>
+      open(page, { ...fixture, state, nowLineCase, nowLineMember: member });
+    await show("before");
+    assert.equal(await line.count(), 0);
+    const before = await existingControls(page);
+    await capture(`now-line-before-${audience}`);
+
+    for (const state of ["current", "stale"]) {
+      const response = await show(state);
+      assert.equal(await line.count(), 1);
+      assert.equal(await page.getByRole("heading", { level: 1 }).count(), 1);
+      assert.deepEqual(await existingControls(page), before);
+      assert.doesNotMatch(
+        await response.text(),
+        /Fixture player|Fixture attendee|kit-public-voice/,
+      );
+      assert.equal(
+        await line.locator("a, button, form, script, [tabindex], [aria-live]").count(),
+        0,
+      );
+      assert.match(await line.innerText(), /Schedule snapshot · Europe\/London/);
+      assert.equal(
+        await observation.innerText(),
+        `${state === "stale" ? "Last seen" : "Now · as of"} 20:12`,
+      );
+      assert.deepEqual(
+        await line.locator("time").evaluateAll((nodes) => nodes.map((node) => node.dateTime)),
+        ["20:12", "20:00", "21:00"].map((clock) => `2026-11-21T${clock}:00.000Z`),
+      );
+      assert.equal(await marker.getAttribute("x1"), "20");
+      assert.equal(await marker.getAttribute("x2"), "20");
+      assert.equal(
+        await marker.evaluate((el) => getComputedStyle(el).strokeDasharray !== "none"),
+        state === "stale",
+      );
+      if (member) assert.equal(await line.innerText(), publicText.get(state));
+      else publicText.set(state, await line.innerText());
+
+      assert.ok(
+        await line.evaluate((el, compact) => {
+          const rail = document.querySelector(".event-layout-rail");
+          const box = el.getBoundingClientRect();
+          const railBox = rail.getBoundingClientRect();
+          return (
+            el.closest(".event-layout-body") &&
+            (rail.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0 &&
+            (compact ? box.top >= railBox.bottom : box.right <= railBox.left)
+          );
+        }, compact),
+      );
+      const { violations } = await new AxeBuilder({ page }).include(".now-line").analyze();
+      assert.deepEqual(
+        violations.filter(({ impact }) => impact === "critical" || impact === "serious"),
+        [],
+      );
+      await capture(`now-line-${state}-${audience}`);
+    }
+
+    await show("absent");
+    assert.equal(await line.count(), 0);
+    assert.deepEqual(await existingControls(page), before);
+    await capture(`now-line-absent-${audience}`);
+    await show("invalid");
+    assert.equal(await line.count(), 0);
+    for (const state of ["cancelled", "ended"]) {
+      await show("current", state);
+      assert.equal(await line.count(), 0);
+    }
+  }
+}
+
 test("EventDetail places the read-only Lifeline after the seat rail and preserves RSVP", async (t) => {
   const webRequire = createRequire(file("web/package.json"));
   const { compile } = webRequire("@tailwindcss/node");
@@ -251,6 +332,7 @@ test("EventDetail places the read-only Lifeline after the seat rail and preserve
       for (const value of attendance.privateValues) assert.ok(!html.includes(value));
       await capture(state);
     }
+    await assertNowLine(page, open, capture, compact);
     assert.ok((await page.consoleMessages()).every((message) => message.type() !== "error"));
     await open(page, { state: "upcoming" });
     const going = compact
