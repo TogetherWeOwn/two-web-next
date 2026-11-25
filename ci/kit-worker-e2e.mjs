@@ -987,6 +987,20 @@ export default {
   }
 
   if (args.length) {
+    const { assertKitQueueRedispatchServing } = await import("./fixtures/kit-queue-redispatch.mjs");
+    await assertKitQueueRedispatchServing({
+      worker,
+      scratch,
+      databaseUrl,
+      start: async (entry) => {
+        const instance = await startWorker("kit-queue-redispatch", entry, assets, secret);
+        await listen(instance.child, instance.origin, () => instance.log);
+        return instance.origin;
+      },
+    });
+  }
+
+  if (args.length) {
     const { assertMembersNotFoundParity } = await import(
       "./fixtures/kit-members-not-found-parity.mjs"
     );

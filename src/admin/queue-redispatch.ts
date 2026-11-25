@@ -1,5 +1,6 @@
 import type { Context, Next } from "hono";
 import postgres from "postgres";
+import { requestBodyLimit } from "../body-limit";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import type { Env } from "../env";
 import {
@@ -13,7 +14,19 @@ import { queueExceptionClass } from "../jobs/queue-error";
 import { replayFailedSyncEvent } from "../jobs/replay";
 import { bufferedMemberJson } from "../member-reads";
 import { QA_IDENTITIES, STAGING_APP_URL } from "../qa";
+import { throttle, WRITE_THROTTLE_PER_MINUTE } from "../throttle";
 import type { QueuePreviewVars } from "./queue-preview";
+
+export const QUEUE_REDISPATCH_PATH = "/queue/failed/:id/redispatch";
+
+// Both owners install this chain after staging and moderator admission. The
+// cap and I/O-free refusals precede the shared admin-write throttle.
+export const queueRedispatchAction = [
+  requestBodyLimit("action"),
+  queueRedispatchPreThrottleRefusal,
+  throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
+  queueRedispatchHandler,
+] as const;
 
 /**
  * The one dedicated principal allowed past the moderator gate for queue
