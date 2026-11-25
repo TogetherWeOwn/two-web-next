@@ -400,6 +400,8 @@ test("strict inventory admits the admin action page and zero-cost endpoints", (t
   const f = fixture(t);
   const path = "ci/budgets/decisions/kit-perf/2026-11-25-strict-route-inventory.json";
   const admission = JSON.parse(readFileSync(join(import.meta.dirname, "..", path), "utf8"));
+  const decisionHash = hash(JSON.stringify(admission));
+  assert.equal(decisionHash, "167c9fdc4b2964627b212a08f76366c555550a132fdc3b26ec8a5e11f33395ae");
   const action = "/admin/[...action]";
   const page = f.evidence.routes.find(({ id }) => id === "/about").page;
   for (const id of Object.keys(admission.routes)) {
@@ -416,10 +418,8 @@ test("strict inventory admits the admin action page and zero-cost endpoints", (t
   assert.equal(result.exitCode, 1, result.error);
   assert.deepEqual(result.breaches, ["/ js"]);
   assert.deepEqual(result.routes[action], result.routes["/about"]);
-  for (const id of Object.keys(admission.routes).filter((id) => id !== action)) {
+  for (const id of Object.keys(admission.routes).filter((id) => id !== action))
     assert.deepEqual(result.routes[id], result.routes["/api"]);
-    assert.deepEqual(admission.routes[id], f.budget.routes["/api"]);
-  }
 });
 
 function runReportOnlyCli(args, summaryPath) {
