@@ -50,6 +50,32 @@ identity-aware smoke succeed.
 - `CHANGELOG.md` is frozen history up to `v0.4.0`; later notes live on the
   GitHub Releases page.
 
+## Verify a proposed reusable-workflow pin offline
+
+Use the full reviewed commit SHA whose tree contains both `rollback-production.yml`
+and `release.yml`, the proposed full pin SHA, and an independently captured
+GitHub Release and Git tag ref for the selected stable tag. Capture the responses
+from `GET /repos/TogetherWeOwn/two-web-next/releases/tags/{tag}` and
+`GET /repos/TogetherWeOwn/two-web-next/git/ref/tags/{tag}`. The release must be
+published and immutable. The verifier trusts the provenance of these captures
+as supplied by the reviewer. It checks their identity and contents offline.
+
+From a local Git clone that already contains the tag and both commits, set
+`tag`, `pin_sha` and `reviewed_sha` to the selected values and run:
+
+```sh
+jq -s '{release: .[0], ref: .[1]}' release.json tag-ref.json |
+  node ci/verify-release-workflow-pin.mjs "$tag" "$pin_sha" "$reviewed_sha"
+```
+
+The verifier matches the local tag object to the captured ref, peels that
+object to the proposed pin and compares both workflows' raw Git blob bytes
+with the reviewed commit. On success it prints the tag object, both commits
+and the blob IDs and SHA-256 digests for the two workflows. Any missing evidence
+or mismatch exits nonzero. Run this before proposing a caller change. The
+command reads local evidence and Git objects without credentials or a network
+connection.
+
 ## Promotion evidence
 
 The release job proves the promotion twice before any write:
@@ -203,6 +229,8 @@ publisher changes depend on the observed result and require their own review.
 
 - `test/release-workflow.test.ts`: the release workflow shape, the shared
   releaser pin and the plan request (`ci/release-request.cjs`).
+- `test/release-workflow-pin.test.ts`: offline verifier fixtures for release
+  identity, tag movement, wrong pins and changes to either workflow blob.
 - `ci/release-promotion-proof.acceptance.cjs`, wired through
   `test/release-promotion-proof.test.ts`: trusted and untrusted evidence, exact
   SHA and attempt binding, the workflow's receipt producer, failed-publication
