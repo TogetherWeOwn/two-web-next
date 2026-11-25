@@ -241,6 +241,17 @@ test("isolated cutover proof requires both exact versions and six healthy transi
     () => verifyStagingProof({ ...proof, checks: checks.slice(0, 3) }, identity),
     /must prove/,
   );
+
+  // Keep every transition consistent with the claimed version pair.
+  const sameVersion = {
+    ...ember,
+    kit: ember.hono,
+    checks: ember.checks.map((row) => ({ ...row, version: ember.hono })),
+  };
+  assert.throws(() => verifyStagingProof(sameVersion, { ...identity, mode: "ember" }), {
+    message: "staging requires distinct versions on one Worker",
+  });
+
   const adminPin = { ...identity, mode: "admin" };
   const admin = {
     ...proof,
