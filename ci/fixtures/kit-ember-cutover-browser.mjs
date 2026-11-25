@@ -264,6 +264,7 @@ async function verifyOpenEmberAssets(browser, proxy, { kitOrigin, kitAssets, hon
     assert.equal(await refused.headerValue("x-content-type-options"), "nosniff", path);
     assert.equal(await refused.headerValue("x-two-renderer"), null, path);
     assert.equal(await refused.headerValue("location"), null, path);
+    assert.equal(await refused.headerValue("set-cookie"), null, path);
 
     const shared = await fetchFromOpenDocument(page, sharedLogo);
     assert.equal(shared.status(), 200, sharedLogo);
@@ -278,11 +279,13 @@ async function verifyOpenEmberAssets(browser, proxy, { kitOrigin, kitAssets, hon
     const recovered = await page.reload();
     await assertDocument(page, recovered, "/", null);
     await expect(page.locator("h1#home-heading")).toBeVisible();
+    await expect(page.locator(".ember-home")).toHaveCount(0);
     assert.ok(!(await recovered.text()).includes(path), "Hono Home omits the retired stylesheet");
     console.log(
       `PASS open Ember tab after pure Hono undo: ${path} 404 (no-store, private; nosniff), ${sharedLogo} 200 (same SHA-256 ${createHash("sha256").update(logo).digest("hex")}), Home reload 200 (Hono)`,
     );
   } finally {
+    proxy.switchBackend(kitOrigin);
     await context.close();
   }
 }
@@ -306,6 +309,8 @@ export async function verifyEmberCutoverJourney({
       // fixture document and asset GETs and rejects CONNECT.
       proxy: { server: proxy.origin, bypass: "<-loopback>" },
     });
+    // Exercise the asset transition before the signed-in journey adds fixture state.
+    await verifyOpenEmberAssets(browser, proxy, { kitOrigin, kitAssets, honoUndoOrigin });
     const context = await browser.newContext({
       baseURL: proxy.origin,
       javaScriptEnabled: false,
@@ -378,7 +383,6 @@ export async function verifyEmberCutoverJourney({
     console.log(
       "PASS cutover Events cache boundary: Ember stayed private; Hono reused guest HTML and bypassed it for the synthetic session",
     );
-    await verifyOpenEmberAssets(browser, proxy, { kitOrigin, kitAssets, honoUndoOrigin });
   } finally {
     try {
       await browser?.close();
