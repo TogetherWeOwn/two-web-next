@@ -5,10 +5,11 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import soakFixture from "../test/fixtures/staging-soak-receipt.json" with { type: "json" };
 import { isRedStagingRun } from "./resolve-promotion-sha.mjs";
+import { bindStagingE2eReservation } from "./staging-e2e-reservation-receipt.mjs";
 import {
   deploySmokeWasScoped,
   observeStaging,
@@ -142,6 +143,129 @@ test("staging receipts follow the served candidate through an out-of-order main 
   const refused = await e2e({ STAGING_CANDIDATE: C, expectedProbes: [] }, fetchOrigins(C, C));
   assert.match(refused, /Candidate source unavailable/);
   assert.match(refused, /Identity receipt refused \(no observation\)/);
+});
+
+const reservedE2e = Object.freeze({
+  sha: A,
+  allocationId: "aaaa1111-1111-4111-8111-111111111111",
+  workerVersion: "bbbb2222-2222-4222-8222-222222222222",
+  e2e: Object.freeze({
+    runId: 300,
+    attempt: 1,
+    conclusion: "success",
+    startedAt: "2026-11-01T10:10:00Z",
+    completedAt: "2026-11-01T10:25:00Z",
+  }),
+});
+const reservationRecord = Object.freeze({
+  sha: reservedE2e.sha,
+  allocationId: reservedE2e.allocationId,
+  ownerId: 12345,
+  issuedAt: "2026-11-01T10:05:00Z",
+  expiresAt: "2026-11-01T11:05:00Z",
+});
+const reservationRead = Object.freeze({
+  record: reservationRecord,
+  verifiedOwnerId: reservationRecord.ownerId,
+});
+const refusedBinding = /^Error: Staging E2E reservation binding refused$/;
+
+// Stand in for the separate admission module's interface. The adapter must
+// consume its canonical records and pass the exact context to its gate.
+function reservationAdmission() {
+  return {
+    parseStagingReservation({ sha, allocationId, ownerId, issuedAt, expiresAt }) {
+      return {
+        sha,
+        allocationId,
+        ownerId,
+        issuedAtMs: Date.parse(issuedAt),
+        expiresAtMs: Date.parse(expiresAt),
+      };
+    },
+    canAdmitStagingOperation: mock.fn(() => true),
+  };
+}
+
+test("staging E2E reservation receipt binds the verified lease through completion", () => {
+  const admission = reservationAdmission();
+  const bound = bindStagingE2eReservation(reservedE2e, {
+    before: reservationRead,
+    after: { ...reservationRead, record: { ...reservationRecord } },
+    admission,
+  });
+  assert.deepEqual(bound, {
+    ...reservedE2e,
+    reservation: admission.parseStagingReservation(reservationRecord),
+  });
+  const calls = admission.canAdmitStagingOperation.mock.calls.map(({ arguments: args }) => args);
+  assert.deepEqual(
+    calls,
+    [reservedE2e.e2e.startedAt, reservedE2e.e2e.completedAt].map((at) => [
+      reservationRecord,
+      {
+        operation: "e2e",
+        nowMs: Date.parse(at),
+        verifiedOwnerId: reservationRead.verifiedOwnerId,
+        observed: { sha: reservedE2e.sha, allocationId: reservedE2e.allocationId },
+        e2eSha: reservedE2e.sha,
+      },
+    ]),
+  );
+});
+
+test("staging E2E reservation receipt refuses expired, changed, or unverified leases", () => {
+  const admission = reservationAdmission();
+  const bind = (before, after, receipt = reservedE2e) =>
+    bindStagingE2eReservation(receipt, { before, after, admission });
+  const changed = (record) => ({ ...reservationRead, record: { ...reservationRecord, ...record } });
+
+  for (const expiresAt of ["2026-11-01T10:24:59.999Z", reservedE2e.e2e.completedAt]) {
+    const expired = changed({ expiresAt });
+    assert.throws(() => bind(expired, expired), refusedBinding);
+  }
+  for (const after of [
+    changed({ sha: B }),
+    changed({ allocationId: reservedE2e.workerVersion }),
+    changed({ ownerId: 99999 }),
+    changed({ issuedAt: "2026-11-01T10:06:00Z" }),
+    changed({ expiresAt: "2026-11-01T11:00:00Z" }),
+    null,
+    undefined,
+  ]) {
+    assert.throws(() => bind(reservationRead, after), refusedBinding);
+  }
+  assert.throws(() => bind(null, reservationRead), refusedBinding);
+  assert.throws(() => bind(undefined, undefined), refusedBinding);
+  assert.throws(
+    () =>
+      bind(reservationRead, reservationRead, {
+        ...reservedE2e,
+        e2e: { ...reservedE2e.e2e, completedAt: "2026-11-31T10:25:00Z" },
+      }),
+    refusedBinding,
+  );
+  assert.equal(admission.canAdmitStagingOperation.mock.callCount(), 0);
+
+  admission.canAdmitStagingOperation.mock.mockImplementationOnce(() => false, 1);
+  assert.throws(
+    () => bind(reservationRead, { ...reservationRead, verifiedOwnerId: 99999 }),
+    refusedBinding,
+  );
+  assert.equal(admission.canAdmitStagingOperation.mock.callCount(), 2);
+  admission.canAdmitStagingOperation.mock.mockImplementationOnce(() => {
+    throw new Error("private fixture detail");
+  });
+  assert.throws(() => bind(reservationRead, reservationRead), refusedBinding);
+});
+
+test("staging E2E reservation receipt preserves an ordinary receipt on confirmed absence", () => {
+  const evidence = { before: null, after: null };
+  assert.equal(bindStagingE2eReservation(reservedE2e, evidence), reservedE2e);
+  assert.throws(
+    () => bindStagingE2eReservation({ ...reservedE2e, reservation: reservationRecord }, evidence),
+    refusedBinding,
+  );
 });
 
 test("a deploy title is mandatory, exact, and lowercase", () => {
