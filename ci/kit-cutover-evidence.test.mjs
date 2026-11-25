@@ -321,7 +321,8 @@ test("isolated cleanup removes only the claimed run attempt's resources", async 
   const calls = [];
   const database = Symbol("synthetic database");
   const operations = {
-    qualifyPacket: async (_packet, _proofPath, { worker, names, claim }) => {
+    qualifyPacket: async (packet, proofPath, { worker, names, claim }) => {
+      assert.deepEqual([packet, proofPath], ["packet", "proof.json"]);
       allocations.push({ worker, names });
       await writeFile(claim, worker, { flag: "wx" });
       workers.add(worker);
