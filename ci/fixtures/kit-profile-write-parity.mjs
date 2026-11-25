@@ -68,7 +68,7 @@ async function envelope(response) {
   };
 }
 
-async function nativeForm({ kit, off, cookie, moderatorCookie, readProfile }) {
+async function nativeForm({ kit, off, cookie, moderatorCookie, readProfile, hasLiveOwnerSession }) {
   const directory = process.env.KIT_PROFILE_WRITE_EVIDENCE_DIR;
   if (directory) await mkdir(directory, { recursive: true });
   const browser = await chromium.launch();
@@ -95,6 +95,14 @@ async function nativeForm({ kit, off, cookie, moderatorCookie, readProfile }) {
     const timezone = page.locator("#profile-timezone");
     const hide = page.locator("#profile-leaderboard-opt-out");
     const form = page.getByTestId("profile-form");
+    const assertLiveBearer = async () => {
+      const current = (await context.cookies()).find((candidate) => candidate.name === name);
+      assert.ok(current, "the browser has a session cookie");
+      assert.ok(
+        await hasLiveOwnerSession(current.value.split(".")[0]),
+        "the browser uses a live owner token outside predecessor grace",
+      );
+    };
     const submit = async (origin) => {
       const pending = page.waitForResponse(
         (response) =>
@@ -200,6 +208,7 @@ async function nativeForm({ kit, off, cookie, moderatorCookie, readProfile }) {
 
     // Both Workers share a loopback hostname. Keep the context's live bearer
     // through document rotations as the browser moves to the flag-off Worker.
+    await assertLiveBearer();
     const fallbackPage = await page.goto(off + profilePath);
     assert.equal(fallbackPage.status(), 200);
     assert.equal(fallbackPage.headers()["x-two-renderer"], undefined);
@@ -208,6 +217,7 @@ async function nativeForm({ kit, off, cookie, moderatorCookie, readProfile }) {
     assert.equal(await hide.isChecked(), true);
     await bio.fill(fallbackBio);
     await waitForFill();
+    await assertLiveBearer();
     const fallback = await submit(off);
     assert.equal(fallback.status(), 303);
     assert.equal(fallback.headers()["x-two-renderer"], undefined);
@@ -234,7 +244,12 @@ async function nativeForm({ kit, off, cookie, moderatorCookie, readProfile }) {
     assert.equal(denied.headers.get("x-two-renderer"), null);
     assert.equal(denied.headers.get("location"), null);
     assert.equal(denied.headers.get("vary"), "Accept");
-    await denied.body.cancel();
+    const denialPage = parseRenderedPage(await denied.text());
+    const ownProfileLink = [...renderedElements(denialPage, { tag: "a" })].find(
+      (link) => renderedAttribute(link, "data-testid") === "error-own-profile",
+    );
+    assert.ok(ownProfileLink, "fallback reached the owner-only denial");
+    assert.equal(renderedAttribute(ownProfileLink, "href"), "/profile");
     assert.deepEqual(await readProfile(), beforeDenial);
     console.log(
       "PASS installed Kit native profile save, same-session Hono fallback and write denial",
@@ -251,6 +266,13 @@ export async function assertKitProfileWriteParity({ kit, off, hono, databaseUrl,
     // The row version detects an update even if it would leave the same values.
     const [row] = await sql`select *, xmin::text as version from profiles where user_id = ${owner}`;
     return row;
+  }
+  async function hasLiveOwnerSession(token) {
+    const hash = createHash("sha256").update(token).digest("hex");
+    const [row] = await sql`
+      select exists(select 1 from web_sessions
+        where token_hash = ${hash} and user_id = ${owner} and expires_at > now()) as live`;
+    return row.live;
   }
   async function session(id, { member = true, mod = false } = {}) {
     const token = `two_${randomBytes(32).toString("base64url")}`;
@@ -389,7 +411,7 @@ export async function assertKitProfileWriteParity({ kit, off, hono, databaseUrl,
       }
     }
 
-    await nativeForm({ kit, off, cookie, moderatorCookie, readProfile });
+    await nativeForm({ kit, off, cookie, moderatorCookie, readProfile, hasLiveOwnerSession });
     // Document navigation rotates the browser's bearer. Issue a fresh token
     // for the independent PATCH probe so it cannot rely on predecessor grace.
     const patchCookie = await session(owner);
