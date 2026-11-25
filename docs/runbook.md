@@ -992,17 +992,20 @@ The rollback workflow remains a separate already-served-version route.
 Before the deploy job, `deploy-production` runs two more gates
 (`ci/production-deploy-gate.mjs`):
 
-- `staging-soak` (staging credentials, under the staging Environment —
-  branch policy only, no reviewers, so it still starts at once) finds the
-  candidate's staging Worker versions by commit tag — every tagged version
-  counts, since a deploy retry tags twice — and sums their Workers
-  invocation errors since the oldest deployed (at most 24 hours). The job
-  only reads (versions list, analytics query) and never mutates, but its
-  token is the staging deploy token, not a read-only credential.
+- `staging-soak` reads the exact successful first-attempt `e2e-staging` run
+  and checks that its critical journeys, passive set and web standards ran.
+  It reads the active Cloudflare deployment for `two-web-next` using the
+  existing staging Environment credentials. The allocation must have started
+  before the GitHub run started and still serve only the expected Worker at
+  100% through both reads around the sample. The provider creates a distinct
+  allocation on every traffic change, including a rollback or a restore to
+  the same Worker UUID. `/up`, `/version` and the exact provider version tag
+  must agree with the candidate. Analytics counts apply to that UUID from
+  E2E completion through the observation, at least 30 minutes later.
 - `production-regression` (production Environment as the reviewer
   checkpoint, analytics via the repo-level read-only token) downloads the
-  `staging-passive-ledger-<run>` artifact that `e2e-staging` recorded for the
-  candidate (`bin/smoke.mjs --ledger` and the GET-only guest journeys in
+  `staging-passive-ledger-<run>` artifact from the soak's exact E2E run
+  (`bin/smoke.mjs --ledger` and the GET-only guest journeys in
   `e2e/watch` against staging), runs the same set against the apex with the
   candidate's checkers, and refuses promotion when a check that passes on
   production did not pass on staging, or when the staging soak error rate is
@@ -1011,9 +1014,12 @@ Before the deploy job, `deploy-production` runs two more gates
   artifact (an `e2e-staging` run that predates it, or an expired artifact)
   is refused; roll back with `rollback-production` instead of redeploying it.
 
-Both modes require the staged candidate and its 30-minute soak. Reviewer-mode
-preflight can pass without staging evidence. Regression still requires the
-candidate's ledgers before deploy.
+Both modes require the staged candidate, executed E2E on its current
+allocation and its 30-minute soak before deploy. If a rollback drill restores
+the candidate, qualify the restored allocation with a fresh staging E2E run.
+A first-attempt manual staging E2E at the exact main SHA can qualify an
+explicit-SHA production selection under the existing release gates. Automatic
+selection continues to require post-deploy E2E.
 
 Both modes refuse a candidate with red staging evidence: any failed or
 timed-out `e2e-staging` run that names it, or any run past its first attempt.
@@ -1026,31 +1032,17 @@ forward: land a new commit and promote it once its own staging
 run passes on the first attempt. A re-run can still diagnose a flake, but its
 green is not promotion evidence.
 
-#### Manual staging soak receipt
+#### Archived staging soak receipts
 
-Use [`ci/staging-soak-receipt.mjs`](../ci/staging-soak-receipt.mjs) with the
-verified deploy SHA, Worker UUID and `/version` timestamp. Supply the retained
-`/version` pair from first-attempt staging E2E with journeys and quality passed.
+The `staging-soak-<run>-<attempt>` artifact contains a `staging-soak/2`
+receipt, E2E provenance and provider observations. Keep that bundle with its
+Actions link. `validateStagingSoakReceipt` checks the receipt against those
+observations. Each new promotion takes its own live sample.
 
-```js
-const deployment = { sha, deployedAt, workerVersion, runId: deployRunId, attempt: deployAttempt };
-const e2e = { runId: e2eRunId, attempt: 1, conclusion: "success", completedAt, before, after };
-const evidence = { sha, deployment, e2e };
-const receipt = await captureStagingSoakReceipt(evidence, { accountId, token, fetchImpl: fetch });
-validateStagingSoakReceipt(evidence, receipt);
-await writeFile(receiptPath, JSON.stringify(receipt, null, 2) + "\n", { flag: "wx" });
-```
-
-Use an existing analytics credential and `writeFile` from `node:fs/promises`.
-The helper checks serving identity around a tagged query from E2E completion
-to the sample, at least 30 minutes later. Analytics can lag, and identity reads
-describe the Worker serving at capture time. The automated regression gate
-computes its own counts across all candidate-tagged versions.
-
-For a verified replacement, supply `evidence.replacement = { sha, workerVersion,
-observedAt }` at capture and validation. Write `superseded` to a new path and
-preserve earlier receipts as history. A superseded receipt records the
-replacement and leaves the soak unverified.
+Keep `staging-soak/1` and `superseded` records as history.
+`validateArchivedStagingSoakReceipt` still checks the original format against
+its retained pins. Promotion requires allocation proof, so a v1 receipt can
+never qualify a new promotion.
 
 #### Deploy notify
 
