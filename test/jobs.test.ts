@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { announcementStore } from "./helpers/announcement-store";
+import { handleCallInternalAction } from "../src/jobs/call-internal-action";
 import {
   CALL_INTERNAL_ACTION,
   PRUNE_CRON,
@@ -379,7 +380,7 @@ describe("CallInternalAction", () => {
     kind: "announcement",
     idempotencyKey: "94e5ec13-81e8-4d24-8841-19489bda1b15",
     action: { channelKey: "c", body: "b" },
-  };
+  } as const;
   it("walks 5/15/60/180 then fails on attempt 5", async () => {
     const bot = { postAnnouncement: async () => fail({}) } as unknown as BotClient;
     const events = store();
@@ -428,6 +429,121 @@ describe("CallInternalAction", () => {
     const timestamp = new Date();
     await consume({ messages: [msg(ann, 1, timestamp), msg(ann, 2, timestamp)] }, deps);
     expect(seen.get(ann.idempotencyKey)).toBe(2);
+  });
+
+  it("settles a definitive refusal without reconciliation or another send", async () => {
+    const postAnnouncement = vi.fn(async () =>
+      fail({ code: "discord_rejected", status: 422, retryable: false }),
+    );
+    const result = await handleCallInternalAction(
+      ann,
+      1,
+      { postAnnouncement } as unknown as BotClient,
+      true,
+    );
+    expect(result).toEqual({ failed: "The bot refused announcement.post with `discord_rejected`" });
+    expect(postAnnouncement).toHaveBeenCalledExactlyOnceWith(ann.action, ann.idempotencyKey);
+  });
+
+  it.each([
+    { code: "needs_reconciliation", status: 409, retryable: true },
+    { code: "in_progress", status: 409, retryable: true },
+    { code: "upstream_timeout", status: 504, retryable: false },
+    { code: "unknown", status: 502, retryable: false },
+    { code: "rate_limited", status: 503, retryable: true },
+    { code: "rate_limited", status: 429, retryable: true, attempt: CALL_INTERNAL_ACTION.tries },
+  ])(
+    "reconciles claimed announcements after $code ($status)",
+    async ({ attempt = 1, ...failure }) => {
+      const announcementClaims = announcementStore(attempt);
+      const postAnnouncement = vi.fn(async () => fail(failure));
+      const deps = {
+        bot: { postAnnouncement } as unknown as BotClient,
+        events: store(),
+        lock: memLock(),
+        ledger: memLedger(),
+        announcementClaims,
+      };
+      const first = msg(ann);
+      await consume({ messages: [first] }, deps);
+      expect(first.acked).toBe(true);
+      expect(first.retried).toBeUndefined();
+      expect(announcementClaims.recordAnnouncement).toHaveBeenCalledExactlyOnceWith(
+        ann.idempotencyKey,
+        attempt,
+        { lastCode: failure.code, lastStatus: failure.status },
+      );
+      expect(announcementClaims.finishAnnouncement).not.toHaveBeenCalled();
+      announcementClaims.claimAnnouncement.mockResolvedValueOnce({
+        kind: "closed",
+        attempts: attempt,
+        claimUntil: new Date(),
+      });
+      const duplicate = msg(ann, 2, first.timestamp);
+      await consume({ messages: [duplicate] }, deps);
+      expect(duplicate.acked).toBe(true);
+      expect(postAnnouncement).toHaveBeenCalledExactlyOnceWith(ann.action, ann.idempotencyKey);
+    },
+  );
+
+  it("uses the claim count for throttled announcements after storage failures", async () => {
+    const announcementClaims = announcementStore(1);
+    const postAnnouncement = vi.fn(async () => fail({ code: "rate_limited", status: 429 }));
+    const deps = {
+      bot: { postAnnouncement } as unknown as BotClient,
+      events: store(),
+      lock: memLock(),
+      ledger: memLedger(),
+      announcementClaims,
+    };
+    const timestamp = new Date();
+    announcementClaims.claimAnnouncement.mockRejectedValueOnce(new Error("storage unavailable"));
+    const first = msg(ann, 5, timestamp);
+    await consume({ messages: [first] }, deps);
+    expect(first.retried).toBe(180);
+    expect(first.acked).toBe(false);
+    expect(postAnnouncement).not.toHaveBeenCalled();
+
+    const redelivery = msg(ann, 6, timestamp);
+    await consume({ messages: [redelivery] }, deps);
+    expect(redelivery.retried).toBe(5);
+    expect(redelivery.acked).toBe(false);
+    expect(announcementClaims.finishAnnouncement).toHaveBeenCalledExactlyOnceWith(
+      ann.idempotencyKey,
+      1,
+      "retryable",
+    );
+    expect(postAnnouncement).toHaveBeenCalledExactlyOnceWith(ann.action, ann.idempotencyKey);
+  });
+
+  it("recovers an expired claim after a hard-stop write error without another send", async () => {
+    const announcementClaims = announcementStore();
+    const postAnnouncement = vi.fn(async () => fail({ code: "needs_reconciliation", status: 409 }));
+    const deps = {
+      bot: { postAnnouncement } as unknown as BotClient,
+      events: store(),
+      lock: memLock(),
+      ledger: memLedger(),
+      announcementClaims,
+    };
+    announcementClaims.recordAnnouncement.mockRejectedValueOnce(new Error("storage unavailable"));
+    const first = msg(ann);
+    await consume({ messages: [first] }, deps);
+    expect(first.acked).toBe(false);
+    expect(first.retried).toBe(5);
+    announcementClaims.claimAnnouncement.mockResolvedValueOnce({
+      kind: "abandoned",
+      attempts: 1,
+      claimUntil: first.timestamp,
+    });
+    const redelivery = msg(ann, 2, first.timestamp);
+    await consume({ messages: [redelivery] }, deps);
+    expect(redelivery.acked).toBe(true);
+    expect(announcementClaims.recordAnnouncement.mock.calls).toEqual([
+      [ann.idempotencyKey, 1, { lastCode: "needs_reconciliation", lastStatus: 409 }],
+      [ann.idempotencyKey, 1, null],
+    ]);
+    expect(postAnnouncement).toHaveBeenCalledExactlyOnceWith(ann.action, ann.idempotencyKey);
   });
 
   it("role.assign sends no key", async () => {
