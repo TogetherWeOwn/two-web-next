@@ -479,12 +479,22 @@ For API-5, the fallback fixture compares the disabled Hono queue preview guard
 with Hono's earlier source-evidence handler. The two JSON refusals identify
 which branch answered before the moderator gate.
 
-The installed Worker also compares native queue preview with direct Hono using
-synthetic sessions and a disposable database.
-It checks the exact owner, default-off fallback, admission and refusal
-responses, one operational audit receipt per successful preview, and refusal
-when the audit insert fails. Native source evidence, remaining middleware
-registrations and named matcher targets still need installed Worker evidence.
+The installed Worker compares native queue preview with direct Hono using
+synthetic sessions and a disposable database. It checks the exact owner,
+default-off fallback, admission and refusal responses, one operational audit
+receipt per successful preview, and refusal when the audit insert fails.
+
+The separate [installed source-evidence fixture](../ci/fixtures/kit-source-evidence.mjs)
+adds the native comparison for `/admin/queue/source-evidence/:id`, with direct
+Hono as the reference in both ownership modes.
+`KIT_ROUTE_ADMIN_SOURCE_EVIDENCE=true` selects Kit for the literal path with
+one unencoded incident segment. GET and HEAD keep the verifier's separate
+staging origin, bearer, incident and expiry checks ahead of any moderator or
+preview admission. POST, PUT, PATCH, DELETE and OPTIONS keep their existing
+origin and body checks and method refusal. Encoded paths use Hono.
+
+The remaining middleware registrations and named matcher targets still need
+installed Worker evidence.
 
 Retirement follows the [all-off cutover and Hono undo](kit-cutover-release.md),
 M0 and production parity for every live page and API family. Record each
