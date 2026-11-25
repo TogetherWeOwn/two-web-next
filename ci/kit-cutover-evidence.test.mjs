@@ -263,51 +263,81 @@ test("isolated Workers API GET bounds and disposes provider responses", async (t
       },
     });
 
-  await t.test("cancels an oversized stream before reading to EOF", async () => {
-    const halfMiB = new Uint8Array(512 * 1024).fill(32);
-    const json = new TextEncoder().encode(JSON.stringify({ success: true, result: { id: kit } }));
-    const chunks = [halfMiB, halfMiB, json];
-    let pulls = 0;
-    let cancelled = false;
-    const stream = new ReadableStream(
-      {
-        pull(controller) {
-          const chunk = chunks[pulls++];
-          if (chunk) controller.enqueue(chunk);
-          else controller.close();
+  await t.test("accepts exactly 1 MiB and cancels one byte over before EOF", async () => {
+    const version = { id: kit };
+    const json = new TextEncoder().encode(JSON.stringify({ success: true, result: version }));
+    const padding = new Uint8Array(1024 * 1024 - json.byteLength).fill(32);
+    const readVersion = (...chunks) => {
+      let pulls = 0;
+      let cancelled = false;
+      const stream = new ReadableStream(
+        {
+          pull(controller) {
+            const chunk = chunks[pulls++];
+            if (chunk) controller.enqueue(chunk);
+            else controller.close();
+          },
+          cancel() {
+            cancelled = true;
+          },
         },
-        cancel() {
-          cancelled = true;
-        },
-      },
-      { highWaterMark: 0 },
-    );
-    const api = mockApi(() => new Response(stream));
+        { highWaterMark: 0 },
+      );
+      return {
+        result: mockApi(() => new Response(stream))(versionPath),
+        state: () => ({ pulls, cancelled, locked: stream.locked }),
+      };
+    };
 
-    await assert.rejects(api(versionPath), { message: "staging Workers API response too large" });
-    assert.equal(pulls, 3);
-    assert.equal(cancelled, true);
-    assert.equal(stream.locked, false);
+    const exact = readVersion(json, padding);
+    assert.deepEqual(await exact.result, version);
+    assert.deepEqual(exact.state(), { pulls: 3, cancelled: false, locked: false });
+    const oversized = readVersion(json, padding, Uint8Array.of(32));
+    await assert.rejects(oversized.result, { message: "staging Workers API response too large" });
+    assert.deepEqual(oversized.state(), { pulls: 3, cancelled: true, locked: false });
   });
 
-  await t.test("returns null for missing settings and cancels without pulling", async () => {
-    let cancelled = false;
-    const stream = new ReadableStream(
-      {
-        pull() {
-          assert.fail("missing-resource body was read");
+  await t.test("cancels missing and refused settings responses without pulling", async () => {
+    for (const status of [404, 502]) {
+      let pulls = 0;
+      let cancelled = false;
+      const stream = new ReadableStream(
+        {
+          pull(controller) {
+            pulls++;
+            controller.close();
+          },
+          cancel() {
+            cancelled = true;
+            throw new Error("synthetic cancellation failure");
+          },
         },
-        cancel() {
-          cancelled = true;
-          throw new Error("synthetic cancellation failure");
-        },
-      },
-      { highWaterMark: 0 },
-    );
-    const api = mockApi(() => new Response(stream, { status: 404 }));
+        { highWaterMark: 0 },
+      );
+      const api = mockApi(() => new Response(stream, { status }));
 
-    assert.equal(await api(settingsPath), null);
-    assert.equal(cancelled, true);
+      if (status === 404) assert.equal(await api(settingsPath), null);
+      else
+        await assert.rejects(api(settingsPath), {
+          message: "staging Workers API refused the request",
+        });
+      assert.equal(pulls, 0);
+      assert.equal(cancelled, true);
+      assert.equal(stream.locked, false);
+    }
+  });
+
+  await t.test("releases the reader and sanitizes a stream read failure", async () => {
+    const stream = new ReadableStream({
+      pull(controller) {
+        controller.error(new Error("synthetic private response"));
+      },
+    });
+    const api = mockApi(() => new Response(stream));
+
+    await assert.rejects(api(settingsPath), {
+      message: "staging Workers API response could not be read",
+    });
     assert.equal(stream.locked, false);
   });
 
@@ -337,17 +367,21 @@ test("isolated Workers API GET bounds and disposes provider responses", async (t
     assert.deepEqual(await api(settingsPath), settings);
   });
 
-  await t.test("reports malformed JSON and provider errors without response data", async () => {
-    const invalid = mockApi(() => new Response("synthetic private response"));
-    const refused = mockApi(() => Response.json({ success: "synthetic private response" }));
-
-    await assert.rejects(invalid(settingsPath), {
-      message: "staging Workers API response was not valid JSON",
-    });
-    await assert.rejects(refused(settingsPath), {
-      message: "staging Workers API returned an error",
-    });
-  });
+  await t.test(
+    "reports empty or malformed JSON and provider errors without response data",
+    async () => {
+      for (const payload of ["", "synthetic private response"]) {
+        const invalid = mockApi(() => new Response(payload));
+        await assert.rejects(invalid(settingsPath), {
+          message: "staging Workers API response was not valid JSON",
+        });
+      }
+      const refused = mockApi(() => Response.json({ success: "synthetic private response" }));
+      await assert.rejects(refused(settingsPath), {
+        message: "staging Workers API returned an error",
+      });
+    },
+  );
 });
 
 test("isolated cutover repeats readiness and smoke when rollback is still propagating", async () => {
