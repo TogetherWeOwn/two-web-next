@@ -112,15 +112,14 @@ async function checkUp(
   console.info(`${build.sha} /up: HTTP ${status}, pending=${pending}, rows=${rows}`);
 }
 
-// The migration selftest owns the fresh database and validates its URL before
-// connecting; the reader changes only the identity on that same target.
-export async function rehearseWebReadiness(owner, url) {
+// The migration selftest owns both disposable databases and validates the
+// target before connecting. Every fixture login changes only the identity.
+export async function rehearseWebReadiness(owner, url, botOwner, botUrl) {
   const login = `runtime_${randomUUID().replaceAll("-", "")}`;
-  const password = randomUUID();
   const queries = [];
   const root = mkdtempSync(join(tmpdir(), "web-readiness-"));
+  const roles = [];
   let reader;
-  let createdLogin = false;
   try {
     symlinkSync(resolve("node_modules"), join(root, "node_modules"));
     assert.equal(new Set([legacy, ...bridges]).size, bridges.length + 1);
@@ -134,7 +133,7 @@ export async function rehearseWebReadiness(owner, url) {
         await checkUp(candidate, reader, expected, status, pending, queries, projection);
       }
     };
-    const cutoverUp = async (expected, relation) => {
+    const cutoverUp = async (expected, relation, serving = reader) => {
       // A future web migration outside the reviewed window requires the full
       // current journal, even when this historical fixture is a valid prefix.
       const hasNewRequirement = webTags.some((tag) => tag.slice(0, 4) > "1038");
@@ -147,7 +146,7 @@ export async function rehearseWebReadiness(owner, url) {
       for (const app of cutover.apps) {
         await checkUp(
           app,
-          reader,
+          serving,
           expected,
           pending === 0 ? 200 : 503,
           pending,
@@ -167,22 +166,6 @@ export async function rehearseWebReadiness(owner, url) {
     for (const candidate of candidates.slice(1)) assert.deepEqual(candidate.history, first.history);
     console.info(`Pinned sources: legacy=${legacy}; bridges=${bridges.join(", ")}.`);
 
-    await owner`CREATE ROLE ${owner(login)} LOGIN PASSWORD ${owner.unsafe(`'${password}'`)}`;
-    createdLogin = true;
-    await owner`GRANT pg_read_all_data, pg_write_all_data TO ${owner(login)}`;
-    const runtimeUrl = new URL(url);
-    runtimeUrl.username = login;
-    runtimeUrl.password = "";
-    reader = postgres(runtimeUrl.href, {
-      // The jobs runtime disables prepared statements. Reusing a prepared
-      // SELECT * across 1036 would otherwise retain the pre-expansion shape.
-      ...cutover.databaseOptions,
-      port: 5432,
-      max: 2,
-      connect_timeout: 5,
-      password: () => password,
-      debug: (_connection, query) => queries.push(query),
-    });
     const identity = async (sql) => {
       const [row] = await sql`SELECT current_database() AS db, oid, current_user AS role,
         session_user AS login, pg_get_userbyid(datdba) AS owner
@@ -192,38 +175,132 @@ export async function rehearseWebReadiness(owner, url) {
     const catalog = await identity(owner);
     assert.equal(catalog.db, url.pathname.slice(1));
     assert.equal(catalog.role, catalog.owner);
-    assert.deepEqual(await identity(reader), { ...catalog, role: login, login });
+    const openLogin = async (admin, target, role) => {
+      const password = randomUUID();
+      await admin`CREATE ROLE ${admin(role)} LOGIN PASSWORD ${admin.unsafe(`'${password}'`)}`;
+      const entry = { admin, role };
+      roles.push(entry);
+      const loginUrl = new URL(target);
+      loginUrl.username = role;
+      loginUrl.password = "";
+      const sql = postgres(loginUrl.href, {
+        // Keep SELECT * safe across the 1036 column addition on the same connection.
+        ...cutover.databaseOptions,
+        port: 5432,
+        max: 2,
+        connect_timeout: 5,
+        password: () => password,
+        debug: (_connection, query) => queries.push(query),
+      });
+      entry.sql = sql;
+      assert.deepEqual(await identity(sql), { ...(await identity(admin)), role, login: role });
+      return sql;
+    };
+    const suffix = login.slice("runtime_".length);
+    const webRole = `web_${suffix}`;
+    const jobsRole = `jobs_${suffix}`;
+    const migrationRole = `migrator_${suffix}`;
+    const auditRole = `audit_${suffix}`;
+    const botRole = `bot_reader_${suffix}`;
+    const botViews = `bot_views_${suffix}`;
+    const grantor = `serving_grantor_${suffix}`;
+    await owner`CREATE ROLE ${owner(grantor)} NOLOGIN`;
+    roles.push({ admin: owner, role: grantor });
+    await botOwner`CREATE ROLE ${botOwner(botViews)} NOLOGIN`;
+    roles.push({ admin: botOwner, role: botViews });
+    reader = await openLogin(owner, url, login);
+    const web = await openLogin(owner, url, webRole);
+    const jobs = await openLogin(owner, url, jobsRole);
+    const migrator = await openLogin(owner, url, migrationRole);
+    const audit = await openLogin(owner, url, auditRole);
+    const bot = await openLogin(botOwner, botUrl, botRole);
+    await owner`GRANT pg_read_all_data, pg_write_all_data TO ${owner(grantor)} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE`;
+    await owner`GRANT ${owner(grantor)} TO ${owner(migrationRole)} WITH INHERIT FALSE, SET TRUE`;
+    await owner.begin(async (tx) => {
+      await tx`SET LOCAL ROLE ${tx(grantor)}`;
+      await tx`GRANT pg_read_all_data, pg_write_all_data TO ${tx(login)} GRANTED BY ${tx(grantor)}`;
+    });
+    await owner`GRANT ${owner(login)} TO ${owner(webRole)}, ${owner(jobsRole)} WITH INHERIT TRUE, SET FALSE`;
     await owner`REVOKE CREATE ON SCHEMA public FROM PUBLIC`;
-    const readLedger = async () => [
-      ...(await owner`SELECT created_at::text, hash
+    await owner`GRANT CREATE ON DATABASE ${owner(catalog.db)} TO ${owner(migrationRole)}`;
+    await owner`GRANT USAGE, CREATE ON SCHEMA public TO ${owner(migrationRole)}`;
+
+    await botOwner`GRANT ${botOwner(botViews)} TO ${botOwner(botRole)} WITH INHERIT TRUE, SET FALSE`;
+    await botOwner`CREATE TABLE public.events (id int PRIMARY KEY)`;
+    await botOwner`INSERT INTO public.events VALUES (1), (2)`;
+    await botOwner`CREATE SCHEMA web_v1`;
+    await botOwner`CREATE VIEW web_v1.live_counts AS SELECT count(*)::int AS count FROM public.events`;
+    await botOwner`GRANT USAGE ON SCHEMA web_v1 TO ${botOwner(botViews)}`;
+    await botOwner`GRANT SELECT ON web_v1.live_counts TO ${botOwner(botViews)}`;
+
+    const readLedger = async (sql = migrator) => [
+      ...(await sql`SELECT created_at::text, hash
         FROM drizzle.__drizzle_migrations ORDER BY created_at, id`),
     ];
     const pairs = (history) => history.map(({ created_at, hash }) => ({ created_at, hash }));
-    await migrate(drizzle(owner), old);
+    await migrate(drizzle(migrator), old);
     assert.deepEqual(await readLedger(), pairs(old.history));
+    await migrator`GRANT SELECT ON public.activity_log TO ${migrator(auditRole)}`;
     await cutoverUp(old.history, ledger);
     await probeCutoverEventSync(cutover.pgEventStore, reader);
-    await owner.unsafe(fixture("../docs/web-readiness-projection.sql"));
-    await owner`COMMENT ON VIEW web_readiness.migration_timestamps IS 'two-web readiness projection installation v1'`;
+    await migrator.unsafe(fixture("../docs/web-readiness-projection.sql"));
+    await migrator`COMMENT ON VIEW web_readiness.migration_timestamps IS 'two-web readiness projection installation v1'`;
     await owner`GRANT USAGE ON SCHEMA public, web_readiness TO ${owner(login)}`;
     await owner`GRANT SELECT ON web_readiness.migration_timestamps TO ${owner(login)}`;
     await bridgeUp(old.history, 503, 4);
     await cutoverUp(old.history, projection);
+
+    const denied = { code: "42501" };
+    const probePrincipals = async (history, isolated) => {
+      assert.deepEqual(await readLedger(), pairs(history));
+      for (const [role, sql] of [
+        [webRole, web],
+        [jobsRole, jobs],
+      ]) {
+        if (isolated) {
+          await assertServingLedgerIsolation(owner, role);
+          await assert.rejects(readLedger(sql), denied);
+          await assert.rejects(
+            sql`SELECT last_value FROM drizzle.__drizzle_migrations_id_seq`,
+            denied,
+          );
+        } else {
+          assert.deepEqual(await readLedger(sql), pairs(history));
+        }
+      }
+      const description = randomUUID();
+      const [{ id }] = await web`INSERT INTO public.activity_log (description, created_at)
+        VALUES (${description}, now()) RETURNING id`;
+      const [row] = await audit`SELECT description FROM public.activity_log WHERE id = ${id}`;
+      assert.equal(row.description, description);
+      await assert.rejects(
+        audit`INSERT INTO public.activity_log (description) VALUES ('denied')`,
+        denied,
+      );
+      assert.equal((await bot`SELECT count FROM web_v1.live_counts`)[0].count, 2);
+      await assert.rejects(bot`SELECT id FROM public.events`, denied);
+      await probeCutoverEventSync(cutover.pgEventStore, jobs);
+      if (isolated) await cutoverUp(history, projection, web);
+      else if (history === first.history) await checkUp(old, web, history, 200, 0, queries, ledger);
+      console.info(
+        `${history.at(-1).tag}: ${isolated ? "isolated" : "original"} inherited Web/Jobs, migrator, audit and Bot reader rights verified.`,
+      );
+    };
 
     const verifyExpandedIsolation = await rehearseServingIsolation({
       owner,
       reader,
       login,
       database: catalog.db,
-      ownerRole: catalog.role,
+      migrator,
+      migrationRole,
       databasePath: url.pathname,
       oldHistory: old.history,
       newHistory: first.history,
-      cutoverUp,
-      probeEventSync: () => probeCutoverEventSync(cutover.pgEventStore, reader),
+      probePrincipals,
     });
 
-    await migrate(drizzle(owner), first);
+    await migrate(drizzle(migrator), first);
     const expanded = await readLedger();
     assert.deepEqual(expanded, pairs(first.history));
     await verifyExpandedIsolation();
@@ -238,9 +315,11 @@ export async function rehearseWebReadiness(owner, url) {
 
     await owner.begin(async (tx) => {
       await grantScopedAcl(tx, login);
-      await tx`REVOKE pg_read_all_data, pg_write_all_data FROM ${tx(login)}`;
+      await tx`SET LOCAL ROLE ${tx(grantor)}`;
+      await tx`REVOKE pg_read_all_data, pg_write_all_data FROM ${tx(login)} GRANTED BY ${tx(grantor)}`;
+      await tx`RESET ROLE`;
       await assertServingLedgerIsolation(tx, login);
-      await assertScopedAcl(tx, login, catalog.role);
+      await assertScopedAcl(tx, login, migrationRole);
     });
     assert.deepEqual(await identity(reader), { ...catalog, role: login, login });
     await assert.rejects(reader.unsafe(`SELECT created_at FROM ${ledger}`), { code: "42501" });
@@ -257,10 +336,10 @@ export async function rehearseWebReadiness(owner, url) {
     console.info("Verified scoped ACL, same database/login, workloads and unchanged journal.");
   } finally {
     try {
-      await reader?.end({ timeout: 0 });
-      if (createdLogin) {
-        await owner`DROP OWNED BY ${owner(login)}`;
-        await owner`DROP ROLE ${owner(login)}`;
+      for (const { sql } of roles) await sql?.end({ timeout: 0 });
+      for (const { admin, role } of roles.reverse()) {
+        await admin`DROP OWNED BY ${admin(role)}`;
+        await admin`DROP ROLE ${admin(role)}`;
       }
     } finally {
       rmSync(root, { recursive: true, force: true });
