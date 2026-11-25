@@ -99,6 +99,69 @@ it.each(Object.values(move.refusals))("projects $status refusal", async ({ statu
   expect(await res.json()).toEqual(body);
 });
 
+it("preserves a lease expiry refusal at handoff and requires a new request after renewal", async () => {
+  const refused = {
+    ok: false,
+    request_id: "00000000000000000000000002",
+    error: { code: "action_not_allowed", message: "request refused", retryable: false },
+  };
+  const returnMove = { ...move.request, channel_id: source };
+  const effects: string[] = [];
+  let receiverNow = 0;
+  let leaseUntil = 1_000;
+  let room = source;
+
+  // The staging receiver owns the lease. The Web request carries no deadline.
+  const receiveMove: typeof fetch = async (_url, init) => {
+    if (receiverNow >= leaseUntil) {
+      return Response.json(
+        { ...refused, error: { ...refused.error, message: "synthetic receiver details" } },
+        { status: 403 },
+      );
+    }
+    const { channel_id: destination } = JSON.parse(String(init?.body));
+    const from = room;
+    effects.push(destination);
+    room = destination;
+    return Response.json(success({ outcome: "moved", from_channel_id: from }));
+  };
+  outbound.mockImplementation(receiveMove);
+
+  const before = await post();
+  expect(before.status).toBe(200);
+  expect(await before.json()).toEqual(success(move.results.moved));
+  expect(effects).toEqual([target]);
+
+  receiverNow = leaseUntil - 1;
+  outbound.mockImplementationOnce((...request) => {
+    receiverNow = leaseUntil;
+    return receiveMove(...request);
+  });
+  const expired = await post({}, { channel_id: source });
+  expect(expired.status).toBe(403);
+  expect(expired.headers.get("cache-control")).toBe("no-store, private");
+  expect(expired.headers.has("retry-after")).toBe(false);
+  expect(await expired.json()).toEqual(refused);
+  expect(outbound).toHaveBeenCalledTimes(2);
+  expect(effects).toEqual([target]);
+
+  leaseUntil += 1_000;
+  const fresh = await post({}, { channel_id: source });
+  expect(fresh.status).toBe(200);
+  expect(await fresh.json()).toEqual(success({ outcome: "moved", from_channel_id: target }));
+  expect(effects).toEqual([target, source]);
+  expect(outbound.mock.calls.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([
+    move.request,
+    returnMove,
+    returnMove,
+  ]);
+  const headers = outbound.mock.calls.map(([, init]) => new Headers(init?.headers));
+  expect(headers.every((header) => !header.has("X-TWO-Voice-Move-Until"))).toBe(true);
+  const nonces = headers.map((header) => header.get("X-TWO-Nonce"));
+  expect(nonces).not.toContain(null);
+  expect(new Set(nonces).size).toBe(3);
+});
+
 const { body: limited } = move.refusals.rate_limited;
 const moved = success(move.results.moved);
 it.each([
