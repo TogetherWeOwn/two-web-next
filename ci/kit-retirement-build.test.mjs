@@ -10,14 +10,6 @@ import {
 import { EVENT_KEY } from "./parity/vectors.mjs";
 
 const source = (path) => fileURLToPath(new URL(`../${path}`, import.meta.url));
-const chunk = (fileName, modules, options = {}) => ({
-  fileName,
-  type: "chunk",
-  modules: Object.fromEntries(modules.map((id) => [id, {}])),
-  imports: [],
-  dynamicImports: [],
-  ...options,
-});
 const ssr = ({
   modules = [source("src/release-tag.ts")],
   imports = [],
@@ -32,6 +24,11 @@ const ssr = ({
     dynamicImports,
   },
 });
+const chunk = (fileName, modules, options) => ({
+  ...ssr({ modules, ...options })["index.js"],
+  fileName,
+  isEntry: false,
+});
 const noModuleInfo = () => null;
 const emptyRemoval = { chunks: [], entrypoints: [], lazyChunks: [], units: [] };
 const flatDependencies = (bundle) => inspectSsrBundle(bundle, noModuleInfo, []).honoDependencies;
@@ -40,6 +37,7 @@ const finding = (dependency, entrypoints, unowned = false) => ({
   entrypoints,
   unowned,
 });
+const foundIn = (file, ...dependencies) => ({ file, dependencies });
 
 const mounted = (id, pattern, api = [], page = []) => ({
   id,
@@ -80,7 +78,10 @@ test("finds bundled and external Hono modules, including lazy SSR chunks", () =>
     "src/route-ownership.ts",
     "web/src/lib/server/hono.ts",
   ]);
-  assert.deepEqual(flatDependencies(ssr()), []);
+  assert.deepEqual(inspectSsrBundle(ssr(), noModuleInfo, []), {
+    honoDependencies: [],
+    honoRemoval: emptyRemoval,
+  });
   assert.throws(() => flatDependencies({}), /missing Kit SSR entry/);
   assert.throws(() => flatDependencies(ssr({ modules: [] })), /empty Kit SSR module graph/);
 });
@@ -93,16 +94,23 @@ test("joins shared and lazy SSR imports to exact route and fallback removal unit
   const hook = "web/src/hooks.server.ts";
   const bridge = "web/src/lib/server/hono.ts";
   const fallback = "web/src/routes/[...path]/+server.ts";
-  const legacyApp = source("src/index.tsx");
-  const packageModule = source("node_modules/hono/dist/context.js");
+  const legacyApp = "src/index.tsx";
+  const ownership = "src/route-ownership.ts";
+  const context = "hono/dist/context.js";
+  const packageModule = `node_modules/${context}`;
+  const sharedModules = [helper, fallback, bridge, legacyApp, ownership, packageModule];
+  const imports = (from, to) => [source(from), { importedIds: [source(to)] }];
   const graph = new Map([
-    [source(hook), { importedIds: [source(bridge)], dynamicallyImportedIds: [source(ops)] }],
-    [source(ops), { importedIds: [source(helper)] }],
-    [source(pageLoad), { importedIds: [source(helper)] }],
-    [source(helper), { importedIds: [packageModule] }],
-    [source(fallback), { importedIds: [source(bridge)] }],
-    [source(bridge), { importedIds: [legacyApp] }],
-    [legacyApp, { importedIds: [packageModule] }],
+    imports(ops, helper),
+    imports(pageLoad, helper),
+    imports(helper, packageModule),
+    imports(fallback, bridge),
+    imports(bridge, legacyApp),
+    imports(legacyApp, packageModule),
+    [
+      source(hook),
+      { importedIds: [source(bridge), source(ownership)], dynamicallyImportedIds: [source(ops)] },
+    ],
   ]);
   const bundle = {
     ...ssr({
@@ -111,13 +119,7 @@ test("joins shared and lazy SSR imports to exact route and fallback removal unit
       dynamicImports: ["up.js"],
     }),
     "up.js": chunk("up.js", [source(ops)], { imports: ["shared.js"] }),
-    "shared.js": chunk("shared.js", [
-      source(helper),
-      source(fallback),
-      source(bridge),
-      legacyApp,
-      packageModule,
-    ]),
+    "shared.js": chunk("shared.js", sharedModules.map(source)),
   };
   const rows = [
     { ...registration("GET", "/up", "/up/+server.ts"), family: "ops", slice: "API-3" },
@@ -125,31 +127,36 @@ test("joins shared and lazy SSR imports to exact route and fallback removal unit
     { ...registration("GET", "/profile", "/profile/+page.svelte"), owner: "Page owner" },
   ];
   const { honoRemoval } = inspectSsrBundle(bundle, (id) => graph.get(id), rows);
-  assert.equal(honoRemoval.chunks[0].file, "shared.js");
-  assert.deepEqual(honoRemoval.chunks[0].dependencies, [
-    finding("hono/dist/context.js", [bridge, helper]),
-    finding("src/index.tsx", [bridge]),
-    finding(bridge, [bridge]),
-    finding(fallback, [fallback]),
-  ]);
-  assert.deepEqual(honoRemoval.entrypoints, [
-    { source: bridge, targets: [hook, fallback], unownedImporters: [] },
-    { source: helper, targets: [page, ops], unownedImporters: [] },
-    { source: fallback, targets: [fallback], unownedImporters: [] },
-  ]);
-  assert.deepEqual(honoRemoval.lazyChunks, [
-    { file: "up.js", importers: ["index.js"], dependencyFiles: ["shared.js"] },
-  ]);
-  const [hookUnit, fallbackUnit, pageUnit, opsUnit] = honoRemoval.units;
-  assert.deepEqual(hookUnit, { target: hook, slice: "API-10", registrations: [] });
-  assert.deepEqual(fallbackUnit, { target: fallback, slice: "API-10", registrations: [] });
-  assert.deepEqual(pageUnit.registrations, [
-    { route: "GET /profile", family: null, slice: null, owner: "Page owner" },
-  ]);
-  assert.deepEqual(opsUnit.registrations, [
-    { route: "GET /up", family: "ops", slice: "API-3", owner: null },
-    { route: "GET /up-alias", family: "ops", slice: "API-3", owner: null },
-  ]);
+  const api10 = (target) => ({ target, slice: "API-10", registrations: [] });
+  const opsRoute = (route) => ({ route, family: "ops", slice: "API-3", owner: null });
+  assert.deepEqual(honoRemoval, {
+    chunks: [
+      foundIn(
+        "shared.js",
+        finding(context, [bridge, helper]),
+        finding(legacyApp, [bridge]),
+        finding(ownership, [hook]),
+        finding(bridge, [bridge]),
+        finding(fallback, [fallback]),
+      ),
+    ],
+    entrypoints: [
+      { source: hook, targets: [], unownedImporters: [hook] },
+      { source: bridge, targets: [hook, fallback], unownedImporters: [] },
+      { source: helper, targets: [page, ops], unownedImporters: [] },
+      { source: fallback, targets: [fallback], unownedImporters: [] },
+    ],
+    lazyChunks: [{ file: "up.js", importers: ["index.js"], dependencyFiles: ["shared.js"] }],
+    units: [
+      api10(hook),
+      api10(fallback),
+      {
+        target: page,
+        registrations: [{ route: "GET /profile", family: null, slice: null, owner: "Page owner" }],
+      },
+      { target: ops, registrations: [opsRoute("GET /up"), opsRoute("GET /up-alias")] },
+    ],
+  });
 });
 
 test("keeps unmapped importers and missing edges visible beside known owners", () => {
@@ -177,14 +184,12 @@ test("keeps unmapped importers and missing edges visible beside known owners", (
     { source: helper, targets: [page], unownedImporters: [unmapped] },
   ]);
   assert.deepEqual(honoRemoval.chunks, [
-    { file: "index.js", dependencies: [finding("hono/cookie", [helper])] },
-    {
-      file: "lazy.js",
-      dependencies: [
-        finding("hono/cookie", [], true),
-        finding("hono/dist/context.js", [helper], true),
-      ],
-    },
+    foundIn("index.js", finding("hono/cookie", [helper])),
+    foundIn(
+      "lazy.js",
+      finding("hono/cookie", [], true),
+      finding("hono/dist/context.js", [helper], true),
+    ),
   ]);
 });
 
