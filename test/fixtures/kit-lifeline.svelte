@@ -20,7 +20,15 @@ let {
   attendeePage?: 1 | 2;
   savedSeat?: boolean;
   echo?: LifelineFacts["echo"];
-  nowLineCase?: "before" | "current" | "stale" | "absent" | "invalid";
+  nowLineCase?:
+    | "before"
+    | "current"
+    | "stale"
+    | "absent"
+    | "invalid"
+    | "atEnd"
+    | "noFreshWindow"
+    | "futureObservation";
   nowLineMember?: boolean;
 } = $props();
 
@@ -33,15 +41,25 @@ const fact = (clock: string) => ({ eventKey, at: time(clock) });
 const schedule = { eventKey, startsAt: time("20:00"), endsAt: time("21:00") };
 const observedAt = time("20:12");
 const expiry = timeStaleAt("live", observedAt, schedule.startsAt, schedule.endsAt);
-const _nowLineAt = $derived(nowLineCase === "stale" ? (expiry ?? observedAt) : observedAt);
-const _scheduleSnapshot = $derived(
-  nowLineCase === "absent" || expiry === null
-    ? undefined
-    : {
-        asOf: iso("20:12"),
-        staleAt: nowLineCase === "invalid" ? "unknown" : new Date(expiry).toISOString(),
-      },
-);
+if (expiry === null || !Number.isFinite(expiry)) throw new Error("Missing fixture snapshot expiry");
+const observation = {
+  asOf: new Date(observedAt).toISOString(),
+  staleAt: new Date(expiry).toISOString(),
+};
+const nowLineExamples = {
+  before: { at: observedAt },
+  current: { at: observedAt, snapshot: observation },
+  stale: { at: expiry, snapshot: observation },
+  absent: { at: observedAt },
+  invalid: { at: observedAt, snapshot: { ...observation, staleAt: "unknown" } },
+  atEnd: { at: schedule.endsAt, snapshot: { asOf: iso("21:00"), staleAt: iso("21:05") } },
+  noFreshWindow: { at: observedAt, snapshot: { ...observation, staleAt: observation.asOf } },
+  futureObservation: { at: observedAt - 1, snapshot: observation },
+} satisfies Record<
+  NonNullable<typeof nowLineCase>,
+  { at: number; snapshot?: KitEventDetailModel["liveTime"] }
+>;
+const _nowLine = $derived(nowLineExamples[nowLineCase ?? "before"]);
 const viewerMember = $derived(nowLineCase ? nowLineMember : true);
 const viewerRsvp = fact("18:23");
 const terminalSiteReminder = { ...fact("19:32"), sent: 8, unavailable: 2 };
@@ -144,7 +162,7 @@ const _steps = $derived(
 
 {#snippet fixtureNowLine()}
   <EventNowLine startsAt={_model.timeDatetime} endsAt={_model.endsAt} zone={_model.zoneLabel}
-    snapshot={_scheduleSnapshot} renderedAt={_nowLineAt} />
+    snapshot={"snapshot" in _nowLine ? _nowLine.snapshot : undefined} renderedAt={_nowLine.at} />
 {/snippet}
 
 <EventDetail model={_model} lifeline={_steps} nowLine={nowLineCase && nowLineCase !== "before" ? fixtureNowLine : undefined} />

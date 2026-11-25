@@ -215,8 +215,10 @@ async function assertNowLine(page, open, capture, compact) {
     assert.equal(await line.count(), 0);
     assert.deepEqual(await existingControls(page), before);
     await capture(`now-line-absent-${audience}`);
-    await show("invalid");
-    assert.equal(await line.count(), 0);
+    for (const state of ["invalid", "atEnd", "noFreshWindow", "futureObservation"]) {
+      await show(state);
+      assert.equal(await line.count(), 0, state);
+    }
     for (const state of ["cancelled", "ended"]) {
       await show("current", state);
       assert.equal(await line.count(), 0);
@@ -257,7 +259,8 @@ test("EventDetail places the read-only Lifeline after the seat rail and preserve
   for (const width of [1280, 390]) {
     const compact = width === 390;
     const viewport = { width, height: compact ? 844 : 800 };
-    const page = await browser.newPage({ viewport, javaScriptEnabled: false });
+    const context = await browser.newContext({ viewport, javaScriptEnabled: false });
+    const page = await context.newPage();
     await stubRequests(page, origin);
     const section = page.getByRole("region", { name: "Lifeline" });
     const capture = async (state) => {
@@ -358,7 +361,7 @@ test("EventDetail places the read-only Lifeline after the seat rail and preserve
     assert.equal(await currentPage.innerText(), "Page 2");
     await open(page, { state: "upcoming", savedSeat: true });
     await assertRows(section, examples.upcoming.replace(plannedSeat, seat), "saved seat", width);
-    await page.close();
+    await context.close();
   }
 
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
