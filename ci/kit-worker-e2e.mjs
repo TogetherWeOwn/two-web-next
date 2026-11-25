@@ -853,7 +853,15 @@ export default {
     const entry = join(scratch, "kit-admin.mjs");
     const vars = await prepareAdminFixture(worker, entry);
     const admin = await startWorker("kit-admin", entry, assets, secret, vars);
-    await listen(admin.child, admin.origin, () => admin.log);
+    const nativeCreate = await startWorker("kit-admin-native-create", entry, assets, secret, {
+      ...vars,
+      KIT_PARITY_FIXTURE_ADMIN_EVENT_CREATE_REDIRECT: "true",
+    });
+    await Promise.all(
+      [admin, nativeCreate].map((instance) =>
+        listen(instance.child, instance.origin, () => instance.log),
+      ),
+    );
     await assertFeaturedUnpublishParity({
       kit: admin,
       off: kitWithSession,
@@ -862,6 +870,7 @@ export default {
     });
     await assertKitAdminServing({
       kit: admin,
+      nativeCreate,
       off: kitWithSession,
       hono: honoWithSession,
       databaseUrl,
