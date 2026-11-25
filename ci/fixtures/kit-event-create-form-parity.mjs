@@ -5,6 +5,7 @@ import postgres from "postgres";
 import { FIXTURE_SECRETS, SESSION_COOKIE } from "../parity/fixture.mjs";
 
 const fixtureIp = "192.0.2.193";
+const formLimit = 32 * 1024;
 const form = {
   title: "Synthetic Event + Form",
   starts_at: "2099-07-01 18:30",
@@ -12,6 +13,12 @@ const form = {
   timezone: "Europe/London",
   capacity: "8",
 };
+
+function formAtSize(bytes) {
+  const body = new URLSearchParams({ ...form, padding: "" });
+  body.set("padding", "x".repeat(bytes - Buffer.byteLength(body.toString())));
+  return body;
+}
 
 function session(actor, moderator) {
   const token = `two_${randomBytes(32).toString("base64url")}`;
@@ -87,7 +94,8 @@ export async function assertEventCreateFormParity({ hono, off, on, databaseUrl }
       return { context, requestId, payload: JSON.parse(text) };
     }
 
-    const oversized = { ...form, padding: "x".repeat(32 * 1024) };
+    const atLimit = formAtSize(formLimit);
+    const oversized = formAtSize(formLimit + 1);
     for (const worker of [hono, off, on]) {
       for (const [label, status, options, expected] of [
         [
@@ -130,7 +138,11 @@ export async function assertEventCreateFormParity({ hono, off, on, databaseUrl }
     // Create commits a local draft and its audit. The loopback workers have no sync queue binding.
     const keys = [];
     for (const worker of [hono, off, on]) {
-      const { context, payload } = await post(worker, { label: "valid form", status: 201 });
+      const { context, payload } = await post(worker, {
+        label: "valid form at the 32 KiB limit",
+        body: atLimit,
+        status: 201,
+      });
       const key = payload.data?.event_key;
       assert.match(key ?? "", /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/, context);
       keys.push(key);
