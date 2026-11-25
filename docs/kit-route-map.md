@@ -475,10 +475,19 @@ and refusals with synthetic drafts, and verifies that the committed event and
 its audit row are visible before the stubbed write-back queue receives the job.
 
 For API-5, it compares the disabled queue preview guard with the earlier
-source-evidence handler. The two distinct JSON refusals confirm which branch
-answered before the moderator gate. Native queue preview and source evidence
-remain blocked on Kit ownership. Enabled queue admission and audit, the
-remaining middleware registrations, and named matcher targets remain open.
+source-evidence handler on Hono fallback. The two distinct JSON refusals
+confirm which branch answered before the moderator gate. Enabled queue preview
+admission and audit, the remaining middleware registrations, and named matcher
+targets remain open.
+
+The separate [installed source-evidence fixture](../ci/fixtures/kit-source-evidence.mjs)
+adds the native comparison for `/admin/queue/source-evidence/:id`, with direct
+Hono as the reference in both ownership modes.
+`KIT_ROUTE_ADMIN_SOURCE_EVIDENCE=true` selects Kit for the literal path with
+one unencoded incident segment. GET and HEAD keep the verifier's separate
+staging origin, bearer, incident and expiry checks ahead of any moderator or
+preview admission. POST, PUT, PATCH, DELETE and OPTIONS keep their existing
+origin and body checks and method refusal. Encoded paths use Hono.
 
 Retirement follows the [all-off cutover and Hono undo](kit-cutover-release.md),
 M0 and production parity for every live page and API family. Record each

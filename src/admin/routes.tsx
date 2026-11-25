@@ -38,7 +38,12 @@ import { Hono } from "hono";
 import type { Context, MiddlewareHandler } from "hono";
 import { queuePreviewAdmission, queuePreviewHandler, type QueuePreviewVars } from "./queue-preview";
 import { queueRedispatchHandler, queueRedispatchPreThrottleRefusal } from "./queue-redispatch";
-import { sourceEvidenceHandler, sourceEvidenceMethodRefused } from "./source-evidence";
+import {
+  SOURCE_EVIDENCE_REFUSED_METHODS,
+  sourceEvidenceBodyLimit,
+  sourceEvidenceHandler,
+  sourceEvidenceMethodRefused,
+} from "./source-evidence";
 import { opsOverridesHandler, opsOverridesMethodRefused } from "./ops-overrides";
 import { dbFor, type EnvWithAdminDb } from "./db";
 import { bufferedMemberHtml, bufferedMemberText } from "../member-reads";
@@ -327,11 +332,11 @@ export function buildAdminApp(admit: MiddlewareHandler<Vars>) {
   // HEAD keeps standard GET-without-body semantics; it is safe here because
   // the handler has no side effects (read-only snapshot, no audit write).
   admin.on(
-    ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    SOURCE_EVIDENCE_REFUSED_METHODS,
     "/queue/source-evidence/:id",
     // Same wire cap as every other admin write: oversized attempts refuse
     // before parsing, and the refusal itself never parses a payload.
-    requestBodyLimit("action"),
+    sourceEvidenceBodyLimit,
     sourceEvidenceMethodRefused,
   );
   admin.use("/queue/*", queuePreviewAdmission);

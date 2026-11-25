@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -340,7 +348,11 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
     ],
   });
   const { databaseReadiness } = await import(pathToFileURL(outfile).href);
-  const { run: isolate, version } = await withClient(restore.admin(), (owner) =>
+  const {
+    run: isolate,
+    version,
+    assertDuplicateRefused,
+  } = await withClient(restore.admin(), (owner) =>
     prepareServingIsolation({
       owner,
       login: app,
@@ -390,10 +402,16 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
   const baselineRoles = await roles();
   const readiness = await probe(base, false);
   t.diagnostic("Web, Jobs and both Bot logins passed on the repaired 1033 baseline.");
+  const forward = { readiness: { ...readiness, revision: { version_id: version } } };
+  assert.equal(await isolate("forward", forward), "committed");
+  const { digest: isolatedDigest } = await inspect(fresh);
+  await assertDuplicateRefused("forward", forward);
   assert.equal(
-    await isolate("forward", { readiness: { ...readiness, revision: { version_id: version } } }),
-    "committed",
+    (await inspect(fresh)).digest,
+    isolatedDigest,
+    "Duplicate forward changed the catalog",
   );
+  t.diagnostic("Duplicate isolation forward refused. Readback stayed after and grants matched.");
   await probe(base, true);
   t.diagnostic("Isolated 1033 preserved workload access and projected readiness.");
   await withClient(connectMigrator(), async (sql) => {
@@ -405,13 +423,18 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
   await probe(expanded, true);
   t.diagnostic("Isolated 1037 preserved workload access and projected readiness.");
 
-  assert.equal(await isolate("undo", { end: expandedEnd }), "committed");
-  assert.equal(await isolate("readback", { end: expandedEnd }), "before");
+  const undo = { end: expandedEnd };
+  assert.equal(await isolate("undo", undo), "committed");
+  assert.equal(await isolate("readback", undo), "before");
+  const { digest: restoredDigest } = await inspect(fresh);
+  await assertDuplicateRefused("undo", undo);
+  const { digest: replayedUndoDigest, state: afterUndo } = await inspect(fresh);
+  assert.equal(replayedUndoDigest, restoredDigest, "Duplicate undo changed the catalog");
+  t.diagnostic("Duplicate isolation undo refused. Readback stayed before and grants matched.");
   assert.deepEqual(await getLedger(expandedEnd), expanded);
   await probe(expanded, false);
   await webReads(fresh, true, expanded.rows.length);
   assert.deepEqual(await roles(), baselineRoles);
-  const { state: afterUndo } = await inspect(fresh);
   assert.deepEqual(
     Object.fromEntries(originalObjects.map((name) => [name, afterUndo.inventory[name]])),
     baseline.inventory,
@@ -437,6 +460,8 @@ test("PostgreSQL 18 branch replay preserves repair and Bot scope with alternate 
   t.after(() => {
     for (const cluster of clusters.reverse()) cluster.stop();
     rmSync(directory, { recursive: true, force: true });
+    assert.equal(existsSync(directory), false);
+    t.diagnostic("Disposable source and restore clusters stopped and fixture directory removed.");
   });
   let phase = "synthetic source and restore setup";
   try {
