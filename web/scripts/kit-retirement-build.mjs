@@ -29,7 +29,10 @@ export function requireKitRetirementReport(output, mode) {
   assert.ok(
     typeof report.ready === "boolean" &&
       Array.isArray(report.honoDependencies) &&
-      Array.isArray(report.unowned),
+      Array.isArray(report.unowned) &&
+      report.unownedByFamily &&
+      typeof report.unownedByFamily === "object" &&
+      !Array.isArray(report.unownedByFamily),
     "incomplete Kit retirement report",
   );
   return report;
@@ -116,6 +119,20 @@ export function inspectRoutes(routes, inventory, rows) {
   return { checked, unowned };
 }
 
+function groupUnownedRoutes(unowned, rows) {
+  const registrations = new Map(rows.map((row) => [routeKey(row), row]));
+  const families = Object.groupBy(
+    unowned,
+    ({ route }) => registrations.get(route).family ?? "unresolved",
+  );
+  return Object.fromEntries(
+    Object.entries(families).map(([family, blockers]) => [
+      family,
+      Object.groupBy(blockers, ({ route }) => registrations.get(route).method),
+    ]),
+  );
+}
+
 // Read the exact build's SSR graph and Kit's analyzed route methods.
 export function kitRetirementBuild(adapter, mode, load = loadInventory) {
   if (mode === undefined) return;
@@ -143,7 +160,8 @@ export function kitRetirementBuild(adapter, mode, load = loadInventory) {
         const { inventory, rows } = load();
         const { checked, unowned } = inspectRoutes(builder.routes, inventory, rows);
         const ready = honoDependencies.length === 0 && unowned.length === 0;
-        const report = { mode, ready, checked, honoDependencies, unowned };
+        const unownedByFamily = groupUnownedRoutes(unowned, rows);
+        const report = { mode, ready, checked, honoDependencies, unowned, unownedByFamily };
         console.log(reportPrefix + JSON.stringify(report));
         assert.ok(mode === "report" || ready, "Kit retirement guard found blockers");
         return adapter.adapt(builder);

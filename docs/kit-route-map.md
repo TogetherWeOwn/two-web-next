@@ -412,6 +412,9 @@ The Kit archive parity job sets `KIT_RETIREMENT_GUARD=report` and requires the
 build's report. It lists Hono dependencies in the emitted SSR graph and legacy
 method/path pairs without native Kit coverage. The check reuses the mounted
 inventory, proposed targets, and synthetic parity samples, including multisegment paths.
+The `unownedByFamily` field groups the same findings by the route map's family
+and exact legacy method, including `ALL` for wildcard method fallbacks. Entries
+without a family, including page cutover rows, appear under `unresolved`.
 
 With locked dependencies installed, run `KIT_RETIREMENT_GUARD=strict npm run build --prefix web`
 to fail before generating new adapter output when either blocker remains.
