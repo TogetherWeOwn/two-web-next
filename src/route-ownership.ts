@@ -417,11 +417,6 @@ export function stagingManifestFor(
 const PRODUCTION_APP_URL = `https://${PRODUCTION_APEX}`;
 const ISOLATED_CUTOVER_ORIGIN =
   /^https:\/\/two-web-kit-cutover-proof-[1-9]\d{0,14}-[1-9]\d{0,14}\.[a-z0-9][a-z0-9-]{0,62}\.workers\.dev$/;
-
-function isCutoverOrigin(origin: string): boolean {
-  return origin === PRODUCTION_APP_URL || ISOLATED_CUTOVER_ORIGIN.test(origin);
-}
-
 const PRODUCTION_DOCUMENT_VARY = [
   "X-Two-Island",
   "Sec-Fetch-Dest",
@@ -440,7 +435,7 @@ function emberDocumentPath(url: URL, deps: ProductionRollout): boolean {
   return (
     deps.kitRouteEmberPages === "true" &&
     deps.appUrl === url.origin &&
-    isCutoverOrigin(url.origin) &&
+    (url.origin === PRODUCTION_APP_URL || ISOLATED_CUTOVER_ORIGIN.test(url.origin)) &&
     (url.pathname === "/" || url.pathname === "/events" || url.pathname === "/join")
   );
 }
@@ -1116,7 +1111,8 @@ async function dispatchOwnedRequest(
       event.isDataRequest,
       deps.appUrl,
       admin.env.KIT_ROUTE_ADMIN,
-      deps.kitRouteEmberPages === "true" && isCutoverOrigin(deps.appUrl),
+      deps.kitRouteEmberPages === "true" &&
+        (deps.appUrl === PRODUCTION_APP_URL || ISOLATED_CUTOVER_ORIGIN.test(deps.appUrl)),
     )
   ) {
     const response = await dispatchKitAdminRequest(event, deps, admin);

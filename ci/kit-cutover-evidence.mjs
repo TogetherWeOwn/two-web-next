@@ -268,13 +268,10 @@ export function productionUploadConfig(profile, { root, kit }, mode = "all-off")
   const config = profile === "hono" ? hono : { ...kit };
   delete config.$schema;
   delete config.triggers;
+  if (mode !== "all-off") config.vars = { ...config.vars, ...EMBER_CUTOVER_VARS };
+  if (mode === "admin") config.vars.KIT_ROUTE_ADMIN = "true";
   return {
     ...config,
-    vars: {
-      ...config.vars,
-      ...(mode !== "all-off" ? EMBER_CUTOVER_VARS : {}),
-      ...(mode === "admin" ? { KIT_ROUTE_ADMIN: "true" } : {}),
-    },
     main: profile === "kit" ? "modules/_worker.js" : "modules/worker.js",
     base_dir: "modules",
     ...(profile === "kit" ? { rules: [{ type: "ESModule", globs: ["kit-adapter.js"] }] } : {}),

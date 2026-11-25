@@ -524,7 +524,6 @@ describe("Kit production route selection", () => {
   it("keeps the shipped production config inert", () => {
     expect(vars.APP_URL).toBe(apex);
     expect(Object.values(shippedFlags)).toEqual(Array(6).fill("false"));
-    expect(vars.KIT_ROUTE_ADMIN).toBe("false");
   });
 
   it.each([

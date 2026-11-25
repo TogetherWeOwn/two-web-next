@@ -12,6 +12,7 @@ import {
 
 const sourceSha = "a".repeat(40);
 const digest = "b".repeat(64);
+const undoDigest = "c".repeat(64);
 const hono = "11111111-1111-1111-1111-111111111111";
 const kit = "22222222-2222-2222-2222-222222222222";
 const identity = { sourceSha, runId: "21", runAttempt: "3", digest };
@@ -31,11 +32,10 @@ test("cutover requires explicit protected selection and the paired Hono UUID", (
   assert.deepEqual(selection(active), { mode: "kit", undo: hono, ...identity });
   const ember = { ...active, CUTOVER_MODE: "ember" };
   assert.deepEqual(selection(ember), { mode: "ember", undo: hono, ...identity });
-  assert.deepEqual(selection({ ...active, CUTOVER_MODE: "admin", CUTOVER_UNDO_VERSION: kit }), {
-    mode: "admin",
-    undo: kit,
-    ...identity,
-  });
+  const admin = { ...active, CUTOVER_MODE: "admin", CUTOVER_UNDO_VERSION: kit };
+  assert.throws(() => selection(admin), /undo digest/);
+  const selected = selection({ ...admin, CUTOVER_UNDO_DIGEST: undoDigest });
+  assert.deepEqual(selected, { ...identity, mode: "admin", undo: kit, undoDigest });
   const prepare = selection({ ...active, CUTOVER_MODE: "hono", CUTOVER_UNDO_VERSION: "" });
   assert.deepEqual(prepare, { ...identity, mode: "hono", undo: "" });
   for (const change of [
@@ -65,6 +65,7 @@ test("cutover requires explicit protected selection and the paired Hono UUID", (
 });
 
 test("admin rollback admits only the recorded production Ember version with admin off", () => {
+  const pin = { undo: kit, undoDigest };
   const text = (name, value) => ({ name, text: value, type: "plain_text" });
   const bindings = [
     text("APP_URL", "https://togetherweown.com"),
@@ -74,27 +75,28 @@ test("admin rollback admits only the recorded production Ember version with admi
     id: kit,
     annotations: {
       "workers/tag": `${sourceSha}-99-1`,
-      "workers/message": `two-web-cutover-kit:${digest}`,
+      "workers/message": `two-web-cutover-kit:${undoDigest}`,
     },
     resources: { bindings },
   };
-  verifyEmberUndoVersion(version, kit, sourceSha);
+  const withBindings = (bindings) => ({ ...version, resources: { bindings } });
+  verifyEmberUndoVersion(version, pin, sourceSha);
   verifyEmberUndoVersion(
-    { ...version, resources: { bindings: [...bindings, text("KIT_ROUTE_ADMIN", "false")] } },
-    kit,
+    withBindings([...bindings, text("KIT_ROUTE_ADMIN", "false")]),
+    pin,
     sourceSha,
   );
-  assert.throws(() => verifyEmberUndoVersion(version, hono, sourceSha));
-  assert.throws(() => verifyEmberUndoVersion(version, kit, "c".repeat(40)));
+  for (const mismatch of [{ undo: hono }, { undoDigest: digest }]) {
+    assert.throws(() => verifyEmberUndoVersion(version, { ...pin, ...mismatch }, sourceSha));
+  }
+  assert.throws(() => verifyEmberUndoVersion(version, pin, "c".repeat(40)));
   for (const rejected of [
     bindings.slice(0, 1),
     [...bindings, text("KIT_ROUTE_ADMIN", "true")],
     [...bindings, { name: "KIT_ROUTE_ADMIN", type: "secret_text" }],
     [...bindings, text("APP_URL", "https://other.example")],
   ]) {
-    assert.throws(() =>
-      verifyEmberUndoVersion({ ...version, resources: { bindings: rejected } }, kit, sourceSha),
-    );
+    assert.throws(() => verifyEmberUndoVersion(withBindings(rejected), pin, sourceSha));
   }
 });
 

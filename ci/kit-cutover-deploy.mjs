@@ -23,6 +23,9 @@ export function selection(env) {
   const mode = env.CUTOVER_MODE || "ordinary";
   const pin = env.CUTOVER_PIN || "";
   const undo = env.CUTOVER_UNDO_VERSION || "";
+  const undoDigest = env.CUTOVER_UNDO_DIGEST || "";
+  if (mode === "admin") assert.match(undoDigest, /^[a-f0-9]{64}$/, "invalid Ember undo digest");
+  else assert.equal(undoDigest, "", "Ember undo digest requires admin mode");
   if (mode === "ordinary") {
     assert.ok(!pin && !undo, "cutover inputs require an explicit cutover mode");
     return { mode };
@@ -42,7 +45,8 @@ export function selection(env) {
   assert.ok(parsed, "expected cutover run:attempt:manifest SHA-256");
   assert.ok(mode === "hono" ? undo === "" : uuid.test(undo), "invalid expected undo version");
   const [, runId, runAttempt, digest] = parsed;
-  return { mode, sourceSha: env.DEPLOY_SHA, runId, runAttempt, digest, undo };
+  const selected = { mode, sourceSha: env.DEPLOY_SHA, runId, runAttempt, digest, undo };
+  return undoDigest ? { ...selected, undoDigest } : selected;
 }
 
 export async function verifyProducer(pin, token, fetchImpl) {
@@ -67,7 +71,7 @@ export function verifyUndoVersion(version, pin) {
   );
 }
 
-export function verifyEmberUndoVersion(version, undo, commit) {
+export function verifyEmberUndoVersion(version, { undo, undoDigest }, commit) {
   const tag = version?.annotations?.["workers/tag"];
   const bindings = version?.resources?.bindings;
   assert.ok(
@@ -76,7 +80,7 @@ export function verifyEmberUndoVersion(version, undo, commit) {
       typeof tag === "string" &&
       tag.startsWith(`${commit}-`) &&
       tagSuffix.test(tag.slice(commit.length + 1)) &&
-      /^two-web-cutover-kit:[a-f0-9]{64}$/.test(version.annotations["workers/message"] ?? "") &&
+      version.annotations["workers/message"] === `two-web-cutover-kit:${undoDigest}` &&
       Array.isArray(bindings),
     "rollback target is not the recorded Ember release",
   );
@@ -149,7 +153,7 @@ async function main() {
       "--json",
     ]);
     const rollback = JSON.parse(view);
-    if (pin.mode === "admin") verifyEmberUndoVersion(rollback, pin.undo, expected.commit);
+    if (pin.mode === "admin") verifyEmberUndoVersion(rollback, pin, expected.commit);
     else verifyUndoVersion(rollback, pin);
   }
   if (command === "prepare") {

@@ -22,6 +22,9 @@ on:
       cutover_undo_version:
         description: "Exact serving rollback UUID. Hono for kit or ember, Ember with admin off for admin"
         type: string
+      cutover_undo_digest:
+        description: "For admin mode, the manifest SHA-256 of the separately approved Ember qualification packet"
+        type: string
       migrations_applied:
         description: "Set to true only after db-migrate.yml (target production) applied the target's migrations out of band. Audited manual continuation past a ledger-unproven stop (ledger lacks target entries, ledger read failed, unusable target timestamp, or unknown live commit after 3 /up reads); automatic runs ignore it and halt on those stops unless the live ledger already proves every target web migration applied. The first promotion after the ledger signal ships needs one manual dispatch because the live Worker predates it"
         required: false
@@ -70,6 +73,7 @@ jobs:
       CUTOVER_MODE: ${{ inputs.cutover_mode }}
       CUTOVER_PIN: ${{ inputs.cutover_pin }}
       CUTOVER_UNDO_VERSION: ${{ inputs.cutover_undo_version }}
+      CUTOVER_UNDO_DIGEST: ${{ inputs.cutover_undo_digest }}
       INPUT_SHA: ${{ inputs.sha }}
       PRODUCTION_AUTO_PROMOTE_DISABLED: ${{ vars.PRODUCTION_AUTO_PROMOTE_DISABLED }}
       MIGRATIONS_APPLIED: ${{ inputs.migrations_applied }}
@@ -360,6 +364,7 @@ jobs:
       CUTOVER_ATTEMPT: ${{ needs.preflight.outputs.cutover_attempt }}
       CUTOVER_PIN: ${{ inputs.cutover_pin }}
       CUTOVER_UNDO_VERSION: ${{ inputs.cutover_undo_version }}
+      CUTOVER_UNDO_DIGEST: ${{ inputs.cutover_undo_digest }}
       INPUT_SHA: ${{ inputs.sha }}
       DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
       PRODUCTION_AUTO_PROMOTE_DISABLED: ${{ vars.PRODUCTION_AUTO_PROMOTE_DISABLED }}

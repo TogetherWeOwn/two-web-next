@@ -191,6 +191,7 @@ test("Ember cutover configuration opts in only the Ember documents", () => {
   assert.equal(allOff.vars.KIT_ROUTE_EMBER_PAGES, "false");
   const vars = {
     ...allOff.vars,
+    KIT_ROUTE_ADMIN: "false",
     KIT_ROUTE_EMBER_PAGES: "true",
     KIT_ROUTE_AUTH: "false",
     KIT_ROUTE_FEEDS: "false",
