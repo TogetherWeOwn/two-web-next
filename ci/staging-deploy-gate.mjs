@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -151,6 +151,16 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
     console.log(
       `Staging gate passed: ${evidence.sha}, full CI run ${evidence.runId}, attempt ${evidence.runAttempt}`,
     );
+    if (process.env.GITHUB_OUTPUT) {
+      try {
+        appendFileSync(
+          process.env.GITHUB_OUTPUT,
+          `sha=${evidence.sha}\nrun_id=${evidence.runId}\nrun_attempt=${evidence.runAttempt}\n`,
+        );
+      } catch {
+        console.warn("::warning::Could not record verified staging CI provenance");
+      }
+    }
   } catch (error) {
     console.error(`Staging gate refused: ${error.message}`);
     process.exitCode = 1;

@@ -205,11 +205,13 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Re-verify exact-SHA full CI before Worker deploy
+        id: web-deploy-ci
         # Queue creation or the Tail deploy may outlive the accepted CI attempt; this step runs directly before the deploy.
         run: node ci/staging-deploy-gate.mjs
         env:
           GITHUB_TOKEN: ${{ github.token }}
       - name: Deploy to Cloudflare Workers
+        id: web-deploy
         # The Version is tagged with the CI-verified commit; /up reads the tag
         # back as revision.commit (a full lowercase SHA only). The Kit Worker
         # only produces after the handoff. Deploying the consumer-free config
@@ -403,3 +405,14 @@ jobs:
           exit 1
         env:
           QA_AUTH_TOKEN: ${{ secrets.QA_AUTH_TOKEN }}
+      - name: Summarize staging deploy evidence
+        # An older CI checkout may predate the receipt. Reporting is advisory.
+        if: ${{ !cancelled() && steps.web-deploy-ci.outputs.sha != '' && hashFiles('ci/staging-receipt.mjs') != '' }}
+        env:
+          STAGING_JOB_STATUS: ${{ job.status }}
+          STAGING_WEB_DEPLOY_OUTCOME: ${{ steps.web-deploy.outcome }}
+          STAGING_CANDIDATE: ${{ steps.web-deploy-ci.outputs.sha }}
+          STAGING_CI_RUN_ID: ${{ steps.web-deploy-ci.outputs.run_id }}
+          STAGING_CI_RUN_ATTEMPT: ${{ steps.web-deploy-ci.outputs.run_attempt }}
+        run: |
+          node ci/staging-receipt.mjs deploy || printf '%s\n' '::warning::Staging evidence summary unavailable'

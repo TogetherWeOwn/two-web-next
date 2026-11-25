@@ -309,6 +309,13 @@ binding isolation before any remote mutation.
    qualifying evidence: follow the linked contract's post-merge manual-dispatch
    caveat rather than claiming automatic eligibility.
 
+   The **Staging evidence** summary in Actions lists the trigger SHA and the
+   live `/up` and `/version` source SHAs separately. The deploy summary links
+   the verified CI attempt. The E2E summary links the triggering deploy and
+   records soak status as known before qualification. A matched receipt records
+   one observation of staging. Use the existing promotion checks for soak and
+   release eligibility.
+
    For automatic promotion, follow the [production release gate](../CONTRIBUTING.md#production-release-gate)
    to obtain independent approval for the exact release SHA. The authorized
    executor sets the repository Actions variable `PRODUCTION_ACCEPTED_SHA` to

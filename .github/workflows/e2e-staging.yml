@@ -94,6 +94,16 @@ jobs:
             | awk -F'\t' '{ if ($1 ~ /^R/) print $3 "\t" $2; else print $2 "\t" }' > "$RUNNER_TEMP/deployed-files.tsv"
           EXPECTED=$(wc -l < "$RUNNER_TEMP/deployed-files.tsv")
           bash ci/change-scope.sh "$RUNNER_TEMP/deployed-files.tsv" "$EXPECTED" >> "$GITHUB_OUTPUT"
+      - name: Summarize staging E2E provenance
+        # Scope can report pending or ineligible here. Qualification and soak
+        # are evaluated by the existing promotion checks after the run.
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        env:
+          STAGING_JOB_STATUS: ${{ job.status }}
+          STAGING_CANDIDATE: ${{ steps.candidate.outputs.sha }}
+          STAGING_SKIP_E2E: ${{ steps.scope.outputs.skip_e2e }}
+        run: node ci/staging-receipt.mjs e2e
 
   # OWASP ZAP passive scan of the deployed staging Worker (zap-staging.yml).
   # Runs for every successful main deploy, including docs-only ones (it scans

@@ -51,9 +51,14 @@ function fixture() {
 }
 
 const workflow = readFileSync(join(root, ".github/workflows/deploy.yml"), "utf8");
-function step(name) {
+function stepBlock(name) {
   const block = workflow.split(`      - name: ${name}\n`)[1]?.split(/\n      - /)[0];
   assert.ok(block, `Missing workflow step: ${name}`);
+  return block;
+}
+
+function step(name) {
+  const block = stepBlock(name);
   assert.doesNotMatch(
     block,
     /^        if:/m,
@@ -68,6 +73,37 @@ function step(name) {
     .replace(/^          /gm, "")
     .trim();
 }
+
+test("deploy receipt uses the admission outputs and completed Worker step", () => {
+  assert.match(
+    stepBlock("Re-verify exact-SHA full CI before Worker deploy"),
+    /^        id: web-deploy-ci$/m,
+  );
+  assert.match(stepBlock("Deploy to Cloudflare Workers"), /^        id: web-deploy$/m);
+  const receipt = stepBlock("Summarize staging deploy evidence");
+  assert.ok(
+    workflow.trimEnd().endsWith(receipt.trimEnd()),
+    "the receipt runs after all deploy steps",
+  );
+  assert.match(
+    receipt,
+    /if: \$\{\{ !cancelled\(\) && steps\.web-deploy-ci\.outputs\.sha != '' && hashFiles\('ci\/staging-receipt\.mjs'\) != '' \}\}/,
+  );
+  assert.match(
+    receipt,
+    /run: \|\n +node ci\/staging-receipt\.mjs deploy \|\| printf .*::warning::/,
+  );
+  for (const [key, source] of Object.entries({
+    STAGING_JOB_STATUS: "job.status",
+    STAGING_WEB_DEPLOY_OUTCOME: "steps.web-deploy.outcome",
+    STAGING_CANDIDATE: "steps.web-deploy-ci.outputs.sha",
+    STAGING_CI_RUN_ID: "steps.web-deploy-ci.outputs.run_id",
+    STAGING_CI_RUN_ATTEMPT: "steps.web-deploy-ci.outputs.run_attempt",
+  })) {
+    assert.ok(receipt.split("\n").includes(`          ${key}: \${{ ${source} }}`));
+  }
+});
+
 const gateCommand = step("Require successful exact-SHA full CI");
 const queueCommand = step("Ensure queues exist");
 const tailCommand = `${step("Re-verify exact-SHA full CI before Tail Worker deploy")}\n${step("Deploy alert Tail Worker before attaching the app")}`;
@@ -682,6 +718,7 @@ test("real Git accepts only the current checkout despite a container owner misma
         NODE_OPTIONS: `--import=${join(dir, "fetch.mjs")}`,
         GITHUB_EVENT_NAME: ctx.eventName,
         GITHUB_EVENT_PATH: join(dir, "event.json"),
+        GITHUB_OUTPUT: join(dir, "outputs.txt"),
         GITHUB_REPOSITORY: repository,
         GITHUB_REF: ctx.ref,
         GITHUB_SHA: checkoutSha,
@@ -690,6 +727,10 @@ test("real Git accepts only the current checkout despite a container owner misma
     });
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, new RegExp(`Staging gate passed: ${checkoutSha}`));
+    assert.equal(
+      readFileSync(join(dir, "outputs.txt"), "utf8"),
+      `sha=${checkoutSha}\nrun_id=42\nrun_attempt=${evidence.current.run_attempt}\n`,
+    );
     // Trust is command-scoped: the next bare Git call still refuses this repo.
     assert.equal(spawnSync("git", ["rev-parse", "HEAD"], { cwd: dir, env }).status, 128);
   } finally {

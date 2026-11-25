@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { observeStaging, resolveStagingCandidate } from "./staging-provenance.mjs";
+import { stagingReceipt } from "./staging-receipt.mjs";
 
 const A = "a".repeat(40);
 const B = "b".repeat(40);
@@ -35,6 +36,102 @@ const observe = (body, options = {}) =>
 
 test("candidate A survives deploy metadata B and workflow main tip C", () => {
   assert.equal(candidate(), A);
+});
+
+test("staging receipts follow the served candidate through an out-of-order main advance and refuse disagreement", async () => {
+  const worker = "12345678-0123-4567-abcd-123456789abc";
+  const env = {
+    GITHUB_REPOSITORY: repository,
+    GITHUB_EVENT_NAME: "workflow_run",
+    GITHUB_SHA: B,
+    GITHUB_RUN_ID: "200",
+    GITHUB_RUN_ATTEMPT: "1",
+    STAGING_CANDIDATE: A,
+    STAGING_CI_RUN_ID: "100",
+    STAGING_CI_RUN_ATTEMPT: "2",
+    STAGING_JOB_STATUS: "success",
+    STAGING_WEB_DEPLOY_OUTCOME: "success",
+  };
+  const calls = [];
+  const fetchOrigins = (upSha, versionSha) => async (url, options) => {
+    const endpoint = new URL(url);
+    assert.equal(endpoint.origin, "https://next.togetherweown.com");
+    assert.equal(options.redirect, "error");
+    calls.push(endpoint.pathname);
+    if (endpoint.pathname === "/up") {
+      return new Response(JSON.stringify({ revision: { commit: upSha, version_id: worker } }), {
+        status: 503,
+      });
+    }
+    assert.equal(endpoint.pathname, "/version");
+    return new Response(JSON.stringify({ sha: versionSha, deployedAt, extra: "private response" }));
+  };
+  const deploy = await stagingReceipt("deploy", env, {}, { fetchImpl: fetchOrigins(A, A), now });
+  assert.ok(deploy.includes(`Workflow trigger SHA (run head) \`${B}\``));
+  assert.ok(deploy.includes(`actions/runs/100/attempts/2), source \`${A}\``));
+  assert.ok(deploy.includes(`Live /up source \`${A}\`, Worker version \`${worker}\``));
+  assert.ok(deploy.includes(`Live /version source \`${A}\`, deployed at \`${deployedAt}\``));
+  assert.match(deploy, /Identity receipt matched at observation/);
+  assert.deepEqual(calls.splice(0), ["/up", "/version"]);
+
+  const failedDeploy = await stagingReceipt(
+    "deploy",
+    { ...env, STAGING_JOB_STATUS: "failure" },
+    {},
+    { fetchImpl: fetchOrigins(A, A), now },
+  );
+  assert.match(failedDeploy, /Identity receipt matched at observation/);
+  assert.match(failedDeploy, /This deploy run is ineligible \(deploy job failed\)/);
+  assert.deepEqual(calls.splice(0), ["/up", "/version"]);
+
+  const failedUpload = await stagingReceipt(
+    "deploy",
+    { ...env, STAGING_JOB_STATUS: "failure", STAGING_WEB_DEPLOY_OUTCOME: "failure" },
+    {},
+    { fetchImpl: fetchOrigins(A, A), now },
+  );
+  assert.match(failedUpload, /Identity receipt refused \(no observation\)/);
+  assert.equal(calls.length, 0);
+
+  const e2eEnv = { ...env, GITHUB_SHA: C, GITHUB_RUN_ID: "300", STAGING_SKIP_E2E: "false" };
+  const event = { workflow_run: { ...run, id: 200, run_attempt: 1 } };
+  const e2e = async ({ expectedProbes = ["/up", "/version"], ...override }, fetchImpl) => {
+    const summary = await stagingReceipt("e2e", { ...e2eEnv, ...override }, event, {
+      fetchImpl,
+      now,
+    });
+    assert.deepEqual(calls.splice(0), expectedProbes);
+    return summary;
+  };
+  const matched = await e2e({}, fetchOrigins(A, A));
+  assert.ok(matched.includes(`Workflow trigger SHA (run head) \`${C}\``));
+  assert.ok(matched.includes(`actions/runs/200/attempts/1), workflow head \`${B}\``));
+  assert.match(matched, /actions\/runs\/300\/attempts\/1/);
+  assert.match(matched, /Pending successful qualification and 30-minute soak/);
+  assert.doesNotMatch(matched, /private response/);
+
+  const disagreement = await e2e({}, fetchOrigins(B, A));
+  assert.ok(disagreement.includes(`Live /up source \`${B}\``));
+  assert.ok(disagreement.includes(`Live /version source \`${A}\``));
+  assert.match(disagreement, /Identity receipt refused \(disagreement or missing proof\)/);
+  assert.match(disagreement, /Soak eligibility\*\* Unproven/);
+  assert.doesNotMatch(disagreement, /matched at observation|Pending successful qualification/);
+  assert.match(await e2e({}, fetchOrigins(B, B)), /Identity receipt refused/);
+
+  const malformed = await e2e({}, fetchOrigins("<private response>", C));
+  assert.match(malformed, /Live \/up source unavailable/);
+  assert.ok(malformed.includes(`Live /version source \`${C}\``));
+  assert.doesNotMatch(malformed, /private response/);
+  assert.match(malformed, /Identity receipt refused/);
+
+  assert.match(await e2e({ STAGING_SKIP_E2E: "true" }, fetchOrigins(A, A)), /scope-skipped/);
+  assert.match(
+    await e2e({ GITHUB_RUN_ATTEMPT: "2" }, fetchOrigins(A, A)),
+    /rerun disqualifies the commit and blocks candidates with older runs/,
+  );
+  const refused = await e2e({ STAGING_CANDIDATE: C, expectedProbes: [] }, fetchOrigins(C, C));
+  assert.match(refused, /Candidate source unavailable/);
+  assert.match(refused, /Identity receipt refused \(no observation\)/);
 });
 
 test("a deploy title is mandatory, exact, and lowercase", () => {
@@ -302,6 +399,10 @@ test("qualification pins every checker, validates ancestry and shares the stagin
     "utf8",
   );
   assert.match(workflow, /run: node ci\/staging-provenance\.mjs candidate/);
+  assert.match(
+    workflow,
+    /continue-on-error: true\n(?:.*\n)*? +run: node ci\/staging-receipt\.mjs e2e/,
+  );
   assert.match(workflow, /git merge-base --is-ancestor "\$CANDIDATE_SHA" origin\/main/);
   const scope = workflow.split("  zap-baseline:")[0];
   assert.equal((scope.match(/uses: actions\/checkout@/g) ?? []).length, 1);
