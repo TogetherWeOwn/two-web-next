@@ -17,6 +17,7 @@ import {
 const appUrl = `https://${PRODUCTION_APEX}`;
 const clientIp = "192.0.2.163";
 const memberId = "900000000000090163";
+const memberName = "Synthetic Archive Member";
 const query = "Ember % & Archive";
 const encoded = new URLSearchParams({ q: query }).toString();
 const firstPage = `/events/past?${encoded}`;
@@ -47,6 +48,15 @@ function assertCanonical(html, path, label) {
     .filter((link) => renderedAttribute(link, "rel") === "canonical")
     .map((link) => renderedAttribute(link, "href"));
   assert.deepEqual(canonicals, [`${appUrl}${path}`], `${label}: canonical URL`);
+}
+
+function assertDetail({ html, label }, permalink, title) {
+  assertCanonical(html, permalink, label);
+  assert.deepEqual(
+    [...renderedElements(html, { tag: "h1" })].map(renderedText),
+    [title],
+    `${label}: detail title`,
+  );
 }
 
 function assertArchive(html, path, page, expected, label) {
@@ -159,7 +169,7 @@ export default {
       assert.equal(existing.occupied, false, "archive fixture identities must be unused");
       await tx`insert into events ${tx(records)}`;
       await tx`insert into web_sessions (token_hash, user_id, username, member, expires_at, roles_checked_at)
-        values (${hash}, ${memberId}, 'Synthetic Archive Member', true, now() + interval '10 minutes', now())`;
+        values (${hash}, ${memberId}, ${memberName}, true, now() + interval '10 minutes', now())`;
     });
     seeded = true;
     let cookie = (
@@ -175,6 +185,7 @@ export default {
     assertArchive(ember.html, bookmark, 2, matching.slice(20), ember.label);
 
     const detail = matching[20];
+    const permalink = `/e/${detail.event_key}`;
     let savedDetailHref;
     for (const [phase, owner] of [
       ["archive", "kit"],
@@ -189,12 +200,7 @@ export default {
       // Detail is Hono-owned in both profiles. Follow the link saved before
       // fallback and check the session passed from the preceding response.
       const page = await get(savedDetailHref, phase, null, cookie);
-      assertCanonical(page.html, `/e/${detail.event_key}`, page.label);
-      assert.deepEqual(
-        [...renderedElements(page.html, { tag: "h1" })].map(renderedText),
-        [detail.title],
-        `${page.label}: detail title`,
-      );
+      assertDetail(page, permalink, detail.title);
       const back = [...renderedElements(page.html, { tag: "a" })].find(
         (link) => renderedText(link).trim() === "← Back to search results",
       );
@@ -208,6 +214,18 @@ export default {
       assert.ok(renewed !== cookie, `${page.label}: session bearer rotated`);
       cookie = renewed;
     }
+
+    // A fresh visit to the canonical permalink must accept Hono's replacement.
+    const revisit = await get(permalink, "fallback", null, cookie);
+    assertDetail(revisit, permalink, detail.title);
+    const account = [...renderedElements(revisit.html, { tag: "form" })].find(
+      (form) => renderedAttribute(form, "action") === "/logout",
+    );
+    assert.ok(account, `${revisit.label}: replacement signs in on Hono`);
+    assert.ok(
+      renderedText(account).includes(memberName),
+      `${revisit.label}: same synthetic member`,
+    );
   } finally {
     try {
       if (seeded) {
