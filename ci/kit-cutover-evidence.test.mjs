@@ -514,6 +514,118 @@ test("isolated qualification refuses changed packet bytes and preserves earlier 
   assert.deepEqual((await readdir(scratch)).sort(), ["kit-cutover-packet", "proof.json"]);
 });
 
+test("cutover packet publishes its digest after the summary", async (t) => {
+  const scratch = await mkdtemp(join(tmpdir(), "cutover-publication-test-"));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const repo = join(scratch, "repo");
+  const name = "two-web-next-production";
+  const wrangler = "1.2.3";
+  const kitModules = { "_worker.js": "// fixture facade", "kit-adapter.js": "// fixture Kit" };
+  const kitConfig = {
+    name,
+    main: ".svelte-kit/cloudflare/_worker.js",
+    assets: { directory: ".svelte-kit/cloudflare" },
+    workers_dev: false,
+    preview_urls: false,
+    triggers: { crons: [] },
+    vars: Object.fromEntries(KIT_ROUTE_FLAGS.map((flag) => [flag, "false"])),
+  };
+  for (const [path, body] of Object.entries({
+    "wrangler.jsonc": JSON.stringify({ env: { production: { name, main: "src/worker.ts" } } }),
+    "web/wrangler.production.jsonc": JSON.stringify(kitConfig),
+    "drizzle/meta/_journal.json": JSON.stringify({ entries: [] }),
+    "package-lock.json": JSON.stringify({
+      packages: { "node_modules/wrangler": { version: wrangler } },
+    }),
+    "node_modules/wrangler/package.json": JSON.stringify({ version: wrangler }),
+    "public/index.html": "<p>Fixture Hono</p>",
+    ...Object.fromEntries(
+      Object.entries(kitModules).map(([path, body]) => [`installed/${path}`, body]),
+    ),
+  })) {
+    const target = join(repo, path);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, body);
+  }
+  const stub = join(repo, "node_modules/.bin/wrangler");
+  await mkdir(dirname(stub));
+  await writeFile(
+    stub,
+    '#!/bin/sh\n[ "$5" = --outdir ] || exit 2\nprintf "%s\\n" "// fixture Hono" > "$6/worker.js"\n',
+    {
+      mode: 0o700,
+    },
+  );
+
+  const context = { sourceSha, runId: identity.runId, runAttempt: identity.runAttempt };
+  const installed = { assets: join(repo, "installed") };
+  const assetIdentity = {
+    files: Object.fromEntries(
+      Object.entries(kitModules).map(([path, body]) => [`cloudflare/${path}`, sha256(body)]),
+    ),
+  };
+  const fixtureInputs = await sourceInputs(repo);
+  const packager = new URL("./kit-cutover-package.mjs", import.meta.url).href;
+  const runPackage = (packet, output, summary) =>
+    spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        "const { packageCutover } = await import(process.argv[1]); await packageCutover(...JSON.parse(process.argv[2]));",
+        packager,
+        JSON.stringify([packet, repo, installed, assetIdentity, context]),
+      ],
+      {
+        encoding: "utf8",
+        env: { RUNNER_TEMP: scratch, GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary },
+        timeout: 10_000,
+      },
+    );
+  const verifyWrittenPacket = async (packet) => {
+    const manifestDigest = sha256(await readFile(join(packet, "manifest.json")));
+    await verifyPackage(packet, { ...context, digest: manifestDigest }, fixtureInputs);
+    return manifestDigest;
+  };
+
+  await t.test(
+    "summary write failure leaves the output unchanged and the packet verifiable",
+    async () => {
+      const packet = join(scratch, "failed-packet");
+      const output = join(scratch, "failed-output");
+      const summary = join(scratch, "failed-summary");
+      await writeFile(output, "existing=value\n");
+      await mkdir(summary);
+
+      const result = runPackage(packet, output, summary);
+      assert.ifError(result.error);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(result.stderr, /EISDIR/);
+      assert.ok(result.stderr.includes(summary));
+      await verifyWrittenPacket(packet);
+      assert.equal(await readFile(output, "utf8"), "existing=value\n");
+    },
+  );
+
+  await t.test("successful publication appends the exact manifest digest", async () => {
+    const packet = join(scratch, "successful-packet");
+    const output = join(scratch, "successful-output");
+    const summary = join(scratch, "successful-summary");
+    await writeFile(output, "existing=value\n");
+    await writeFile(summary, "Existing summary\n");
+
+    const result = runPackage(packet, output, summary);
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    const manifestDigest = await verifyWrittenPacket(packet);
+    assert.equal(await readFile(output, "utf8"), `existing=value\ndigest=${manifestDigest}\n`);
+    assert.equal(
+      await readFile(summary, "utf8"),
+      `Existing summary\nCutover packet manifest SHA-256: \`${manifestDigest}\`\n`,
+    );
+  });
+});
+
 test("cutover packaging cleans only its own incomplete packet", async (t) => {
   const scratch = await mkdtemp(join(tmpdir(), "cutover-packet-cleanup-test-"));
   t.after(() => rm(scratch, { recursive: true, force: true }));
