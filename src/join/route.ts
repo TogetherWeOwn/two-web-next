@@ -35,6 +35,14 @@ export function registerJoinRoutes(
   render: JoinRender,
 ) {
   registerJoinPageRoutes(app, render);
+  registerJoinOAuthRoutes(app, hooks, render.recovery);
+}
+
+export function registerJoinOAuthRoutes(
+  app: Hono<{ Bindings: Env }>,
+  hooks: JoinSessionHooks,
+  recovery: JoinRender["recovery"],
+) {
   registerJoinStartRoutes(app, hooks);
-  registerJoinCallbackRoutes(app, hooks, render);
+  registerJoinCallbackRoutes(app, hooks, recovery);
 }

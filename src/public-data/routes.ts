@@ -22,7 +22,6 @@ import { etagFor, matchesIfNoneMatch } from "../http/conditional";
 import { inviteDestination } from "../invite";
 import { wallDateIso, wallTimeHm } from "../islands/contracts";
 import { MCP_SERVER_NAME, MCP_SERVER_VERSION } from "../mcp/identity";
-import { requestRoute } from "../request-log";
 import { JOIN_INTRO } from "../screens/join";
 import {
   API_PUBLIC_BOUNDS,
@@ -47,6 +46,7 @@ import {
   type ApiPublicCacheEntry,
 } from "./cache";
 import { getOpenApiDocument } from "./openapi";
+import { PUBLIC_API_PATHS } from "./kit-routes";
 import { apiError, type Ctx } from "./unknown-path";
 import { parseRetryAfterSeconds } from "../jobs/retry-delay";
 
@@ -59,10 +59,10 @@ const TEXT = new TextEncoder();
  * and answer the static `internal` envelope, never branded HTML, exception
  * text, SQL or row data. Transport failures stay on the 503 path.
  */
-function internalFault(c: Ctx, err: unknown): Response {
+function internalFault(c: Ctx, err: unknown, route: string): Response {
   alertRequestError(err, {
     method: c.req.method,
-    route: requestRoute(c),
+    route,
     requestId: c.get("requestId"),
   });
   varyAccept(c);
@@ -380,8 +380,8 @@ function parsePage(raw: string): number {
   return n;
 }
 
-export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
-  app.get("/api/public/events", async (c) => {
+export const publicApiHandlers = {
+  async events(c: Ctx) {
     const refused = await admitted(c);
     if (refused) return refused;
     // Optional `game` facet: absent reads unfiltered (byte-identical CONTROL);
@@ -465,7 +465,7 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
       }
     } catch (err) {
       if (isDatabaseUnavailable(err)) return unavailable(c);
-      return internalFault(c, err);
+      return internalFault(c, err, PUBLIC_API_PATHS.events);
     }
     // Final guard: an oversized success is never cached or served.
     if (TEXT.encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes) return unavailable(c);
@@ -477,12 +477,12 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
       : `?limit=${limit}&page=${clamped}`;
     const storeKey = apiPublicCacheKey("GET", "/api/public/events", storeQuery);
     return servePublicJson(c, storeKey, body, generation);
-  });
+  },
 
-  app.get("/api/public/events/:key", async (c) => {
+  async event(c: Ctx, readKey: () => string) {
     const refused = await admitted(c);
     if (refused) return refused;
-    const raw = c.req.param("key");
+    const raw = readKey();
     // Static message: the rejected key is never reflected.
     if (!parsePublicEventId(raw))
       return apiError(c, "invalid_request", "That event key is not valid.", 422);
@@ -514,12 +514,30 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
       }
     } catch (err) {
       if (isDatabaseUnavailable(err)) return unavailable(c);
-      return internalFault(c, err);
+      return internalFault(c, err, PUBLIC_API_PATHS.event);
     }
     // Final guard: an oversized success is never cached or served.
     if (TEXT.encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes) return unavailable(c);
     return servePublicJson(c, key, body, generation);
-  });
+  },
+
+  // Static discovery document, database-free like robots.txt: no admission,
+  // no session, unchanged bytes per APP_URL with a long edge TTL.
+  async openApi(c: Ctx) {
+    const body = JSON.stringify(getOpenApiDocument(c.env.APP_URL));
+    const etag = await etagFor(body, "SHA-1");
+    c.header("cache-control", "public, max-age=3600");
+    c.header("etag", etag);
+    const robots = stagingRobots(c);
+    if (robots) c.header("x-robots-tag", robots);
+    if (matchesIfNoneMatch(c.req.header("if-none-match"), etag)) return c.body(null, 304);
+    return c.body(body, 200, { "content-type": "application/json" });
+  },
+};
+
+export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
+  app.get(PUBLIC_API_PATHS.events, publicApiHandlers.events);
+  app.get(PUBLIC_API_PATHS.event, (c) => publicApiHandlers.event(c, () => c.req.param("key")));
 
   app.get("/api/public/community", async (c) => {
     const refused = await admitted(c);
@@ -542,16 +560,5 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
     return servePublicJson(c, key, serializeJoin(c.env));
   });
 
-  // Static discovery document, database-free like robots.txt: no admission,
-  // no session, unchanged bytes per APP_URL with a long edge TTL.
-  app.get("/openapi.json", async (c) => {
-    const body = JSON.stringify(getOpenApiDocument(c.env.APP_URL));
-    const etag = await etagFor(body, "SHA-1");
-    c.header("cache-control", "public, max-age=3600");
-    c.header("etag", etag);
-    const robots = stagingRobots(c);
-    if (robots) c.header("x-robots-tag", robots);
-    if (matchesIfNoneMatch(c.req.header("if-none-match"), etag)) return c.body(null, 304);
-    return c.body(body, 200, { "content-type": "application/json" });
-  });
+  app.get(PUBLIC_API_PATHS.openApi, publicApiHandlers.openApi);
 }

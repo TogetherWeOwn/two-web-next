@@ -326,6 +326,70 @@ Then dispatch the separately approved undo. It checks direct access, 100% fallba
 traffic, and healthy `/up` on the same ledger before dropping the view and schema with `RESTRICT`.
 Recheck `/up` and the ledger after the inverse.
 
+## Isolate the Web and Jobs serving login
+
+Install the projection while direct ledger access still works. Qualify the
+compatible Hono artifact and direct-ledger fallback on the exact ledger before
+selecting Hono through the [protected release workflow](kit-cutover-release.md).
+Confirm the live Web and Jobs `DB` bindings both resolve to `two_web_app` on
+the intended branch. Confirm Web's `BOT_DB` points to the separate Bot reader.
+The `db-serving-ledger-isolation` dispatch starts the forward change only at
+1033, while the approved compatible Hono version serves 100% of Web traffic
+and reports the exact timestamps through the projection. This operation
+changes grants and role memberships. It changes neither schema nor ledger rows.
+
+On a read-only connection to the pinned Web database, use
+`planServingIsolation(tx, identity, version, artifact)` from
+`ci/db-serving-ledger-isolation.mjs` to capture catalog metadata. Pass the
+Hono staging packet's `{ sourceSha, digest }` in `artifact`. The forward check
+matches the live Worker's version, source tag and Hono manifest annotation to
+that packet. Rehearse the delta, inverse and effective rights
+against a synthetic copy of the captured catalog. Use PostgreSQL 17 or later
+and confirm that the executor can act as each captured grantor in both directions.
+The runner preserves
+existing public ACLs and adds only missing direct grants from the reviewed
+Web and Jobs workload inventory. It revokes the two broad data memberships
+and direct privileges on the ledger, sequence and schema. The ledger guard
+rejects remaining rights from any reachable role or PUBLIC.
+
+Set the approved dispatch commit, database URL, exact plan JSON and its
+SHA-256 digest in the `production` Environment under
+`PRODUCTION_DB_ISOLATION_APPROVED_SHA`, `PRODUCTION_DB_ISOLATION_DATABASE_URL`,
+`PRODUCTION_DB_ISOLATION_PLAN`, and `PRODUCTION_DB_ISOLATION_PLAN_SHA256`.
+Use `PRODUCTION_DB_ISOLATION_CF_ACCOUNT_ID` and
+`PRODUCTION_DB_ISOLATION_CF_READ_TOKEN` for the forward traffic check. Keep
+the same plan and credential available for `readback` and `undo`. If the
+workflow outcome is uncertain, classify the state before retrying. The
+isolated state requires no caller authority on the ledger and all reviewed
+Web/Jobs privileges. An unclassified state needs investigation before retry.
+
+Verify the actual logins before and immediately after the change. Through the
+Web and Jobs binding, check the ordered projection, session and event reads,
+queue and event-sync access, and the audit trigger and sequence contract.
+After narrowing, direct table, sequence and schema access must fail. Check the
+Bot runtime's existing read and the Web Bot reader's `web_v1.live_counts`,
+`rank_counts`, `members` and `member_milestones` access in the separate Bot
+database. Use counts and permission verdicts. Rehearse writes only with
+invented data. Watch Web and Jobs health, errors and queues for at least 30
+minutes under the production release gate.
+
+On regression, run the protected `undo` on the actual canonical prefix (1033
+or 1037). It restores the previous grants before removing the added grants.
+Keep the inverse available if the projection becomes unreadable. An undo at
+1037 restores service with the wider grants. Re-isolation at that prefix needs
+a separately reviewed operation because this forward path is limited to 1033.
+After confirming direct timestamp access, use the protected Worker rollback
+if necessary. Remove the projection only with the separate protected inverse
+once the approved fallback serves all traffic and can read the ledger.
+
+Advance `1034_event-echoes`, `1035_bot-reconciliation-intents`,
+`1036_event-sync-claim-started`, and `1037_waitlist-offers` only through the
+separately approved protected migration. This adds echo and attendance tables,
+a reconciliation-intent table, a claim-start timestamp on existing event-sync
+attempts, and a waitlist-offer table. Keep `1038` deferred. A grant inverse
+does not undo any of these schema changes. Use the release's rehearsed
+database recovery procedure for an adverse schema or data effect.
+
 ## Audit tables are append-only (deployed-role prerequisite)
 
 `drizzle/1018_audit-immutability.sql` guards `agent_event_audits`,

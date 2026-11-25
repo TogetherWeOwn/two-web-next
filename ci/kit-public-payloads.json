@@ -85,6 +85,24 @@
       "tests": ["Kit GET /events/past anonymous payload"]
     },
     {
+      "id": "kit-payload-public-api-events",
+      "route": "GET /api/public/events",
+      "binding": "web/src/routes/api/public/events/+server.ts",
+      "tests": ["Kit public API anonymous payloads"]
+    },
+    {
+      "id": "kit-payload-public-api-event",
+      "route": "GET /api/public/events/:key",
+      "binding": "web/src/routes/api/public/events/[key]/+server.ts",
+      "tests": ["Kit public API anonymous payloads"]
+    },
+    {
+      "id": "kit-payload-openapi",
+      "route": "GET /openapi.json",
+      "binding": "web/src/routes/openapi.json/+server.ts",
+      "tests": ["Kit public API anonymous payloads"]
+    },
+    {
       "id": "kit-payload-about",
       "route": "GET /about",
       "binding": "web/src/routes/about/+page.server.ts",
@@ -151,6 +169,11 @@
       "route": "POST /admin/*",
       "binding": "web/src/routes/admin/[...action]/+page.server.ts",
       "reads": "exact moderator form actions admitted by the hook before controller dispatch"
+    },
+    {
+      "route": "GET /events/:key",
+      "binding": "web/src/routes/events/[key]/+server.ts",
+      "reads": "event, moderator-only draft and viewer's own waitlist position after a non-rotating session check"
     },
     {
       "route": "GET /profile",
@@ -245,6 +268,51 @@
   ],
   "outOfScope": [
     {
+      "route": "GET /llms.txt",
+      "binding": "web/src/routes/llms.txt/+server.ts",
+      "reason": "Static Markdown has no Kit data representation. The installed Worker fixture compares the public response across both owners."
+    },
+    {
+      "route": "GET /about.md",
+      "binding": "web/src/routes/about.md/+server.ts",
+      "reason": "Static Markdown has no Kit data representation. The installed Worker fixture compares the public response across both owners."
+    },
+    {
+      "route": "GET /faq.md",
+      "binding": "web/src/routes/faq.md/+server.ts",
+      "reason": "Static Markdown has no Kit data representation. The installed Worker fixture compares the public response across both owners."
+    },
+    {
+      "route": "GET /rules.md",
+      "binding": "web/src/routes/rules.md/+server.ts",
+      "reason": "Static Markdown has no Kit data representation. The installed Worker fixture compares the public response across both owners."
+    },
+    {
+      "route": "GET /privacy.md",
+      "binding": "web/src/routes/privacy.md/+server.ts",
+      "reason": "Static Markdown has no Kit data representation. The installed Worker fixture compares the public response across both owners."
+    },
+    {
+      "route": "GET /join.md",
+      "binding": "web/src/routes/join.md/+server.ts",
+      "reason": "Static Markdown has no Kit data representation. The installed Worker fixture compares the public response across both owners."
+    },
+    {
+      "route": "GET /community",
+      "binding": "web/src/routes/community/+server.ts",
+      "reason": "The vanity redirect has no Kit data representation. The installed Worker fixture compares the public response across both owners."
+    },
+    {
+      "route": "GET /discord",
+      "binding": "web/src/routes/discord/+server.ts",
+      "reason": "The vanity redirect has no Kit data representation. The installed Worker fixture compares the public response across both owners."
+    },
+    {
+      "route": "GET /login",
+      "binding": "web/src/routes/login/+server.ts",
+      "reason": "The vanity redirect has no Kit data representation. The installed Worker fixture compares the public response across both owners."
+    },
+    {
       "route": "GET /admin/ops-overrides",
       "binding": "web/src/routes/admin/ops-overrides/+server.ts",
       "reason": "Private operator record behind independent control-bearer admission."
@@ -285,6 +353,21 @@
       "reason": "Session liveness protocol returns one boolean. The installed Worker auth fixture covers this endpoint without a Kit data response."
     },
     {
+      "route": "GET /join/discord",
+      "binding": "web/src/routes/join/discord/+server.ts",
+      "reason": "Join authorization redirect issues signed journey cookies. The installed Worker auth fixture covers it without a Kit data response."
+    },
+    {
+      "route": "GET /join/callback",
+      "binding": "web/src/routes/join/callback/+server.ts",
+      "reason": "Join callback issues session cookies or a transient recovery document. The installed Worker auth fixture covers it without a Kit data response."
+    },
+    {
+      "route": "POST /auth/qa/:identity",
+      "binding": "web/src/routes/auth/qa/[identity]/+server.ts",
+      "reason": "Staging-only synthetic sign-in issues session cookies. The installed Worker auth fixture covers it without a Kit data response."
+    },
+    {
       "route": "POST /logout",
       "binding": "web/src/routes/logout/+server.ts",
       "reason": "Native POST redirects and clears session cookies. The installed Worker auth fixture covers this endpoint without a Kit data response."
@@ -293,6 +376,26 @@
       "route": "POST /logout/everywhere",
       "binding": "web/src/routes/logout/everywhere/+server.ts",
       "reason": "Native POST revokes member sessions and clears session cookies. The installed Worker auth fixture covers this endpoint without a Kit data response."
+    },
+    {
+      "route": "GET /up",
+      "binding": "web/src/routes/up/+server.ts",
+      "reason": "Operational JSON readiness with aggregate counts and migration timestamps. The installed Worker ops fixture checks healthy and unavailable responses without a Kit data payload."
+    },
+    {
+      "route": "GET /version",
+      "binding": "web/src/routes/version/+server.ts",
+      "reason": "Operational JSON with only revision identity and upload time. The installed Worker ops fixture checks wire parity without a Kit data payload."
+    },
+    {
+      "route": "POST /csp-reports",
+      "binding": "web/src/routes/csp-reports/+server.ts",
+      "reason": "POST-only CSP sink. The installed Worker ops fixture checks the empty response and bounded report handling."
+    },
+    {
+      "route": "POST /__probe/alert",
+      "binding": "web/src/routes/__probe/alert/+server.ts",
+      "reason": "POST-only staging QA probe. The installed Worker ops fixture checks gate refusals and intercepted effects."
     },
     {
       "route": "*",

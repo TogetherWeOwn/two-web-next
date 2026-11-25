@@ -4,6 +4,7 @@ import type { Env } from "../env";
 import { internalErrorHandler } from "../errors";
 import { safeRequestId } from "../http/request-log";
 import { readContextSession } from "../session-hono";
+import { KIT_EVENT_JSON_ROUTE } from "./kit-json-routes";
 import { eventDetailJson } from "./routes-json";
 
 /**
@@ -29,7 +30,7 @@ export async function fetchKitEventDetailJson(
     (context) => readContextSession(context, false),
   ).catch((error: unknown) => {
     if (!(error instanceof Error)) throw error;
-    return internalErrorHandler(error, c);
+    return internalErrorHandler(error, c, KIT_EVENT_JSON_ROUTE.path);
   });
   return request.method === "HEAD" ? new Response(null, response) : response;
 }

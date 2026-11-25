@@ -135,17 +135,20 @@ family selector runs only when the existing ownership lookup falls back to
 Hono. Each family requires its own binding set to the literal string
 `true`. A candidate must match the original method, pathname and mounted Kit
 route ID. Static entries may release exact reserved pairs. Dynamic entries
-require a pathname predicate and leave reserved paths to Hono. HEAD follows
+require a pathname predicate and an explicit literal-path release to take
+ownership of a reserved path. HEAD follows
 GET. Conflicting claims and overlaps with disabled page ownership entries
 fall back to Hono.
 
 ### Browser authentication endpoints
 
-`KIT_ROUTE_AUTH=true` selects Kit for the literal Discord sign-in, callback,
-legacy redirect and status GET/HEAD pairs, and the two logout POST paths.
-Other values leave these paths with Hono. Encoded aliases, trailing slashes,
-Kit data URLs and other methods keep Hono's answer. Join OAuth, staging QA
-and the recovery page follow their existing ownership rules.
+`KIT_ROUTE_AUTH=true` selects Kit for GET and HEAD on `/auth/discord`,
+`/auth/discord/callback`, `/auth/discord/redirect`, `/auth/status`,
+`/join/discord` and `/join/callback`, and POST on `/logout` and
+`/logout/everywhere`. It also selects POST on `/auth/qa/:identity` when
+`APP_URL` is exactly the staging URL. Other flag values, encoded aliases,
+trailing slashes, Kit data URLs and other methods keep Hono's answer.
+The `/join` and `/auth/recover` documents have their own ownership policy.
 
 Both entry points register the same callback, use the same signed state and
 session cookies, and consume the same one-time `auth` journey before provider
@@ -153,10 +156,16 @@ exchange. An in-flight sign-in can complete across a flag change. Kit checks
 host and origin before the shared handlers run. The logout body cap runs
 before the shared logout throttle and session revocation. The legacy
 redirects, status probe and native HTML form submissions retain their
-existing response contracts.
+existing response contracts. Join shares the `join` journey namespace and
+the same return cookies, redirect targets and HTML recovery. The native Join
+and retry links keep the safe `next` and `source` parameters across owners.
+The staging QA POST keeps the same identity and token gate before the action
+body cap, throttle and session issuance. Production refuses QA sign-in even
+if an auth flag and QA token are present.
 
 The hosted installed-Worker fixture exercises both owners with synthetic
-sessions and mocked provider responses, including a no-JavaScript sign-out.
+sessions and mocked provider responses, including no-JavaScript sign-out and
+Join recovery.
 Keep the binding unset in deployed configurations until the exact candidate
 qualifies through the [production release gate](../CONTRIBUTING.md#production-release-gate).
 
@@ -201,6 +210,22 @@ both endpoints return to Hono when the binding is cleared, accounting for
 cached responses. Check delivery under the existing Tail Worker rules for the
 two registered route labels as part of release verification.
 
+### Static text and vanity redirects
+
+`KIT_ROUTE_STATIC_TEXT=true` selects Kit for exact GET and HEAD requests to
+`/llms.txt`, `/about.md`, `/faq.md`, `/rules.md`, `/privacy.md`, `/join.md`,
+`/community`, `/discord`, and `/login`. Keep the binding unset in deployed
+configurations until approval through the
+[production release gate](../CONTRIBUTING.md#production-release-gate).
+Clearing it returns the next uncached request to Hono. Encoded aliases,
+trailing slashes, Kit data URLs, other methods, and event Markdown stay
+with their existing owner.
+
+The shared Markdown responses retain their byte-derived validators, staging
+noindex policy, and one-hour public cache. Vanity redirects stay private and
+uncacheable, with the existing invite fallback and safe login destination.
+The hosted installed Worker fixture exercises both owners without member data.
+
 ### Feed endpoints
 
 `KIT_ROUTE_FEEDS=true` selects GET and HEAD on `/events.ics`, `/events.rss`
@@ -221,13 +246,52 @@ refusal headers, and shared budget charges across absent, off and on bindings.
 It exercises trailing slashes, encoded and data URL variants, wrong methods,
 an existing Kit page and the reserved Hono `/version` read. Per-event cases
 cover published, cancelled, missing and draft rows with anonymous, member and
-moderator requests. Event JSON and the public API keep their current owners.
+moderator requests.
 
 Before activating the flag, qualify the exact candidate with staging feed and
 rollback checks through the [production release gate](../CONTRIBUTING.md#production-release-gate).
 Use all three feed paths to confirm that clearing the binding returns requests
 to Hono. Account for the existing 300-second cache lifetime. The collections
 are public-cacheable and single-event downloads are private-cacheable.
+
+### Operational endpoints
+
+`KIT_ROUTE_OPS=true` selects Kit for exact POST `/csp-reports` and
+`/__probe/alert`, and GET and HEAD `/up` and `/version`. Hono owns the
+routes by default and handles other methods, path aliases and Kit data URLs.
+The CSP sink keeps its exact origin exemption and returns 204 on oversize or
+timeout. The alert probe keeps the origin and staging QA gates, then the body
+cap and throttle. The existing queue and request alert run only after admission.
+The built and installed Worker fixture uses synthetic inputs, counts diagnostics
+and intercepts the queue and outbound network.
+
+The remaining API-3 endpoints are the vanity redirects `/community`,
+`/discord`, `/login`, the static text routes `/llms.txt`, `/about.md`,
+`/faq.md`, `/join.md`, `/privacy.md`, `/rules.md`, and the event Markdown
+routes `/events.md` and `/e/:file{.+\\.md}`. Event Markdown still needs shared
+read-budget and suffix precedence proof, including paths with multiple segments.
+
+### Event detail JSON, public event reads and OpenAPI
+
+`KIT_ROUTE_EVENT_JSON=true` admits GET and HEAD on `/events/<key>`. The handler
+keeps the non-rotating session check, private cache policy, the viewer's own
+waitlist position and moderator-only draft visibility. `/events/past` and
+per-event `.ics` keep their existing owners.
+
+`KIT_ROUTE_PUBLIC_API=true` admits GET and HEAD on `/api/public/events`,
+`/api/public/events/<key>` and `/openapi.json`. The event reads stay session-free
+and share the existing public projections and cache. OpenAPI uses `APP_URL`
+and retains its one-hour public cache policy. Unknown paths in the public API
+namespace still use Hono's JSON fallback.
+
+For both families, encoded aliases, trailing slashes, data URLs and other
+methods stay with Hono. The hosted installed-Worker fixture compares the four
+registrations with the API-4 inventory and checks response and ownership parity
+with the bindings unset, `false` and `true`. The remaining API-4 registrations
+are GET and HEAD on `/events.json`, `/api/public/community` and
+`/api/public/join`. Keep both bindings unset in deployed configuration until
+separately qualified through the
+[production release gate](../CONTRIBUTING.md#production-release-gate).
 
 ## Offline retirement guard
 

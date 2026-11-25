@@ -6,6 +6,7 @@ import { recordBoardView, recordQueuedBoardView } from "../../src/hotzones/board
 import { prepareKitHomePanels } from "../../src/kit-home-panels";
 import { KIT_SECURITY_TXT_ROUTE } from "../../src/kit-security-txt-route";
 import { KIT_SEO_ROUTES } from "../../src/kit-seo-routes";
+import { KIT_STATIC_TEXT_ROUTES } from "../../src/static-public";
 import { kitAccessSink } from "../../src/kit-access-sink";
 import { preserveHonoDataResponse } from "../../src/kit-worker-facade";
 import {
@@ -19,12 +20,15 @@ import {
 import { dispatchHookRequest } from "../../src/route-ownership";
 import { dispatchEventDetailRequest } from "../../src/events/kit-detail";
 import { KIT_EVENT_CALENDAR_ROUTE } from "../../src/events/kit-event-calendar-route";
+import { KIT_EVENT_JSON_ROUTE } from "../../src/events/kit-json-routes";
 import { KIT_STATIC_FEED_ROUTES } from "../../src/events/kit-static-feed-routes";
+import { KIT_PUBLIC_API_ROUTES } from "../../src/public-data/kit-routes";
 import { dispatchEventsRequest } from "../../src/kit-events";
 import { dispatchHotzonesRequest } from "../../src/kit-hotzones";
 import { dispatchPastArchiveRequest } from "../../src/kit-past-events";
 import { KIT_PROFILE_WRITE_ROUTES } from "../../src/profiles/kit-write-route";
-import { authOriginRefusal, KIT_AUTH_ROUTES } from "#lib/server/auth.ts";
+import { authOriginRefusal, kitAuthRoutes } from "#lib/server/auth.ts";
+import { kitOpsFamily } from "#lib/server/ops.ts";
 import { honoFetch, honoRecoveryFetch } from "#lib/server/hono.ts";
 import { resolveProfileWrite } from "#lib/server/profile-write.ts";
 
@@ -68,10 +72,13 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
     apiFamilies: [
       {
         flag: env.KIT_ROUTE_AUTH,
-        routes: KIT_AUTH_ROUTES,
+        routes: kitAuthRoutes(env.APP_URL),
         crossOriginRefusal: authOriginRefusal,
       },
       { flag: env.KIT_ROUTE_FEEDS, routes: [...KIT_STATIC_FEED_ROUTES, KIT_EVENT_CALENDAR_ROUTE] },
+      { flag: env.KIT_ROUTE_STATIC_TEXT, routes: KIT_STATIC_TEXT_ROUTES },
+      { flag: env.KIT_ROUTE_EVENT_JSON, routes: [KIT_EVENT_JSON_ROUTE] },
+      { flag: env.KIT_ROUTE_PUBLIC_API, routes: KIT_PUBLIC_API_ROUTES },
       { flag: env.KIT_ROUTE_SEO, routes: KIT_SEO_ROUTES },
       { flag: env.KIT_ROUTE_SECURITY_TXT, routes: [KIT_SECURITY_TXT_ROUTE] },
       {
@@ -79,6 +86,7 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
         routes: KIT_PROFILE_WRITE_ROUTES,
         crossOriginRefusal: authOriginRefusal,
       },
+      kitOpsFamily(),
     ],
     versionMetadata: env.CF_VERSION_METADATA,
     featuredImageHosts: env.FEATURED_IMAGE_HOSTS,

@@ -16,7 +16,9 @@ import { discordEventsSource } from "../../src/events/discord-transients";
 import { fetchKitFeed } from "../../src/events/kit-feed-fetch";
 import {
   eventLinkAvailability,
+  getPublicApiEvent,
   listPast,
+  listPublicApiEvents,
   type PublicEvent,
   sitemapEvents,
 } from "../../src/events/reads";
@@ -216,6 +218,8 @@ export function archiveReadFixture() {
 const kitDependencies = {
   dbFor: async (c: { env: Env }) => (c.env as Env & { ADMIN_DB?: Db }).ADMIN_DB ?? null,
   listPast,
+  getPublicApiEvent,
+  listPublicApiEvents,
   sitemapEvents,
   eventLinkAvailability,
   loadPastArchivePage,
@@ -245,7 +249,16 @@ export async function compileArchiveKit() {
   const outfile = join(scratch, "kit.mjs");
   const dependencyExports = new Map([
     [join(root, "src/admin/db.ts"), ["dbFor"]],
-    [join(root, "src/events/reads.ts"), ["listPast", "eventLinkAvailability", "sitemapEvents"]],
+    [
+      join(root, "src/events/reads.ts"),
+      [
+        "listPast",
+        "eventLinkAvailability",
+        "sitemapEvents",
+        "getPublicApiEvent",
+        "listPublicApiEvents",
+      ],
+    ],
     [join(root, "src/kit-past-events.ts"), ["loadPastArchivePage", "toPublicPastArchiveRow"]],
     [join(root, "src/kit-events.ts"), ["loadEventsPage"]],
     [join(root, "src/kit-events-html.ts"), ["renderEventsHtml"]],
@@ -267,19 +280,25 @@ export async function compileArchiveKit() {
         import { GET as robots } from ${JSON.stringify(join(root, "web/src/routes/robots.txt/+server.ts"))};
         import { GET as sitemap } from ${JSON.stringify(join(root, "web/src/routes/sitemap_index.xml/+server.ts"))};
         import { GET as securityTxt } from ${JSON.stringify(join(root, "web/src/routes/.well-known/security.txt/+server.ts"))};
+        import { GET as publicEvents } from ${JSON.stringify(join(root, "web/src/routes/api/public/events/+server.ts"))};
+        import { GET as publicEvent } from ${JSON.stringify(join(root, "web/src/routes/api/public/events/[key]/+server.ts"))};
+        import { GET as openApi } from ${JSON.stringify(join(root, "web/src/routes/openapi.json/+server.ts"))};
         import { KIT_EVENT_CALENDAR_ROUTE } from ${JSON.stringify(join(root, "src/events/kit-event-calendar-route.ts"))};
         import { bind } from "acceptance:bindings";
         const endpoints = new Map([
           ["/events.ics", calendar], ["/events.rss", rss],
           ["/robots.txt", robots], ["/sitemap_index.xml", sitemap],
           ["/.well-known/security.txt", securityTxt],
+          ["/api/public/events", publicEvents], ["/openapi.json", openApi],
         ]);
         export async function request(request, env, deps) {
           bind(env, deps);
           const pathname = new URL(request.url).pathname;
+          const match = new RegExp("^/api/public/events/([^/]+)$").exec(pathname);
+          if (match) return publicEvent({request, params: {key: match[1]}, locals: {}});
           const endpoint = endpoints.get(pathname) ??
             (KIT_EVENT_CALENDAR_ROUTE.dynamic.matches(pathname, pathname) ? eventCalendar : undefined);
-          if (endpoint) return endpoint({request, locals: {}});
+          if (endpoint) return endpoint({request, params: {}, locals: {}});
           const headers = new Headers({"content-type": "text/html; charset=utf-8"});
           try {
             if (pathname === "/events") {

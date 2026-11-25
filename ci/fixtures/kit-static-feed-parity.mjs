@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { generateSignedCookie } from "hono/cookie";
 import postgres from "postgres";
 import { KIT_EVENT_CALENDAR_ROUTE } from "../../src/events/kit-event-calendar-route.ts";
+import { KIT_EVENT_JSON_ROUTE } from "../../src/events/kit-json-routes.ts";
 import { KIT_STATIC_FEED_ROUTES } from "../../src/events/kit-static-feed-routes.ts";
 import { KIT_SECURITY_TXT_ROUTE } from "../../src/kit-security-txt-route.ts";
 import { KIT_SEO_ROUTES } from "../../src/kit-seo-routes.ts";
@@ -93,7 +94,8 @@ async function assertMountedEndpoints() {
   );
   assert.deepEqual(
     detailRoutes.map(({ id }) => id),
-    [KIT_EVENT_CALENDAR_ROUTE.dynamic.id],
+    [KIT_EVENT_CALENDAR_ROUTE.dynamic.id, KIT_EVENT_JSON_ROUTE.dynamic.id],
+    "the calendar suffix matches before the generic detail endpoint",
   );
   assert.equal(detailRoutes[0].page, null, "per-event ICS is endpoint only");
   assert.equal(typeof detailRoutes[0].endpoint, "function", "per-event ICS is mounted");

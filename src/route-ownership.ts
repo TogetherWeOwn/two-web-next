@@ -83,9 +83,9 @@ export interface RouteDecision {
 // disabled path; the preview Worker moves a Kit-owned path back to Hono by
 // design — that is the rollback. Add one entry per migrated route, enabled
 // only when its Kit handler is ready to own the exact method/path. Only GET
-// is listed per page (HEAD follows its GET entry); /join/discord and
-// /join/callback stay
-// Hono-owned, so the funnel keeps one OAuth authority.
+// is listed per page (HEAD follows its GET entry). The auth family controls
+// the two Join OAuth endpoints independently of the document through the
+// default-off KIT_ROUTE_AUTH flag.
 // Exported so the preview parity script derives its expected renderer from the
 // shipped manifest instead of hard-coding "kit": flipping enabled flips the
 // gate for the right reason.
@@ -1606,7 +1606,11 @@ interface KitApiRoute extends OwnedRoute {
   reads: RouteReads;
   // A dynamic family uses a mounted route ID plus an explicit path predicate.
   // Its registered path remains the trusted route label for logging.
-  dynamic?: { id: string; matches: (raw: string, decoded: string) => boolean };
+  dynamic?: {
+    id: string;
+    matches: (raw: string, decoded: string) => boolean;
+    releaseReservedLiteral?: true;
+  };
 }
 
 function familyRouteFor(
@@ -1632,7 +1636,11 @@ function familyRouteFor(
       if (route.dynamic) {
         if (
           id !== route.dynamic.id ||
-          isReservedPath(decoded) ||
+          (isReservedPath(decoded) &&
+            (!route.dynamic.releaseReservedLiteral ||
+              pathname !== decoded ||
+              pathname.includes("%") ||
+              !matchPattern(route.path, pathname))) ||
           !route.dynamic.matches(pathname, decoded)
         )
           continue;

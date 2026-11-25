@@ -69,6 +69,15 @@ const CHECK_MATCHERS = [
     describe: "Kit security.txt anonymous payload",
     testContains: null,
   },
+  ...[
+    ["public-api-events", "/api/public/events "],
+    ["public-api-event", "/api/public/events/"],
+    ["openapi", "/openapi.json "],
+  ].map(([id, path]) => ({
+    id: `kit-payload-${id}`,
+    describe: "Kit public API anonymous payloads",
+    testContains: `GET ${path}`,
+  })),
   {
     id: "kit-payload-events-past",
     describe: "Kit GET /events/past anonymous payload",

@@ -17,6 +17,7 @@ import {
   assertKitAttendanceDisabled,
   prepareAdminFixture,
 } from "./fixtures/kit-admin-serving.mjs";
+import { assertEventReadsParity } from "./fixtures/kit-event-reads-parity.mjs";
 import { assertStaticFeedParity } from "./fixtures/kit-static-feed-parity.mjs";
 import { expectedMarkerFor, kitHomeHeadingText } from "./kit-parity-gates.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
@@ -210,6 +211,38 @@ async function startWorker(name, main, assetsDirectory, sessionSecret, vars, liv
 // success quiet while a red check still shows the cause.
 let failed = false;
 try {
+  const textProbe = "/__fixture/static-text-parity";
+  const textEntry = join(scratch, "kit-static-text.mjs");
+  const textFixture = fileURLToPath(
+    new URL("./fixtures/kit-static-text-parity.mjs", import.meta.url),
+  );
+  await writeFile(
+    textEntry,
+    `import { withEnv } from "cloudflare:workers";
+import inner from ${JSON.stringify(worker)};
+import { assertStaticTextParity } from ${JSON.stringify(textFixture)};
+export default {
+  async fetch(request, env, ctx) {
+    if (new URL(request.url).pathname !== ${JSON.stringify(textProbe)})
+      return inner.fetch(request, env, ctx);
+    await assertStaticTextParity((input, overrides) => {
+      const bindings = { ...env, ...overrides };
+      return withEnv(bindings, () => inner.fetch(input, bindings, ctx));
+    });
+    return new Response(null, { status: 204 });
+  },
+};\n`,
+  );
+  const textWorker = await startWorker("kit-static-text", textEntry, assets, undefined, {
+    DATABASE_URL: undefined,
+  });
+  await listen(textWorker.child, textWorker.origin, () => textWorker.log);
+  const textResult = await fetch(`${textWorker.origin}${textProbe}`, {
+    signal: AbortSignal.timeout(20_000),
+  });
+  assert.equal(textResult.status, 204, "static text and vanity parity probes");
+  console.log("PASS Kit static text and vanity redirects with exact route and method boundaries");
+
   const kit = await startWorker("kit", worker, assets, undefined, undefined, args.length > 0);
   const hono = await startWorker("hono", join(repo, "src/worker.ts"), join(repo, "public"));
   const origin = kit.origin;
@@ -217,6 +250,36 @@ try {
     listen(kit.child, kit.origin, () => kit.log),
     listen(hono.child, hono.origin, () => hono.log),
   ]);
+
+  const opsEntry = join(scratch, "kit-ops.mjs");
+  const opsFixture = fileURLToPath(new URL("./fixtures/kit-ops-worker.mjs", import.meta.url));
+  const opsProbePath = "/__fixture/ops-parity";
+  await writeFile(
+    opsEntry,
+    `import inner from ${JSON.stringify(worker)};
+import { opsFixtureWorker } from ${JSON.stringify(opsFixture)};
+export default opsFixtureWorker(inner, ${JSON.stringify(opsProbePath)});\n`,
+  );
+  const ops = await startWorker("kit-ops", opsEntry, assets, FIXTURE_SECRETS.SESSION_SECRET, {
+    DATABASE_URL: undefined,
+  });
+  await listen(ops.child, ops.origin, () => ops.log);
+  const opsParity = await fetch(`${ops.origin}${opsProbePath}`, {
+    signal: AbortSignal.timeout(20_000),
+  });
+  assert.equal(opsParity.status, 200, "ops parity probes passed");
+  assert.deepEqual(await opsParity.json(), {
+    violations: 2,
+    malformed: 2,
+    oversized: 4,
+    failed: 0,
+    alerts: 1,
+    outbound: 0,
+    queued: 2,
+  });
+  console.log(
+    "PASS Kit ops ownership, health and version, CSP bounds and sampling, and alert admission",
+  );
 
   if (args.length) {
     const disabled = await fetch(`${origin}/internal/discord-live/v1/ingest`, {
@@ -901,21 +964,38 @@ export default {
   }
   console.log("PASS generated Worker reserved method/path parity with API families off");
 
+  async function startKit(name, vars) {
+    const instance = await startWorker(name, worker, assets, secret, vars);
+    await listen(instance.child, instance.origin, () => instance.log);
+    return instance;
+  }
+
+  const [eventJsonOn, publicApiOn] = await Promise.all([
+    startKit("kit-event-json-on", {
+      APP_URL: honoWithSession.origin,
+      KIT_ROUTE_FEEDS: "true",
+      KIT_ROUTE_EVENT_JSON: "true",
+      KIT_ROUTE_PUBLIC_API: "false",
+    }),
+    startKit("kit-public-api-on", {
+      APP_URL: honoWithSession.origin,
+      KIT_ROUTE_EVENT_JSON: "false",
+      KIT_ROUTE_PUBLIC_API: "true",
+    }),
+  ]);
+  await assertEventReadsParity({
+    hono: honoWithSession,
+    unset: kitWithSession,
+    eventJsonOn,
+    publicApiOn,
+    databaseUrl,
+  });
+
   await assertStaticFeedParity({
     hono: honoWithSession,
     kit: kitWithSession,
     databaseUrl,
-    startKit: async (name, vars) => {
-      const instance = await startWorker(
-        name,
-        worker,
-        assets,
-        FIXTURE_SECRETS.SESSION_SECRET,
-        vars,
-      );
-      await listen(instance.child, instance.origin, () => instance.log);
-      return instance;
-    },
+    startKit,
     startSecurityTxtPair: async () => {
       const appUrl = "https://policy.example.test";
       const [direct, enabled] = await Promise.all(
