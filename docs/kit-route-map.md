@@ -483,6 +483,11 @@ installed Kit ownership and installed Hono fallback. It checks no-JS success
 and refusals with synthetic drafts, and verifies that the committed event and
 its audit row are visible before the stubbed write-back queue receives the job.
 
+The separate `/admin/events/:key/edit` fixture enables the dormant Kit redirect for
+literal keys, checks the same query and moderator contract against direct Hono, and
+follows the redirect to the seeded Kit edit form. With the fixture switch off,
+encoded key spellings, or methods other than GET and HEAD, Hono handles the request.
+
 For API-5, it compares the disabled queue preview guard with the earlier
 source-evidence handler on Hono fallback. The two distinct JSON refusals
 confirm which branch answered before the moderator gate. Enabled queue preview

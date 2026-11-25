@@ -49,6 +49,7 @@ import { dbFor, type EnvWithAdminDb } from "./db";
 import { bufferedMemberHtml, bufferedMemberText } from "../member-reads";
 import { badRequest, prefersHtmlError, varyAccept } from "../errors";
 import { EVENT_PAGE_SIZE, parseEventListQuery } from "./event-list";
+import { eventEditUrl } from "./event-edit-url";
 import { eventKeyAllowed } from "../events/keys";
 import {
   ACTIVITY_LOG_PAGE_SIZE,
@@ -365,12 +366,7 @@ export function buildAdminApp(admit: MiddlewareHandler<Vars>) {
     legacyRedirect(c, "/admin/events/new", "events", "admin.events.legacy-create"),
   );
   admin.get("/events/:key/edit", (c) =>
-    legacyRedirect(
-      c,
-      `/admin/events/${encodeURIComponent(c.req.param("key"))}`,
-      "events",
-      "admin.events.legacy-edit",
-    ),
+    legacyRedirect(c, eventEditUrl(c.req.param("key")), "events", "admin.events.legacy-edit"),
   );
   admin.get("/featured-contents", (c) =>
     legacyRedirect(c, "/admin/featured", "featured_contents", "admin.featured.legacy-index"),

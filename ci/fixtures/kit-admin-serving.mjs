@@ -980,7 +980,106 @@ async function assertEventEditFallback({
   assert.deepEqual(await snapshot(), committed, "the stale save leaves the event and audit intact");
 }
 
-export async function assertKitAdminServing({ kit, nativeCreate, off, hono, databaseUrl }) {
+async function assertKitEventEditRedirectServing({
+  kit,
+  nativeEdit,
+  off,
+  hono,
+  cookie,
+  member,
+  eventPath,
+}) {
+  const alias = `${eventPath}/edit?ignored=1&ignored=2&next=%2F%2Fexample.invalid`;
+  for (const target of [kit, nativeEdit, off, hono]) {
+    const owned = target === nativeEdit;
+    for (const method of ["HEAD", "GET"]) {
+      const guest = await visit(target, alias, 302, { method, owned });
+      assert.equal(guest.headers.get("location"), "/auth/discord");
+      const intended = guest.headers.getSetCookie();
+      assert.equal(intended.length, 1);
+      assert.ok(intended[0].startsWith(`__Host-two_login_intended=${encodeURIComponent(alias)}.`));
+      const denied = await visit(target, alias, 403, {
+        method,
+        owned,
+        headers: { cookie: member },
+      });
+      assert.equal(denied.headers.get("location"), null);
+      assert.equal(denied.headers.getSetCookie().length, 0);
+    }
+    const moderator = await cookie();
+    const head = await visit(target, alias, 301, {
+      method: "HEAD",
+      owned,
+      headers: { cookie: moderator },
+    });
+    assert.equal(head.headers.get("location"), eventPath);
+    assert.equal(head.headers.getSetCookie().length, 0);
+    const redirect = await visit(target, alias, 301, { owned, headers: { cookie: moderator } });
+    assert.equal(redirect.headers.get("location"), eventPath);
+    assert.match(redirect.headers.get("content-type") ?? "", /^text\/plain\b/);
+    assert.equal(redirect.text, "");
+    assert.notEqual(renewedModerator(redirect.headers), moderator);
+    if (owned) {
+      const form = await visit(target, eventPath, 200, {
+        headers: { ...html, cookie: renewedModerator(redirect.headers) },
+      });
+      assert.match(form.text, /Edit Fixture admin draft/);
+    }
+  }
+
+  const unknown = "/admin/events/01J00000000000000000000000";
+  const encodedKey = eventPath.replace(
+    /\/([^/])([^/]*)$/,
+    (_segment, first, rest) => `/%${first.charCodeAt(0).toString(16)}${rest}`,
+  );
+  for (const target of [nativeEdit, hono]) {
+    const owned = target === nativeEdit;
+    const missing = await visit(target, `${unknown}/edit?ignored=1`, 301, {
+      owned,
+      headers: { cookie: await cookie() },
+    });
+    assert.equal(missing.headers.get("location"), unknown);
+    await visit(target, unknown, 404, {
+      owned,
+      headers: { cookie: renewedModerator(missing.headers) },
+    });
+    const encoded = "/admin/events/a%2Fb%3Fc%23d%25";
+    for (const [path, location] of [
+      [encoded, encoded],
+      [encodedKey, eventPath],
+    ]) {
+      const redirect = await visit(target, `${path}/edit?ignored=1`, 301, {
+        owned: false,
+        headers: { cookie: await cookie() },
+      });
+      assert.equal(redirect.headers.get("location"), location);
+    }
+    for (const path of [`${eventPath}/edit/`, `${eventPath}/edit/__data.json`]) {
+      const fallback = await visit(target, path, 302, { owned: false });
+      assert.equal(fallback.headers.get("location"), "/auth/discord");
+    }
+    const moderator = await cookie();
+    for (const method of ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
+      const fallback = await visit(target, alias, 404, {
+        method,
+        owned: false,
+        headers: { cookie: moderator },
+      });
+      assert.equal(fallback.headers.get("location"), null);
+      assert.equal(fallback.headers.getSetCookie().length, 0);
+    }
+  }
+  console.log("PASS installed Worker legacy event edit redirect with Kit ownership off and on");
+}
+
+export async function assertKitAdminServing({
+  kit,
+  nativeCreate,
+  nativeEdit,
+  off,
+  hono,
+  databaseUrl,
+}) {
   await assertActivityLogReadParity({ kit, off, databaseUrl });
   const actor = 900000000000000000n + BigInt(`0x${randomBytes(7).toString("hex")}`);
   const moderatorId = String(actor);
@@ -1275,6 +1374,16 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
     });
 
     await assertAdminPublish({ kit, off, hono, sql, moderatorId, member });
+
+    await assertKitEventEditRedirectServing({
+      kit,
+      nativeEdit,
+      off,
+      hono,
+      cookie: () => session(sql, moderatorId, true),
+      member,
+      eventPath,
+    });
   } finally {
     try {
       // Audit rows are append-only and are isolated by the synthetic actor.

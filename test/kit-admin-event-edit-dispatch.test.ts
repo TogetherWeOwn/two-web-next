@@ -11,6 +11,7 @@
 // the real declaration instead of a copy.
 import { describe, expect, it, vi, afterEach } from "vitest";
 import type { AccessEntry } from "../src/access-log";
+import { eventEditUrl } from "../src/admin/event-edit-url";
 import type { KitLocals } from "../src/kit-session";
 import { declareMemberResult, keyedMemberRead, memberQueryPermit } from "../src/member-reads";
 import {
@@ -22,6 +23,8 @@ import {
   type HookEventLike,
   type OwnedRoute,
 } from "../src/route-ownership";
+import { STAGING_APP_URL } from "../src/qa";
+import { env as fixtureEnv } from "./helpers/member-data";
 
 const APP_URL = "https://next.example.test";
 const MOD_ID = "100000000000000111";
@@ -153,19 +156,6 @@ describe("Kit admin event-edit dispatch: privileged boundary releases and routin
     }
   });
 
-  it("GET /admin/events/:key/edit legacy alias stays Hono-owned and drops no marker", async () => {
-    const request = new Request(`${APP_URL}/admin/events/EVT1/edit`, {
-      method: "GET",
-      headers: { host: "next.example.test" },
-    });
-    const res = await dispatchHookRequest(
-      { request, url: new URL(request.url), route: { id: "/admin/events/[key]" } },
-      depsFor(),
-    );
-    expect(await res.text()).toBe("hono");
-    expect(res.headers.get(KIT_RENDERER_HEADER)).toBeNull();
-  });
-
   it("the legacy /admin/events/create bookmark stays Hono-owned once :key is enabled", async () => {
     const shippedCreate = ROUTE_MANIFEST.find(
       (e) => e.method === "GET" && e.path === "/admin/events/create",
@@ -187,6 +177,16 @@ describe("Kit admin event-edit dispatch: privileged boundary releases and routin
     );
     expect(honoFetch).toHaveBeenCalledOnce();
     expect(resolve).not.toHaveBeenCalled();
+    expect(await res.text()).toBe("hono");
+    expect(res.headers.get(KIT_RENDERER_HEADER)).toBeNull();
+  });
+
+  it("the event edit alias is Hono-owned in the shipped manifest", async () => {
+    const request = new Request(`${APP_URL}/admin/events/EVT1/edit`);
+    const res = await dispatchHookRequest(
+      { request, url: new URL(request.url), route: { id: "/admin/events/[key]/edit" } },
+      depsFor({ manifest: ROUTE_MANIFEST }),
+    );
     expect(await res.text()).toBe("hono");
     expect(res.headers.get(KIT_RENDERER_HEADER)).toBeNull();
   });
@@ -230,5 +230,111 @@ describe("Kit admin event-edit dispatch: privileged boundary releases and routin
     const body = await res.text();
     expect(body).toBe(REFUSAL);
     expect(body).not.toContain("rsvp-roster");
+  });
+});
+
+describe("legacy event edit alias dispatch", () => {
+  const loopback = "http://127.0.0.1:8787";
+  const alias = "/admin/events/EVT1/edit?next=%2Felsewhere";
+  const routeId = "/admin/events/[key]/edit";
+
+  function dispatchAlias({
+    appUrl = loopback,
+    path = alias,
+    method = "GET",
+    adminFlag = "true",
+    fixtureFlag = "true",
+    manifest = ROUTE_MANIFEST,
+    id = routeId,
+    isDataRequest = false,
+    locals = localsFor("authenticated", MOD_ID),
+  } = {}) {
+    const request = new Request(appUrl + path, { method });
+    const event = { request, url: new URL(request.url), route: { id }, isDataRequest };
+    const resolve = vi.fn(
+      async () => new Response(null, { status: 301, headers: { location: eventEditUrl("EVT1") } }),
+    );
+    const accessSink = vi.fn(async () => null);
+    const adminRenewalFor = vi.fn(async () => null);
+    const sessionFor = vi.fn(async () => locals);
+    const honoFetch = vi.fn(async () => new Response("hono"));
+    const response = dispatchHookRequest(event, {
+      appUrl,
+      manifest,
+      admin: {
+        env: {
+          ...fixtureEnv,
+          APP_URL: appUrl,
+          KIT_ROUTE_ADMIN: adminFlag,
+          KIT_PARITY_FIXTURE_ADMIN_EVENT_EDIT_REDIRECT: fixtureFlag,
+        },
+        completeForm: () => {
+          throw new Error("unexpected form submission");
+        },
+      },
+      resolve,
+      honoFetch,
+      sessionFor,
+      accessSink,
+      adminRenewalFor,
+    });
+    return { response, request, resolve, honoFetch, sessionFor, accessSink, adminRenewalFor };
+  }
+
+  it.each(["GET", "HEAD"])("releases an admitted %s without a subject read", async (method) => {
+    const result = dispatchAlias({ method });
+    const response = await result.response;
+    expect(response.status).toBe(301);
+    expect(response.headers.get("location")).toBe("/admin/events/EVT1");
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(await response.text()).toBe("");
+    expect(result.sessionFor).toHaveBeenCalledOnce();
+    expect(result.resolve).toHaveBeenCalledOnce();
+    expect(result.adminRenewalFor).toHaveBeenCalledTimes(method === "GET" ? 1 : 0);
+    expect(result.accessSink).not.toHaveBeenCalled();
+    expect(result.honoFetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [localsFor("guest"), 302],
+    [localsFor("authenticated", SUBJECT), 403],
+    [localsFor("unknown"), 503],
+  ] as const)(
+    "refuses an unadmitted viewer with %s / %i before resolving",
+    async (locals, status) => {
+      const result = dispatchAlias({ locals });
+      const response = await result.response;
+      expect(response.status).toBe(status);
+      expect(response.headers.get("location")).toBe(status === 302 ? "/auth/discord" : null);
+      expect(result.resolve).not.toHaveBeenCalled();
+      expect(result.adminRenewalFor).not.toHaveBeenCalled();
+      expect(result.honoFetch).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["fixture off", { fixtureFlag: "false" }],
+    ["admin off", { adminFlag: "false" }],
+    ["deployed origin", { appUrl: STAGING_APP_URL }],
+    ["wrong mounted endpoint", { id: "/admin/[...action]" }],
+    ["data request", { isDataRequest: true }],
+    ["encoded key", { path: "/admin/events/EV%54/edit" }],
+    ["malformed key", { path: "/admin/events/%ZZ/edit" }],
+    ["POST", { method: "POST" }],
+    [
+      "unadmitted manifest entry",
+      {
+        adminFlag: "false",
+        manifest: ROUTE_MANIFEST.map((entry) =>
+          entry.path === "/admin/events/:key/edit" ? { ...entry, enabled: true } : entry,
+        ),
+      },
+    ],
+  ] as const)("hands the original request to Hono for %s", async (_label, options) => {
+    const result = dispatchAlias(options);
+    expect(await (await result.response).text()).toBe("hono");
+    expect(result.honoFetch).toHaveBeenCalledExactlyOnceWith(result.request);
+    expect(result.sessionFor).not.toHaveBeenCalled();
+    expect(result.resolve).not.toHaveBeenCalled();
   });
 });

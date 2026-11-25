@@ -1021,14 +1021,19 @@ export default {
       ...vars,
       KIT_PARITY_FIXTURE_ADMIN_EVENT_CREATE_REDIRECT: "true",
     });
+    const nativeEdit = await startWorker("kit-admin-native-edit", worker, assets, secret, {
+      KIT_ROUTE_ADMIN: "true",
+      KIT_PARITY_FIXTURE_ADMIN_EVENT_EDIT_REDIRECT: "true",
+    });
     await Promise.all(
-      [admin, nativeCreate].map((instance) =>
+      [admin, nativeCreate, nativeEdit].map((instance) =>
         listen(instance.child, instance.origin, () => instance.log),
       ),
     );
     await assertKitAdminServing({
       kit: admin,
       nativeCreate,
+      nativeEdit,
       off: kitWithSession,
       hono: honoWithSession,
       databaseUrl,
