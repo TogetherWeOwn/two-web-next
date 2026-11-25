@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -259,6 +259,15 @@ test("database repair recovery pins an unchanged dispatcher and a main ancestor"
   assert.deepEqual(compare(changedSelector).changedRecoveryPaths, [selector]);
 
   git("checkout", "--detach", tip);
+  chmodSync(join(cwd, selector), 0o755);
+  git("update-index", "--chmod=+x", selector);
+  git("commit", "-qm", "made selector executable");
+  const executableSelector = git("rev-parse", "HEAD");
+  const executable = compare(executableSelector, executableSelector);
+  assert.equal(executable.undo, "Revision check matches");
+  assert.deepEqual(executable.unavailableDispatchPaths, []);
+
+  git("checkout", "--detach", tip);
   git("rm", selector);
   git("commit", "-qm", "removed selector");
   const removedSelector = git("rev-parse", "HEAD");
@@ -271,6 +280,17 @@ test("database repair recovery pins an unchanged dispatcher and a main ancestor"
   assert.equal(stillMissing.forward, "Workflow or selector unavailable at dispatch");
   assert.equal(stillMissing.undo, removed.undo);
   assert.deepEqual(stillMissing.changedRecoveryPaths, []);
+
+  const nestedPath = `${selector}/placeholder`;
+  write(nestedPath, "A directory cannot serve as the selector.\n");
+  git("add", nestedPath);
+  git("commit", "-qm", "replaced selector with a directory");
+  const directorySelector = git("rev-parse", "HEAD");
+  assert.deepEqual(select(repair, "undo", directorySelector, approved), [1, directorySelector]);
+  const directory = compare(directorySelector);
+  assert.equal(directory.undo, removed.undo);
+  assert.deepEqual(directory.unavailableDispatchPaths, [selector]);
+  assert.ok(directory.changedPaths.includes(nestedPath));
 });
 
 test("repair refuses missing plan provenance and stale live identity before a write", async () => {

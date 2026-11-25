@@ -17,18 +17,19 @@ function report(approved, dispatch) {
     }
   }
   git("merge-base", "--is-ancestor", approved, dispatch);
-  const dispatchEntries = git(
+  const availableDispatchPaths = git(
     "ls-tree",
     "--full-tree",
-    "--format=%(objectmode)%x09%(path)",
     "-z",
     dispatch,
     "--",
     ...recoveryPaths,
-  ).split("\0");
+  )
+    .split("\0")
+    .filter((entry) => /^100(?:644|755) blob /.test(entry))
+    .map((entry) => entry.slice(entry.indexOf("\t") + 1));
   const unavailableDispatchPaths = recoveryPaths.filter(
-    (path) =>
-      !dispatchEntries.includes(`100644\t${path}`) && !dispatchEntries.includes(`100755\t${path}`),
+    (path) => !availableDispatchPaths.includes(path),
   );
   const changedPaths = git(
     "diff",
