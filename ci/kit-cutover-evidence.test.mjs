@@ -872,6 +872,31 @@ test("isolated cutover refuses a healthy smoke response from the wrong Worker ve
   assert.ok(requests.every(({ override }) => override === undefined));
 });
 
+test("isolated cutover propagates a smoke rejection after a route callback", async () => {
+  const origin = "https://cutover.example.invalid";
+  const prefixes = ledgerPrefixes(ledgerJournal);
+  const ready = {
+    db: "ok",
+    pending_migrations: 0,
+    migration_ledger: prefixes["1037"],
+    revision: { version_id: kit, commit: sourceSha },
+  };
+  const failure = new Error("synthetic smoke adapter failure");
+  const verify = (complete) =>
+    verifyServed(origin, prefixes, identity, kit, "1037", "kit", {
+      probeReady: async (_origin, ledger, expected) => verifyReady(200, ready, ledger, expected),
+      probeRoutes: async (_origin, { onRoute }) => {
+        onRoute("/up", 0);
+        if (!complete) throw failure;
+        return true;
+      },
+      wait: async () => assert.fail("unexpected retry after smoke adapter rejection"),
+    });
+
+  await assert.rejects(verify(false), (error) => error === failure);
+  assert.equal(await verify(true), 1);
+});
+
 test("isolated cutover proof requires both exact versions and six healthy transitions", () => {
   const checks = LEDGER_STATES.flatMap((state) =>
     ["hono", "kit", "undo"].map((step) => ({
