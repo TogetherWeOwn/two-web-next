@@ -226,6 +226,12 @@ export async function verifyEmberCutoverJourney({
     context.setDefaultTimeout(10_000);
 
     const page = await context.newPage();
+    for (const refusedUrl of ["/join/discord", "http://ember-foreign.invalid/events"]) {
+      const response = await page.goto(refusedUrl);
+      assert.equal(response?.status(), 403, `browser proxy refuses ${refusedUrl}`);
+      assert.equal(await response.headerValue("location"), null);
+    }
+    console.log("PASS Ember browser proxy refused OAuth start and a foreign origin");
     await guestJourney(page, "kit");
     console.log(
       "PASS installed Ember browser: Home to Events to Join and frozen directory recovery",
