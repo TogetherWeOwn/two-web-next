@@ -25,6 +25,7 @@ const profilePath = `/members/${owner}`;
 const base = "Synthetic saved profile";
 const draft = "Synthetic rejected draft <example>";
 const updated = "Synthetic native-form save";
+const fallbackBio = "Synthetic fallback form save";
 const viewports = [
   { width: 1280, height: 800 },
   { width: 390, height: 844 },
@@ -67,21 +68,21 @@ async function envelope(response) {
   };
 }
 
-async function nativeForm(origin, cookie) {
+async function nativeForm({ kit, off, cookie, moderatorCookie, readProfile }) {
   const directory = process.env.KIT_PROFILE_WRITE_EVIDENCE_DIR;
   if (directory) await mkdir(directory, { recursive: true });
   const browser = await chromium.launch();
   try {
     const context = await browser.newContext({ javaScriptEnabled: false });
     await context.route("**/*", (route) =>
-      new URL(route.request().url()).origin === origin ? route.continue() : route.abort(),
+      [kit, off].includes(new URL(route.request().url()).origin) ? route.continue() : route.abort(),
     );
     const [name, value] = cookie.split(/=(.*)/s);
     await context.addCookies([
       {
         name,
         value,
-        domain: new URL(origin).hostname,
+        domain: new URL(kit).hostname,
         path: "/",
         secure: true,
         httpOnly: true,
@@ -93,11 +94,11 @@ async function nativeForm(origin, cookie) {
     const bio = page.locator("#profile-bio");
     const timezone = page.locator("#profile-timezone");
     const hide = page.locator("#profile-leaderboard-opt-out");
-    const submit = async () => {
+    const form = page.getByTestId("profile-form");
+    const submit = async (origin) => {
       const pending = page.waitForResponse(
         (response) =>
-          response.request().method() === "POST" &&
-          new URL(response.url()).pathname === profilePath,
+          response.request().method() === "POST" && response.url() === origin + profilePath,
       );
       await page.getByTestId("profile-save").click();
       return pending;
@@ -106,7 +107,7 @@ async function nativeForm(origin, cookie) {
       await bio.fill(draft);
       await timezone.fill("Not/AZone");
       await hide.check();
-      const invalid = await submit();
+      const invalid = await submit(kit);
       assert.equal(invalid.status(), 422);
       assert.equal(invalid.headers()["x-two-renderer"], "kit");
       assert.equal(invalid.headers()["cache-control"], "private, no-store");
@@ -125,11 +126,31 @@ async function nativeForm(origin, cookie) {
         }
       }
     };
+    const waitForFill = async () => {
+      // Workerd and the fixture share the runner clock. Wait outside the no-JS browser.
+      const opened = Number(await form.locator(`[name="${PROFILE_OPENED_AT_FIELD}"]`).inputValue());
+      const now = Date.now();
+      assert.ok(Number.isSafeInteger(opened) && opened > 0 && opened <= now);
+      await delay(Math.max(0, opened + PROFILE_MIN_FILL_MS - now + 1));
+    };
+    const assertSaved = async (expectedBio) => {
+      const row = await readProfile();
+      const { bio, games, timezone, leaderboard_opt_out } = row;
+      assert.deepEqual(
+        { bio, games, timezone, leaderboard_opt_out },
+        {
+          bio: expectedBio,
+          games: ["Chess", "Go"],
+          timezone: "Europe/London",
+          leaderboard_opt_out: true,
+        },
+      );
+      return row;
+    };
 
-    const get = await page.goto(origin + profilePath);
+    const get = await page.goto(kit + profilePath);
     assert.equal(get.status(), 200);
     assert.equal(get.headers()["x-two-renderer"], undefined);
-    const form = page.getByTestId("profile-form");
     assert.equal(await form.getAttribute("action"), profilePath);
     assert.equal(await form.locator('[name="_method"]').inputValue(), "PATCH");
     assert.equal(await bio.inputValue(), base);
@@ -165,12 +186,8 @@ async function nativeForm(origin, cookie) {
     await bio.fill(updated);
     await timezone.fill("Europe/London");
     await page.locator("#profile-games-text").fill("Chess\nGo\nChess");
-    // Workerd and the fixture share the runner clock. Wait outside the no-JS browser.
-    const opened = Number(await form.locator(`[name="${PROFILE_OPENED_AT_FIELD}"]`).inputValue());
-    const now = Date.now();
-    assert.ok(Number.isSafeInteger(opened) && opened > 0 && opened <= now);
-    await delay(Math.max(0, opened + PROFILE_MIN_FILL_MS - now + 1));
-    const accepted = await submit();
+    await waitForFill();
+    const accepted = await submit(kit);
     assert.equal(accepted.status(), 303);
     assert.equal(accepted.headers()["x-two-renderer"], "kit");
     assert.equal(accepted.headers().location, profilePath);
@@ -179,6 +196,49 @@ async function nativeForm(origin, cookie) {
     assert.equal(await bio.inputValue(), updated);
     assert.equal(await hide.isChecked(), true);
     await capture("saved");
+    await assertSaved(updated);
+
+    // Both Workers share a loopback hostname. Keep the context's live bearer
+    // through document rotations as the browser moves to the flag-off Worker.
+    const fallbackPage = await page.goto(off + profilePath);
+    assert.equal(fallbackPage.status(), 200);
+    assert.equal(fallbackPage.headers()["x-two-renderer"], undefined);
+    assert.equal(await bio.inputValue(), updated);
+    assert.equal(await timezone.inputValue(), "Europe/London");
+    assert.equal(await hide.isChecked(), true);
+    await bio.fill(fallbackBio);
+    await waitForFill();
+    const fallback = await submit(off);
+    assert.equal(fallback.status(), 303);
+    assert.equal(fallback.headers()["x-two-renderer"], undefined);
+    assert.equal(fallback.headers().location, profilePath);
+    await page.waitForLoadState("load");
+    assert.equal(page.url(), off + profilePath);
+    assert.equal(
+      await page.getByTestId("profile-edit").getAttribute("data-saved-bio"),
+      fallbackBio,
+    );
+    const beforeDenial = await assertSaved(fallbackBio);
+
+    const fallbackBody = fallback.request().postData();
+    assert.ok(fallbackBody, "the fallback submitted a native form body");
+    const deniedForm = new URLSearchParams(fallbackBody);
+    deniedForm.set("bio", "Synthetic denied fallback draft");
+    const denied = await send(off, profilePath, {
+      method: "POST",
+      body: deniedForm,
+      headers: { accept: "text/html" },
+      cookie: moderatorCookie,
+    });
+    assert.equal(denied.status, 403);
+    assert.equal(denied.headers.get("x-two-renderer"), null);
+    assert.equal(denied.headers.get("location"), null);
+    assert.equal(denied.headers.get("vary"), "Accept");
+    await denied.body.cancel();
+    assert.deepEqual(await readProfile(), beforeDenial);
+    console.log(
+      "PASS installed Kit native profile save, same-session Hono fallback and write denial",
+    );
   } finally {
     await browser.close();
   }
@@ -187,6 +247,11 @@ async function nativeForm(origin, cookie) {
 /** The calling runner checks the disposable database URL and starts loopback Workers. */
 export async function assertKitProfileWriteParity({ kit, off, hono, databaseUrl, secret }) {
   const sql = postgres(databaseUrl, { max: 1 });
+  async function readProfile() {
+    // The row version detects an update even if it would leave the same values.
+    const [row] = await sql`select *, xmin::text as version from profiles where user_id = ${owner}`;
+    return row;
+  }
   async function session(id, { member = true, mod = false } = {}) {
     const token = `two_${randomBytes(32).toString("base64url")}`;
     const hash = createHash("sha256").update(token).digest("hex");
@@ -324,19 +389,10 @@ export async function assertKitProfileWriteParity({ kit, off, hono, databaseUrl,
       }
     }
 
-    await nativeForm(kit, cookie);
+    await nativeForm({ kit, off, cookie, moderatorCookie, readProfile });
     // Document navigation rotates the browser's bearer. Issue a fresh token
     // for the independent PATCH probe so it cannot rely on predecessor grace.
     const patchCookie = await session(owner);
-    const [native] = await sql`
-      select bio, games, timezone, leaderboard_opt_out from profiles where user_id = ${owner}`;
-    assert.deepEqual(native, {
-      bio: updated,
-      games: ["Chess", "Go"],
-      timezone: "Europe/London",
-      leaderboard_opt_out: true,
-    });
-
     const patch = {
       bio: "Synthetic island save",
       games_text: "Go\r\nGo",
