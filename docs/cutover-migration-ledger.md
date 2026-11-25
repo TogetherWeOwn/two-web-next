@@ -144,9 +144,9 @@ version, approvals and watch results.
    [migration Environment](runbook.md#neon-web-schema-migrations-separate-operator-action).
    Pin `1034_event-echoes`, `1035_bot-reconciliation-intents`,
    `1036_event-sync-claim-started` and `1037_waitlist-offers` in that order.
-   Verify the 38-entry
-   canonical ledger and keep `1038_announcement-send-claims` deferred for this
-   cutover. Finish the migration watch.
+   Record the `verify-scope` result for the 38-entry canonical ledger and
+   keep `1038_announcement-send-claims` deferred for this cutover. Finish the
+   migration watch.
 4. **Keep recovery tied to the observed prefix.** For the schema advance, use
    a fresh PlanetScale backup restored to an isolated temporary branch. Verify
    the ordered ledger and affected objects at the real access levels, rehearse
@@ -167,7 +167,8 @@ version, approvals and watch results.
    before running the separate projection inverse. Use the
    [migration recovery procedure](runbook.md#migration-rollback-and-recovery)
    for uncertain schema commits or schema regression. The grant inverse leaves
-   the applied schema in place.
+   the applied schema in place. After undo at `1037`, re-isolation requires a
+   separately reviewed operation because `forward` only admits `1033`.
 5. **Hand off explicitly to the Ember release.** After the repair, isolation
    and migration watches pass, pass along the observed `1037` ledger and `1038`
    deferral, healthy `/up`, effective access results, database recovery receipts,
