@@ -162,7 +162,12 @@ function databaseUrl() {
   );
 }
 
-async function cleanup({ claim, worker, names }, api, database) {
+export async function cleanup(
+  { claim, worker, names },
+  api,
+  database,
+  removeDatabase = removeFixture,
+) {
   const marker = await readFile(claim, "utf8").catch((error) => {
     if (error.code === "ENOENT") return null;
     throw error;
@@ -176,7 +181,7 @@ async function cleanup({ claim, worker, names }, api, database) {
       assert.equal(await api(`${target}/settings`), null, "isolated Worker cleanup failed");
     }
   } finally {
-    await removeFixture(database, names);
+    await removeDatabase(database, names);
   }
   await rm(claim);
 }
@@ -278,7 +283,7 @@ async function exercise(proof, prefixes, owner, names, origin, dir, secrets) {
 }
 
 async function qualify(dir, proofPath, ctx) {
-  const { identity, worker, names, claim } = ctx;
+  const { identity, worker } = ctx;
   const inputs = await sourceInputs();
   await verifyPackage(dir, identity, inputs);
   const prefixes = ledgerPrefixes(inputs.journal);
@@ -288,7 +293,33 @@ async function qualify(dir, proofPath, ctx) {
   assert.match(subdomain ?? "", /^[a-z0-9][a-z0-9-]{0,62}$/);
   const origin = `https://${worker}.${subdomain}.workers.dev`;
   assert.equal(await api(`scripts/${worker}/settings`), null, "isolated script already exists");
-  const scratch = await mkdtemp(join(process.env.RUNNER_TEMP, "kit-cutover-staging-"));
+  await rehearseIsolatedCutover(
+    dir,
+    proofPath,
+    ctx,
+    {
+      inputs,
+      prefixes,
+      database,
+      api,
+      origin,
+      runnerTemp: process.env.RUNNER_TEMP,
+      profile: cutoverProfile,
+    },
+    { allocate: createFixture, advance: advanceFixture, deploy: deployPacket, runChecks: exercise },
+  );
+}
+
+export async function rehearseIsolatedCutover(
+  dir,
+  proofPath,
+  { identity, worker, names, claim },
+  { inputs, prefixes, database, api, origin, runnerTemp, profile },
+  { allocate, advance, deploy, runChecks },
+) {
+  const admin = profile === "admin";
+  const baseline = admin ? "ember" : "hono";
+  const scratch = await mkdtemp(join(runnerTemp, "kit-cutover-staging-"));
   const proof = {
     schema: 1,
     identity,
@@ -296,25 +327,25 @@ async function qualify(dir, proofPath, ctx) {
     configs: {},
     checks: [],
     kitReadinessSamples: 0,
-    bindingCheck: `isolated-and-${cutoverProfile}`,
+    bindingCheck: `isolated-and-${profile}`,
   };
   let owner;
   let phase = "synthetic database setup";
   try {
-    const fixture = await createFixture(database, names, () =>
+    const fixture = await allocate(database, names, () =>
       writeFile(claim, worker, { flag: "wx", mode: 0o600 }),
     );
     owner = fixture.owner;
-    await advanceFixture(owner, prefixes[admin ? "1037" : "1033"], names.login);
+    await advance(owner, prefixes[admin ? "1037" : "1033"], names.login);
     const secrets = {
       runtimeUrl: fixture.runtimeUrl,
       SESSION_SECRET: randomUUID(),
       ...(admin ? { OPS_CONTROL_TOKEN: randomUUID() } : {}),
     };
     phase = "same-script staged uploads";
-    await deployPacket(dir, scratch, proof, origin, inputs, api, secrets);
+    await deploy(dir, scratch, proof, origin, inputs, api, secrets);
     phase = "exact readiness, route smoke and guarded undo";
-    await exercise(proof, prefixes, owner, names, origin, dir, secrets);
+    await runChecks(proof, prefixes, owner, names, origin, dir, secrets);
   } catch (error) {
     // Report only the operation and numeric provider code from Wrangler.
     const detail = error instanceof WranglerOperationError ? ` (${error.message})` : "";
@@ -323,10 +354,10 @@ async function qualify(dir, proofPath, ctx) {
     await owner?.end({ timeout: 0 });
     await rm(scratch, { recursive: true, force: true });
   }
-  verifyStagingProof(proof, { ...identity, mode: admin ? "admin" : ember ? "ember" : "kit" });
+  verifyStagingProof(proof, { ...identity, mode: profile === "all-off" ? "kit" : profile });
   await writeFile(proofPath, JSON.stringify(proof), { flag: "wx" });
   console.info(
-    `Isolated ${cutoverProfile} pin ${identity.runId}:${identity.runAttempt}:${identity.digest}, baseline ${proof[baseline]}, candidate ${proof.kit}`,
+    `Isolated ${profile} pin ${identity.runId}:${identity.runAttempt}:${identity.digest}, baseline ${proof[baseline]}, candidate ${proof.kit}`,
   );
 }
 

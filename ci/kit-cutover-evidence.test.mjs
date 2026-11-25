@@ -16,6 +16,7 @@ import {
   writeManifest,
 } from "./kit-cutover-evidence.mjs";
 import { verifyServed } from "./kit-cutover-staging.mjs";
+import "./fixtures/kit-cutover-cleanup.mjs";
 
 const sourceSha = "a".repeat(40);
 const digest = "b".repeat(64);
