@@ -16,6 +16,7 @@ const ssr = ({
   dynamicImports = [],
 } = {}) => ({
   "index.js": {
+    fileName: "index.js",
     type: "chunk",
     isEntry: true,
     modules: Object.fromEntries(modules.map((id) => [id, {}])),
@@ -23,6 +24,20 @@ const ssr = ({
     dynamicImports,
   },
 });
+const chunk = (fileName, modules, options) => ({
+  ...ssr({ modules, ...options })["index.js"],
+  fileName,
+  isEntry: false,
+});
+const noModuleInfo = () => null;
+const emptyRemoval = { chunks: [], entrypoints: [], lazyChunks: [], units: [] };
+const flatDependencies = (bundle) => inspectSsrBundle(bundle, noModuleInfo, []).honoDependencies;
+const finding = (dependency, entrypoints, unowned = false) => ({
+  dependency,
+  entrypoints,
+  unowned,
+});
+const foundIn = (file, ...dependencies) => ({ file, dependencies });
 
 const mounted = (id, pattern, api = [], page = []) => ({
   id,
@@ -44,6 +59,7 @@ test("finds bundled and external Hono modules, including lazy SSR chunks", () =>
       modules: [source("src/index.tsx"), source("src/route-ownership.ts")],
     }),
     "chunks/lazy.js": {
+      fileName: "chunks/lazy.js",
       type: "chunk",
       modules: {
         [source("node_modules/.pnpm/hono@1/node_modules/hono/dist/index.js?commonjs")]: {},
@@ -54,7 +70,7 @@ test("finds bundled and external Hono modules, including lazy SSR chunks", () =>
       dynamicImports: ["hono/jsx"],
     },
   };
-  assert.deepEqual(inspectSsrBundle(bundle), [
+  assert.deepEqual(flatDependencies(bundle), [
     "hono/cookie",
     "hono/dist/index.js",
     "hono/jsx",
@@ -62,9 +78,119 @@ test("finds bundled and external Hono modules, including lazy SSR chunks", () =>
     "src/route-ownership.ts",
     "web/src/lib/server/hono.ts",
   ]);
-  assert.deepEqual(inspectSsrBundle(ssr()), []);
-  assert.throws(() => inspectSsrBundle({}), /missing Kit SSR entry/);
-  assert.throws(() => inspectSsrBundle(ssr({ modules: [] })), /empty Kit SSR module graph/);
+  assert.deepEqual(inspectSsrBundle(ssr(), noModuleInfo, []), {
+    honoDependencies: [],
+    honoRemoval: emptyRemoval,
+  });
+  assert.throws(() => flatDependencies({}), /missing Kit SSR entry/);
+  assert.throws(() => flatDependencies(ssr({ modules: [] })), /empty Kit SSR module graph/);
+});
+
+test("joins shared and lazy SSR imports to exact route and fallback removal units", () => {
+  const ops = "web/src/routes/up/+server.ts";
+  const page = "web/src/routes/profile/+page.svelte";
+  const pageLoad = "web/src/routes/profile/+page.server.ts";
+  const helper = "web/src/lib/server/shared.ts";
+  const hook = "web/src/hooks.server.ts";
+  const bridge = "web/src/lib/server/hono.ts";
+  const fallback = "web/src/routes/[...path]/+server.ts";
+  const legacyApp = "src/index.tsx";
+  const ownership = "src/route-ownership.ts";
+  const context = "hono/dist/context.js";
+  const packageModule = `node_modules/${context}`;
+  const sharedModules = [helper, fallback, bridge, legacyApp, ownership, packageModule];
+  const imports = (from, to) => [source(from), { importedIds: [source(to)] }];
+  const graph = new Map([
+    imports(ops, helper),
+    imports(pageLoad, helper),
+    imports(helper, packageModule),
+    imports(fallback, bridge),
+    imports(bridge, legacyApp),
+    imports(legacyApp, packageModule),
+    [
+      source(hook),
+      { importedIds: [source(bridge), source(ownership)], dynamicallyImportedIds: [source(ops)] },
+    ],
+  ]);
+  const bundle = {
+    ...ssr({
+      modules: [source(hook), source(pageLoad)],
+      imports: ["shared.js"],
+      dynamicImports: ["up.js"],
+    }),
+    "up.js": chunk("up.js", [source(ops)], { imports: ["shared.js"] }),
+    "shared.js": chunk("shared.js", sharedModules.map(source)),
+  };
+  const rows = [
+    { ...registration("GET", "/up", "/up/+server.ts"), family: "ops", slice: "API-3" },
+    { ...registration("GET", "/up-alias", "/up/+server.ts"), family: "ops", slice: "API-3" },
+    { ...registration("GET", "/profile", "/profile/+page.svelte"), owner: "Page owner" },
+  ];
+  const { honoRemoval } = inspectSsrBundle(bundle, (id) => graph.get(id), rows);
+  const api10 = (target) => ({ target, slice: "API-10", registrations: [] });
+  const opsRoute = (route) => ({ route, family: "ops", slice: "API-3", owner: null });
+  assert.deepEqual(honoRemoval, {
+    chunks: [
+      foundIn(
+        "shared.js",
+        finding(context, [bridge, helper]),
+        finding(legacyApp, [bridge]),
+        finding(ownership, [hook]),
+        finding(bridge, [bridge]),
+        finding(fallback, [fallback]),
+      ),
+    ],
+    entrypoints: [
+      { source: hook, targets: [], unownedImporters: [hook] },
+      { source: bridge, targets: [hook, fallback], unownedImporters: [] },
+      { source: helper, targets: [page, ops], unownedImporters: [] },
+      { source: fallback, targets: [fallback], unownedImporters: [] },
+    ],
+    lazyChunks: [{ file: "up.js", importers: ["index.js"], dependencyFiles: ["shared.js"] }],
+    units: [
+      api10(hook),
+      api10(fallback),
+      {
+        target: page,
+        registrations: [{ route: "GET /profile", family: null, slice: null, owner: "Page owner" }],
+      },
+      { target: ops, registrations: [opsRoute("GET /up"), opsRoute("GET /up-alias")] },
+    ],
+  });
+});
+
+test("keeps unmapped importers and missing edges visible beside known owners", () => {
+  const page = "web/src/routes/profile/+page.svelte";
+  const unmapped = "web/src/routes/profile/+server.ts";
+  const helper = "web/src/lib/server/profile-helper.ts";
+  const context = source("node_modules/hono/dist/context.js");
+  const legacy = source("src/legacy.ts");
+  const graph = new Map([
+    [source(page), { importedIds: [source(helper)] }],
+    [source(unmapped), { importedIds: [source(helper)] }],
+    [source(helper), { dynamicallyImportedIds: ["hono/cookie", context] }],
+    [legacy, { importedIds: [context] }],
+  ]);
+  const bundle = {
+    ...ssr({
+      modules: [source(page), source(helper), source(unmapped)],
+      dynamicImports: ["lazy.js", "hono/cookie"],
+    }),
+    "lazy.js": chunk("lazy.js", [context, legacy], { imports: ["hono/cookie"] }),
+  };
+  const rows = [registration("GET", "/profile", "/profile/+page.svelte")];
+  const { honoRemoval } = inspectSsrBundle(bundle, (id) => graph.get(id), rows);
+  assert.deepEqual(honoRemoval.entrypoints, [
+    { source: helper, targets: [page], unownedImporters: [unmapped] },
+  ]);
+  assert.deepEqual(honoRemoval.chunks, [
+    foundIn("index.js", finding("hono/cookie", [helper])),
+    foundIn(
+      "lazy.js",
+      finding("hono/cookie", [], true),
+      finding("hono/dist/context.js", [helper], true),
+    ),
+  ]);
 });
 
 test("tracks exact handlers, actions, and explicit method refusals separately", () => {
@@ -149,7 +275,7 @@ test("groups every blocker by its legacy family and exact method", (t) => {
   const log = t.mock.method(console, "log", () => {});
   const adapter = { name: "fixture", adapt: () => {} };
   const guard = kitRetirementBuild(adapter, "report", () => ({ rows, inventory: rows }));
-  guard.plugin.generateBundle({}, ssr());
+  guard.plugin.generateBundle.call({ getModuleInfo: noModuleInfo }, {}, ssr());
   guard.adapter.adapt({ routes });
 
   const report = requireKitRetirementReport(log.mock.calls[0].arguments[0], "report");
@@ -175,13 +301,14 @@ test("groups every blocker by its legacy family and exact method", (t) => {
   });
 });
 
-test("report reader requires a grouped findings object", () => {
+test("report reader requires grouped findings and removal evidence", () => {
   const report = { mode: "report", checked: 1, ready: true, honoDependencies: [], unowned: [] };
-  const line = (unownedByFamily) =>
-    `Kit retirement report ${JSON.stringify({ ...report, unownedByFamily })}`;
+  const line = (unownedByFamily, honoRemoval = emptyRemoval, honoDependencies = []) =>
+    `Kit retirement report ${JSON.stringify({ ...report, unownedByFamily, honoRemoval, honoDependencies })}`;
   assert.deepEqual(requireKitRetirementReport(line({}), "report"), {
     ...report,
     unownedByFamily: {},
+    honoRemoval: emptyRemoval,
   });
   for (const value of [undefined, null, "unresolved", []]) {
     assert.throws(
@@ -189,6 +316,14 @@ test("report reader requires a grouped findings object", () => {
       /incomplete Kit retirement report/,
     );
   }
+  assert.throws(
+    () => requireKitRetirementReport(line({}, {}), "report"),
+    /incomplete Kit retirement report/,
+  );
+  assert.throws(
+    () => requireKitRetirementReport(line({}, emptyRemoval, ["hono"]), "report"),
+    /missing chunk evidence/,
+  );
 });
 
 test("explicit strict mode blocks adapter output and report mode lets it proceed", (t) => {
@@ -203,6 +338,8 @@ test("explicit strict mode blocks adapter output and report mode lets it proceed
   const load = () => ({ rows, inventory: rows });
   const covered = { routes: [mounted("/", /^\/$/, [], ["GET"])] };
   const unowned = { routes: [mounted("/[...path]", /^\//, ["*", "GET"])] };
+  const generate = (guard, bundle) =>
+    guard.plugin.generateBundle.call({ getModuleInfo: noModuleInfo }, {}, bundle);
   assert.equal(kitRetirementBuild(cloudflare, undefined), undefined);
   assert.throws(() => kitRetirementBuild(cloudflare, "typo"), /invalid KIT_RETIREMENT_GUARD/);
   const strict = kitRetirementBuild(cloudflare, "strict", load);
@@ -210,15 +347,15 @@ test("explicit strict mode blocks adapter output and report mode lets it proceed
   assert.equal(strict.plugin.applyToEnvironment({ name: "client" }), false);
   assert.equal(strict.plugin.applyToEnvironment({ name: "ssr" }), true);
   const log = t.mock.method(console, "log", () => {});
-  strict.plugin.generateBundle({}, ssr({ imports: ["hono"] }));
+  generate(strict, ssr({ imports: ["hono"] }));
   assert.throws(() => strict.adapter.adapt(covered), /Kit retirement guard found blockers/);
-  strict.plugin.generateBundle({}, ssr());
+  generate(strict, ssr());
   assert.throws(() => strict.adapter.adapt(unowned), /Kit retirement guard found blockers/);
   assert.equal(adapted, 0);
   strict.adapter.adapt(covered);
 
   const report = kitRetirementBuild(cloudflare, "report", load);
-  report.plugin.generateBundle({}, ssr({ imports: ["hono"] }));
+  generate(report, ssr({ imports: ["hono"] }));
   report.adapter.adapt(unowned);
   assert.equal(adapted, 2);
 
@@ -247,5 +384,6 @@ test("explicit strict mode blocks adapter output and report mode lets it proceed
   );
   assert.equal(clean.ready, true);
   assert.deepEqual(clean.unownedByFamily, {});
+  assert.deepEqual(clean.honoRemoval, emptyRemoval);
   assert.equal(reportOnly.ready, false);
 });

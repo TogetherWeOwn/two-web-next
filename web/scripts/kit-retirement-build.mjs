@@ -5,12 +5,15 @@ import { fileURLToPath } from "node:url";
 import { concretePath, multiSegmentPath } from "../../ci/parity/vectors.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
+const fallbackTarget = "web/src/routes/[...path]/+server.ts";
+const fallbackBridge = "web/src/lib/server/hono.ts";
+const serverHook = "web/src/hooks.server.ts";
 const legacySeams = new Set([
   "src/index.tsx",
   "src/route-ownership.ts",
   "src/worker.ts",
-  "web/src/lib/server/hono.ts",
-  "web/src/routes/[...path]/+server.ts",
+  fallbackBridge,
+  fallbackTarget,
 ]);
 const readFixture = (name) =>
   JSON.parse(readFileSync(new URL(`../../test/fixtures/${name}.json`, import.meta.url), "utf8"));
@@ -32,38 +35,209 @@ export function requireKitRetirementReport(output, mode) {
       Array.isArray(report.unowned) &&
       report.unownedByFamily &&
       typeof report.unownedByFamily === "object" &&
-      !Array.isArray(report.unownedByFamily),
+      !Array.isArray(report.unownedByFamily) &&
+      ["entrypoints", "chunks", "lazyChunks", "units"].every((key) =>
+        Array.isArray(report.honoRemoval?.[key]),
+      ),
     "incomplete Kit retirement report",
+  );
+  const chunkDependencies = report.honoRemoval.chunks.flatMap(({ dependencies }) =>
+    dependencies.map(({ dependency }) => dependency),
+  );
+  assert.deepEqual(
+    new Set(chunkDependencies),
+    new Set(report.honoDependencies),
+    "missing chunk evidence",
   );
   return report;
 }
 
+const moduleFile = (id) => id.replace(/^\0/, "").split("?")[0].replaceAll("\\", "/");
+const sourcePath = (file) => (isAbsolute(file) ? relative(root, file) : undefined);
+const kitSource = (id) => {
+  if (id.startsWith("\0")) return;
+  const source = sourcePath(moduleFile(id));
+  return source?.startsWith("web/src/") ? source : undefined;
+};
+
+function honoDependency(id) {
+  const file = moduleFile(id);
+  const dependency = file.split(/(?:^|\/)node_modules\//).at(-1);
+  if (/^hono(?:\/|$)/.test(dependency)) return dependency;
+  const source = sourcePath(file);
+  if (legacySeams.has(source)) return source;
+}
+
+function addToSet(map, key, value) {
+  if (!map.has(key)) map.set(key, new Set());
+  map.get(key).add(value);
+}
+
+function removalUnits(rows) {
+  const units = new Map();
+  for (const row of rows) {
+    const { target, family = null, slice = null, owner = null } = row;
+    if (row.kind === "middleware" || typeof target !== "string") continue;
+    if (!routeTarget.test(target)) continue;
+    if (!units.has(target)) units.set(target, { target, registrations: [] });
+    units.get(target).registrations.push({ route: routeKey(row), family, slice, owner });
+  }
+  for (const target of [fallbackTarget, serverHook]) {
+    units.set(target, { target, slice: "API-10", registrations: [] });
+  }
+  return units;
+}
+
+function entrypointOwners(id, importers, unitsByTarget) {
+  const units = new Set();
+  const unownedImporters = new Set();
+  const pending = new Set([id]);
+  // Visiting each module once also handles cycles between shared helpers.
+  for (const current of pending) {
+    const source = kitSource(current);
+    const target = source.replace(/\/\+page\.server\.ts$/, "/+page.svelte");
+    if (target !== serverHook && unitsByTarget.has(target)) {
+      units.add(target);
+      continue;
+    }
+    const parents = importers.get(current);
+    if (!parents?.size) unownedImporters.add(source);
+    for (const parent of parents ?? []) {
+      const parentSource = kitSource(parent);
+      if (!parentSource) unownedImporters.add(source);
+      else if (source === fallbackBridge && parentSource === serverHook) units.add(serverHook);
+      else pending.add(parent);
+    }
+  }
+  if (!units.size && !unownedImporters.size) unownedImporters.add(kitSource(id));
+  return { units, unownedImporters };
+}
+
+function traceKitEntrypoints(origins, importers) {
+  const entrypoints = new Set();
+  const pending = new Set(origins);
+  let unowned = false;
+  for (const id of pending) {
+    if (kitSource(id)) {
+      entrypoints.add(id);
+      continue;
+    }
+    const parents = importers.get(id);
+    if (!parents?.size) unowned = true;
+    for (const parent of parents ?? []) pending.add(parent);
+  }
+  return { entrypoints, unowned: unowned || !entrypoints.size };
+}
+
+function describeEntrypoints(ids, importers, rows) {
+  const units = removalUnits(rows);
+  const entrypoints = [];
+  const usedUnits = new Set();
+  const byPath = Map.groupBy(ids, kitSource);
+  for (const source of [...byPath.keys()].sort()) {
+    const targets = new Set();
+    const unowned = new Set();
+    for (const id of byPath.get(source)) {
+      const owners = entrypointOwners(id, importers, units);
+      for (const target of owners.units) targets.add(target);
+      for (const importer of owners.unownedImporters) unowned.add(importer);
+    }
+    for (const target of targets) usedUnits.add(target);
+    entrypoints.push({
+      source,
+      targets: [...targets].sort(),
+      unownedImporters: [...unowned].sort(),
+    });
+  }
+  return { entrypoints, units: [...usedUnits].sort().map((target) => units.get(target)) };
+}
+
+function inspectLazyChunks(chunksByFile, dependencyChunks) {
+  const dynamicImporters = new Map();
+  for (const chunk of chunksByFile.values()) {
+    for (const file of chunk.dynamicImports) {
+      if (chunksByFile.has(file)) addToSet(dynamicImporters, file, chunk.fileName);
+    }
+  }
+  const filesWithDependencies = new Set(dependencyChunks.map(({ file }) => file));
+  const lazyChunks = [];
+  for (const file of [...dynamicImporters.keys()].sort()) {
+    const reachable = new Set([file]);
+    for (const current of reachable) {
+      for (const imported of chunksByFile.get(current).imports) {
+        if (chunksByFile.has(imported)) reachable.add(imported);
+      }
+    }
+    const dependencyFiles = [...reachable].filter((name) => filesWithDependencies.has(name)).sort();
+    if (dependencyFiles.length) {
+      lazyChunks.push({ file, importers: [...dynamicImporters.get(file)].sort(), dependencyFiles });
+    }
+  }
+  return lazyChunks;
+}
+
 /** @param {import("vite").Rollup.OutputBundle} bundle */
-export function inspectSsrBundle(bundle) {
+export function inspectSsrBundle(bundle, getModuleInfo, rows) {
   const chunks = Object.values(bundle).filter((item) => item.type === "chunk");
   assert.ok(
     chunks.some((chunk) => chunk.isEntry),
     "missing Kit SSR entry chunks",
   );
-  const modules = chunks.flatMap((chunk) => Object.keys(chunk.modules));
-  assert.ok(modules.length, "empty Kit SSR module graph");
-  const ids = new Set([
-    ...modules,
-    ...chunks.flatMap((chunk) => [...chunk.imports, ...chunk.dynamicImports]),
-  ]);
-  const dependencies = new Set();
-  for (const id of ids) {
-    const file = id.replace(/^\0/, "").split("?")[0].replaceAll("\\", "/");
-    const dependency = file.split(/(?:^|\/)node_modules\//).at(-1);
-    if (/^hono(?:\/|$)/.test(dependency)) {
-      dependencies.add(dependency);
-    }
-    if (isAbsolute(file)) {
-      const source = relative(root, file);
-      if (legacySeams.has(source)) dependencies.add(source);
+  const moduleIds = new Set(chunks.flatMap((chunk) => Object.keys(chunk.modules)));
+  assert.ok(moduleIds.size, "empty Kit SSR module graph");
+  const importers = new Map();
+  for (const id of moduleIds) {
+    const info = getModuleInfo(id);
+    for (const dependency of [
+      ...(info?.importedIds ?? []),
+      ...(info?.dynamicallyImportedIds ?? []),
+    ]) {
+      addToSet(importers, dependency, id);
     }
   }
-  return [...dependencies].sort();
+
+  const entrypointIds = new Set();
+  const dependencyNames = new Set();
+  const dependencyChunks = [];
+  const chunksByFile = new Map(chunks.map((chunk) => [chunk.fileName, chunk]));
+  for (const chunk of chunks) {
+    const emitted = new Set(Object.keys(chunk.modules));
+    const ids = new Set([...emitted, ...chunk.imports, ...chunk.dynamicImports]);
+    const findings = Map.groupBy(ids, honoDependency);
+    findings.delete(undefined);
+    if (!findings.size) continue;
+
+    const dependencies = [];
+    for (const dependency of [...findings.keys()].sort()) {
+      dependencyNames.add(dependency);
+      const sources = new Set();
+      let unowned = false;
+      for (const id of findings.get(dependency)) {
+        // An external import belongs to this output chunk. Use only its own
+        // emitted modules as evidence for the direct import edge.
+        const origins = emitted.has(id)
+          ? [id]
+          : [...(importers.get(id) ?? [])].filter((parent) => emitted.has(parent));
+        const trace = traceKitEntrypoints(origins, importers);
+        unowned ||= trace.unowned;
+        for (const current of trace.entrypoints) {
+          entrypointIds.add(current);
+          sources.add(kitSource(current));
+        }
+      }
+      dependencies.push({ dependency, entrypoints: [...sources].sort(), unowned });
+    }
+    dependencyChunks.push({ file: chunk.fileName, dependencies });
+  }
+
+  return {
+    honoDependencies: [...dependencyNames].sort(),
+    honoRemoval: {
+      ...describeEntrypoints(entrypointIds, importers, rows),
+      chunks: dependencyChunks.sort((a, b) => a.file.localeCompare(b.file)),
+      lazyChunks: inspectLazyChunks(chunksByFile, dependencyChunks),
+    },
+  };
 }
 
 const routeKey = ({ method, path }) => `${method} ${path}`;
@@ -138,15 +312,19 @@ export function kitRetirementBuild(adapter, mode, load = loadInventory) {
   if (mode === undefined) return;
   assert.ok(mode === "report" || mode === "strict", "invalid KIT_RETIREMENT_GUARD mode");
 
-  /** @type {string[] | undefined} */
-  let honoDependencies;
+  let evidence;
   /** @type {import("vite").Plugin} */
   const plugin = {
     name: "two-kit-retirement-guard",
     apply: "build",
     applyToEnvironment: (environment) => environment.name === "ssr",
     generateBundle(_options, bundle) {
-      honoDependencies = inspectSsrBundle(bundle);
+      const { inventory, rows } = load();
+      evidence = {
+        inventory,
+        rows,
+        ...inspectSsrBundle(bundle, (id) => this.getModuleInfo(id), rows),
+      };
     },
   };
 
@@ -156,12 +334,12 @@ export function kitRetirementBuild(adapter, mode, load = loadInventory) {
     adapter: {
       ...adapter,
       adapt(builder) {
-        assert.ok(honoDependencies, "missing Kit SSR dependency evidence");
-        const { inventory, rows } = load();
+        assert.ok(evidence, "missing Kit SSR dependency evidence");
+        const { inventory, rows, ...ssrEvidence } = evidence;
         const { checked, unowned } = inspectRoutes(builder.routes, inventory, rows);
-        const ready = honoDependencies.length === 0 && unowned.length === 0;
+        const ready = ssrEvidence.honoDependencies.length === 0 && unowned.length === 0;
         const unownedByFamily = groupUnownedRoutes(unowned, rows);
-        const report = { mode, ready, checked, honoDependencies, unowned, unownedByFamily };
+        const report = { mode, ready, checked, unowned, unownedByFamily, ...ssrEvidence };
         console.log(reportPrefix + JSON.stringify(report));
         assert.ok(mode === "report" || ready, "Kit retirement guard found blockers");
         return adapter.adapt(builder);
