@@ -295,6 +295,8 @@ export async function compileArchiveKit() {
         import { GET as securityTxt } from ${JSON.stringify(join(root, "web/src/routes/.well-known/security.txt/+server.ts"))};
         import { GET as publicEvents } from ${JSON.stringify(join(root, "web/src/routes/api/public/events/+server.ts"))};
         import { GET as publicEvent } from ${JSON.stringify(join(root, "web/src/routes/api/public/events/[key]/+server.ts"))};
+        import { GET as publicCommunity } from ${JSON.stringify(join(root, "web/src/routes/api/public/community/+server.ts"))};
+        import { GET as publicJoin } from ${JSON.stringify(join(root, "web/src/routes/api/public/join/+server.ts"))};
         import { GET as openApi } from ${JSON.stringify(join(root, "web/src/routes/openapi.json/+server.ts"))};
         import { KIT_EVENT_CALENDAR_ROUTE } from ${JSON.stringify(join(root, "src/events/kit-event-calendar-route.ts"))};
         import { bind } from "acceptance:bindings";
@@ -304,6 +306,7 @@ export async function compileArchiveKit() {
           ["/robots.txt", robots], ["/sitemap_index.xml", sitemap],
           ["/.well-known/security.txt", securityTxt],
           ["/api/public/events", publicEvents], ["/openapi.json", openApi],
+          ["/api/public/community", publicCommunity], ["/api/public/join", publicJoin],
         ]);
         export async function request(request, env, deps) {
           bind(env, deps);

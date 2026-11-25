@@ -3,7 +3,11 @@ import { createHash, randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { generateSignedCookie } from "hono/cookie";
 import postgres from "postgres";
-import { KIT_EVENT_JSON_ROUTE } from "../../src/events/kit-json-routes.ts";
+import {
+  KIT_EVENT_COLLECTION_ROUTE,
+  KIT_EVENT_JSON_ROUTE,
+} from "../../src/events/kit-json-routes.ts";
+import { FALLBACK_INVITE } from "../../src/invite-fallback.ts";
 import { KIT_PUBLIC_API_ROUTES } from "../../src/public-data/kit-routes.ts";
 import { FIXTURE_SECRETS, SESSION_COOKIE } from "../parity/fixture.mjs";
 
@@ -15,6 +19,8 @@ const privateField = "synthetic-event-join-instructions";
 const draftTitle = "Synthetic API Draft";
 const event = (key) => `/events/${key}`;
 const publicEvent = (key) => `/api/public/events/${key}`;
+const collection = "/events.json";
+const publicSnapshots = ["/api/public/community", "/api/public/join"];
 
 const eventFields = [
   "event_key",
@@ -41,11 +47,10 @@ async function assertInventory() {
     await readFile(new URL("../../test/fixtures/route-kit-map.json", import.meta.url), "utf8"),
   );
   const coveredFeeds = ["/events.ics", "/events.rss", "/events/:file{.+\\.ics}"];
-  const separateSlice = ["/events.json", "/api/public/community", "/api/public/join"];
   const remaining = map.rows.filter(
-    ({ slice, path }) => slice === "API-4" && ![...coveredFeeds, ...separateSlice].includes(path),
+    ({ slice, path }) => slice === "API-4" && !coveredFeeds.includes(path),
   );
-  const routes = [KIT_EVENT_JSON_ROUTE, ...KIT_PUBLIC_API_ROUTES];
+  const routes = [KIT_EVENT_COLLECTION_ROUTE, KIT_EVENT_JSON_ROUTE, ...KIT_PUBLIC_API_ROUTES];
   const pair = ({ method, path }) => `${method} ${path}`;
   assert.deepEqual(routes.map(pair).sort(), remaining.map(pair).sort());
   for (const { path, dynamic } of routes) {
@@ -59,13 +64,14 @@ async function assertInventory() {
 export async function assertEventReadsParity({
   hono,
   unset,
+  feedOn,
   eventJsonOn,
   publicApiOn,
   databaseUrl,
 }) {
   await assertInventory();
   const sql = postgres(databaseUrl, { max: 1 });
-  const workers = [hono, unset, eventJsonOn, publicApiOn];
+  const workers = [hono, unset, eventJsonOn, publicApiOn, feedOn];
   const ips = new Map(workers.map((worker, index) => [worker, `192.0.2.${150 + index}`]));
   const buckets = [...ips.values()].map((ip) => `events-read:${ip}`);
   const sessions = [];
@@ -108,12 +114,18 @@ export async function assertEventReadsParity({
   async function compare(path, status, { kit = true, headers, method, ownEtag, cache } = {}) {
     let baseline;
     const results = [];
-    const enabled = path.startsWith("/events/") ? eventJsonOn : publicApiOn;
+    const enabled =
+      path.startsWith(collection) || path.endsWith(".ics")
+        ? feedOn
+        : path.startsWith("/events/")
+          ? eventJsonOn
+          : publicApiOn;
     for (const worker of workers) {
       const index = results.length;
       const requestHeaders = { ...headers };
       if (ownEtag) requestHeaders["if-none-match"] = ownEtag[index];
-      if (method === "POST") requestHeaders.origin = worker === unset ? unset.origin : hono.origin;
+      if (method === "POST")
+        requestHeaders.origin ??= worker === unset ? unset.origin : hono.origin;
       const { response, body } = await read(worker, path, { method, headers: requestHeaders });
       const label = `${worker.name}: ${method ?? "GET"} ${path}`;
       assert.equal(response.status, status, label);
@@ -123,12 +135,30 @@ export async function assertEventReadsParity({
         label,
       );
       assert.equal(response.headers.get("set-cookie"), null, label);
+      assert.equal(response.headers.get("access-control-allow-origin"), null, label);
+      assert.equal(response.headers.get("access-control-allow-credentials"), null, label);
       if (method === "HEAD" || status === 304) assert.equal(body, "", label);
       const requestId = response.headers.get("x-request-id");
       assert.ok(requestId, label);
       let normalized = body
         .replaceAll(requestId, "REQUEST_ID")
         .replaceAll(worker.origin, hono.origin);
+      if (status === 429) {
+        const retry = response.headers.get("retry-after");
+        assert.match(retry ?? "", /^(?:[1-5]?\d|60)$/);
+        assert.ok(Number(retry) > 0, label);
+        if (method !== "HEAD") {
+          const payload = JSON.parse(body);
+          const error = path === collection ? payload : payload.error;
+          assert.equal(error.code, "rate_limited", label);
+          assert.equal(error.request_id, requestId, label);
+          assert.equal(error.message, `Too many requests. Try again in ${retry} seconds.`, label);
+          if (path === collection) assert.equal(error.retry_after, Number(retry), label);
+          normalized = normalized
+            .replace(`in ${retry} seconds`, "in RETRY seconds")
+            .replace(`"retry_after":${retry}`, '"retry_after":RETRY');
+        }
+      }
       if (path.endsWith(".ics")) {
         const host = new URL(worker === unset ? unset.origin : hono.origin).host;
         const uid = `UID:${published}@${host}\r\n`;
@@ -163,7 +193,7 @@ export async function assertEventReadsParity({
         !body.includes(privateField) && !body.includes(memberId) && !body.includes(moderatorId),
         label,
       );
-      results.push({ body, etag });
+      results.push({ body, etag, headers: response.headers });
     }
     return results;
   }
@@ -181,6 +211,29 @@ export async function assertEventReadsParity({
     ])
       await compare(path, status, { kit: false, method });
 
+    for (const path of [collection, ...publicSnapshots]) {
+      for (const [method, suffix, status] of [
+        ["POST", "", 404],
+        ["OPTIONS", "", 404],
+        ["HEAD", "/", 404],
+        ["GET", "/__data.json", 404],
+      ]) {
+        await compare(path + suffix, status, { method, kit: false });
+      }
+      await compare(path, 403, {
+        method: "POST",
+        kit: false,
+        headers: { origin: "https://example.invalid", accept: "application/json" },
+      });
+    }
+    for (const [path, status] of [
+      ["/events%2Ejson", 401],
+      ["/api/public/%63ommunity", 200],
+      ["/api/public/%6Aoin", 200],
+    ]) {
+      await compare(path, status, { kit: false });
+    }
+
     await sql`insert into events (event_key, title, game, status, starts_at, ends_at, join_instructions)
       values (${published}, 'Synthetic API Published', ${game}, 'published', '2099-02-01 18:00+00', '2099-02-01 19:00+00', ${privateField}),
         (${draft}, ${draftTitle}, ${game}, 'draft', '2099-02-02 18:00+00', '2099-02-02 19:00+00', ${privateField})`;
@@ -189,6 +242,58 @@ export async function assertEventReadsParity({
       select id, ${memberId}, 'waitlisted' from events where event_key = ${published}`;
     const member = { cookie: await mintSession(memberId, false), accept: "application/json" };
     const moderator = { cookie: await mintSession(moderatorId, true), accept: "application/json" };
+    const beforeCollection = await hitCounts();
+    const collectionUrl = `${collection}?event_key=${published.toLowerCase()}&per_page=1&page=50`;
+    const privateCache = "private, no-cache";
+    const list = await compare(collectionUrl, 200, { headers: member, cache: privateCache });
+    const data = JSON.parse(list[0].body);
+    assert.deepEqual(data.meta, { current_page: 1, per_page: 1, total: 1, last_page: 1 });
+    assert.deepEqual(Object.keys(data.data[0]), eventFields);
+    assert.equal(data.data[0].event_key, published);
+    assert.equal(list[0].headers.get("vary"), "Cookie, Accept");
+    const [head] = await compare(collectionUrl, 200, {
+      method: "HEAD",
+      headers: member,
+      cache: privateCache,
+    });
+    assert.equal(head.etag, list[0].etag);
+    assert.equal(head.headers.get("content-type"), list[0].headers.get("content-type"));
+    for (const method of ["GET", "HEAD"]) {
+      await compare(collectionUrl, 304, {
+        method,
+        headers: member,
+        ownEtag: list.map(({ etag }) => `W/${etag}`),
+        cache: privateCache,
+      });
+    }
+    const [guest] = await compare(collectionUrl, 401, {
+      ownEtag: list.map(({ etag }) => etag),
+      cache: "private, no-store",
+    });
+    assert.equal(guest.etag, null);
+    assert.deepEqual(JSON.parse(guest.body), { error: "unauthenticated" });
+    const [login] = await compare(collectionUrl, 302, {
+      headers: { accept: "text/html" },
+      cache: "private, no-store",
+    });
+    assert.equal(
+      new URL(login.headers.get("location"), hono.origin).searchParams.get("next"),
+      collectionUrl,
+    );
+    const [invalid] = await compare(`${collection}?event_key=invalid%2Fkey`, 422, {
+      headers: { ...member, "if-none-match": "*" },
+      cache: "private, no-store",
+    });
+    assert.deepEqual(JSON.parse(invalid.body), { error: "invalid_event_key" });
+    const [hidden] = await compare(`${collection}?event_key=${draft}`, 200, {
+      headers: moderator,
+      cache: privateCache,
+    });
+    assert.deepEqual(JSON.parse(hidden.body).data, []);
+    assert.deepEqual(
+      await hitCounts(),
+      beforeCollection.map(({ bucket, hits }) => ({ bucket, hits: hits + 8 })),
+    );
 
     const before = await hitCounts();
     assert.equal(before.length, workers.length);
@@ -233,10 +338,15 @@ export async function assertEventReadsParity({
 
     const publicList = `/api/public/events?game=${encodeURIComponent(game)}&per_page=1&page=50`;
     const beforePublic = await hitCounts();
-    for (const path of [publicList, publicEvent(published), "/openapi.json"]) {
+    for (const path of [publicList, publicEvent(published), ...publicSnapshots, "/openapi.json"]) {
+      const snapshot = publicSnapshots.includes(path);
+      const beforeSnapshot = snapshot ? await hitCounts() : null;
       const cache = path === "/openapi.json" ? "public, max-age=3600" : "public";
       const first = await compare(path, 200, { headers: moderator, cache });
-      const guest = await compare(path, 200, { cache });
+      const guest = await compare(path, 200, {
+        cache,
+        headers: snapshot ? { origin: "https://example.invalid" } : undefined,
+      });
       const body = JSON.parse(first[0].body);
       if (path === publicList) {
         assert.deepEqual(body.meta, { current_page: 1, per_page: 1, total: 1, last_page: 1 });
@@ -244,6 +354,14 @@ export async function assertEventReadsParity({
         assert.equal(body.data[0].event_key, published);
       }
       if (path === publicEvent(published)) assert.deepEqual(Object.keys(body), eventFields);
+      if (path === publicSnapshots[0]) {
+        assert.deepEqual(body, { member_count: null, online_count: null, ranks: [] });
+      }
+      if (path === publicSnapshots[1]) {
+        assert.deepEqual(Object.keys(body), ["intro", "invite_url"]);
+        assert.ok(body.intro.length > 0);
+        assert.equal(body.invite_url, FALLBACK_INVITE);
+      }
       if (path === "/openapi.json") {
         assert.equal(body.openapi, "3.1.0");
         assert.equal(body.servers[0].url, hono.origin);
@@ -257,19 +375,27 @@ export async function assertEventReadsParity({
       for (const [index, { body, etag }] of guest.entries()) {
         assert.deepEqual(
           { body, etag },
-          first[index],
+          { body: first[index].body, etag: first[index].etag },
           `${path}: cookie-independent bytes and validator`,
         );
         assert.match(etag ?? "", /^"[a-f0-9]{40}"$/);
         assert.ok(!body.includes(draftTitle) && !body.includes(draft));
       }
-      await compare(path, 200, { method: "HEAD", cache });
+      const [head] = await compare(path, 200, { method: "HEAD", cache });
+      assert.equal(head.etag, first[0].etag);
       await compare(path, 304, { method: "HEAD", ownEtag: first.map(({ etag }) => etag), cache });
+      if (beforeSnapshot) {
+        await compare(path, 304, { ownEtag: first.map(({ etag }) => `W/${etag}`), cache });
+        assert.deepEqual(
+          await hitCounts(),
+          beforeSnapshot.map(({ bucket, hits }) => ({ bucket, hits: hits + 5 })),
+        );
+      }
     }
-    // Four requests per event route, including 304. Discovery is budget-free.
+    // Four requests per event route, five per snapshot. Discovery is budget-free.
     assert.deepEqual(
       await hitCounts(),
-      beforePublic.map(({ bucket, hits }) => ({ bucket, hits: hits + 8 })),
+      beforePublic.map(({ bucket, hits }) => ({ bucket, hits: hits + 18 })),
     );
     for (const key of [missing, draft]) {
       const [refusal] = await compare(publicEvent(key), 404, {
@@ -284,6 +410,28 @@ export async function assertEventReadsParity({
     const { response } = await read(eventJsonOn, "/events/past");
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("x-two-renderer"), "kit");
+
+    // Fill the real shared window. Cached JSON and correct validators cannot
+    // bypass admission, and refusals must leave the bucket unchanged.
+    await sql`delete from web_throttle_hits where bucket in ${sql(buckets)}`;
+    for (const bucket of buckets) {
+      await sql`insert into web_throttle_hits (bucket) select ${bucket} from generate_series(1, 60)`;
+    }
+    for (const path of [collection, ...publicSnapshots]) {
+      for (const method of ["GET", "HEAD"]) {
+        await compare(path, 429, {
+          method,
+          headers: { "if-none-match": "*" },
+          cache: "no-store, private",
+        });
+      }
+    }
+    assert.deepEqual(
+      await hitCounts(),
+      buckets
+        .map((bucket) => ({ bucket, hits: 60 }))
+        .sort((a, b) => a.bucket.localeCompare(b.bucket)),
+    );
 
     console.log(
       "PASS built Worker API-4 JSON and OpenAPI inventory, ownership, wire parity and privacy",

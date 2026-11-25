@@ -154,27 +154,21 @@ function sessionRenewal(headers) {
 export async function assertStaticFeedParity({
   hono,
   kit,
+  feedOn,
   startKit,
   startSecurityTxtPair,
   databaseUrl,
 }) {
   await assertMountedEndpoints();
   // Exercise the rollout flags independently on the same installed Workers.
-  const [seoOn, feedOn] = await Promise.all([
-    startKit("kit-seo-on", {
-      APP_URL: `${hono.origin}/`,
-      KIT_ROUTE_FEEDS: "false",
-      KIT_ROUTE_SEO: "true",
-      KIT_ROUTE_SECURITY_TXT: "false",
-      KIT_ROUTE_EVENT_JSON: "true",
-      KIT_ROUTE_EVENT_WRITES: "true",
-    }),
-    startKit("kit-feed-on", {
-      APP_URL: hono.origin,
-      KIT_ROUTE_FEEDS: "true",
-      KIT_ROUTE_SEO: "false",
-    }),
-  ]);
+  const seoOn = await startKit("kit-seo-on", {
+    APP_URL: `${hono.origin}/`,
+    KIT_ROUTE_FEEDS: "false",
+    KIT_ROUTE_SEO: "true",
+    KIT_ROUTE_SECURITY_TXT: "false",
+    KIT_ROUTE_EVENT_JSON: "true",
+    KIT_ROUTE_EVENT_WRITES: "true",
+  });
   const modes = [hono, kit, seoOn, feedOn];
   const sql = postgres(databaseUrl, { max: 1 });
   const writeBucket = `event-write:${fixtureIp}`;

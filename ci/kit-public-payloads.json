@@ -115,6 +115,18 @@
       "tests": ["Kit public API anonymous payloads"]
     },
     {
+      "id": "kit-payload-public-api-community",
+      "route": "GET /api/public/community",
+      "binding": "web/src/routes/api/public/community/+server.ts",
+      "tests": ["Kit public API anonymous payloads"]
+    },
+    {
+      "id": "kit-payload-public-api-join",
+      "route": "GET /api/public/join",
+      "binding": "web/src/routes/api/public/join/+server.ts",
+      "tests": ["Kit public API anonymous payloads"]
+    },
+    {
       "id": "kit-payload-about",
       "route": "GET /about",
       "binding": "web/src/routes/about/+page.server.ts",
@@ -201,6 +213,11 @@
       "route": "PUT/DELETE /events/:key/rsvp",
       "binding": "web/src/routes/events/[key]/rsvp/+server.ts",
       "reads": "nonrotating member admission and the caller's RSVP and rank"
+    },
+    {
+      "route": "GET /events.json",
+      "binding": "web/src/routes/events.json/+server.ts",
+      "reads": "published event collection after the shared read budget and non-rotating session check"
     },
     {
       "route": "POST /admin/*",

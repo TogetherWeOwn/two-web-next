@@ -229,16 +229,20 @@ The hosted installed Worker fixture exercises both owners without member data.
 ### Feed endpoints
 
 `KIT_ROUTE_FEEDS=true` selects GET and HEAD on `/events.ics`, `/events.rss`
-and `/events/<key>.ics`. An absent or false binding leaves ownership with Hono.
+and `/events/<key>.ics`, plus the session-gated `/events.json` collection.
+An absent or false binding leaves ownership with Hono.
 The per-event route requires the literal mount and suffix with a single key
 segment. Encoded key bytes follow Hono's parameter decoding. Trailing slashes,
 encoded mount or suffix aliases and multisegment forms go to Hono.
 
 The shared handlers charge the `events-read` bucket before reading events.
-Kit supplies the request ID, global response headers and completion log. Only
-a per-event draft resolves the signed session. The handler checks moderator
-access before honoring validators and delivers session renewal cookies on
-GET and HEAD when the shared session reader rotates the session.
+Kit supplies the request ID, global response headers and completion log.
+Within ICS and RSS, only a per-event draft resolves the signed session. The
+handler checks moderator access before honoring validators and delivers
+renewal cookies on GET and HEAD when the shared session reader rotates it.
+The JSON collection runs a non-rotating session check before accepting a
+validator. Its published event projection varies by Cookie and Accept and
+successful responses use `private, no-cache`.
 
 The hosted built-Worker fixture checks the compiled Kit manifest against the
 mounted Hono inventory, then compares feed bytes, validators, success and
@@ -250,9 +254,10 @@ moderator requests.
 
 Before activating the flag, qualify the exact candidate with staging feed and
 rollback checks through the [production release gate](../CONTRIBUTING.md#production-release-gate).
-Use all three feed paths to confirm that clearing the binding returns requests
-to Hono. Account for the existing 300-second cache lifetime. The collections
-are public-cacheable and single-event downloads are private-cacheable.
+Use all four feed paths to confirm that clearing the binding returns requests
+to Hono. Account for the existing 300-second cache lifetime on ICS and RSS.
+The ICS and RSS collections are public-cacheable and single-event downloads
+are private-cacheable.
 
 ### Operational endpoints
 
@@ -292,18 +297,17 @@ waitlist position and moderator-only draft visibility. `/events/past` and
 per-event `.ics` keep their existing owners.
 
 `KIT_ROUTE_PUBLIC_API=true` admits GET and HEAD on `/api/public/events`,
-`/api/public/events/<key>` and `/openapi.json`. The event reads stay session-free
-and share the existing public projections and cache. OpenAPI uses `APP_URL`
+`/api/public/events/<key>`, `/api/public/community`, `/api/public/join` and
+`/openapi.json`. The API reads share the existing session-free projections,
+read budget and one-minute cache. OpenAPI uses `APP_URL`
 and retains its one-hour public cache policy. Unknown paths in the public API
 namespace still use Hono's JSON fallback.
 
 For both families, encoded aliases, trailing slashes, data URLs and other
-methods stay with Hono. The hosted installed-Worker fixture compares the four
+methods stay with Hono. The hosted installed-Worker fixture compares the JSON
 registrations with the API-4 inventory and checks response and ownership parity
-with the bindings unset, `false` and `true`. The remaining API-4 registrations
-are GET and HEAD on `/events.json`, `/api/public/community` and
-`/api/public/join`. Keep both bindings unset in deployed configuration until
-separately qualified through the
+with the bindings unset, `false` and `true`. Keep the bindings unset in deployed
+configuration until separately qualified through the
 [production release gate](../CONTRIBUTING.md#production-release-gate).
 
 ## Offline retirement guard

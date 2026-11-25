@@ -114,7 +114,7 @@ export type Env = AgentEventsEnv & {
   DISCORD_LIVE_SOCKET_ENABLED?: string;
   // Browser auth endpoints. Only the literal string "true" opts in.
   KIT_ROUTE_AUTH?: string;
-  // ICS and RSS reads. Only the literal string "true" opts in.
+  // ICS, RSS and event collection JSON reads. Only the literal string "true" opts in.
   KIT_ROUTE_FEEDS?: string;
   // Static machine-readable text and vanity redirects. Unset keeps Hono.
   KIT_ROUTE_STATIC_TEXT?: string;

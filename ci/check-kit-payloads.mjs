@@ -82,6 +82,8 @@ const CHECK_MATCHERS = [
   ...[
     ["public-api-events", "/api/public/events "],
     ["public-api-event", "/api/public/events/"],
+    ["public-api-community", "/api/public/community "],
+    ["public-api-join", "/api/public/join "],
     ["openapi", "/openapi.json "],
   ].map(([id, path]) => ({
     id: `kit-payload-${id}`,
