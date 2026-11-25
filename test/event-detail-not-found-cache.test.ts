@@ -10,12 +10,8 @@ import app from "./app";
 // DB-source-scoped cached suggestion snapshot as ordinary 404s instead of
 // running notFoundSuggestions for every request.
 //
-// These cases stay hermetic (pg-proxy doubles). The proxy driver has no
-// transactions, so a cold in-boundary fill cannot return rows here; row
-// rendering through the member-read boundary is covered DB-backed in
-// test/event-detail-not-found-db.test.ts. What these prove hermetically:
-// the route serves /e misses from the shared snapshot with no fresh
-// suggestion DB read while it is valid.
+// The proxy fixture supplies the event and suggestion queries without a
+// database. The DB-backed sibling covers the same routes with real rows.
 const baseEnv: EnvWithAdminDb = {
   APP_URL: "https://next.example.test",
   DISCORD_CLIENT_ID: "client-id",
@@ -34,23 +30,25 @@ const row = (key: string): Row => ({ key, title: `Event ${key}` });
 
 // Each test gets its own binding, so the per-isolate cache never carries rows
 // between tests: it is keyed on the DB source.
-function eventsDb(initial: Row[]) {
+function eventsDb(initial: Row[], beforeSuggestions?: () => Promise<void>) {
   const state = { rows: initial };
   const query = vi.fn(async (sql: string) => {
     // Event-detail lookup by key always misses; anything else from events is
     // the suggestions select.
     if (sql.includes('"event_key" =')) return { rows: [] };
-    if (sql.includes('from "events"'))
+    if (sql.includes('from "events"')) {
+      await beforeSuggestions?.();
       return {
         rows: state.rows.map((r) => [r.key, r.title, "2026-10-03T18:00:00Z", null]),
       };
+    }
     return { rows: [] };
   });
   const db = drizzle(query);
-  const transaction = vi.fn(async (fn: (tx: Db) => Promise<unknown>) => fn(db as unknown as Db));
-  Object.assign(db, { transaction });
+  const { session } = db as unknown as { session: object };
+  Object.assign(session, { transaction: (run: (tx: typeof db) => Promise<unknown>) => run(db) });
   const env: EnvWithAdminDb = { ...baseEnv, ADMIN_DB: db as unknown as Db };
-  return { env, state, transaction };
+  return { env, state };
 }
 
 async function eventMiss(path: string, env: EnvWithAdminDb) {
@@ -66,6 +64,14 @@ async function eventMiss(path: string, env: EnvWithAdminDb) {
 const suggested = (html: string) =>
   [...html.matchAll(/href="\/e\/([^"]+)" data-testid="error-event-suggestion"/g)].map((m) => m[1]);
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(T0);
@@ -77,6 +83,29 @@ afterEach(() => {
 });
 
 describe("event-detail miss suggestions cache", () => {
+  it("keeps the branded 404 when the suggestion query is still pending at the deadline", async () => {
+    const started = deferred();
+    const release = deferred();
+    const { env } = eventsDb([row("game-night")], () => {
+      started.resolve();
+      return release.promise;
+    });
+    const response = app.request(`/e/${UNKNOWN_KEY}`, {}, env);
+    try {
+      await started.promise;
+      const res = await response;
+      expect(res.status).toBe(404);
+      expect(res.headers.get("content-type")).toMatch(/^text\/html\b/);
+      expect(res.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+      expect(res.headers.get("cache-control")).toBe("private, no-store");
+      const html = await res.text();
+      expect(html).toContain("We cannot find that page");
+      expect(suggested(html)).toEqual([]);
+    } finally {
+      release.resolve();
+    }
+  });
+
   it("serves repeated unknown-key misses without a fresh suggestion DB read", async () => {
     const { env } = eventsDb([row("game-night")]);
     const fills = vi.spyOn(suggestions, "notFoundSuggestions");
@@ -101,15 +130,12 @@ describe("event-detail miss suggestions cache", () => {
     const { env } = eventsDb([row("game-night")]);
     const fills = vi.spyOn(suggestions, "notFoundSuggestions");
     const acquire = vi.spyOn(adminDb, "dbFor");
-    // Ordinary 404 fills outside the member-read boundary, where the
-    // proxy double supports transactions.
     const plain = await app.request("/lost/link", {}, env);
     expect(plain.status).toBe(404);
     expect(suggested(await plain.text())).toEqual(["game-night"]);
     expect(fills).toHaveBeenCalledOnce();
     const dbReads = acquire.mock.calls.length;
-    // Both miss shapes reuse that snapshot inside the boundary: same rows,
-    // no fresh suggestion read (the event lookup still reads per request).
+    // Both miss shapes reuse that snapshot. The event lookup still reads per request.
     vi.setSystemTime(T0 + 5_000);
     expect(suggested(await eventMiss(`/e/${UNKNOWN_KEY}`, env))).toEqual(["game-night"]);
     vi.setSystemTime(T0 + 10_000);
