@@ -184,3 +184,48 @@ describe("Kit security.txt anonymous payload", () => {
     assertNoMemberBytes(body);
   });
 });
+
+describe("Kit public API anonymous payloads", () => {
+  it.each([
+    ["/api/public/events", "Public API fixture title", 4],
+    [`/api/public/events/${KEY}`, "Public API fixture title", 3],
+    ["/openapi.json", '"openapi":"3.1.0"', 0],
+  ])(
+    "GET %s serves its public payload without member bytes",
+    async (path, expected, queryCount) => {
+      const row = archiveRow(7, {
+        eventKey: KEY,
+        status: "published",
+        title: "Public API fixture title",
+        createdBy: MEMBER_ID,
+        organizer_name: USERS[0]!.username,
+        join_instructions: USERS[1]!.username,
+        discordEventId: USERS[2]!.id,
+      });
+      const query = vi.fn(async (sql: string, params: unknown[]) => {
+        if (sql.includes('from "rsvps"')) return { rows: [] };
+        expect(sql).toContain('from "events"');
+        if (sql.startsWith("select count(*)")) return { rows: [[1]] };
+        return {
+          rows: [
+            encodeEventRow(sql, params, row, (value) =>
+              value instanceof Date ? value.toISOString() : value,
+            ),
+          ],
+        };
+      });
+      const request = new Request(`${ARCHIVE_ORIGIN}${path}`, {
+        headers: { cookie: `__Host-two_session=${SESSION_BEARER}` },
+      });
+      const response = await kit.request(request, archiveEnv(drizzle(query) as unknown as Db));
+      const bytes = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("application/json");
+      expect(response.headers.get("set-cookie")).toBeNull();
+      expect(query).toHaveBeenCalledTimes(queryCount);
+      expect(bytes).toContain(expected);
+      assertNoMemberBytes(bytes);
+    },
+  );
+});

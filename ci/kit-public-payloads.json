@@ -85,6 +85,24 @@
       "tests": ["Kit GET /events/past anonymous payload"]
     },
     {
+      "id": "kit-payload-public-api-events",
+      "route": "GET /api/public/events",
+      "binding": "web/src/routes/api/public/events/+server.ts",
+      "tests": ["Kit public API anonymous payloads"]
+    },
+    {
+      "id": "kit-payload-public-api-event",
+      "route": "GET /api/public/events/:key",
+      "binding": "web/src/routes/api/public/events/[key]/+server.ts",
+      "tests": ["Kit public API anonymous payloads"]
+    },
+    {
+      "id": "kit-payload-openapi",
+      "route": "GET /openapi.json",
+      "binding": "web/src/routes/openapi.json/+server.ts",
+      "tests": ["Kit public API anonymous payloads"]
+    },
+    {
       "id": "kit-payload-about",
       "route": "GET /about",
       "binding": "web/src/routes/about/+page.server.ts",
@@ -151,6 +169,11 @@
       "route": "POST /admin/*",
       "binding": "web/src/routes/admin/[...action]/+page.server.ts",
       "reads": "exact moderator form actions admitted by the hook before controller dispatch"
+    },
+    {
+      "route": "GET /events/:key",
+      "binding": "web/src/routes/events/[key]/+server.ts",
+      "reads": "event, moderator-only draft and viewer's own waitlist position after a non-rotating session check"
     },
     {
       "route": "GET /profile",

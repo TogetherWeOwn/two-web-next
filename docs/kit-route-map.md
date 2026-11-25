@@ -135,7 +135,8 @@ family selector runs only when the existing ownership lookup falls back to
 Hono. Each family requires its own binding set to the literal string
 `true`. A candidate must match the original method, pathname and mounted Kit
 route ID. Static entries may release exact reserved pairs. Dynamic entries
-require a pathname predicate and leave reserved paths to Hono. HEAD follows
+require a pathname predicate and an explicit literal-path release to take
+ownership of a reserved path. HEAD follows
 GET. Conflicting claims and overlaps with disabled page ownership entries
 fall back to Hono.
 
@@ -237,7 +238,7 @@ refusal headers, and shared budget charges across absent, off and on bindings.
 It exercises trailing slashes, encoded and data URL variants, wrong methods,
 an existing Kit page and the reserved Hono `/version` read. Per-event cases
 cover published, cancelled, missing and draft rows with anonymous, member and
-moderator requests. Event JSON and the public API keep their current owners.
+moderator requests.
 
 Before activating the flag, qualify the exact candidate with staging feed and
 rollback checks through the [production release gate](../CONTRIBUTING.md#production-release-gate).
@@ -261,6 +262,28 @@ The remaining API-3 endpoints are the vanity redirects `/community`,
 `/faq.md`, `/join.md`, `/privacy.md`, `/rules.md`, and the event Markdown
 routes `/events.md` and `/e/:file{.+\\.md}`. Event Markdown still needs shared
 read-budget and suffix precedence proof, including paths with multiple segments.
+
+### Event detail JSON, public event reads and OpenAPI
+
+`KIT_ROUTE_EVENT_JSON=true` admits GET and HEAD on `/events/<key>`. The handler
+keeps the non-rotating session check, private cache policy, the viewer's own
+waitlist position and moderator-only draft visibility. `/events/past` and
+per-event `.ics` keep their existing owners.
+
+`KIT_ROUTE_PUBLIC_API=true` admits GET and HEAD on `/api/public/events`,
+`/api/public/events/<key>` and `/openapi.json`. The event reads stay session-free
+and share the existing public projections and cache. OpenAPI uses `APP_URL`
+and retains its one-hour public cache policy. Unknown paths in the public API
+namespace still use Hono's JSON fallback.
+
+For both families, encoded aliases, trailing slashes, data URLs and other
+methods stay with Hono. The hosted installed-Worker fixture compares the four
+registrations with the API-4 inventory and checks response and ownership parity
+with the bindings unset, `false` and `true`. The remaining API-4 registrations
+are GET and HEAD on `/events.json`, `/api/public/community` and
+`/api/public/join`. Keep both bindings unset in deployed configuration until
+separately qualified through the
+[production release gate](../CONTRIBUTING.md#production-release-gate).
 
 ## Offline retirement guard
 
