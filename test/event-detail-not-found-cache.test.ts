@@ -64,6 +64,14 @@ async function eventMiss(path: string, env: EnvWithAdminDb) {
 const suggested = (html: string) =>
   [...html.matchAll(/href="\/e\/([^"]+)" data-testid="error-event-suggestion"/g)].map((m) => m[1]);
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(T0);
@@ -76,8 +84,8 @@ afterEach(() => {
 
 describe("event-detail miss suggestions cache", () => {
   it("keeps the branded 404 when the suggestion query is still pending at the deadline", async () => {
-    const started = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
+    const started = deferred();
+    const release = deferred();
     const { env } = eventsDb([row("game-night")], () => {
       started.resolve();
       return release.promise;
