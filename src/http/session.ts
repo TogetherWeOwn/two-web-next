@@ -173,7 +173,7 @@ type SessionRead = {
   renewal: { replacement: string; statusKey: string | null } | null;
 };
 
-export type SessionReadMode = boolean | { currentMemberId: string };
+export type SessionReadMode = boolean | { currentMemberId: string; requireFreshRoles?: true };
 
 /** Resolve a verified bearer and optionally rotate it. The caller owns cookie I/O. */
 export async function readSession(
@@ -193,13 +193,19 @@ export async function readSession(
   // Mid-session role recheck: bits older than the cadence re-derive from
   // Discord before they authorize (src/session-role-refresh.ts). A row that
   // stopped being live during the refresh reads as no session.
-  const row = await refreshSessionRoles(store, tokenHash, storedRow, roleRecheckConfigFor(env));
+  const requireFreshRoles = typeof mode === "object" && mode.requireFreshRoles;
+  const row = requireFreshRoles
+    ? storedRow
+    : await refreshSessionRoles(store, tokenHash, storedRow, roleRecheckConfigFor(env));
   if (!row) return null;
   // Recheck liveness after role refresh. Only the current bearer can submit
   // the dedicated write, and an aborted action must not rotate that bearer.
   if (typeof mode === "object") {
     if (!row.member || row.userId !== mode.currentMemberId) return null;
-    const live = await store.getLive(tokenHash);
+    const live = await store.getLive(
+      tokenHash,
+      requireFreshRoles ? { requireFreshRoles } : undefined,
+    );
     if (!live?.member || live.userId !== mode.currentMemberId) return null;
     return { store, row, renewal: null };
   }

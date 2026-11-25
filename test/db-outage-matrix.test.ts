@@ -166,6 +166,7 @@ const MATRIX: Case[] = [
   // throttle/queue/DB read, so it is outage-independent and branded.
   { method: "POST", route: "/__probe/alert", status: 404, format: "html", body: "{}" },
   { method: "POST", route: "/__probe/voice-move", status: 404, format: "json", body: "{}" },
+  { method: "POST", route: "/__probe/voice-move/session", status: 404, format: "json", body: "{}" },
   {
     method: "POST",
     route: "/events",
@@ -512,7 +513,8 @@ async function assertResponse(res: Response, row: Case): Promise<void> {
     } else expect.soft(location).toBe(row.location);
   }
   if (row.route === "/discord") expect.soft(res.headers.get("cache-control")).toContain("no-store");
-  if (row.route === "/__probe/voice-move") expect.soft(clients).toHaveLength(0);
+  if (row.route === "/__probe/voice-move" || row.route === "/__probe/voice-move/session")
+    expect.soft(clients).toHaveLength(0);
   if (row.route === "/up") {
     expect.soft(JSON.parse(body)).toMatchObject({ db: "error", pending_migrations: null });
     expect

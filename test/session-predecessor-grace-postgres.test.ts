@@ -90,6 +90,20 @@ describe.skipIf(!url)("postgres predecessor grace", () => {
     expect(await store.getLive(hash)).toBeNull();
   });
 
+  it("admits only fresh membership when the exact live read requires it", async () => {
+    const hash = "strict-role-freshness";
+    await store.create(session(hash));
+    const options = { requireFreshRoles: true } as const;
+    expect(await store.getLive(hash, options)).toMatchObject({ member: true });
+    await fixture.client`update web_sessions set roles_checked_at = null,
+      created_at = clock_timestamp() - interval '5 minutes' where token_hash = ${hash}`;
+    expect(await store.getLive(hash, options)).toBeNull();
+    expect(await store.getLive(hash)).toMatchObject({ member: true });
+    await fixture.client`update web_sessions set roles_checked_at = clock_timestamp()
+      where token_hash = ${hash}`;
+    expect(await store.getLive(hash, options)).toMatchObject({ member: true });
+  });
+
   it("refuses an unrevoked exact row with expired sliding expiry and a fresh lineage", async () => {
     const hash = "strict-expired";
     await store.create(session(hash));

@@ -1,15 +1,25 @@
 // route-inventory: POST /__probe/voice-move
+// route-inventory: POST /__probe/voice-move/session
 import { createHash, createHmac } from "node:crypto";
+import { parseSigned, serializeSigned } from "hono/utils/cookie";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { BODY_LIMIT_BYTES } from "../src/body-limit";
 import type { Env } from "../src/env";
 import { QA_IDENTITIES, STAGING_APP_URL } from "../src/qa";
-import { createMemorySessionStore, SESSION_ROLE_RECHECK_SECONDS } from "../src/sessions";
+import { SESSION_COOKIE } from "../src/session-cookie";
+import {
+  createMemorySessionStore,
+  hashToken,
+  newSessionToken,
+  SESSION_ROLE_RECHECK_SECONDS,
+} from "../src/sessions";
 import app from "./app";
 import contract from "./fixtures/bot-site-contract-v2.json";
 import { cookieFor, env, MEMBER, MODERATOR } from "./helpers/member-data";
 
 const move = contract.verbs["voice.move_member"];
 const { discord_id: memberId, channel_id: target } = move.request;
+const fixtureMember = { ...MEMBER, userId: memberId, avatar: null };
 const source = move.results.moved.from_channel_id;
 const botUrl = "https://two-bot-next-staging.5150.workers.dev";
 const secret = "fixture-hmac-key-for-staging-voice-move";
@@ -23,19 +33,18 @@ let cookie: string;
 beforeEach(async () => {
   now = Date.now();
   store = createMemorySessionStore(() => now);
-  cookie = await cookieFor(store, { ...MEMBER, userId: memberId });
+  cookie = await cookieFor(store, fixtureMember);
   outbound.mockReset().mockRejectedValue(new Error("fixture has no external network"));
   vi.stubGlobal("fetch", outbound);
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
-function post(
-  bind: Partial<Env> = {},
-  body = { channel_id: target },
-  bearer = cookie,
-  origin?: string | null,
-) {
-  const bindings = {
+function probeEnv(bind: Partial<Env>) {
+  return {
     ...env,
     APP_URL: STAGING_APP_URL,
     DISCORD_GUILD_ID: "100000000000000015",
@@ -48,6 +57,15 @@ function post(
     BOT_KEY_ID: "voice-fixture",
     ...bind,
   };
+}
+
+function post(
+  bind: Partial<Env> = {},
+  body = { channel_id: target },
+  bearer = cookie,
+  origin?: string | null,
+) {
+  const bindings = probeEnv(bind);
   const headers: Record<string, string> = { cookie: bearer, "content-type": "application/json" };
   if (origin === null) headers["sec-fetch-site"] = "same-origin";
   else headers.origin = origin ?? new URL(bindings.APP_URL).origin;
@@ -222,4 +240,175 @@ it("refuses member substitution and a target outside the fixture", async () => {
   expect((await post({}, substitute)).status).toBe(400);
   expect((await post({}, { channel_id: "100000000000000013" })).status).toBe(403);
   expect(outbound).not.toHaveBeenCalled();
+});
+
+const proofPath = "/__probe/voice-move/session";
+const pins = { discord_id: memberId, channel_ids: [target, source] };
+const version = { id: "12345678-1234-4321-8123-123456789abc", tag: "a".repeat(40) };
+const throttleStore = vi.fn();
+type ProofRequest = {
+  bindings?: Partial<Env>;
+  headers?: HeadersInit;
+  path?: string;
+  body?: string;
+};
+
+async function proof(request: ProofRequest = {}) {
+  const bindings = {
+    ...probeEnv({ CF_VERSION_METADATA: version, ...request.bindings }),
+    THROTTLE_STORE: throttleStore.mockClear(),
+  };
+  const origin = new URL(bindings.APP_URL).origin;
+  const headers = request.headers ?? { cookie, origin, "content-type": "application/json" };
+  const writes = [
+    "applyRoleRecheck",
+    "create",
+    "renew",
+    "replace",
+    "revoke",
+    "revokeLineage",
+    "revokeUserSessions",
+    "rotate",
+    "sweepExpired",
+  ] as const;
+  const spies = writes.map((method) => vi.spyOn(store, method).mockClear());
+  const body = request.body ?? JSON.stringify(pins);
+  const res = await app.request(
+    request.path ?? proofPath,
+    { method: "POST", headers, body },
+    bindings,
+  );
+  expect(res.headers.get("cache-control")).toBe("no-store, private");
+  expect(res.headers.has("set-cookie")).toBe(false);
+  expect(outbound).not.toHaveBeenCalled();
+  expect(throttleStore).not.toHaveBeenCalled();
+  for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+  return res;
+}
+
+async function refuses(status: number, error: string, request?: ProofRequest) {
+  const res = await proof(request);
+  expect(res.status).toBe(status);
+  expect(await res.json()).toEqual({ error, request_id: expect.any(String) });
+}
+
+it.each<Partial<Env>>([
+  { STAGING_VOICE_MOVE_ENABLED: undefined },
+  { APP_URL: "https://togetherweown.com" },
+  { STAGING_VOICE_MOVE_MEMBER_ID: QA_IDENTITIES["qa-member"]!.discordId },
+  { STAGING_VOICE_MOVE_CHANNEL_IDS: `${target},${target}` },
+  { CF_VERSION_METADATA: { id: version.id } },
+  { CF_VERSION_METADATA: { ...version, id: "invalid" } },
+])("refuses disabled, production or incomplete configuration (%#)", async (bindings) => {
+  const get = vi.spyOn(store, "get");
+  await refuses(404, "not_found", { bindings });
+  expect(get).not.toHaveBeenCalled();
+});
+
+it("requires both an exact staging request URL and explicit same-origin Origin", async () => {
+  await refuses(404, "not_found", { path: `http://${new URL(STAGING_APP_URL).host}${proofPath}` });
+  for (const origin of ["https://elsewhere.example", null]) {
+    const headers = new Headers({ accept: "application/json", "sec-fetch-site": "same-origin" });
+    if (origin !== null) headers.set("origin", origin);
+    await refuses(403, "cross_origin", { headers });
+  }
+});
+
+it.each([
+  { ...pins, extra: true },
+  { ...pins, discord_id: 1 },
+  { ...pins, channel_ids: [target] },
+  { ...pins, channel_ids: [target, "18446744073709551616"] },
+])("refuses malformed assertions (%#)", (body) =>
+  refuses(400, "invalid", { body: JSON.stringify(body) }),
+);
+
+it.each([
+  { ...pins, discord_id: MODERATOR.userId },
+  { ...pins, channel_ids: [target, MODERATOR.userId] },
+  { ...pins, channel_ids: [source, target] },
+])("refuses mismatched or reordered assertions before session lookup (%#)", async (body) => {
+  const get = vi.spyOn(store, "get");
+  await refuses(403, "forbidden", { body: JSON.stringify(body) });
+  expect(get).not.toHaveBeenCalled();
+});
+
+it("refuses query input, a different media type, malformed JSON and an oversized upload", async () => {
+  await refuses(400, "invalid", { path: `${proofPath}?extra=1` });
+  await refuses(415, "unsupported_media_type", { headers: { origin: STAGING_APP_URL } });
+  await refuses(400, "invalid", { body: "{" });
+  const res = await proof({ body: JSON.stringify(pins).padEnd(BODY_LIMIT_BYTES.action + 1) });
+  expect(res.status).toBe(413);
+});
+
+async function tokenInCookie() {
+  const token = (await parseSigned(cookie, env.SESSION_SECRET))[SESSION_COOKIE];
+  if (!token) throw new Error("Synthetic bearer missing");
+  return token;
+}
+
+it("refuses absent, incorrectly signed, unrelated and nonmember bearers", async () => {
+  const forged = await serializeSigned(SESSION_COOKIE, await tokenInCookie(), newSessionToken(), {
+    secure: true,
+    path: "/",
+  });
+  const outsider = await cookieFor(store, { ...fixtureMember, member: false });
+  for (const cookie of ["", forged.split(";")[0]!, await cookieFor(store, MODERATOR), outsider]) {
+    const headers = { cookie, origin: STAGING_APP_URL, "content-type": "application/json" };
+    await refuses(403, "forbidden", { headers });
+  }
+});
+
+it("refuses stale membership at the exact refresh deadline and after bearer expiry", async () => {
+  const hash = await hashToken(await tokenInCookie());
+  now += SESSION_ROLE_RECHECK_SECONDS * 1000;
+  await refuses(403, "forbidden");
+  await store.create({ ...fixtureMember, tokenHash: hash, expiresAt: new Date(now) });
+  await refuses(403, "forbidden");
+});
+
+it("refuses a replaced bearer within predecessor grace", async () => {
+  const hash = await hashToken(await tokenInCookie());
+  const replacement = {
+    ...fixtureMember,
+    tokenHash: await hashToken(newSessionToken()),
+    expiresAt: new Date(now + 3600_000),
+  };
+  expect(await store.rotate(hash, replacement)).toBe(true);
+  expect(await store.get(hash)).toMatchObject({ member: true });
+  await refuses(403, "forbidden");
+});
+
+it("refuses a bearer revoked between the initial and exact live reads", async () => {
+  const { get, revoke } = store;
+  vi.spyOn(store, "get").mockImplementationOnce(async (hash) => {
+    const row = await get(hash);
+    await revoke(hash);
+    return row;
+  });
+  await refuses(403, "forbidden");
+});
+
+it("returns the exact bounded receipt after the live read and logs no private values", async () => {
+  const log = vi.spyOn(console, "log").mockImplementation(() => {});
+  const observedAt = new Date("2030-06-15T12:39:55.999Z");
+  const getLive = store.getLive;
+  vi.spyOn(store, "getLive").mockImplementationOnce(async (...args) => {
+    const live = await getLive(...args);
+    vi.useFakeTimers({ toFake: ["Date"] }).setSystemTime(observedAt);
+    return live;
+  });
+  const res = await proof({ body: JSON.stringify(pins).padEnd(BODY_LIMIT_BYTES.action) });
+  expect(res.status).toBe(200);
+  expect(await res.json()).toEqual({
+    matched: true,
+    observed_at: observedAt.toISOString(),
+    revision: { version_id: version.id, commit: version.tag },
+  });
+  expect(log).toHaveBeenCalledTimes(1);
+  const line = String(log.mock.calls[0]?.[0]);
+  expect(JSON.parse(line)).toMatchObject({ event: "http.request", route: proofPath, status: 200 });
+  for (const privateValue of [memberId, target, source, cookie, env.SESSION_SECRET]) {
+    expect(line.includes(privateValue)).toBe(false);
+  }
 });

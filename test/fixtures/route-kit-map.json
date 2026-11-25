@@ -1292,6 +1292,24 @@
     },
     {
       "method": "POST",
+      "path": "/__probe/voice-move/session",
+      "auth": "staging-member",
+      "kind": "endpoint",
+      "scope": "api",
+      "target": {
+        "state": "unresolved",
+        "decisionSource": "staging-only Hono probe",
+        "alternatives": ["preserve the staging gate on migration or retire with the probe"]
+      },
+      "slice": "API-3",
+      "family": "ops",
+      "hono405": false,
+      "etag": false,
+      "pageAndEndpoint": false,
+      "multiSegmentParam": false
+    },
+    {
+      "method": "POST",
       "path": "/admin/events",
       "auth": "moderator",
       "kind": "endpoint",
