@@ -496,6 +496,35 @@ function fetch(request, env, context) {
         return instance.origin;
       },
     });
+    const { assertKitSourceEvidence } = await import("./fixtures/kit-source-evidence.mjs");
+    const evidenceWorkers = [];
+    try {
+      await assertKitSourceEvidence({
+        worker,
+        honoWorker: join(repo, "src/worker.ts"),
+        scratch,
+        databaseUrl,
+        start: async (name, entry, vars) => {
+          const instance = await startWorker(
+            `source-evidence-${name}`,
+            entry,
+            name === "hono" ? join(repo, "public") : assets,
+            FIXTURE_SECRETS.SESSION_SECRET,
+            vars,
+          );
+          evidenceWorkers.push(instance);
+          await listen(instance.child, instance.origin, () => instance.log);
+          return instance;
+        },
+      });
+    } finally {
+      await Promise.all(evidenceWorkers.map(stopWorker));
+      assert.ok(
+        evidenceWorkers.every(({ stopped }) => stopped),
+        "source-evidence Workers did not stop",
+      );
+    }
+    console.log("PASS source-evidence loopback Workers stopped");
   }
 
   const manifest = await readFile(join(repo, "src/route-ownership.ts"), "utf8");
