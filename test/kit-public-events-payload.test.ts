@@ -21,6 +21,7 @@ const USERS = [
   { id: "765432109876543210", username: "leak-probe-\u0301\ud83d\udc80\u6f22\u5b57-qq4" },
 ];
 const SESSION_BEARER = `two_${"z".repeat(43)}`;
+const INVITE_URL = "https://discord.gg/synthetic-invite";
 
 function assertNoMemberBytes(bytes: string) {
   for (const user of USERS) {
@@ -226,6 +227,8 @@ describe("Kit public API anonymous payloads", () => {
   it.each([
     ["/api/public/events", "Public API fixture title", 4],
     [`/api/public/events/${KEY}`, "Public API fixture title", 3],
+    ["/api/public/community", '"member_count":null', 0],
+    ["/api/public/join", INVITE_URL, 0],
     ["/openapi.json", '"openapi":"3.1.0"', 0],
   ])(
     "GET %s serves its public payload without member bytes",
@@ -254,7 +257,10 @@ describe("Kit public API anonymous payloads", () => {
       const request = new Request(`${ARCHIVE_ORIGIN}${path}`, {
         headers: { cookie: `__Host-two_session=${SESSION_BEARER}` },
       });
-      const response = await kit.request(request, archiveEnv(drizzle(query) as unknown as Db));
+      const response = await kit.request(request, {
+        ...archiveEnv(drizzle(query) as unknown as Db),
+        DISCORD_INVITE_URL: INVITE_URL,
+      });
       const bytes = await response.text();
 
       expect(response.status).toBe(200);

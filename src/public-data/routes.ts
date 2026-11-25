@@ -521,6 +521,27 @@ export const publicApiHandlers = {
     return servePublicJson(c, key, body, generation);
   },
 
+  async community(c: Ctx) {
+    const refused = await admitted(c);
+    if (refused) return refused;
+    const key = apiPublicCacheKey("GET", PUBLIC_API_PATHS.community, "");
+    const hit = readApiPublicCache(key);
+    if (hit) return cachedEntry(c, hit);
+    // readCounts never throws: missing collectors degrade to nulls, never 0.
+    const payload = serializeCommunity(await readCounts(c.env));
+    return servePublicJson(c, key, payload);
+  },
+
+  async join(c: Ctx) {
+    const refused = await admitted(c);
+    if (refused) return refused;
+    const key = apiPublicCacheKey("GET", PUBLIC_API_PATHS.join, "");
+    const hit = readApiPublicCache(key);
+    if (hit) return cachedEntry(c, hit);
+    // Database-free like the /join leaf: the handoff is env config only.
+    return servePublicJson(c, key, serializeJoin(c.env));
+  },
+
   // Static discovery document, database-free like robots.txt: no admission,
   // no session, unchanged bytes per APP_URL with a long edge TTL.
   async openApi(c: Ctx) {
@@ -539,26 +560,9 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
   app.get(PUBLIC_API_PATHS.events, publicApiHandlers.events);
   app.get(PUBLIC_API_PATHS.event, (c) => publicApiHandlers.event(c, () => c.req.param("key")));
 
-  app.get("/api/public/community", async (c) => {
-    const refused = await admitted(c);
-    if (refused) return refused;
-    const key = apiPublicCacheKey("GET", "/api/public/community", "");
-    const hit = readApiPublicCache(key);
-    if (hit) return cachedEntry(c, hit);
-    // readCounts never throws: missing collectors degrade to nulls, never 0.
-    const payload = serializeCommunity(await readCounts(c.env));
-    return servePublicJson(c, key, payload);
-  });
+  app.get(PUBLIC_API_PATHS.community, publicApiHandlers.community);
 
-  app.get("/api/public/join", async (c) => {
-    const refused = await admitted(c);
-    if (refused) return refused;
-    const key = apiPublicCacheKey("GET", "/api/public/join", "");
-    const hit = readApiPublicCache(key);
-    if (hit) return cachedEntry(c, hit);
-    // Database-free like the /join leaf: the handoff is env config only.
-    return servePublicJson(c, key, serializeJoin(c.env));
-  });
+  app.get(PUBLIC_API_PATHS.join, publicApiHandlers.join);
 
   app.get(PUBLIC_API_PATHS.openApi, publicApiHandlers.openApi);
 }

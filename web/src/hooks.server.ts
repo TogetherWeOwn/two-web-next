@@ -21,7 +21,7 @@ import {
 import { dispatchHookRequest } from "../../src/route-ownership";
 import { dispatchEventDetailRequest } from "../../src/events/kit-detail";
 import { KIT_EVENT_CALENDAR_ROUTE } from "../../src/events/kit-event-calendar-route";
-import { KIT_EVENT_JSON_ROUTE } from "../../src/events/kit-json-routes";
+import { KIT_EVENT_COLLECTION_ROUTE, KIT_EVENT_JSON_ROUTE } from "../../src/events/kit-json-routes";
 import { KIT_STATIC_FEED_ROUTES } from "../../src/events/kit-static-feed-routes";
 import { KIT_EVENT_WRITE_ROUTES } from "../../src/events/kit-event-write-routes";
 import { refuseKitEventWriteOrigin } from "../../src/events/kit-event-write-fetch";
@@ -78,7 +78,10 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
         routes: kitAuthRoutes(env.APP_URL),
         crossOriginRefusal: authOriginRefusal,
       },
-      { flag: env.KIT_ROUTE_FEEDS, routes: [...KIT_STATIC_FEED_ROUTES, KIT_EVENT_CALENDAR_ROUTE] },
+      {
+        flag: env.KIT_ROUTE_FEEDS,
+        routes: [...KIT_STATIC_FEED_ROUTES, KIT_EVENT_CALENDAR_ROUTE, KIT_EVENT_COLLECTION_ROUTE],
+      },
       { flag: env.KIT_ROUTE_STATIC_TEXT, routes: KIT_STATIC_TEXT_ROUTES },
       { flag: env.KIT_ROUTE_EVENT_JSON, routes: [KIT_EVENT_JSON_ROUTE] },
       { flag: env.KIT_ROUTE_PUBLIC_API, routes: KIT_PUBLIC_API_ROUTES },

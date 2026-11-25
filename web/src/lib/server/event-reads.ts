@@ -10,7 +10,7 @@ import type { Ctx } from "../../../../src/public-data/unknown-path";
 
 export const trailingSlash = "ignore";
 
-function publicRead(
+export function jsonRead(
   route: string,
   respond: (c: Ctx, key: string) => Promise<Response>,
 ): RequestHandler {
@@ -26,8 +26,10 @@ function publicRead(
   };
 }
 
-export const publicEvents = publicRead(PUBLIC_API_PATHS.events, publicApiHandlers.events);
-export const publicEvent = publicRead(PUBLIC_API_PATHS.event, (c, key) =>
+export const publicEvents = jsonRead(PUBLIC_API_PATHS.events, publicApiHandlers.events);
+export const publicEvent = jsonRead(PUBLIC_API_PATHS.event, (c, key) =>
   publicApiHandlers.event(c, () => key),
 );
-export const openApi = publicRead(PUBLIC_API_PATHS.openApi, publicApiHandlers.openApi);
+export const publicCommunity = jsonRead(PUBLIC_API_PATHS.community, publicApiHandlers.community);
+export const publicJoin = jsonRead(PUBLIC_API_PATHS.join, publicApiHandlers.join);
+export const openApi = jsonRead(PUBLIC_API_PATHS.openApi, publicApiHandlers.openApi);
