@@ -183,7 +183,9 @@ function reservationAdmission() {
         expiresAtMs: Date.parse(expiresAt),
       };
     },
-    canAdmitStagingOperation: mock.fn(() => true),
+    canAdmitStagingOperation: mock.fn(
+      (record, { verifiedOwnerId }) => verifiedOwnerId === record.ownerId,
+    ),
   };
 }
 
@@ -247,16 +249,34 @@ test("staging E2E reservation receipt refuses expired, changed, or unverified le
   );
   assert.equal(admission.canAdmitStagingOperation.mock.callCount(), 0);
 
-  admission.canAdmitStagingOperation.mock.mockImplementationOnce(() => false, 1);
-  assert.throws(
-    () => bind(reservationRead, { ...reservationRead, verifiedOwnerId: 99999 }),
-    refusedBinding,
-  );
-  assert.equal(admission.canAdmitStagingOperation.mock.callCount(), 2);
   admission.canAdmitStagingOperation.mock.mockImplementationOnce(() => {
     throw new Error("private fixture detail");
   });
   assert.throws(() => bind(reservationRead, reservationRead), refusedBinding);
+});
+
+test("staging E2E reservation receipt requires the independently verified completion owner", () => {
+  const admission = reservationAdmission();
+  const after = { ...reservationRead, verifiedOwnerId: 99999 };
+  assert.throws(
+    () => bindStagingE2eReservation(reservedE2e, { before: reservationRead, after, admission }),
+    refusedBinding,
+  );
+  const calls = admission.canAdmitStagingOperation.mock.calls;
+  assert.deepEqual(calls.map((call) => call.arguments[1].verifiedOwnerId), [
+    reservationRead.verifiedOwnerId,
+    after.verifiedOwnerId,
+  ]);
+});
+
+test("staging E2E reservation receipt refuses equal or reversed run boundaries", () => {
+  const admission = reservationAdmission();
+  const evidence = { before: reservationRead, after: reservationRead, admission };
+  for (const completedAt of [reservedE2e.e2e.startedAt, "2026-11-01T10:09:59.999Z"]) {
+    const receipt = { ...reservedE2e, e2e: { ...reservedE2e.e2e, completedAt } };
+    assert.throws(() => bindStagingE2eReservation(receipt, evidence), refusedBinding);
+  }
+  assert.equal(admission.canAdmitStagingOperation.mock.callCount(), 0);
 });
 
 test("staging E2E reservation receipt preserves an ordinary receipt on confirmed absence", () => {
