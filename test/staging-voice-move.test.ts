@@ -284,12 +284,13 @@ async function tokenInCookie() {
   return token;
 }
 
-it("refuses absent, incorrectly signed and other accounts' bearers", async () => {
+it("refuses absent, incorrectly signed, unrelated and nonmember bearers", async () => {
   const forged = await serializeSigned(SESSION_COOKIE, await tokenInCookie(), newSessionToken(), {
     secure: true,
     path: "/",
   });
-  for (const cookie of ["", forged.split(";")[0]!, await cookieFor(store, MODERATOR)]) {
+  const outsider = await cookieFor(store, { ...fixtureMember, member: false });
+  for (const cookie of ["", forged.split(";")[0]!, await cookieFor(store, MODERATOR), outsider]) {
     const headers = { cookie, origin: STAGING_APP_URL, "content-type": "application/json" };
     await refuses(403, "forbidden", { headers });
   }
