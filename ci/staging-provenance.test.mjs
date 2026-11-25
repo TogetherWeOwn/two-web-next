@@ -263,6 +263,48 @@ test("qualification observes the fixed staging endpoint once without redirects o
   assert.ok(calls[0][1].signal instanceof AbortSignal);
 });
 
+test("qualification bounds the staging identity stream and accepts matching evidence", async () => {
+  const encoder = new TextEncoder();
+  const candidate = { sha: A, deployedAt };
+  const maxPadding = 2048 - JSON.stringify({ ...candidate, padding: "" }).length;
+  for (const padding of ["€", "€".repeat(maxPadding)]) {
+    const bytes = encoder.encode(JSON.stringify({ ...candidate, padding }));
+    const split = bytes.indexOf(0xe2) + 1;
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(bytes.subarray(0, split));
+        controller.enqueue(bytes.subarray(split));
+        controller.close();
+      },
+    });
+    assert.deepEqual(await observe({}, { fetchImpl: async () => new Response(body) }), candidate);
+  }
+
+  for (const char of [" ", "€"]) {
+    const chunks = [encoder.encode(char.repeat(2048)), encoder.encode(JSON.stringify(candidate))];
+    let pulls = 0;
+    let cancelled = false;
+    const body = new ReadableStream(
+      {
+        pull(controller) {
+          const chunk = chunks[pulls++];
+          if (chunk) controller.enqueue(chunk);
+          else controller.close();
+        },
+        cancel() {
+          cancelled = true;
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    await assert.rejects(observe({}, { fetchImpl: async () => new Response(body) }), {
+      message: "Staging identity response too large",
+    });
+    assert.equal(cancelled, true);
+    assert.equal(pulls, 2);
+  }
+});
+
 test("identity evidence files retain only validated SHA and timestamp, never response data", () => {
   const directory = mkdtempSync(join(tmpdir(), "staging-identity-"));
   try {

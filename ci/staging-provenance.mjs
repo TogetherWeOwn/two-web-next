@@ -9,6 +9,10 @@ const SHA = /^[0-9a-f]{40}$/;
 export const isSha = (value) => typeof value === "string" && value.length === 40 && SHA.test(value);
 const DEPLOY_TITLE = /^deploy ([0-9a-f]{40})$/;
 export const STAGING_ORIGIN = "https://next.togetherweown.com";
+const MAX_IDENTITY_LENGTH = 2048;
+// Keep the decoded UTF-16 length policy. UTF-8 needs at most three bytes per
+// decoded code unit, plus an optional three-byte BOM stripped by the decoder.
+const MAX_IDENTITY_BYTES = 3 * MAX_IDENTITY_LENGTH + 3;
 
 export function resolveStagingCandidate({ eventName, event, sha, ref, repository }) {
   if (eventName === "workflow_dispatch") {
@@ -93,6 +97,29 @@ export function validateStagingIdentityPair(expected, before, after, now = Date.
   }
 }
 
+async function readIdentityText(body) {
+  if (!body) return "";
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      bytes += value?.byteLength ?? 0;
+      if (bytes > MAX_IDENTITY_BYTES) break;
+      text += decoder.decode(value, { stream: !done });
+      if (text.length > MAX_IDENTITY_LENGTH) break;
+      if (done) return text;
+    }
+    // Cancellation is best-effort and must not delay or replace the refusal.
+    void reader.cancel().catch(() => undefined);
+    throw new Error("Staging identity response too large");
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 export async function readStagingIdentity({ fetchImpl = fetch, now = Date.now() } = {}) {
   const response = await fetchImpl(`${STAGING_ORIGIN}/version`, {
     redirect: "error",
@@ -100,8 +127,7 @@ export async function readStagingIdentity({ fetchImpl = fetch, now = Date.now() 
     signal: AbortSignal.timeout(10_000),
   });
   if (response.status !== 200) throw new Error("Staging identity HTTP response refused");
-  const text = await response.text();
-  if (text.length > 2048) throw new Error("Staging identity response too large");
+  const text = await readIdentityText(response.body);
   let data;
   try {
     data = JSON.parse(text);
