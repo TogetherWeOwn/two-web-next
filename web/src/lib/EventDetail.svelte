@@ -373,15 +373,27 @@ const detailIslands = $derived([
 </Shell>
 
 <style>
-  @import "./event-tag.css";
-
+  /* Keep the static status labels in the detail stylesheet. */
   .event-tag {
+    display: inline-flex;
+    align-items: center;
+    padding: var(--space-inset-tag-y) var(--space-inset-tag-x);
+    border-radius: var(--radius-s);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 45%, transparent);
+    font-family: var(--font-data);
+    font-size: var(--text-label);
+    letter-spacing: var(--tracking-label);
+    line-height: 1;
+    text-transform: uppercase;
+    white-space: nowrap;
   }
   .event-tag.live { color: var(--live); }
   .event-tag.warn { color: var(--warn); }
   .event-tag.you { color: var(--ember); }
   .event-tag.ok { color: var(--ok); }
+  @media (forced-colors: active) {
+    .event-tag { outline: 1px solid CanvasText; outline-offset: -1px; }
+  }
 
   .event-layout-head { grid-area: head; min-width: 0; }
   .lifecycle-time { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2) var(--space-4); padding-top: var(--space-7); margin-bottom: var(--space-4); border-top: 1px solid var(--color-hair2); }

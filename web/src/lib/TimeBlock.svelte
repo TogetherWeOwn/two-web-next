@@ -125,11 +125,22 @@ onMount(() => {
 {/if}
 
 <style>
-  @import "./event-tag.css";
-
   .event-tag {
+    display: inline-flex;
+    align-items: center;
+    padding: var(--space-inset-tag-y) var(--space-inset-tag-x);
+    border-radius: var(--radius-s);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 45%, transparent);
     color: var(--warn);
+    font-family: var(--font-data);
+    font-size: var(--text-label);
+    letter-spacing: var(--tracking-label);
+    line-height: 1;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  @media (forced-colors: active) {
+    .event-tag { outline: 1px solid CanvasText; outline-offset: -1px; }
   }
 
   .time-block { border-top: 1px solid var(--two-color-hair-2); padding-top: var(--two-space-inset-card-lg); display: flex; align-items: baseline; gap: var(--two-space-4); flex-wrap: wrap; color: var(--two-color-text-primary); font-size: var(--two-font-size-body-reading); }

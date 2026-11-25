@@ -1740,6 +1740,15 @@ for (const target of targets) {
   }
 }
 
+async function expectEventStylesheets(page: Page, status: 200 | 410) {
+  const assets = await page
+    .locator('link[rel="stylesheet"][href*="/_app/immutable/"]')
+    .evaluateAll((links) => links.map((link) => new URL((link as HTMLLinkElement).href).pathname));
+  expect(assets.length).toBeGreaterThan(0);
+  expect(assets.filter((path) => path.startsWith("/_app/immutable/assets/Tag."))).toEqual([]);
+  console.log(`Kit event ${status} immutable CSS: ${JSON.stringify(assets)}`);
+}
+
 test("Kit guest seat card keeps its no-JS action at desktop and mobile widths", async ({
   browser,
 }) => {
@@ -1755,6 +1764,7 @@ test("Kit guest seat card keeps its no-JS action at desktop and mobile widths", 
       const response = await page.goto(`${KIT_ORIGIN}${eventPath}`);
       expect(response?.status()).toBe(200);
       expect(response?.headers()["x-two-renderer"]).toBe("kit");
+      await expectEventStylesheets(page, 200);
       const card = page.getByTestId("kit-seat-card");
       await expect(card.getByRole("heading", { name: "Log in to RSVP" })).toBeVisible();
       await expect(card.getByRole("link", { name: "Log in with Discord" })).toHaveAttribute(
@@ -4022,8 +4032,10 @@ test("Kit cancelled event renders its record and next date without JavaScript", 
           const next = page.getByRole("link", { name: "See the next date" });
           const record = page.getByTestId("event-cancelled-record");
           const cancelledTag = record.locator("span", { hasText: /^Cancelled$/ });
-          await expect(cancelledTag).toHaveCSS("display", "inline-flex");
+          // The inline-flex badge is a flex item, so its outer display is blockified.
+          await expect(cancelledTag).toHaveCSS("display", "flex");
           await expect(cancelledTag).toHaveCSS("text-transform", "uppercase");
+          await expectEventStylesheets(page, 410);
           if (fallback) {
             await expect(next).toHaveCount(0);
             await expect(record.locator("time")).toHaveCount(0);

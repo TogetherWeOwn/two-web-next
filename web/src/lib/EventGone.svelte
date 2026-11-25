@@ -89,11 +89,22 @@ let { model }: { model: EventGoneModel } = $props();
 </Shell>
 
 <style>
-  @import "./event-tag.css";
-
   .event-tag {
+    display: inline-flex;
+    align-items: center;
+    padding: var(--space-inset-tag-y) var(--space-inset-tag-x);
+    border-radius: var(--radius-s);
     box-shadow: inset 0 0 0 1px var(--color-hair2);
     color: var(--t2);
+    font-family: var(--font-data);
+    font-size: var(--text-label);
+    letter-spacing: var(--tracking-label);
+    line-height: 1;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  @media (forced-colors: active) {
+    .event-tag { outline: 1px solid CanvasText; outline-offset: -1px; }
   }
 
   .event-head { grid-area: head; min-width: 0; }
