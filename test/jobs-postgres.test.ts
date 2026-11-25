@@ -284,6 +284,71 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
     ).toEqual([{ state: "closed" }]);
   });
 
+  it("recovers missing hard-stop evidence only for a matching unresolved attempt", async () => {
+    const store = pgReconciliationStore(sql);
+    const evidence = { lastCode: "needs_reconciliation", lastStatus: 409 };
+    for (const resolved of [false, true]) {
+      const key = crypto.randomUUID();
+      await store.claimAnnouncement(key, "fixture-channel", new Date());
+      await sql`update announcement_send_claims set claim_until = now()
+        where idempotency_key = ${key}`;
+      await store.recordAnnouncement(key, 1, null);
+      if (resolved) expect(await store.resolve(key, "123", "confirmed", async () => {})).toBe(true);
+      const read = () => sql`select last_code, last_status from bot_reconciliation_intents
+        where idempotency_key = ${key}`;
+
+      expect(await store.recoverAnnouncement(key, 2, evidence, null)).toBe(false);
+      expect(await read()).toEqual([{ last_code: null, last_status: null }]);
+      expect(await store.recoverAnnouncement(key, 1, evidence, null)).toBe(false);
+      expect(
+        await store.recoverAnnouncement(
+          key,
+          1,
+          { lastCode: "upstream_timeout", lastStatus: 503 },
+          null,
+        ),
+      ).toBe(false);
+      expect(await read()).toEqual([
+        resolved
+          ? { last_code: null, last_status: null }
+          : { last_code: "needs_reconciliation", last_status: 409 },
+      ]);
+    }
+  });
+
+  it.each([false, true])("settles a tracked hard stop, lease expired=%s", async (expired) => {
+    const store = pgReconciliationStore(sql);
+    const key = crypto.randomUUID();
+    const jobId = crypto.randomUUID();
+    const now = new Date();
+    await pgQueueLedger(sql).enqueued({ jobId, kind: "announcement", key: null, availableAt: now });
+    expect(await store.claimAnnouncement(key, "fixture-channel", now)).toMatchObject({
+      kind: "claimed",
+    });
+    if (expired)
+      await sql`update announcement_send_claims set claim_until = clock_timestamp()
+        where idempotency_key = ${key}`;
+    expect(
+      await store.recoverAnnouncement(
+        key,
+        1,
+        { lastCode: "needs_reconciliation", lastStatus: 409 },
+        jobId,
+      ),
+    ).toBe(true);
+    expect(await store.claimAnnouncement(key, "fixture-channel", now)).toMatchObject({
+      kind: "closed",
+    });
+    expect(await sql`select 1 from queue_jobs where job_id = ${jobId}`).toEqual([]);
+    expect(await sql`select reason from queue_failed_jobs where job_id = ${jobId}`).toEqual([
+      { reason: "announcement.post requires reconciliation" },
+    ]);
+    expect(
+      await sql`select last_code, last_status from bot_reconciliation_intents
+      where idempotency_key = ${key}`,
+    ).toEqual([{ last_code: "needs_reconciliation", last_status: 409 }]);
+  });
+
   it("never admits a pruned original carrier after the fall clock change", async () => {
     await sql.begin(async (tx) => {
       const key = crypto.randomUUID();
