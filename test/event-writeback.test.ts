@@ -1159,6 +1159,25 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     });
   }
 
+  it("keeps the stored claim timestamp when the default store claims a request", async () => {
+    await seed();
+    const events = pgEventStore(sql);
+    const start = new Date("2099-01-01T00:00:00Z");
+    const key = crypto.randomUUID();
+    const prepared = await events.prepareSync(eventKey, key, start);
+    if (!prepared || "waiting" in prepared) throw new Error("Missing fixture snapshot");
+    const readTimestamp = () =>
+      sql`select claim_started_at from event_sync_attempts where idempotency_key = ${key}`;
+    const before = await readTimestamp();
+    expect(before[0]?.claim_started_at).toBeInstanceOf(Date);
+    expect(before[0]?.claim_started_at).not.toEqual(start);
+    expect(await events.claimSync(prepared, start)).toMatchObject({
+      requestAttempts: 1,
+      nextAttemptAt: null,
+    });
+    expect(await readTimestamp()).toEqual(before);
+  });
+
   it("a claim abandoned before result settlement cannot regain eligibility after a lease", async () => {
     await seed();
     const start = new Date("2099-01-01T00:00:00Z");
