@@ -612,6 +612,27 @@ const mutationCalls = [
   "wrangler deploy --config tail/wrangler.jsonc",
   `wrangler deploy --config web/wrangler.staging.jsonc --tag ${sha} --var KIT_ROUTE_ARCHIVE:false --var KIT_ROUTE_STATIC:false --var KIT_ROUTE_EVENTS:false --var KIT_ROUTE_HOME:false --var KIT_ROUTE_JOIN:false`,
 ];
+
+test("truncated CI jobs after preparation stop staging before the first queue", () => {
+  const ctx = context("workflow_run");
+  const complete = fixture();
+  const truncated = structuredClone(complete);
+  truncated.jobs.total_count = truncated.jobs.jobs.length + 1;
+
+  const refused = executeStaging(ctx, complete, { afterPreparation: truncated });
+  assert.equal(refused.status, 1, refused.stderr);
+  assert.equal(
+    refused.stdout.trim(),
+    `Staging gate passed: ${sha}, full CI run ${run.id}, attempt ${run.run_attempt}`,
+  );
+  assert.match(refused.stderr, /^Staging gate refused: Incomplete CI job evidence$/m);
+  assert.deepEqual(refused.calls, []);
+
+  const accepted = executeStaging(ctx, complete, { afterPreparation: complete });
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.deepEqual(accepted.calls, mutationCalls);
+});
+
 for (const [family, archiveFlag, staticFlag, eventsFlag, homeFlag, joinFlag] of [
   ["archive", "true", "false", "false", "false", "false"],
   ["archive-static", "true", "true", "false", "false", "false"],
