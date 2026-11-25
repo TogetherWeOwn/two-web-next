@@ -218,7 +218,9 @@ async function assertActivityLogReadParity({ kit, off, databaseUrl }) {
       (node) => renderedAttribute(node, "aria-label") === "Activity pages",
     );
     assert.ok(pager, `${label}: activity pagination`);
-    assert.match(renderedText(pager), new RegExp(`\\bPage ${page}\\b`), label);
+    const [pageLabel] = renderedElements(pager, { tag: "span" });
+    assert.ok(pageLabel, `${label}: page label`);
+    assert.equal(renderedText(pageLabel).trim(), `Page ${page}`, label);
     const links = [...renderedElements(pager, { tag: "a" })];
     assert.equal(links.length, 1, `${label}: one direction is available`);
     const direction = page === 1 ? "next" : "prev";
@@ -251,7 +253,7 @@ async function assertActivityLogReadParity({ kit, off, databaseUrl }) {
       returning id
     `;
     seededIds = inserted.map(({ id }) => id);
-    const newestFirst = matching.reverse();
+    const newestFirst = matching.toReversed();
     const first = `${path}?${new URLSearchParams(filters)}`;
     for (const [target, owned] of [
       [kit, true],
