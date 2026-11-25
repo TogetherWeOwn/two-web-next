@@ -83,6 +83,13 @@ export async function assertKitAdminRsvpControls({ hono, off, on, databaseUrl })
     return { event, answers: [...answers], audits: [...audits], jobs: [...jobs] };
   }
 
+  async function adminHits(worker) {
+    const bucket = `admin-write:${ips.get(worker)}`;
+    const [{ count }] =
+      await sql`select count(*)::int from web_throttle_hits where bucket = ${bucket}`;
+    return count;
+  }
+
   async function send(worker, path, status, options = {}, expectedJobs = 0) {
     const response = await fetch(worker.origin + path, {
       method: "POST",
@@ -174,10 +181,11 @@ export async function assertKitAdminRsvpControls({ hono, off, on, databaseUrl })
         });
         await send(worker, target, 413, { headers: moderator.headers, body: oversized });
       }
-      const bucket = `admin-write:${ips.get(worker)}`;
-      const [{ count }] =
-        await sql`select count(*)::int from web_throttle_hits where bucket = ${bucket}`;
-      assert.equal(count, 0, "admission and body-cap refusals spend no admin quota");
+      assert.equal(
+        await adminHits(worker),
+        0,
+        "admission and body-cap refusals spend no admin quota",
+      );
       const missing = await send(
         worker,
         `/admin/events/${"0".repeat(26)}/rsvp-reopen`,
@@ -199,7 +207,9 @@ export async function assertKitAdminRsvpControls({ hono, off, on, databaseUrl })
       assert.deepEqual([await snapshot(draft), await snapshot(ended)], invalidBefore);
       assert.deepEqual(await snapshot(event), before);
 
+      const beforePause = await adminHits(worker);
       const paused = await send(worker, pause, 303, moderator, 1);
+      assert.equal(await adminHits(worker), beforePause + 1, "pause charges the admin bucket");
       assert.equal(paused.headers.get("location"), path);
       assert.equal(paused.headers.getSetCookie().length, 0);
       await assertQueued(paused, event);
@@ -228,6 +238,7 @@ export async function assertKitAdminRsvpControls({ hono, off, on, databaseUrl })
       await sql`delete from queue_jobs where key = ${jobKey}`;
       await sql`delete from job_unique_locks where key = ${jobKey}`;
 
+      const beforeReopen = await adminHits(worker);
       const opened = await send(
         worker,
         reopen,
@@ -235,6 +246,7 @@ export async function assertKitAdminRsvpControls({ hono, off, on, databaseUrl })
         { headers: { ...json, cookie: modCookie } },
         1,
       );
+      assert.equal(await adminHits(worker), beforeReopen + 1, "reopen charges the admin bucket");
       assert.equal(opened.headers.get("location"), path);
       assert.equal(opened.headers.getSetCookie().length, 0);
       await assertQueued(opened, event);
