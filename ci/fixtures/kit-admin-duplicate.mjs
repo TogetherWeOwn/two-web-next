@@ -42,6 +42,7 @@ export default {
     };
     const response = await duplicate.run(rejectSend, () =>
       withEnv(fixture, () => worker.fetch(request, fixture, context)));
+    if (sends !== 0) throw new Error("Copy-to-draft attempted an outbound send");
     const headers = new Headers(response.headers);
     headers.set(${JSON.stringify(dispatchHeader)}, String(sends));
     return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
