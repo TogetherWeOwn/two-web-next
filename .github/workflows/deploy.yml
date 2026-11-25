@@ -211,6 +211,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
       - name: Deploy to Cloudflare Workers
+        id: web-deploy
         # The Version is tagged with the CI-verified commit; /up reads the tag
         # back as revision.commit (a full lowercase SHA only). The Kit Worker
         # only produces after the handoff. Deploying the consumer-free config
@@ -410,6 +411,7 @@ jobs:
         continue-on-error: true
         env:
           STAGING_JOB_STATUS: ${{ job.status }}
+          STAGING_WEB_DEPLOY_OUTCOME: ${{ steps.web-deploy.outcome }}
           STAGING_CANDIDATE: ${{ steps.web-deploy-ci.outputs.sha }}
           STAGING_CI_RUN_ID: ${{ steps.web-deploy-ci.outputs.run_id }}
           STAGING_CI_RUN_ATTEMPT: ${{ steps.web-deploy-ci.outputs.run_attempt }}

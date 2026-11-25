@@ -21,7 +21,12 @@ function runLink(repository, id, attempt) {
   return `[${id}, attempt ${attempt}](https://github.com/${repository}/actions/runs/${id}/attempts/${attempt})`;
 }
 
-export async function stagingReceipt(mode, env, event, { fetchImpl = fetch } = {}) {
+export async function stagingReceipt(
+  mode,
+  env,
+  event,
+  { fetchImpl = fetch, now = Date.now() } = {},
+) {
   const e2e = mode === "e2e";
   const repo = env.GITHUB_REPOSITORY;
   const trigger = event?.workflow_run;
@@ -46,9 +51,12 @@ export async function stagingReceipt(mode, env, event, { fetchImpl = fetch } = {
     }
   }
 
+  const shouldObserve =
+    isSha(candidate) &&
+    (e2e ? env.STAGING_JOB_STATUS : env.STAGING_WEB_DEPLOY_OUTCOME) === "success";
   let up;
   let version;
-  if (env.STAGING_JOB_STATUS === "success" && isSha(candidate)) {
+  if (shouldObserve) {
     [up, version] = await Promise.all([
       readRevision(STAGING_ORIGIN, {
         fetchImpl: async (url, options) => {
@@ -59,7 +67,7 @@ export async function stagingReceipt(mode, env, event, { fetchImpl = fetch } = {
           return response;
         },
       }).catch(() => null),
-      readStagingIdentity({ fetchImpl }).catch(() => null),
+      readStagingIdentity({ fetchImpl, now }).catch(() => null),
     ]);
   }
   const versionId =
@@ -69,13 +77,20 @@ export async function stagingReceipt(mode, env, event, { fetchImpl = fetch } = {
       ? up.version_id
       : null;
   const matched = versionId && version?.sha === candidate && up.commit === candidate;
+  const identityVerdict = matched
+    ? "matched at observation"
+    : shouldObserve
+      ? "refused (disagreement or missing proof)"
+      : "refused (no observation)";
   let soak;
   if (e2e && env.GITHUB_EVENT_NAME === "workflow_dispatch") {
     soak = "This manual E2E run is ineligible for automatic promotion";
   } else if (e2e && env.GITHUB_RUN_ATTEMPT !== "1") {
-    soak = "This E2E attempt is ineligible for automatic promotion";
+    soak = "This E2E rerun disqualifies the commit and blocks candidates with older runs";
   } else if (e2e && env.STAGING_SKIP_E2E === "true") {
     soak = "This E2E run is ineligible (journeys scope-skipped)";
+  } else if (!e2e && env.STAGING_JOB_STATUS === "failure") {
+    soak = "This deploy run is ineligible (deploy job failed)";
   } else if (!matched) {
     soak = "Unproven (identity receipt refused)";
   } else if (e2e) {
@@ -100,7 +115,7 @@ export async function stagingReceipt(mode, env, event, { fetchImpl = fetch } = {
     `- Candidate source ${sha(candidate)}`,
     `- Live /up source ${sha(up?.commit)}, Worker version ${versionId ? `\`${versionId}\`` : "unavailable"}`,
     `- Live /version source ${sha(version?.sha)}${version ? `, deployed at \`${version.deployedAt}\`` : ""}`,
-    `- Identity receipt ${matched ? "matched at observation" : "refused (disagreement or missing proof)"}`,
+    `- Identity receipt ${identityVerdict}`,
     `- **Soak eligibility** ${soak}`,
     "",
   ].join("\n");
