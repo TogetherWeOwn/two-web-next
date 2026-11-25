@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
@@ -429,22 +429,26 @@ test("CLI rolls back and closes the connection after a catalog read fails", (t) 
   t.after(() => rmSync(scratch, { recursive: true, force: true }));
   const outfile = join(scratch, "preflight.json");
   const summary = join(scratch, "summary.md");
-  const firstRead = JSON.stringify(QUERIES[0].sql);
-  const failedRead = JSON.stringify(QUERIES[1].sql);
+  const trace = join(scratch, "driver-trace.json");
+  const firstRead = QUERIES[0].sql;
+  const failedRead = QUERIES[1].sql;
   const driver = `
+    import { setImmediate } from "node:timers/promises";
     export const calls = [];
     export default function postgres() {
       return {
         async unsafe(sql) {
+          // Record rollback once it completes, so closing early breaks the order.
+          if (sql === "ROLLBACK") await setImmediate();
           calls.push(sql);
-          if (sql === ${failedRead}) throw new Error("synthetic catalog read failure");
-          if (sql === ${firstRead}) return [{ object: "join_attempts", owner: "fixture_owner" }];
+          if (sql === ${JSON.stringify(failedRead)}) throw new Error("synthetic catalog read failure");
+          if (sql === ${JSON.stringify(firstRead)}) return [{ object: "join_attempts", owner: "fixture_owner" }];
           return [];
         },
         async end(options) {
-          // Record completion so a missing await fails the trace assertion.
-          await new Promise((resolve) => setImmediate(resolve));
-          calls.push(["end", options]);
+          calls.push(["end:start", options]);
+          await setImmediate();
+          calls.push("end:complete");
         },
       };
     }
@@ -452,7 +456,7 @@ test("CLI rolls back and closes the connection after a catalog read fails", (t) 
   const driverUrl = `data:text/javascript,${encodeURIComponent(driver)}`;
   const entry = new URL("./staging-catalog-preflight.mjs", import.meta.url);
   const source = `
-    import assert from "node:assert/strict";
+    import { writeFileSync } from "node:fs";
     import { registerHooks } from "node:module";
     import { Socket } from "node:net";
     Socket.prototype.connect = () => { throw new Error("network forbidden in catalog fixture"); };
@@ -465,15 +469,7 @@ test("CLI rolls back and closes the connection after a catalog read fails", (t) 
     const { calls } = await import(${JSON.stringify(driverUrl)});
     process.argv[1] = ${JSON.stringify(fileURLToPath(entry))};
     await import(${JSON.stringify(entry.href)});
-    assert.deepEqual(calls, [
-      "BEGIN READ ONLY",
-      "SET LOCAL statement_timeout = '30s'",
-      "SET LOCAL lock_timeout = '10s'",
-      ${firstRead},
-      ${failedRead},
-      "ROLLBACK",
-      ["end", { timeout: 5 }],
-    ]);
+    writeFileSync(${JSON.stringify(trace)}, JSON.stringify(calls));
   `;
   const child = spawnSync(process.execPath, ["--input-type=module", "-e", source], {
     cwd: repoRoot,
@@ -486,6 +482,17 @@ test("CLI rolls back and closes the connection after a catalog read fails", (t) 
   assert.match(child.stderr, /^Preflight failed; database details withheld\.[^\n]*\n$/);
   assert.doesNotMatch(child.stderr, /synthetic catalog read failure/);
   assert.equal(child.stdout, "");
+  assert.ok(existsSync(trace), "CLI returned control to the fixture");
+  assert.deepEqual(JSON.parse(readFileSync(trace, "utf8")), [
+    "BEGIN READ ONLY",
+    "SET LOCAL statement_timeout = '30s'",
+    "SET LOCAL lock_timeout = '10s'",
+    firstRead,
+    failedRead,
+    "ROLLBACK",
+    ["end:start", { timeout: 5 }],
+    "end:complete",
+  ]);
   assert.equal(existsSync(outfile), false, "no partial JSON evidence");
   assert.equal(existsSync(summary), false, "no partial step summary");
 });
