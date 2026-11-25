@@ -51,8 +51,14 @@ export async function assertResponseContracts({ hono, off, on }) {
         const requestId = headers.get("x-request-id");
         assert.ok(requestId, label);
         if (typeof expected === "string") {
-          assert.ok(text.includes(expected), `${label}: expected recovery heading`);
-          assert.ok(text.includes(requestId), `${label}: expected support reference`);
+          assert.ok(
+            text.includes(`<h1 id="error-heading">${expected}</h1>`),
+            `${label}: expected recovery heading`,
+          );
+          assert.ok(
+            text.includes(`<code data-testid="error-support-reference">${requestId}</code>`),
+            `${label}: expected support reference`,
+          );
         } else {
           assert.deepEqual(JSON.parse(text), { ...expected, request_id: requestId }, label);
         }
