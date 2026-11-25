@@ -17,14 +17,10 @@ import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { jsx } from "hono/jsx";
 import { serializeSigned } from "hono/utils/cookie";
-import {
-  parseRenderedPage,
-  renderedAttribute,
-  renderedElements,
-  renderedText,
-} from "../ci/rendered-page.mjs";
+import { parse } from "parse5";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import app from "./app";
+import { attr, elements, textOf } from "./helpers/kit-edit-controls";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { memberReadResponse } from "../src/member-reads";
@@ -1727,9 +1723,9 @@ describe("event-detail gone presentation", () => {
     expect(html).toContain('data-testid="event-jsonld"');
     expect(html).not.toContain('data-testid="event-attendees"');
     expect(html).not.toContain('data-testid="join-result"');
-    const nextDateLinks = [...renderedElements(parseRenderedPage(html), { tag: "a" })]
-      .filter((link) => renderedText(link).trim() === "See the next date")
-      .map((link) => renderedAttribute(link, "href"));
+    const nextDateLinks = elements(parse(html))
+      .filter((link) => link.tagName === "a" && textOf(link).trim() === "See the next date")
+      .map((link) => attr(link, "href"));
     expect(nextDateLinks).toEqual([`/e/${upcoming.eventKey}`]);
   });
 
