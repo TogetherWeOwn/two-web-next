@@ -243,7 +243,8 @@ export async function assertAuthParity(origin, secret, browser) {
   };
   const logoutAcrossOwners = async (bearer, statusKey, logoutFlag, callbackFlag) => {
     for (const pair of [bearer, statusKey]) await status(pair, true, logoutFlag);
-    const logout = await post("/logout", { flag: logoutFlag, cookies: `${bearer}; ${statusKey}` });
+    // A status cookie on the POST could revoke the lineage independently.
+    const logout = await post("/logout", { flag: logoutFlag, cookies: bearer });
     owns(logout, 303, logoutFlag === "true");
     clear(logout);
     // Resend the original cookies to the issuer. Deletion headers alone
