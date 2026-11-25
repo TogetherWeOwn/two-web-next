@@ -116,7 +116,7 @@ it("preserves a lease expiry refusal at handoff and requires a new request after
     if (receiverNow >= leaseUntil) {
       return Response.json(
         { ...refused, error: { ...refused.error, message: "synthetic receiver details" } },
-        { status: 403 },
+        { status: 403, headers: { "Retry-After": "16" } },
       );
     }
     const { channel_id: destination } = JSON.parse(String(init?.body));
