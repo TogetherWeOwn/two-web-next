@@ -11,7 +11,7 @@ function isBeaconScript(url) {
   );
 }
 
-function scanHtml(html, documentUrl, prepareReplay = false) {
+export function inspectAnalyticsHtml(html, documentUrl, prepareReplay = false) {
   const counts = { scripts: 0, beacons: 0, otherTracking: 0 };
   const document = parse(html);
   function visit(node) {
@@ -44,10 +44,6 @@ export function assertScriptInventory(counts, scripts, beacons = scripts) {
   assert.equal(counts.otherTracking, 0, "Other tracking markup");
 }
 
-export function inspectAnalyticsHtml(html, url) {
-  return scanHtml(html, url).counts;
-}
-
 const fakeBeacon = `
   const root = document.documentElement;
   root.dataset.fakeBeaconExecutions = String(Number(root.dataset.fakeBeaconExecutions || 0) + 1);
@@ -64,7 +60,7 @@ export async function observeAnalytics(
   const counts = { loads: 0, collections: 0, blocked: 0, errors: 0 };
   const target = new URL(url);
   try {
-    const replay = allowed ? scanHtml(html, url, true).html : html;
+    const replay = allowed ? inspectAnalyticsHtml(html, url, true).html : html;
     await context.routeWebSocket("**/*", (socket) => {
       counts.blocked++;
       return socket.close();
@@ -122,7 +118,7 @@ export async function observeAnalytics(
     const root = page.locator("html");
     return {
       ...counts,
-      ...inspectAnalyticsHtml(await page.content(), url),
+      ...inspectAnalyticsHtml(await page.content(), url).counts,
       executions: Number(await root.getAttribute("data-fake-beacon-executions")),
       initializations: Number(await root.getAttribute("data-analytics-initializations")),
     };

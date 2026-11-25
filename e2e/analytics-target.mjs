@@ -37,26 +37,30 @@ export async function readAnalyticsDocument({ origin, jurisdiction }, path) {
     get(`${origin}${path}`, options, resolve).on("error", reject);
   });
   try {
-    const { headers, statusCode } = response;
-    if (statusCode !== 200 || !/^text\/html(?:\s*;|$)/i.test(headers["content-type"] ?? "")) {
-      throw new Error("Expected a direct 200 HTML response from the synthetic target");
-    }
-    if (
-      headers["x-two-analytics-fixture"] !== "isolated-v1" ||
-      headers["x-two-analytics-jurisdiction"] !== jurisdiction ||
-      headers["set-cookie"] !== undefined
-    ) {
-      throw new Error("Synthetic target response failed admission");
-    }
-    const chunks = [];
-    let bytes = 0;
-    for await (const chunk of response) {
-      bytes += chunk.length;
-      if (bytes > MAX_HTML_BYTES) throw new Error("Synthetic HTML exceeds the size limit");
-      chunks.push(chunk);
-    }
-    return new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks));
+    return await parseAnalyticsResponse(response, jurisdiction);
   } finally {
     response.destroy();
   }
+}
+
+export async function parseAnalyticsResponse(response, jurisdiction) {
+  const { headers, statusCode } = response;
+  if (statusCode !== 200 || !/^text\/html(?:\s*;|$)/i.test(headers["content-type"] ?? "")) {
+    throw new Error("Expected a direct 200 HTML response from the synthetic target");
+  }
+  if (
+    headers["x-two-analytics-fixture"] !== "isolated-v1" ||
+    headers["x-two-analytics-jurisdiction"] !== jurisdiction ||
+    headers["set-cookie"] !== undefined
+  ) {
+    throw new Error("Synthetic target response failed admission");
+  }
+  const chunks = [];
+  let bytes = 0;
+  for await (const chunk of response) {
+    bytes += chunk.length;
+    if (bytes > MAX_HTML_BYTES) throw new Error("Synthetic HTML exceeds the size limit");
+    chunks.push(chunk);
+  }
+  return new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks));
 }
