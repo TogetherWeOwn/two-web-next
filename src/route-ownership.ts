@@ -33,6 +33,9 @@ import { withStreamedBody } from "./html-stream";
 import { applySingleValidator } from "./http/conditional";
 import { PRODUCTION_APEX } from "./http/robots";
 import { EVENTS_CALENDAR_ISLAND } from "./islands/contracts-calendar";
+import { KIT_HOTZONE_SIGNAL_ROUTE } from "./hotzones/kit-signal-route";
+import { refuseHotzone } from "./hotzones/refusal";
+import { parseSeasonParam } from "./hotzones/season";
 import { transformContentLeafChunk } from "./kit-content-chunk";
 import type { KitHomePanels } from "./kit-home-panels";
 import type { KitLocals } from "./kit-session";
@@ -256,9 +259,8 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     reads: { resource: "profile", action: "view", route: "profiles.show" },
   },
   // Hot-zone heatmaps: public aggregates with the same reads and cache policy
-  // as the Hono handlers (src/hotzones/routes.tsx). Concrete signal paths
-  // only, never a :param pattern: unknown segments must fall through to the
-  // Hono 404, and each path needs its own executed parity run.
+  // as the Hono handlers (src/hotzones/routes.tsx). Keep concrete signals
+  // separate from the default-off generic refusal family.
   { method: "GET", path: "/hotzones", enabled: true, reads: "public" },
   { method: "GET", path: "/hotzones/joins", enabled: true, reads: "public" },
   { method: "GET", path: "/hotzones/voice", enabled: true, reads: "public" },
@@ -1351,6 +1353,13 @@ async function dispatchKitRequest(
     refused.headers.set("x-request-id", requestId);
     return refused;
   }
+  if (route === KIT_HOTZONE_SIGNAL_ROUTE) {
+    // Share Hono's season-first refusal before the API resolve or any reads.
+    const context = new Context<{ Bindings: Env }>(event.request);
+    const season = context.req.query("season") ?? null;
+    const refused = await refuseHotzone(context, parseSeasonParam(season) ? 404 : 400);
+    return finishKitResponse(refused, event, deps, requestId);
+  }
   // These API handlers own route-level admission, including any conditional
   // session work. The dispatcher supplies correlation and global headers.
   if (api && route.reads === "public") {
@@ -1389,8 +1398,7 @@ async function dispatchKitRequest(
   // wrapper.
   const isPastArchivePage = event.route?.id === "/events/past";
   const isEventsListPage = event.route?.id === "/events";
-  // Hot-zone heatmaps: the index plus the per-signal route. Concrete manifest
-  // paths only (see ROUTE_MANIFEST): unknown segments never reach this branch.
+  // Hot-zone heatmaps: the index plus the three concrete signal paths.
   const isHotzonesPage =
     event.route?.id === "/hotzones" || event.route?.id === "/hotzones/[signal]";
   // The live detail is a member read, so it renders inside the boundary; the
