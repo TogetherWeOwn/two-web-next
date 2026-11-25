@@ -24,7 +24,7 @@ export async function assertServingLedgerRelationLock({
 
       await assert.rejects(isolate("forward"), {
         code: "55P03",
-        message: 'could not obtain lock on relation "__drizzle_migrations"',
+        message: 'could not obtain lock on relation "drizzle.__drizzle_migrations"',
       });
       // The recipe reaches the relation lock only after the advisory try-lock succeeds.
       const advisoryIndex = isolationQueries.findIndex(
