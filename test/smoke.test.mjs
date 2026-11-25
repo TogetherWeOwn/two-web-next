@@ -16,6 +16,7 @@ import {
   smoke,
   writeSmokeLedger,
 } from "../bin/smoke.mjs";
+import { verifyServed } from "../ci/kit-cutover-staging.mjs";
 
 // Producer-derived security.txt body: buildSecurityTxt bundled once from
 // src/security-txt.ts (same in-memory esbuild pattern as the rendering tests
@@ -183,7 +184,7 @@ async function stub(t, change = () => {}, extraFixtures = {}) {
         "set-cookie": "fixture=not-a-session; Path=/",
       },
     };
-    change(request.url, result);
+    change(request.url, result, request.headers);
     response.writeHead(result.status, result.headers);
     if (result.body === null) response.flushHeaders();
     else response.end(result.body);
@@ -1121,10 +1122,81 @@ test("Home smoke accepts only the guest headings on Kit responses", async (t) =>
   }
 });
 
+const joinAction = '<a href="/join/discord" data-testid="join-oneclick">Join with Discord</a>';
+const calendarFixtures = {
+  "/events?view=calendar": [
+    200,
+    "text/html",
+    (origin) =>
+      `<link rel="canonical" href="${origin}/events"><section data-island="events-calendar">${["head", "subscribe", "actions", "miss", "content"].map((zone) => `<div data-cal-zone="${zone}"></div>`).join("")}</section>`,
+  ],
+};
+
+test("isolated cutover refuses a healthy smoke response from the wrong Worker version", async (t) => {
+  const expectedVersion = "11111111-1111-1111-1111-111111111111";
+  const otherVersion = "22222222-2222-2222-2222-222222222222";
+  const sourceSha = "a".repeat(40);
+  const prefixes = { 1033: [1], 1037: [1, 2, 3, 4, 5] };
+  let smokeVersion = otherVersion;
+  const observations = [];
+  const { url, requests } = await stub(
+    t,
+    (path, response, headers) => {
+      if (path === "/join") response.body += joinAction;
+      if (path === "/up") {
+        // readReady sends no-cache. The ordinary-traffic smoke makes its own request.
+        const ready = headers["cache-control"] === "no-cache";
+        const version = ready ? expectedVersion : smokeVersion;
+        observations.push([ready ? "readiness" : "smoke", version]);
+        response.body = JSON.stringify({
+          ...JSON.parse(response.body),
+          migration_ledger: prefixes[1033],
+          revision: { version_id: version, commit: sourceSha },
+        });
+      }
+    },
+    calendarFixtures,
+  );
+  const log = t.mock.method(console, "log", () => {});
+  const waits = [];
+  const verify = () =>
+    verifyServed(url, prefixes, { sourceSha }, expectedVersion, "1033", "hono", {
+      wait: async (ms) => {
+        waits.push(ms);
+      },
+    });
+
+  await assert.rejects(verify(), /isolated public-route smoke failed/);
+  assert.deepEqual(waits, Array(5).fill(10_000));
+  assert.deepEqual(
+    observations,
+    Array.from({ length: 6 }, () => [
+      ["readiness", expectedVersion],
+      ["smoke", otherVersion],
+    ]).flat(),
+  );
+  const failures = log.mock.calls
+    .map(({ arguments: [line] }) => line)
+    .filter((line) => line.startsWith("FAIL "));
+  assert.deepEqual(
+    failures,
+    Array(6).fill(
+      `FAIL /up: expected revision.version_id ${expectedVersion}; actual revision.version_id ${otherVersion}`,
+    ),
+  );
+
+  smokeVersion = expectedVersion;
+  observations.length = 0;
+  assert.equal(await verify(), Object.keys(fixtures).length + Object.keys(calendarFixtures).length);
+  assert.deepEqual(observations, [
+    ["readiness", expectedVersion],
+    ["smoke", expectedVersion],
+  ]);
+  assert.equal(waits.length, 5);
+  assert.ok(requests.every(({ override }) => override === undefined));
+});
+
 test("Ember cutover smoke requires Kit documents and Hono fallback", async (t) => {
-  const fragment = (origin) =>
-    `<link rel="canonical" href="${origin}/events"><section data-island="events-calendar">${["head", "subscribe", "actions", "miss", "content"].map((zone) => `<div data-cal-zone="${zone}"></div>`).join("")}</section>`;
-  const fragments = { "/events?view=calendar": [200, "text/html", fragment] };
   let missingAttribute = "";
   let admin = false;
   const render = (path, response) => {
@@ -1132,9 +1204,7 @@ test("Ember cutover smoke requires Kit documents and Hono fallback", async (t) =
       response.headers["x-two-renderer"] = "kit";
     if (path === "/") response.body = '<h1 id="home-heading">The lobby is open.</h1>';
     if (path === "/join") {
-      response.body =
-        '<h2 id="join-card-heading">Join with one sign-in</h2>' +
-        '<a href="/join/discord" data-testid="join-oneclick">Join with Discord</a>';
+      response.body = '<h2 id="join-card-heading">Join with one sign-in</h2>' + joinAction;
     }
     if (missingAttribute && path === "/events?view=calendar") {
       delete response.headers["x-two-renderer"];
@@ -1143,7 +1213,7 @@ test("Ember cutover smoke requires Kit documents and Hono fallback", async (t) =
     if ((admin || missingAttribute) && path === "/admin")
       response.headers["x-two-renderer"] = "kit";
   };
-  const good = await stub(t, render, fragments);
+  const good = await stub(t, render, calendarFixtures);
   const override = 'two-web-next-production="22345678-1234-1234-1234-123456789abc"';
   const options = { expectedCutoverRenderer: "kit", versionOverride: override };
   assert.equal((await run(good.url, options)).ok, true);
