@@ -287,8 +287,9 @@ export async function assertKitQueuePreviewServing({
       ]);
     }
     const receipts =
-      () => sql`select log_name, description, causer_type, causer_id, event, properties
-      from activity_log where subject_type = 'queue_failed_jobs' and subject_id = ${failureId} order by id`;
+      () => sql`select log_name, description, subject_type, subject_id, causer_type, causer_id, event, properties
+      from activity_log where description = 'queue.failed.preview'
+        or causer_id in (${operatorId}, ${otherModerator}, ${member}) order by id`;
 
     await compareRefusal("disabled", 404, { actor: operatorId }, "preview_disabled");
     await compareRefusal("on", 403, { actor: operatorId, origin: "" }, "cross_origin");
@@ -321,6 +322,7 @@ export async function assertKitQueuePreviewServing({
     console.log("PASS installed Kit queue preview admission, refusal and cache match direct Hono");
 
     const encodedId = `%${failureId.charCodeAt(0).toString(16)}${failureId.slice(1)}`;
+    const encodedPath = path.replace(`/${failureId}/`, `/${encodedId}/`);
     for (const [method, url] of [
       ["HEAD", path],
       ["POST", path],
@@ -328,7 +330,7 @@ export async function assertKitQueuePreviewServing({
       ["GET", `${path}/`],
       ["GET", `${path}/__data.json`],
       ["GET", path.replace("/failed/", "/%66ailed/")],
-      ["GET", path.replace(`/${failureId}/`, `/${encodedId}/`)],
+      ["GET", encodedPath],
       ["GET", path.replace(`/${failureId}/`, `/${failureId}%2F1/`)],
       ["GET", path.replace(`/${failureId}/`, `/${failureId}/1/`)],
     ]) {
@@ -341,13 +343,15 @@ export async function assertKitQueuePreviewServing({
 
     let baselineHeaders;
     let expectedReceipts = 0;
-    for (const [name, profile, owned] of [
+    for (const [name, profile, owned, url = path] of [
       ["hono", "on", false],
       ["kit", "unset", false],
       ["kit", "off", false],
       ["kit", "on", true],
+      ["hono", "on", false, encodedPath],
+      ["kit", "on", false, encodedPath],
     ]) {
-      const result = await read(targets[name], profile, 200, { actor: operatorId, owned });
+      const result = await read(targets[name], profile, 200, { actor: operatorId, owned, url });
       baselineHeaders ??= contract(result);
       assert.deepEqual(contract(result), baselineHeaders);
       assert.equal(result.headers.get("cache-control"), "private, no-store");
@@ -377,6 +381,8 @@ export async function assertKitQueuePreviewServing({
       assert.deepEqual(logged.at(-1), {
         log_name: "operations",
         description: "queue.failed.preview",
+        subject_type: "queue_failed_jobs",
+        subject_id: failureId,
         causer_type: "User",
         causer_id: operatorId,
         event: "view",
