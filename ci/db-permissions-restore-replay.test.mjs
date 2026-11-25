@@ -67,6 +67,54 @@ const hash = (input) => createHash("sha256").update(input).digest("hex");
 const snapshotSql = read("db-permissions-repair-state.sql");
 const MISSING_EDGE = [true, false, false];
 
+test("serving isolation rejects repeated membership pairs before connecting", async () => {
+  const login = "fixture_serving";
+  const membership = [
+    { role: "pg_read_all_data", grantor: "fixture_a", admin: false, inherit: true, set: true },
+    { role: "pg_read_all_data", grantor: "fixture_b", admin: false, inherit: false, set: false },
+    { role: "pg_write_all_data", grantor: "fixture_a", admin: false, inherit: true, set: true },
+  ];
+  const [edge] = membership;
+  const connectorReached = new Error("Synthetic connector reached");
+  const run = (operation, edges) => {
+    const raw = JSON.stringify({
+      add: [],
+      after: hash("after"),
+      artifact: { sourceSha: "a".repeat(40), digest: hash("artifact") },
+      before: hash("before"),
+      identity: hash("identity"),
+      membership: edges,
+      remove: [],
+      servingRole: login,
+      version: "00000000-0000-4000-8000-000000000001",
+    });
+    return runServingIsolation(
+      operation,
+      "1033_session-roles-checked-at",
+      {
+        PRODUCTION_DB_ISOLATION_PLAN: raw,
+        PRODUCTION_DB_ISOLATION_PLAN_SHA256: hash(raw),
+        PRODUCTION_DB_ISOLATION_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:fixture@${PLANETSCALE_PRODUCTION_HOST}/postgres?sslmode=verify-full`,
+      },
+      {
+        login,
+        connect() {
+          throw connectorReached;
+        },
+      },
+    );
+  };
+  for (const operation of ["forward", "undo", "readback"]) {
+    await assert.rejects(run(operation, membership), (error) => error === connectorReached);
+    for (const repeated of [edge, { ...edge, inherit: false, set: false }]) {
+      await assert.rejects(run(operation, [...membership, repeated]), {
+        code: "ERR_ASSERTION",
+        message: "Duplicate serving role membership",
+      });
+    }
+  }
+});
+
 async function denies(query, code = "42501") {
   await assert.rejects(query, (error) => {
     assert.equal(error.code, code);
