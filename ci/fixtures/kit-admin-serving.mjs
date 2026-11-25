@@ -1237,7 +1237,10 @@ async function assertEventCancellation({ kit, sql, moderator, member, moderatorI
     const jobs = await sql`
       select job_id, kind from queue_jobs where key = ${queueKey(row)} order by job_id
     `;
-    return { event, activity: [...activity], jobs: [...jobs] };
+    const [lease] = await sql`
+      select owner_token from job_unique_locks where key = ${queueKey(row)}
+    `;
+    return { event, activity: [...activity], jobs: [...jobs], lease };
   }
 
   async function throttleHits() {
@@ -1247,7 +1250,12 @@ async function assertEventCancellation({ kit, sql, moderator, member, moderatorI
     return count;
   }
 
-  async function cancel(row, status, { owned = true, cookie = moderator, origin, body } = {}) {
+  async function cancel(
+    row,
+    status,
+    { owned = true, cookie = moderator, origin, body, expectedHits = 1 } = {},
+  ) {
+    const hitsBefore = await throttleHits();
     const result = await visit(kit, `${eventPath(row)}/cancel`, status, {
       method: "POST",
       owned,
@@ -1260,6 +1268,11 @@ async function assertEventCancellation({ kit, sql, moderator, member, moderatorI
         ...(cookie ? { cookie } : {}),
       },
     });
+    assert.equal(
+      (await throttleHits()) - hitsBefore,
+      expectedHits,
+      `${owned ? "Kit" : "Hono"} ${row.title} POST returning ${status} throttle spend`,
+    );
     const captured = result.headers.get("x-fixture-cancel-sync");
     assert.ok(captured, "the installed Worker used the cancellation transport trap");
     return { ...result, messages: JSON.parse(captured) };
@@ -1270,7 +1283,7 @@ async function assertEventCancellation({ kit, sql, moderator, member, moderatorI
     const untouched = await snapshot(draft);
     assert.equal(untouched.event.status, "draft");
     for (const owned of [true, false]) {
-      const guest = await cancel(draft, 303, { owned, cookie: null });
+      const guest = await cancel(draft, 303, { owned, cookie: null, expectedHits: 0 });
       assert.equal(
         guest.headers.get("location"),
         `/auth/recover?next=${encodeURIComponent(eventPath(draft))}`,
@@ -1282,15 +1295,13 @@ async function assertEventCancellation({ kit, sql, moderator, member, moderatorI
         [403, { origin: "https://other.example" }],
         [413, { body: "x".repeat(4097) }],
       ]) {
-        const denied = await cancel(draft, status, { owned, ...options });
+        const denied = await cancel(draft, status, { owned, ...options, expectedHits: 0 });
         assert.equal(denied.headers.get("location"), null);
         assert.equal(denied.headers.getSetCookie().length, 0);
         assert.deepEqual(denied.messages, []);
       }
       assert.deepEqual(await snapshot(draft), untouched);
     }
-    assert.equal(await throttleHits(), 0, "admission and the action cap refuse before throttle");
-
     for (const row of [draft, published, fallback]) {
       const before = await snapshot(row);
       assert.equal(before.event.status, row.status);
@@ -1316,6 +1327,21 @@ async function assertEventCancellation({ kit, sql, moderator, member, moderatorI
       assert.equal(audit.description, `cancelled event ${row.title}`);
       assert.deepEqual(audit.properties, { status: { before: row.status, after: "cancelled" } });
 
+      // Settle the trapped job locally so its lease cannot mask a replay dispatch.
+      assert.ok(committed.lease?.owner_token, "the dispatch owns a sync lease");
+      await sql.begin(async (tx) => {
+        const removed = await tx`
+          delete from queue_jobs where job_id = ${message.jobId} and key = ${queueKey(row)}
+        `;
+        const released = await tx`
+          delete from job_unique_locks where key = ${queueKey(row)}
+          and owner_token = ${committed.lease.owner_token}
+        `;
+        assert.equal(removed.count, 1, "the trapped job was settled");
+        assert.equal(released.count, 1, "the trapped job's lease was released");
+      });
+      const settled = { ...committed, jobs: [], lease: undefined };
+      assert.deepEqual(await snapshot(row), settled);
       for (const owned of [true, false]) {
         const stale = await cancel(row, 422, { owned });
         assert.equal(stale.headers.get("location"), null);
@@ -1324,8 +1350,8 @@ async function assertEventCancellation({ kit, sql, moderator, member, moderatorI
         assert.deepEqual(stale.messages, []);
         assert.deepEqual(
           await snapshot(row),
-          committed,
-          "stale POST preserves the original audit and state",
+          settled,
+          "stale POST preserves the audit and state without reacquiring a sync lease",
         );
       }
     }
@@ -1339,7 +1365,6 @@ async function assertEventCancellation({ kit, sql, moderator, member, moderatorI
       assert.deepEqual(refused.messages, []);
       assert.deepEqual(await snapshot(past), pastState);
     }
-    assert.equal(await throttleHits(), 11, "each admitted submission spends one write hit");
   } finally {
     const keys = rows.map(queueKey);
     await sql.begin(async (tx) => {
