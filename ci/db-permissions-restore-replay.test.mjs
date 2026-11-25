@@ -119,9 +119,11 @@ async function webReads(connect, repaired, ledgerRows = 34) {
       rows.map(({ id }) => id),
       [1, 2],
     );
-    const [row] =
-      await tx`select has_table_privilege(current_user, 'public.events', 'INSERT') as writes`;
-    assert.equal(row.writes, false);
+    const [row] = await tx`select
+      has_table_privilege(current_user, 'public.events', 'INSERT') as writes,
+      has_column_privilege(current_user, 'public.web_session_grace', 'id', 'SELECT') as grace_column,
+      has_table_privilege(current_user, 'public.web_session_grace', 'SELECT') as grace_table`;
+    assert.deepEqual(row, { writes: false, grace_column: true, grace_table: false });
   });
   await readAs(connect, migrator, "postgres", async (tx) => {
     if (repaired) {
@@ -233,7 +235,7 @@ const expansion = [
 ];
 const expandedEnd = expansion.at(-1);
 
-async function applyWebSlice(sql, directory, originalLength) {
+function writeWebSlice(directory, originalLength) {
   const journal = JSON.parse(read("../drizzle/meta/_journal.json"));
   const entries = journal.entries.slice(0, originalLength + expansion.length);
   assert.deepEqual(
@@ -252,8 +254,7 @@ async function applyWebSlice(sql, directory, originalLength) {
       join(migrationsFolder, `${tag}.sql`),
     );
   }
-  await assertRuntimeDefaultAcl(sql);
-  await migrate(drizzle(sql), { migrationsFolder });
+  return migrationsFolder;
 }
 
 async function rehearseRepairedServing(restore, fresh, directory, t) {
@@ -302,6 +303,7 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
     { connect: connectMigrator },
   );
 
+  const migrationsFolder = writeWebSlice(directory, base.rows.length);
   const outfile = join(directory, "database-readiness.mjs");
   await build({
     entryPoints: [fileURLToPath(new URL("../src/up-database.ts", import.meta.url))],
@@ -310,6 +312,18 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
     platform: "node",
     format: "esm",
     define: { __TWO_WEB_1033_COMPAT__: "true" },
+    plugins: [
+      {
+        name: "historical-web-journal",
+        setup(bundle) {
+          // Use the same canonical prefix for the historical readiness build
+          // and the expansion. Later required migrations belong to newer builds.
+          bundle.onResolve({ filter: /^\.\.\/drizzle\/meta\/_journal\.json$/ }, () => ({
+            path: join(migrationsFolder, "meta/_journal.json"),
+          }));
+        },
+      },
+    ],
   });
   const { databaseReadiness } = await import(pathToFileURL(outfile).href);
   const { run: isolate, version } = await withClient(restore.admin(), (owner) =>
@@ -365,7 +379,10 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
   );
   await probe(base, true);
   t.diagnostic("Isolated 1033 preserved workload access and projected readiness.");
-  await withClient(connectMigrator(), (sql) => applyWebSlice(sql, directory, base.rows.length));
+  await withClient(connectMigrator(), async (sql) => {
+    await assertRuntimeDefaultAcl(sql);
+    await migrate(drizzle(sql), { migrationsFolder });
+  });
   const expanded = await getLedger(expandedEnd);
   assert.equal(await isolate("readback", { end: expandedEnd }), "after");
   await probe(expanded, true);
@@ -383,6 +400,10 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
       Object.keys(baseline.inventory).map((name) => [name, afterUndo.inventory[name]]),
     ),
     baseline.inventory,
+  );
+  assert.deepEqual(
+    afterUndo.object_acl.filter(({ name }) => Object.hasOwn(baseline.inventory, name)),
+    baseline.object_acl,
   );
   for (const key of ["defaults", "schema_db_acl", "drizzle_access", "migrator_ready"]) {
     assert.deepEqual(afterUndo[key], baseline[key], key);
