@@ -20,6 +20,7 @@ const WRANGLER_INTEGRITIES = new Map(
 const CONFIG = "wrangler.jsonc";
 const LOCK = "package-lock.json";
 const DIRECTORY = "public";
+const SOURCE_PATHS = [CONFIG, LOCK, DIRECTORY, "wrangler.json", ".wrangler"];
 const TEXT_LIMIT = 64 * 1024;
 const LOCK_LIMIT = 2 * 1024 * 1024;
 const ASSET_LIMIT = 25 * 1024 * 1024;
@@ -55,7 +56,7 @@ function git(repo, args, maxBuffer, input) {
 function listSource(repo, sourceSha) {
   const output = git(
     repo,
-    ["ls-tree", "-rlz", "--full-tree", sourceSha, "--", CONFIG, LOCK, DIRECTORY],
+    ["ls-tree", "-rlz", "--full-tree", sourceSha, "--", ...SOURCE_PATHS],
     (maxEntries + 4) * 600,
   ).toString("latin1");
   if (!output.endsWith("\0")) throw refusal("source tree");
@@ -71,10 +72,10 @@ function listSource(repo, sourceSha) {
     if (paths.has(path)) throw refusal("duplicate source member");
     let limit = path === LOCK ? LOCK_LIMIT : TEXT_LIMIT;
     if (path !== CONFIG && path !== LOCK) {
+      if (!path.startsWith(`${DIRECTORY}/`)) throw refusal("unsupported source member");
       const relative = path.slice(DIRECTORY.length + 1);
       const archivePath = `assets/${relative}`;
-      if (!path.startsWith(`${DIRECTORY}/`) || !validRecoveryZipPath(archivePath))
-        throw refusal("asset path");
+      if (!validRecoveryZipPath(archivePath)) throw refusal("asset path");
       if (!recordRecoveryPath(aliases, archivePath)) throw refusal("aliased asset path");
       const root = relative.split("/", 1)[0].toLowerCase();
       if (
@@ -164,8 +165,7 @@ function sourceSelection(configBytes, lockBytes) {
   return pin.version;
 }
 
-// Read only Git objects. The caller supplies the trusted repository and source SHA
-// of the historical upload. This does not authenticate the upload or its checkout.
+// Read tracked bytes at a commit in a trusted repository.
 export function inventoryPureHonoSourceAssets({ repo, sourceSha }) {
   if (typeof repo !== "string" || !isAbsolute(repo)) throw refusal("repository");
   if (typeof sourceSha !== "string" || sourceSha.length !== 40 || !/^[0-9a-f]+$/.test(sourceSha))

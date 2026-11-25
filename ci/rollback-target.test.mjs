@@ -108,7 +108,6 @@ const assetConfig = `{
 function sourceAssetLock(version, integrity) {
   return JSON.stringify({ packages: { "node_modules/wrangler": { version, integrity } } });
 }
-
 const assetLock = sourceAssetLock(
   "4.156.1",
   "sha512-aZngeNRosSVly6wgxpaJAtFPtEoyM3hD8mLMMcHNXTnofMq4ZN+RMXOdHETyttNP+//+mfiD1hb5E8YFtiMMRQ==",
@@ -184,7 +183,6 @@ test("Hono source assets pin selected bytes and controls to a commit", (t) => {
     git("rev-parse", "HEAD:public/ok.js"),
   );
   assert.deepEqual(read(sourceSha), first);
-
   const receipt = JSON.parse(first.receipt);
   const row = (path, bytes) => ({ path, bytes: bytes.length, sha256: recoveryDigest(bytes) });
   assert.deepEqual(first.assets, assets);
@@ -210,23 +208,25 @@ test("Hono source assets pin selected bytes and controls to a commit", (t) => {
 
 test("Hono source assets refuse unsafe selection inputs", (t) => {
   const cases = [
-    ["ignore overrides", ".assetsignore", "!/_headers\n", "unsupported asset selection input"],
-    ["case variant ignore", ".ASSETSIGNORE", "", "unsupported asset selection input"],
-    ["case variant headers", "_HEADERS", "value", "unsupported asset selection input"],
-    ["header directory", "_headers/fixture", "value", "unsupported asset selection input"],
-    ["legacy Worker", "_worker.js-extra", "value", "unsupported asset selection input"],
-    ["trailing newline", "internal-canary.js\n", "value", "asset path"],
-    ["case alias", "OK.js", "value", "aliased asset path"],
-    ["invalid header encoding", "_headers", Buffer.from([0xff]), "selection input encoding"],
-    ["large header", "_headers", Buffer.alloc(64 * 1024 + 1), "file size"],
-    ["large asset", "large.bin", Buffer.alloc(25 * 1024 * 1024 + 1), "file size"],
+    ["wrangler.json", "{}", "unsupported source member"],
+    [".wrangler/deploy/config.json", "{}", "unsupported source member"],
+    ["public/.assetsignore", "!/_headers\n", "unsupported asset selection input"],
+    ["public/.ASSETSIGNORE", "", "unsupported asset selection input"],
+    ["public/_HEADERS", "value", "unsupported asset selection input"],
+    ["public/_headers/fixture", "value", "unsupported asset selection input"],
+    ["public/_worker.js-extra", "value", "unsupported asset selection input"],
+    ["public/internal-canary.js\n", "value", "asset path"],
+    ["public/OK.js", "value", "aliased asset path"],
+    ["public/_headers", Buffer.from([0xff]), "selection input encoding"],
+    ["public/_headers", Buffer.alloc(64 * 1024 + 1), "file size"],
+    ["public/large.bin", Buffer.alloc(25 * 1024 * 1024 + 1), "file size"],
   ];
-  for (const [description, path, bytes, reason] of cases) {
+  for (const [path, bytes, reason] of cases) {
     const { write, commit, read } = sourceAssetFixture(t);
-    write(`public/${path}`, bytes);
+    write(path, bytes);
     const source = commit();
     const message = `pure Hono recovery assets refused: ${reason}`;
-    assert.throws(() => read(source), { message }, description);
+    assert.throws(() => read(source), { message }, path);
   }
   const { repo, git, write, commit, read } = sourceAssetFixture(t);
   const source = commit();
