@@ -12,4 +12,6 @@ The [admission](2026-11-24-attendance-route.json) rounds 1.25× measured bytes u
 to 512 B raw and 256 B gzip, capped by the aggregate. File caps add one to the
 measured counts. Existing caps and CSS advisories stay in force.
 
-Undo by reverting the row and replay admission together after any dependent decisions.
+Undo by reverting dependent budget decisions first, then revert the preview
+and its budget admission together. Keep the budget row while the build
+still emits `/admin/attendance`, even when its runtime flag is off.
