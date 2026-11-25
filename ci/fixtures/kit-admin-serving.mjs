@@ -570,9 +570,6 @@ export async function assertKitAdminServing({ kit, off, hono, databaseUrl }) {
     await visit(kit, editor, 403, { headers: { ...html, cookie: member } });
     await visit(kit, editor, 200, { method: "HEAD", headers: { cookie: moderator } });
 
-    const { assertJoinAttemptDetailParity } = await import("./kit-admin-join-attempt-detail.mjs");
-    await assertJoinAttemptDetailParity({ kit, off, sql, visit, session, renewedModerator });
-
     const refused = await visit(kit, operator, 401, { headers: { cookie: moderator } });
     assert.equal(refused.headers.get("www-authenticate"), "Bearer");
     assert.equal(refused.headers.getSetCookie().length, 0);
@@ -729,4 +726,17 @@ export async function assertKitAdminServing({ kit, off, hono, databaseUrl }) {
     }
   }
   console.log("PASS Kit admin ownership, isolated bearers, and native form parity");
+}
+
+export async function assertInstalledJoinAttemptDetail({ worker, scratch, databaseUrl, start }) {
+  const { assertJoinAttemptDetailParity, startJoinAttemptDetailFixture } = await import(
+    "./kit-admin-join-attempt-detail.mjs"
+  );
+  const target = await startJoinAttemptDetailFixture({ worker, scratch, start });
+  const sql = postgres(databaseUrl, { max: 1 });
+  try {
+    await assertJoinAttemptDetailParity({ worker: target, sql, visit, session, renewedModerator });
+  } finally {
+    await sql.end({ timeout: 1 });
+  }
 }

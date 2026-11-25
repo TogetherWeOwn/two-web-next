@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { EMBER_CUTOVER_VARS } from "../kit-cutover-evidence.mjs";
 import {
   parseRenderedPage,
   renderedAttribute,
@@ -8,10 +11,49 @@ import {
 } from "../rendered-page.mjs";
 
 const listPath = "/admin/join-attempts";
+const appUrl = "https://two-web-kit-cutover-proof-1-1.join-attempt-fixture.workers.dev";
+const profileHeader = "x-fixture-join-attempt-admin";
+
+export async function startJoinAttemptDetailFixture({ worker, scratch, start }) {
+  const entry = join(scratch, "kit-admin-join-attempt-detail.mjs");
+  // An unscoped loopback URL selects the preview manifest, which already
+  // owns this GET. Use the real cutover host gate, with transport on loopback.
+  await writeFile(
+    entry,
+    `import { withEnv } from "cloudflare:workers";
+import worker from ${JSON.stringify(worker)};
+let outbound = false;
+globalThis.fetch = async () => {
+  outbound = true;
+  throw new Error("Join-attempt detail fixture forbids outbound HTTP");
+};
+export default {
+  async fetch(request, env, context) {
+    const local = new URL(request.url);
+    if (local.pathname === "/favicon.ico") return worker.fetch(request, env, context);
+    if (request.method !== "GET" || !/^\\/admin\\/join-attempts\\/\\d+$/.test(local.pathname)) {
+      return new Response(null, { status: 404 });
+    }
+    const admin = request.headers.get(${JSON.stringify(profileHeader)});
+    if (admin !== "true" && admin !== "false") return new Response(null, { status: 400 });
+    const url = new URL(local.pathname + local.search, env.APP_URL);
+    const document = new Request(url, request);
+    document.headers.delete(${JSON.stringify(profileHeader)});
+    document.headers.set("host", url.host);
+    if (document.headers.get("origin") === local.origin) document.headers.set("origin", url.origin);
+    const bindings = { ...env, KIT_ROUTE_ADMIN: admin };
+    const response = await withEnv(bindings, () => worker.fetch(document, bindings, context));
+    if (outbound) throw new Error("Join-attempt detail fixture attempted outbound HTTP");
+    return response;
+  },
+};
+`,
+  );
+  return start(entry, { ...EMBER_CUTOVER_VARS, APP_URL: appUrl });
+}
 
 export async function assertJoinAttemptDetailParity({
-  kit,
-  off,
+  worker,
   sql,
   visit,
   session,
@@ -52,10 +94,15 @@ export async function assertJoinAttemptDetailParity({
     const missingPath = `${listPath}/${missingId}`;
     const member = await session(sql, memberId, false);
 
-    for (const [target, owned, moderatorId] of [
-      [off, false, moderatorIds[0]],
-      [kit, true, moderatorIds[1]],
+    for (const [owned, moderatorId] of [
+      [false, moderatorIds[0]],
+      [true, moderatorIds[1]],
     ]) {
+      const target = {
+        ...worker,
+        name: owned ? "Cutover Admin on" : "Cutover Admin off",
+        headers: { [profileHeader]: String(owned) },
+      };
       async function read(path, status, cookie, heading) {
         const label = `${target.name} ${status} ${path}`;
         const response = await visit(target, path, status, {
@@ -110,6 +157,7 @@ export async function assertJoinAttemptDetailParity({
       assert.deepEqual(
         times.map((el) => renderedAttribute(el, "datetime")),
         [instant],
+        `${target.name} UTC instant`,
       );
       assert.doesNotMatch(
         detail.text,
@@ -144,6 +192,7 @@ export async function assertJoinAttemptDetailParity({
         renewedModerator(detail.headers),
         "Join attempt not found",
       );
+      // The 404 still delivers the renewed bearer.
       renewedModerator(missing.headers);
       for (const path of [detailPath, missingPath]) {
         const denied = await read(path, 403, member, "You do not have access to this");

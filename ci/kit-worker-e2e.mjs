@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 import { STAGING_STATIC_DOCUMENT_READY } from "../src/kit-staging-static.ts";
 import {
+  assertInstalledJoinAttemptDetail,
   assertKitAdminServing,
   assertKitAttendanceDisabled,
   assertMixedAdminAuthRollback,
@@ -858,6 +859,23 @@ export default {
       off: kitWithSession,
       hono: honoWithSession,
       databaseUrl,
+    });
+
+    await assertInstalledJoinAttemptDetail({
+      worker,
+      scratch,
+      databaseUrl,
+      start: async (main, vars) => {
+        const instance = await startWorker(
+          "kit-admin-join-attempt-detail",
+          main,
+          assets,
+          secret,
+          vars,
+        );
+        await listen(instance.child, instance.origin, () => instance.log);
+        return { name: instance.name, origin: instance.origin };
+      },
     });
 
     async function observeDataRedirect(worker, path) {
