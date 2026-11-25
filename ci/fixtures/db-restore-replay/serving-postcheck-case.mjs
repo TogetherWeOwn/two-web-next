@@ -8,6 +8,7 @@ export async function assertServingPostcheckRollback({
   forward,
   readAclState,
   probeBefore,
+  retryForward,
 }) {
   const before = await readAclState();
   await withClient(admin(), (sql) => sql`grant create on schema public to ${sql(login)}`);
@@ -28,6 +29,6 @@ export async function assertServingPostcheckRollback({
 
   assert.deepEqual(await readAclState(), before);
   await probeBefore();
-  assert.equal(await isolate("forward", forward), "committed");
+  await retryForward();
   assert.equal(await isolate("readback"), "after");
 }

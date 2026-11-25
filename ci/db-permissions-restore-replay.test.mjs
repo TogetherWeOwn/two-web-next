@@ -416,6 +416,9 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
         roles: await roles(),
       }),
       probeBefore: () => probe(base, false),
+      retryForward: async () => {
+        assert.equal(await isolate("forward", forward), "committed");
+      },
     }),
   );
   const { digest: isolatedDigest } = await inspect(fresh);
