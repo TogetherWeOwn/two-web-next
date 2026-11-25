@@ -9,6 +9,7 @@ import {
   renderedText,
 } from "../rendered-page.mjs";
 
+// Match ISOLATED_CUTOVER_ORIGIN so the installed Worker uses the shipped profile.
 const appUrl = "https://two-web-kit-cutover-proof-1-1.event-detail-fixture.workers.dev";
 
 export async function assertEventDetailRollback({ scratch, kit, hono, startWorker, event }) {
@@ -26,11 +27,19 @@ export default {
     url.search = incoming.search;
     const document = new Request(url, request);
     document.headers.set("host", url.host);
+    // These requests stand in for top-level navigations through the loopback client.
+    document.headers.set("sec-fetch-mode", "navigate");
+    document.headers.set("sec-fetch-dest", "document");
     return worker.fetch(document, env, context);
   },
 };\n`,
     );
-    return startWorker(name, entry, assets, { ...vars, APP_URL: appUrl });
+    return startWorker(name, entry, assets, {
+      ...vars,
+      APP_URL: appUrl,
+      // The Home renderer control uses the fallback and cannot refresh Discord events.
+      DISCORD_GUILD_ID: "",
+    });
   }
 
   const [ember, rollback] = await Promise.all([
@@ -42,22 +51,24 @@ export default {
   const alias = `/e/${event.key.toLowerCase()}${query}`;
   assert.notEqual(alias, `${path}${query}`, "fixture key has a lower-case alias");
 
-  for (const { name, origin } of [ember, rollback]) {
-    async function get(path, status) {
-      const label = `${name}: ${path}`;
-      const response = await fetch(`${origin}${path}`, {
+  for (const [{ name, origin }, homeRenderer] of [
+    [ember, "kit"],
+    [rollback, null],
+  ]) {
+    async function get(target, status) {
+      const response = await fetch(`${origin}${target}`, {
         headers: { ...event.headers, accept: "text/html" },
         redirect: "manual",
         signal: AbortSignal.timeout(10_000),
       });
-      assert.equal(response.status, status, label);
-      // The shipped Ember profile delegates event detail to Hono.
-      assert.equal(response.headers.get("x-two-renderer"), null, `${label}: Hono owns detail`);
-      assert.equal(response.headers.get("cache-control"), "private, no-store", label);
-      assert.match(response.headers.get("vary") ?? "", /(?:^|,\s*)cookie(?:,|$)/i, label);
-      assert.equal(response.headers.get("etag"), null, label);
+      assert.equal(response.status, status, `${name}: ${target}`);
       return response;
     }
+
+    // Detail is Hono-owned in both phases, so use Home to prove profile selection.
+    const home = await get("/", 200);
+    assert.equal(home.headers.get("x-two-renderer"), homeRenderer, `${name}: Home renderer`);
+    await home.body?.cancel();
 
     const redirect = await get(alias, 301);
     const destination = redirect.headers.get("location");
@@ -65,6 +76,13 @@ export default {
     await redirect.body?.cancel();
 
     const page = await get(destination, 200);
+    for (const response of [redirect, page]) {
+      const label = `${name}: event detail HTTP ${response.status}`;
+      assert.equal(response.headers.get("x-two-renderer"), null, `${label}: Hono owns detail`);
+      assert.equal(response.headers.get("cache-control"), "private, no-store", label);
+      assert.match(response.headers.get("vary") ?? "", /(?:^|,\s*)cookie(?:,|$)/i, label);
+      assert.equal(response.headers.get("etag"), null, label);
+    }
     assert.match(page.headers.get("content-type") ?? "", /^text\/html\b/, name);
     const html = parseRenderedPage(await page.text());
     const headings = [...renderedElements(html, { tag: "h1" })].map(renderedText);
