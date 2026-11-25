@@ -111,6 +111,11 @@ test("staging mutation entry requires a verified caller and a successful reserva
   const absent = instrument(() => null, admittedOnlyWhenAbsent);
   await absent.enter();
   assert.deepEqual(absent.effects, ["read", { record: null, context }, "proceed"]);
+
+  const expiredLease = { ...activeLease, expiresAt: new Date(now).toISOString() };
+  const expired = instrument(() => expiredLease, () => true);
+  await expired.enter();
+  assert.deepEqual(expired.effects, ["read", { record: expiredLease, context }, "proceed"]);
 });
 
 test("staging receipts follow the served candidate through an out-of-order main advance and refuse disagreement", async () => {
