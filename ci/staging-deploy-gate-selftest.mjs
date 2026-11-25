@@ -975,7 +975,7 @@ test("staging guard runs from the workflow revision inside the existing lane bef
   assert.equal(step("Require a forward staging rollout"), "node ci/staging-forward.mjs");
   assert.match(
     workflow,
-    /ref: \$\{\{ github\.workflow_sha \}\}[\s\S]*?- name: Require a forward staging rollout[\s\S]*?DEPLOY_SHA: (\$\{\{ github\.event_name == 'workflow_run' && github\.event\.workflow_run\.head_sha \|\| github\.sha \}\})[\s\S]*?ref: \1/,
+    /ref: \$\{\{ github\.workflow_sha \}\}[\s\S]*?- name: Staging admission hold[\s\S]*?- name: Require a forward staging rollout[\s\S]*?DEPLOY_SHA: (\$\{\{ github\.event_name == 'workflow_run' && github\.event\.workflow_run\.head_sha \|\| github\.sha \}\})[\s\S]*?ref: \1/,
   );
   assert.ok(
     workflow.indexOf("- name: Require a forward staging rollout") <
