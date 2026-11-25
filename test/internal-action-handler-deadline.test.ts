@@ -129,6 +129,35 @@ describe("internal-action handler deadline (TOG-11628)", () => {
     expect(rows.get("j1")).toMatchObject({ state: "failed", reason: "gave up after 5 attempts" });
   });
 
+  it("records an uncertain outcome when a claimed send reaches its first deadline", async () => {
+    vi.useFakeTimers();
+    const postAnnouncement = vi.fn(() => new Promise<never>(() => {}));
+    const announcementClaims = announcementStore();
+    const delivery = msg(ann);
+    const consumed = consume(
+      { messages: [delivery] },
+      {
+        bot: { postAnnouncement } as unknown as BotClient,
+        events: store(),
+        lock: memLock(),
+        ledger: memLedger().ledger,
+        announcementClaims,
+      },
+    );
+    await vi.advanceTimersByTimeAsync(INTERNAL_ACTION_DEADLINE_MS);
+    await consumed;
+    expect(delivery.acked).toBe(true);
+    expect(delivery.retried).toBeUndefined();
+    expect(announcementClaims.recordAnnouncement).toHaveBeenCalledExactlyOnceWith(
+      ann.idempotencyKey,
+      1,
+      { lastCode: null, lastStatus: null },
+    );
+    expect(announcementClaims.finishAnnouncement).not.toHaveBeenCalled();
+    expect(postAnnouncement).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("late success after the deadline cannot reclassify the disposed outcome", async () => {
     vi.useFakeTimers();
     let resolve!: (v: unknown) => void;

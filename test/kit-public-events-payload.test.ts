@@ -129,6 +129,43 @@ describe("Kit feed anonymous payloads", () => {
   });
 });
 
+describe("Kit event Markdown anonymous payloads", () => {
+  it.each(["/events.md", `/e/${KEY}.md`])("GET %s excludes member data", async (path) => {
+    const row = archiveRow(7, {
+      eventKey: KEY,
+      status: "published",
+      title: "Public Markdown fixture title",
+      startsAt: new Date("2099-01-02T18:00:00Z"),
+      endsAt: new Date("2099-01-02T19:00:00Z"),
+      createdBy: MEMBER_ID,
+    });
+    const db = drizzle(async (sql, params) => {
+      if (sql.includes('from "rsvps"')) return { rows: [[row.id, USERS.length]] };
+      expect(sql).toContain('from "events"');
+      return {
+        rows: [
+          encodeEventRow(sql, params, row, (value) =>
+            value instanceof Date ? value.toISOString() : value,
+          ),
+        ],
+      };
+    }) as unknown as Db;
+    const response = await kit.request(
+      new Request(`${ARCHIVE_ORIGIN}${path}`, {
+        headers: { cookie: `__Host-two_session=${SESSION_BEARER}` },
+      }),
+      archiveEnv(db),
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/markdown");
+    expect(response.headers.get("set-cookie")).toBeNull();
+    const body = await response.text();
+    expect(body).toContain(row.title);
+    expect(body).toContain(row.eventKey);
+    assertNoMemberBytes(body);
+  });
+});
+
 describe("Kit search indexing anonymous payloads", () => {
   it.each([
     ["/robots.txt", `Sitemap: ${ARCHIVE_ORIGIN}/sitemap_index.xml`, 0],

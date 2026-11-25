@@ -138,9 +138,37 @@ async function checkMcpStream(post, cancelReader) {
   }
 }
 
+async function checkMarkdownErrors(read, expectedOwner) {
+  const detail = "/e/01J0000000000000000000A001.md";
+  for (const path of ["/events.md", detail]) {
+    for (const [status, body, fixture] of [
+      [
+        500,
+        "Events temporarily unavailable. Try again shortly.",
+        {
+          ADMIN_DB: {
+            select() {
+              throw new Error("synthetic Markdown query fault");
+            },
+          },
+        },
+      ],
+      [503, "Events temporarily unavailable", {}],
+    ]) {
+      const response = await read(path, fixture);
+      checkHeaders(response, status, "text/markdown");
+      assert.equal(response.headers.get("x-two-renderer"), expectedOwner);
+      assert.equal(response.headers.get("cache-control"), "no-store, private");
+      assert.equal(response.headers.get("etag"), null);
+      assert.equal(response.headers.get("vary"), null);
+      assert.equal(await response.text(), body);
+    }
+  }
+}
+
 // This wrapper exists only in the loopback test. Run the probes in the same
 // Worker invocation to hold the tool result and read or cancel the real body.
-export function machineParityWorker(inner, probePath) {
+export function machineParityWorker(inner, probePath, kit) {
   return {
     async fetch(request, env, ctx) {
       if (new URL(request.url).pathname !== probePath) return inner.fetch(request, env, ctx);
@@ -155,10 +183,23 @@ export function machineParityWorker(inner, probePath) {
         const bindings = { APP_URL, ...fixture };
         return withEnv(bindings, () => inner.fetch(input, bindings, ctx));
       };
+      const read = (path, fixture) => {
+        const bindings = { APP_URL, KIT_ROUTE_EVENT_MARKDOWN: "true", ...fixture };
+        const input = new Request(new URL(path, APP_URL), {
+          headers: { accept: "application/json", "if-none-match": "*" },
+        });
+        return withEnv(bindings, () => inner.fetch(input, bindings, ctx));
+      };
       await checkAgentCreate(post);
       await checkMcpStream(post, false);
       await checkMcpStream(post, true);
-      return Response.json({ agentCreate: 201, mcpComplete: "eof", mcpReaderCancel: "cancelled" });
+      await checkMarkdownErrors(read, kit ? "kit" : null);
+      return Response.json({
+        agentCreate: 201,
+        mcpComplete: "eof",
+        mcpReaderCancel: "cancelled",
+        eventMarkdownErrors: [500, 503],
+      });
     },
   };
 }

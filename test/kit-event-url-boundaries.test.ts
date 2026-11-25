@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { KIT_EVENT_MARKDOWN_ROUTES } from "../src/ai-friendly/kit-event-markdown-routes";
 import { dispatchHookRequest, isSameOriginAllowed } from "../src/route-ownership";
 
 const origin = "https://example.com";
@@ -58,6 +59,33 @@ describe("Kit event URL boundaries", () => {
       const result = await dispatch(e);
       expect(result.honoFetch).toHaveBeenCalledWith(e.request);
       expect(result.resolve).not.toHaveBeenCalled();
+    }
+  });
+
+  it("lets only the admitted Markdown endpoint shadow the enabled event page", async () => {
+    const markdownId = "/e/[key].md";
+    for (const [path, id, flag, owner] of [
+      ["/e/KEY.md", markdownId, undefined, "hono"],
+      ["/e/KEY.md", markdownId, "false", "hono"],
+      ["/e/KEY.md", markdownId, "true", "kit"],
+      ["/e/KEY%2Emd", markdownId, "true", "hono"],
+      ["/e/KEY/extra.md", "/[...path]", "true", "hono"],
+      ["/e/.md", "/e/[key]", "true", "kit"],
+      ["/e/KEY", "/e/[key]", "true", "kit"],
+    ] as const) {
+      const e = { ...event(path, path), route: { id } };
+      const honoFetch = vi.fn(async () => new Response("hono"));
+      const resolve = vi.fn(async () => new Response("kit"));
+      const response = await dispatchHookRequest(e, {
+        appUrl: origin,
+        manifest: [{ method: "GET", path: "/e/:key", enabled: true, reads: "public" }],
+        apiFamilies: [{ flag, routes: KIT_EVENT_MARKDOWN_ROUTES }],
+        honoFetch,
+        resolve,
+      });
+      expect(await response.text(), path).toBe(owner);
+      expect(honoFetch, path).toHaveBeenCalledTimes(owner === "hono" ? 1 : 0);
+      expect(resolve, path).toHaveBeenCalledTimes(owner === "kit" ? 1 : 0);
     }
   });
 

@@ -2,7 +2,13 @@
 import { page } from "$app/state";
 import MembersDirectory from "#lib/MembersDirectory.svelte";
 import SiteMetadata from "#lib/SiteMetadata.svelte";
-import { type DirectoryFixtureMember, projectMembersDirectory } from "#lib/members-directory";
+import {
+  type DirectoryFixtureMember,
+  type MembersDirectoryView,
+  projectMembersDirectory,
+} from "#lib/members-directory";
+
+let { data }: { data: { serverDirectory?: MembersDirectoryView } } = $props();
 
 // Synthetic data only. Links are never followed and no avatars are loaded.
 const WEEK = 1_000;
@@ -62,7 +68,13 @@ const input = $derived(
         snapshotAt: NOW,
       } as const),
 );
-const _directory = $derived(projectMembersDirectory(input, page.url.searchParams));
+const _directory = $derived.by(() => {
+  if (state === "server-contract") {
+    if (!data?.serverDirectory) throw new Error("Synthetic server directory view is required");
+    return data.serverDirectory;
+  }
+  return projectMembersDirectory(input, page.url.searchParams);
+});
 </script>
 
 <SiteMetadata title="Members" theme="home" />

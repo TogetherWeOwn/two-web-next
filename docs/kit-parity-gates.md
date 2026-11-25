@@ -60,6 +60,28 @@ outside the member-read boundary; anything else is member data). The gates
 derive the expected `x-two-renderer` marker from the shipped manifest; a
 hard-coded `"kit"` expectation is a finding.
 
+### Dormant members directory
+
+The [published privacy terms](../src/privacy-content.ts) cover audited profile
+lookups by ID and the scoped member leaderboard. The saved leaderboard switch
+applies to boards. The web roster records guild membership at last sign-in.
+Neither establishes current directory membership or permission to list a profile.
+
+The [unmounted directory boundary](../src/members-directory.server.ts)
+requires a member session and an injected source and audit sink. It projects
+only display name and a link to the existing profile for explicitly listed,
+current members. It makes one capped read and requires an audit of fetched
+owners other than the viewer before releasing the response. An empty or
+self-only read needs no audit row. The synthetic SvelteKit build exercises the
+boundary and the existing directory component. The serving Worker fixture checks
+that the scratch route and both retired `/members` forms return 404.
+
+Activation needs a separately authorized, current membership and directory
+eligibility source that applies visibility before a storage-side limit and
+deadline. The activation change also needs a distinct route and a view for the
+approved fields. The synthetic display rank, activity, counts and search in
+the fixture confer no data permissions.
+
 ## QA lane ordering
 
 In the `check` job, Kit gates run after shell/runtime basics and before any
@@ -490,7 +512,7 @@ to 256B — the repository rule in `ci/budgets/README.md`):
 `e2e/kit-parity/parity.spec.ts` runs the journeys — past-archive
 paging and refusals (including successful Older/Newer/Back turns over 24
 seeded rows that `afterAll` sweeps), the events list (seeded row, calendar
-island contract, POST/JSON staying Hono-owned, normalized calendar-section
+island contract, JSON read staying Hono-owned, normalized calendar-section
 equality), join-landing funnel, auth-recovery outcome, hot-zone grids and
 signal navigation, public feeds/SEO, reserved/API surface, cross-origin
 refusals, and the authenticated member-board journey (guest bounce, member
@@ -507,8 +529,11 @@ the archive page is driven at desktop and mobile widths with a horizontal
 overflow assertion and a page-error watch. Seeded rows pin non-empty
 collections so an empty fixture cannot pass silently.
 
-Login journeys (member RSVP, moderator admin, profile edit) stay Hono-only
-until their routes migrate; the gate ledger derives each entry from
+The generated loopback Kit Worker enables `KIT_ROUTE_EVENT_WRITES` for the
+synthetic RSVP and moderator event-write journey. The journey verifies renderer
+selection, body and role refusal, persisted waitlist rank and scoped withdrawal,
+the native form response, and the moderator lifecycle on disposable Postgres.
+The live rollout ledger derives its login journey entries from
 `ROUTE_MANIFEST` and records Hono-owned routes as
 `skipped: <route> not Kit-native` with reason strings — loud, countable,
 never quiet green, and never a `test.skip` call (the floor forbids new
