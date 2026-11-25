@@ -2654,11 +2654,25 @@ test("check-migrations CLI requires a successful bounded response from the defer
     );
   });
 
-  for (const [readiness, reason] of [
-    [{ status: 503, statusText: "untrusted status text", chunks: [ledger] }, "HTTP 503"],
-    [{ chunks: [ledger, padding, " "] }, "response exceeds 16384 bytes"],
+  for (const [label, readiness, reason] of [
+    [
+      "HTTP 503",
+      { status: 503, statusText: "untrusted status text", chunks: [ledger] },
+      "HTTP 503",
+    ],
+    [
+      "a stream over the byte limit",
+      { chunks: [ledger, padding, " "] },
+      "response exceeds 16384 bytes",
+    ],
+    ["an empty stream", { chunks: [] }, "response body is unreadable or invalid JSON"],
+    [
+      "malformed JSON",
+      { chunks: ["untrusted payload"] },
+      "response body is unreadable or invalid JSON",
+    ],
   ]) {
-    await t.test(`refuses ${reason} before a ledger verdict`, () => {
+    await t.test(`refuses ${label} before a ledger verdict`, () => {
       const refused = run(readiness);
       assert.equal(refused.status, 1, reason);
       assert.equal(refused.stdout, "");
@@ -2699,7 +2713,7 @@ test("check-migrations CLI halts closed when the live Worker predates the ledger
       { match: `ref=${live}`, body: dated([{ tag: "1000_a", when: 1000 }]) },
       {
         match: "/up",
-        chunks: [JSON.stringify({ revision: { commit: live }, db: "ok", pending_migrations: 0 })],
+        body: { revision: { commit: live }, db: "ok", pending_migrations: 0 },
       },
     ],
   );

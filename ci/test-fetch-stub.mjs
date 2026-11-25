@@ -33,8 +33,7 @@ globalThis.fetch = async (input) => {
         });
         return new Response(stream, { status, statusText: behavior.statusText });
       }
-      const body = behavior.body ?? {};
-      return Response.json(body, { status });
+      return Response.json(behavior.body ?? {}, { status });
     }
   }
   throw new Error(`unexpected fetch ${url}`);
