@@ -749,6 +749,8 @@ test("staging reservation rejects malformed records and overlong lifetimes even 
     { ...reservation, sha: reservation.sha.slice(0, 39) },
     { ...reservation, sha: `${reservation.sha}\n` },
     { ...reservation, allocationId: `${reservation.allocationId}\n` },
+    { ...reservation, allocationId: "g1111111-1111-4111-8111-111111111111" },
+    { ...reservation, allocationId: "A1111111-1111-4111-8111-111111111111" },
     { ...reservation, ownerId: 0 },
     { ...reservation, ownerId: String(reservation.ownerId) },
     { ...reservation, ownerId: Number.MAX_SAFE_INTEGER + 1 },
