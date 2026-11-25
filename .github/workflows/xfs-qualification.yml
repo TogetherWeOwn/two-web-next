@@ -91,6 +91,9 @@ jobs:
           sudo mkfs.xfs -V
           npm ci --include=dev --ignore-scripts --no-audit --no-fund
           npm ci --prefix web --include=dev --ignore-scripts --no-audit --no-fund
+      - name: Prove pinned Wrangler bind collision recovery
+        timeout-minutes: 2
+        run: node --test --test-timeout=90000 ci/kit-worker-loopback.test.mjs
       - name: Build stock Kit output
         run: npm run build --prefix web
       - name: Install Chromium for the installed Kit homepage proof
