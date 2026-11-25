@@ -18,7 +18,8 @@ export async function readEventDetailEcho(
   }
 
   const snapshot = buildFrozenEcho(event, await read(event.eventKey));
-  if (!snapshot || snapshot.echo.windowEndsAt.getTime() > observedAt) return undefined;
+  // The Lifeline still counts at the window's exact end.
+  if (!snapshot || snapshot.echo.windowEndsAt.getTime() >= observedAt) return undefined;
 
   const { eventKey, attendedCount, peakConcurrent } = projectPublicEcho({
     ...snapshot.echo,

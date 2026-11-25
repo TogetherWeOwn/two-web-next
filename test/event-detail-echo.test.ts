@@ -49,3 +49,13 @@ it("omits an Echo before the producer window closes or for a different event key
     await readEventDetailEcho({ ...event, eventKey: "other-event" }, read, observedAt),
   ).toBeUndefined();
 });
+
+it("keeps the exact window close in counting and accepts a final reply just after it", async () => {
+  const read = vi.fn<AttendanceReader>().mockResolvedValue({ ok: true, attendance });
+  const windowEnd = Date.parse(attendance.window.ends_at);
+  expect(await readEventDetailEcho(event, read, windowEnd)).toBeUndefined();
+  expect(await readEventDetailEcho(event, read, windowEnd + 1)).toMatchObject({
+    at: windowEnd + 1,
+    attendance: { attendedCount: 2, peakConcurrent: 5 },
+  });
+});
