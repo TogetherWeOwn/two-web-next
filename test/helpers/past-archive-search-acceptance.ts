@@ -17,6 +17,8 @@ import { fetchKitFeed } from "../../src/events/kit-feed-fetch";
 import {
   eventLinkAvailability,
   getPublicApiEvent,
+  getPublicEvent,
+  listFeed,
   listPast,
   listPublicApiEvents,
   type PublicEvent,
@@ -217,6 +219,8 @@ export function archiveReadFixture() {
 
 const kitDependencies = {
   dbFor: async (c: { env: Env }) => (c.env as Env & { ADMIN_DB?: Db }).ADMIN_DB ?? null,
+  getPublicEvent,
+  listFeed,
   listPast,
   getPublicApiEvent,
   listPublicApiEvents,
@@ -255,6 +259,8 @@ export async function compileArchiveKit() {
     [
       join(root, "src/events/reads.ts"),
       [
+        "getPublicEvent",
+        "listFeed",
         "listPast",
         "eventLinkAvailability",
         "sitemapEvents",
@@ -280,6 +286,9 @@ export async function compileArchiveKit() {
         import { GET } from ${JSON.stringify(join(root, "web/src/routes/events/+server.ts"))};
         import { GET as calendar } from ${JSON.stringify(join(root, "web/src/routes/events.ics/+server.ts"))};
         import { GET as rss } from ${JSON.stringify(join(root, "web/src/routes/events.rss/+server.ts"))};
+        import { GET as markdownCollection } from ${JSON.stringify(join(root, "web/src/routes/events.md/+server.ts"))};
+        import { GET as markdownDetail } from ${JSON.stringify(join(root, "web/src/routes/e/[key].md/+server.ts"))};
+        import { kitEventMarkdownKey } from ${JSON.stringify(join(root, "src/ai-friendly/kit-event-markdown-routes.ts"))};
         import { GET as eventCalendar } from ${JSON.stringify(join(root, "web/src/routes/events/[key].ics/+server.ts"))};
         import { GET as robots } from ${JSON.stringify(join(root, "web/src/routes/robots.txt/+server.ts"))};
         import { GET as sitemap } from ${JSON.stringify(join(root, "web/src/routes/sitemap_index.xml/+server.ts"))};
@@ -291,6 +300,7 @@ export async function compileArchiveKit() {
         import { bind } from "acceptance:bindings";
         const endpoints = new Map([
           ["/events.ics", calendar], ["/events.rss", rss],
+          ["/events.md", markdownCollection],
           ["/robots.txt", robots], ["/sitemap_index.xml", sitemap],
           ["/.well-known/security.txt", securityTxt],
           ["/api/public/events", publicEvents], ["/openapi.json", openApi],
@@ -301,6 +311,7 @@ export async function compileArchiveKit() {
           const match = new RegExp("^/api/public/events/([^/]+)$").exec(pathname);
           if (match) return publicEvent({request, params: {key: match[1]}, locals: {}});
           const endpoint = endpoints.get(pathname) ??
+            (kitEventMarkdownKey(request) === undefined ? undefined : markdownDetail) ??
             (KIT_EVENT_CALENDAR_ROUTE.dynamic.matches(pathname, pathname) ? eventCalendar : undefined);
           if (endpoint) return endpoint({request, params: {}, locals: {}});
           const headers = new Headers({"content-type": "text/html; charset=utf-8"});

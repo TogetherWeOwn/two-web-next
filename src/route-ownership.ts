@@ -14,6 +14,10 @@
 
 import { Context } from "hono";
 import { deleteCookie } from "hono/cookie";
+import {
+  EVENT_MARKDOWN_ENDPOINT_ID,
+  EVENT_MARKDOWN_PATH,
+} from "./ai-friendly/kit-event-markdown-routes";
 import type { AccessSink } from "./access-log";
 import {
   isContentLeafPath,
@@ -1232,7 +1236,8 @@ async function dispatchFromManifest(
 ): Promise<Response> {
   // Use the tested Request-to-decision path for both the method and URL.
   const route = decideRoute(event.request, manifest, event.url);
-  if (route) return dispatchKitRequest(event, deps, route);
+  if (route && !eventMarkdownShadowsPage(event, route))
+    return dispatchKitRequest(event, deps, route);
   const selection = familyRouteFor(event, manifest, deps.apiFamilies);
   if (!selection) return deps.honoFetch(event.request);
   const { route: apiRoute, family } = selection;
@@ -1588,6 +1593,13 @@ interface KitApiRoute extends OwnedRoute {
   };
 }
 
+function eventMarkdownShadowsPage(event: HookEventLike, page: OwnedRoute): boolean {
+  // Hono registers the suffix handler ahead of /e/:key. Preserve that
+  // separation even with only the Kit HTML page enabled: declined Markdown
+  // requests must fall through to Hono instead of entering the page boundary.
+  return page.path === "/e/:key" && event.route?.id === EVENT_MARKDOWN_ENDPOINT_ID;
+}
+
 function familyRouteFor(
   event: HookEventLike,
   manifest: OwnedRoute[],
@@ -1636,10 +1648,12 @@ function familyRouteFor(
   if (!selected) return undefined;
   // A disabled page entry still reserves its pair for rollback. Check the
   // shipped entries too, since a rollout manifest can omit them entirely.
-  const overlaps = (entry: OwnedRoute) =>
-    entry.method.toUpperCase() === method && matchPattern(entry.path, decoded);
-  if (manifest.some(overlaps) || ROUTE_MANIFEST.some(overlaps)) return undefined;
   const { route } = selected;
+  const overlaps = (entry: OwnedRoute) =>
+    entry.method.toUpperCase() === method &&
+    matchPattern(entry.path, decoded) &&
+    !(route.path === EVENT_MARKDOWN_PATH && eventMarkdownShadowsPage(event, entry));
+  if (manifest.some(overlaps) || ROUTE_MANIFEST.some(overlaps)) return undefined;
   if (route.dynamic) return route.enabled && !route.documentGetOnly ? selected : undefined;
   return enabledRouteFor({ method: event.request.method, path: pathname }, [route], {
     originalUrl: event.request.url,
