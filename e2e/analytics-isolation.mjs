@@ -110,8 +110,13 @@ export async function observeAnalytics(
         .waitFor({ state: "attached", timeout: 5_000 });
     }
     if (target.pathname === "/privacy") {
-      for (const name of ["Privacy policy", "Cookies and tracking"]) {
-        await page.getByRole("heading", { name, exact: true }).waitFor({ timeout: 5_000 });
+      const headings = [
+        [1, "Privacy policy"],
+        [2, "Who we are, and what this covers"],
+        [2, "Cookies and tracking"],
+      ];
+      for (const [level, name] of headings) {
+        await page.getByRole("heading", { level, name, exact: true }).waitFor({ timeout: 5_000 });
       }
     }
     const root = page.locator("html");
