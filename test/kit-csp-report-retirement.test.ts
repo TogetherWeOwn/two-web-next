@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, URL } from "node:url";
 import { build } from "esbuild";
 import { expect, it, vi } from "vitest";
 
