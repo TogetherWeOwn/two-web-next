@@ -162,12 +162,7 @@ function databaseUrl() {
   );
 }
 
-export async function cleanup(
-  { claim, worker, names },
-  api,
-  database,
-  removeDatabase = removeFixture,
-) {
+export async function cleanup({ claim, worker, names }, api, database) {
   const marker = await readFile(claim, "utf8").catch((error) => {
     if (error.code === "ENOENT") return null;
     throw error;
@@ -181,7 +176,7 @@ export async function cleanup(
       assert.equal(await api(`${target}/settings`), null, "isolated Worker cleanup failed");
     }
   } finally {
-    await removeDatabase(database, names);
+    await removeFixture(database, names);
   }
   await rm(claim);
 }

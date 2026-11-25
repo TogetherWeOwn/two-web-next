@@ -1,12 +1,29 @@
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { registerHooks } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { parse } from "yaml";
 import { fixtureNames } from "../kit-cutover-database.mjs";
 import { LEDGER_STATES, STAGING_WORKER } from "../kit-cutover-evidence.mjs";
-import { cleanup, rehearseIsolatedCutover, verifyServed } from "../kit-cutover-staging.mjs";
+
+// Stub the database adapter at import time so cleanup calls its normal dependency.
+const staging = new URL("../kit-cutover-staging.mjs?synthetic-cleanup", import.meta.url);
+const databaseModule = new URL("../kit-cutover-database.mjs", import.meta.url);
+const adapter = `export * from ${JSON.stringify(databaseModule.href)};
+export const removeFixture = (database, names) => database.remove(names);`;
+const hook = registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (context.parentURL === staging.href && specifier === "./kit-cutover-database.mjs") {
+      return { shortCircuit: true, url: `data:text/javascript,${encodeURIComponent(adapter)}` };
+    }
+    return nextResolve(specifier, context);
+  },
+});
+const { cleanup, rehearseIsolatedCutover, verifyServed } = await import(staging.href).finally(() =>
+  hook.deregister(),
+);
 
 const identity = {
   sourceSha: "a".repeat(40),
@@ -35,11 +52,13 @@ test("isolated cutover always cleans up before uploading successful proof", asyn
     ({ with: inputs }) => inputs?.path === "${{ runner.temp }}/proof.json",
   );
   assert.ok(qualify >= 0 && qualify < remove && remove < upload);
-  assert.equal(steps[remove].if, "always()");
-  assert.equal(job["continue-on-error"], undefined);
-  assert.equal(steps[qualify]["continue-on-error"], undefined);
-  assert.equal(steps[remove]["continue-on-error"], undefined);
-  assert.equal(steps[upload].if, undefined); // The default condition is success().
+  const condition = (step) =>
+    (step.if ?? "success()").trim().replace(/^\$\{\{\s*(.*?)\s*\}\}$/, "$1");
+  assert.match(condition(steps[remove]), /^always\(\s*\)$/i);
+  assert.equal(job["continue-on-error"] ?? false, false);
+  assert.equal(steps[qualify]["continue-on-error"] ?? false, false);
+  assert.equal(steps[remove]["continue-on-error"] ?? false, false);
+  assert.match(condition(steps[upload]), /^success\(\s*\)$/i);
 });
 
 for (const failure of ["validation", "recording"]) {
@@ -54,10 +73,19 @@ for (const failure of ["validation", "recording"]) {
     const fetch = t.mock.method(globalThis, "fetch", () =>
       assert.fail("unexpected network request"),
     );
-    const database = {};
     const workers = new Set([otherWorker]);
     const databases = new Set([other.db]);
     const logins = new Set([other.login]);
+    const database = {
+      get href() {
+        assert.fail("unexpected live database access");
+      },
+      async remove(claimedNames) {
+        assert.deepEqual(claimedNames, names);
+        assert.equal(databases.delete(claimedNames.db), true);
+        assert.equal(logins.delete(claimedNames.login), true);
+      },
+    };
     const owner = { end: t.mock.fn() };
     let scratch;
     const api = async (path, method = "GET") => {
@@ -69,12 +97,6 @@ for (const failure of ["validation", "recording"]) {
       assert.equal(method, "GET");
       assert.equal(path, `scripts/${worker}/settings`);
       return workers.has(worker) ? {} : null;
-    };
-    const removeDatabase = async (target, claimedNames) => {
-      assert.equal(target, database);
-      assert.deepEqual(claimedNames, names);
-      assert.equal(databases.delete(claimedNames.db), true);
-      assert.equal(logins.delete(claimedNames.login), true);
     };
     const ctx = { identity, names, worker, claim };
     const prefixes = { 1033: [1033], 1037: [1033, 1037] };
@@ -143,7 +165,7 @@ for (const failure of ["validation", "recording"]) {
       try {
         await rehearseIsolatedCutover(runnerTemp, proofPath, ctx, options, effects);
       } finally {
-        await cleanup(ctx, api, database, removeDatabase);
+        await cleanup(ctx, api, database);
       }
     };
     await assert.rejects(
