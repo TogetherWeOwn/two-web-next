@@ -101,9 +101,12 @@ export async function assertHotzoneSignalParity({ hono, off, on, databaseUrl }) 
         assert.doesNotMatch(answer.body, /data-hotzone-scroll/, answer.label);
       }
     }
-    const hits = () =>
-      sql`select count(*)::int as n from web_throttle_hits where bucket = ${bucket}`;
-    assert.deepEqual(await hits(), [{ n: 0 }], "refusals never charge the public-read budget");
+    const hits = async () => {
+      const [row] =
+        await sql`select count(*)::int as n from web_throttle_hits where bucket = ${bucket}`;
+      return row.n;
+    };
+    assert.equal(await hits(), 0, "refusals never charge the public-read budget");
 
     for (const [path, signal] of [
       ...signals.map((signal) => [`/hotzones/${signal}`, signal]),
@@ -158,7 +161,7 @@ export async function assertHotzoneSignalParity({ hono, off, on, databaseUrl }) 
       assertAnswer(unknown, 404, index === 2 ? "kit" : null);
       assert.match(unknown.body, unknownSignal, unknown.label);
     }
-    assert.deepEqual(await hits(), [{ n: 60 }], "refusals leave the full window intact");
+    assert.equal(await hits(), 60, "refusals leave the full window intact");
     console.log(
       "PASS installed Worker Hotzones exact selectors, generic refusals and Hono fallbacks",
     );
