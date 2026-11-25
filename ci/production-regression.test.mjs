@@ -702,6 +702,10 @@ test("deploy-production runs the regression check before the deploy job", () => 
   assert.match(regression, /needs: \[preflight, staging-soak\]/);
   assert.match(job("preflight", "staging-soak"), /INPUT_SHA: \$\{\{ inputs\.sha \}\}/);
   assert.match(
+    job("staging-soak", "regression"),
+    /\n {6}errors: \$\{\{ steps\.soak\.outputs\.errors \}\}\n/,
+  );
+  assert.match(
     regression,
     /STAGING_E2E_RUN_ID: \$\{\{ needs\.staging-soak\.outputs\.e2e_run_id \}\}/,
   );
@@ -745,6 +749,10 @@ test("deploy-production runs the regression check before the deploy job", () => 
   assert.match(
     regression,
     /STAGING_SOAK_REQUESTS: \$\{\{ needs\.staging-soak\.outputs\.requests \}\}/,
+  );
+  assert.match(
+    regression,
+    /STAGING_SOAK_ERRORS: \$\{\{ needs\.staging-soak\.outputs\.errors \}\}/,
   );
   // The gate runs from the tip, the checkers from the candidate.
   assert.match(regression, /ref: \$\{\{ needs\.preflight\.outputs\.sha \}\}/);
