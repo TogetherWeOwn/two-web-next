@@ -226,14 +226,37 @@ test("a smoke skip is proof only on the exact successful deploy attempt", async 
 
   assert.equal(await check(), true);
   for (const changes of [
+    { name: undefined },
     { run_id: 56 },
     { run_attempt: 1 },
     { head_sha: A },
     { status: "in_progress" },
+    { conclusion: "failure" },
+    { steps: undefined },
     { steps: [] },
     { steps: [proof, proof] },
   ]) {
-    assert.equal(await check(changes), false);
+    assert.equal(await check(changes), false, "invalid deploy job metadata must run full E2E");
+  }
+  for (const conclusion of ["skipped", "failure"]) {
+    assert.equal(
+      await check({ steps: [{ ...proof, conclusion }] }),
+      false,
+      `a ${conclusion} smoke marker must run full E2E`,
+    );
+  }
+  for (const [scenario, payload] of [
+    ["missing job count", { jobs: [job] }],
+    ["missing job", { total_count: 0, jobs: [] }],
+    ["multiple jobs reported", { total_count: 2, jobs: [job] }],
+    ["multiple jobs returned", { total_count: 1, jobs: [job, job] }],
+    ["malformed jobs collection", { total_count: 1, jobs: job }],
+  ]) {
+    assert.equal(
+      await deploySmokeWasScoped(trigger, repository, async () => Response.json(payload)),
+      false,
+      `${scenario} must run full E2E`,
+    );
   }
   assert.equal(
     await deploySmokeWasScoped(
@@ -242,6 +265,19 @@ test("a smoke skip is proof only on the exact successful deploy attempt", async 
       async () => new Response(null, { status: 403 }),
     ),
     false,
+    "an HTTP refusal must run full E2E",
+  );
+  assert.equal(
+    await deploySmokeWasScoped(trigger, repository, async () => new Response("{")),
+    false,
+    "invalid JSON must run full E2E",
+  );
+  assert.equal(
+    await deploySmokeWasScoped(trigger, repository, async () => {
+      throw new TypeError("synthetic fetch refusal");
+    }),
+    false,
+    "a rejected metadata request must run full E2E",
   );
 });
 
