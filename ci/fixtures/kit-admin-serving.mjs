@@ -225,16 +225,29 @@ export default {
 
     // Follow the intended-page cookie from the Kit Admin guest gate into Hono Auth.
     const guest = await visitPhase(editor, 302);
-    assert.equal(guest.headers.get("location"), "/auth/discord");
+    const loginPath = guest.headers.get("location");
+    assert.equal(loginPath, "/auth/discord");
     const intended = readCookie(guest.headers, intendedName, 600);
-    const login = await visitPhase("/auth/discord", 302, { owned: false });
+    const login = await visitPhase(loginPath, 302, {
+      headers: { cookie: intended },
+      owned: false,
+    });
     const authorize = new URL(login.headers.get("location"));
     assert.equal(authorize.origin + authorize.pathname, "https://discord.com/oauth2/authorize");
     assert.equal(authorize.searchParams.get("redirect_uri"), appUrl + callback);
     const state = authorize.searchParams.get("state");
     assert.ok(state && /^[0-9a-f-]{36}$/.test(state), "the Hono sign-in issued a state");
     stateHash = createHash("sha256").update(state).digest("hex");
-    const oauth = `${readCookie(login.headers, stateName, 600)}; ${intended}`;
+    readCookie(login.headers, stateName, 600);
+    // Apply the sign-in response before simulating the browser's return.
+    const jar = new Map([[intendedName, intended]]);
+    for (const line of login.headers.getSetCookie()) {
+      const [pair, ...attributes] = line.split(/;\s*/);
+      const name = pair.slice(0, pair.indexOf("="));
+      if (attributes.includes("Max-Age=0")) jar.delete(name);
+      else jar.set(name, pair);
+    }
+    const oauth = [...jar.values()].join("; ");
     const returnPath = `${callback}?${new URLSearchParams({ state, code: "fixture-code" })}`;
     console.log("PASS mixed cutover Admin enabled on Kit while Auth stays on Hono");
 
