@@ -49,11 +49,13 @@ import {
   admitsKitAdmin,
   kitAdminAdmission,
   KIT_ADMIN_OPS_ROUTES,
+  KIT_FEATURED_UNPUBLISH_PATH,
   privateAdminResponse,
   usesKitDefaultAction,
 } from "./admin/kit-serving";
 import { fetchKitAdminForm } from "./admin/kit-form-fetch";
 import type { Env } from "./env";
+import { fixtureRequest } from "./fixture-origin";
 
 export type RouteOwner = "kit" | "hono";
 
@@ -1197,6 +1199,13 @@ async function dispatchKitAdminRequest(
   ]);
   const formPath =
     request.method === "POST" && adminFormPath(url.pathname, event.route?.id ?? null);
+  if (
+    formPath === KIT_FEATURED_UNPUBLISH_PATH &&
+    (env.KIT_PARITY_FIXTURE_ADMIN_FEATURED_UNPUBLISH !== "true" ||
+      !fixtureRequest(request, deps.appUrl))
+  ) {
+    return null;
+  }
   const page = decideRoute(request, KIT_ADMIN_READS, url);
   const read = page && event.route?.id === page.path.replace(/:(\w+)/g, "[$1]") ? page : undefined;
   const route = operator?.route.path ?? (formPath || read?.path);

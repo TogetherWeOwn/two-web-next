@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 import { STAGING_STATIC_DOCUMENT_READY } from "../src/kit-staging-static.ts";
 import {
+  assertFeaturedUnpublishParity,
   assertKitAdminServing,
   assertKitAttendanceDisabled,
   assertMixedAdminAuthRollback,
@@ -853,6 +854,12 @@ export default {
     const vars = await prepareAdminFixture(worker, entry);
     const admin = await startWorker("kit-admin", entry, assets, secret, vars);
     await listen(admin.child, admin.origin, () => admin.log);
+    await assertFeaturedUnpublishParity({
+      kit: admin,
+      off: kitWithSession,
+      hono: honoWithSession,
+      databaseUrl,
+    });
     await assertKitAdminServing({
       kit: admin,
       off: kitWithSession,

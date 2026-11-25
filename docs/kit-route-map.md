@@ -176,6 +176,13 @@ the operator overrides endpoint on canonical staging or HTTP loopback. The
 operator endpoint uses its bearer independently of the moderator cookie. The
 existing Hono guard serves legacy redirects and other unowned admin paths.
 
+`POST /admin/featured/:id/unpublish` stays on Hono when Admin ownership is
+enabled. The installed Worker fixture opts in on HTTP loopback with
+`KIT_PARITY_FIXTURE_ADMIN_FEATURED_UNPUBLISH=true`. It submits the existing
+Kit form to the shared Hono controller and checks moderator admission, the
+action body cap, the list redirect, the saved state and its activity receipt,
+and replay or a missing target through both owners.
+
 ### Security disclosure endpoint
 
 `KIT_ROUTE_SECURITY_TXT=true` admits trusted GET and HEAD on the literal

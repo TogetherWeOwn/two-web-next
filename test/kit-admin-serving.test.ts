@@ -9,6 +9,7 @@ import {
   usesKitDefaultAction,
 } from "../src/admin/kit-serving";
 import { STAGING_APP_URL } from "../src/qa";
+import { dispatchHookRequest, KIT_RENDERER_HEADER } from "../src/route-ownership";
 import { MODERATOR, env as baseEnv } from "./helpers/member-data";
 
 const loopback = "http://127.0.0.1:8787";
@@ -116,3 +117,64 @@ it("opens only exact POST form controllers and keeps shared refusal behavior", a
   const post = new Request(loopback + events, { method: "POST", body: new URLSearchParams() });
   expect((await fetchKitAdminForm(post, env, actor, id)).status).toBe(503);
 });
+
+it.each([
+  { origin: loopback, fixture: undefined, owned: false },
+  { origin: loopback, fixture: "TRUE", owned: false },
+  { origin: loopback, fixture: "true", owned: true },
+  { origin: loopback, fixture: "true", family: "false", owned: false },
+  { origin: loopback, fixture: "true", method: "GET", owned: false },
+  { origin: loopback, fixture: "true", isDataRequest: true, owned: false },
+  { origin: loopback, fixture: "true", routeId: null, owned: false },
+  { origin: STAGING_APP_URL, fixture: "true", owned: false },
+  { origin: "https://togetherweown.com", fixture: "true", owned: false },
+])(
+  "keeps featured unpublish dormant outside the admitted fixture (%j)",
+  async ({
+    origin,
+    fixture,
+    family = "true",
+    method = "POST",
+    isDataRequest = false,
+    routeId = "/admin/[...action]",
+    owned,
+  }) => {
+    const url = new URL("/admin/featured/12/unpublish", origin);
+    const request = new Request(url, { method, headers: { origin } });
+    const sessionFor = vi.fn(async () => ({
+      status: "guest" as const,
+      session: null,
+      returnTo: null,
+      joinResult: null,
+      expiredWrite: null,
+    }));
+    const honoFetch = vi.fn(async () => new Response(null, { status: 303 }));
+    const resolve = vi.fn(async () => new Response(null, { status: 500 }));
+    const response = await dispatchHookRequest(
+      { request, url, route: { id: routeId }, isDataRequest },
+      {
+        appUrl: origin,
+        kitRouteEmberPages: "true",
+        admin: {
+          env: {
+            ...baseEnv,
+            APP_URL: origin,
+            KIT_ROUTE_ADMIN: family,
+            KIT_PARITY_FIXTURE_ADMIN_FEATURED_UNPUBLISH: fixture,
+          },
+          completeForm: () => {
+            throw new Error("Guest reached the admin form");
+          },
+        },
+        sessionFor,
+        honoFetch,
+        resolve,
+      },
+    );
+    expect(response.status).toBe(303);
+    expect(response.headers.get(KIT_RENDERER_HEADER)).toBe(owned ? "kit" : null);
+    expect(sessionFor).toHaveBeenCalledTimes(owned ? 1 : 0);
+    expect(honoFetch).toHaveBeenCalledTimes(owned ? 0 : 1);
+    expect(resolve).not.toHaveBeenCalled();
+  },
+);

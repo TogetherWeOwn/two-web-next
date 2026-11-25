@@ -11,6 +11,8 @@ export const KIT_ADMIN_OPS_ROUTES = ["GET", "POST", "PUT", "PATCH", "DELETE", "O
   (method) => ({ method, path: "/admin/ops-overrides", enabled: true, reads: "public" as const }),
 );
 
+export const KIT_FEATURED_UNPUBLISH_PATH = "/admin/featured/:id/unpublish";
+
 const formPaths = [
   ["/admin/events", "/admin/events"],
   ["/admin/featured", "/admin/featured"],
@@ -19,9 +21,8 @@ const formPaths = [
   ...["publish", "cancel", "duplicate", "rsvp-pause", "rsvp-reopen"].map(
     (action) => [`/admin/events/:key/${action}`, "/admin/[...action]"] as const,
   ),
-  ...["delete", "unpublish"].map(
-    (action) => [`/admin/featured/:id/${action}`, "/admin/[...action]"] as const,
-  ),
+  ["/admin/featured/:id/delete", "/admin/[...action]"],
+  [KIT_FEATURED_UNPUBLISH_PATH, "/admin/[...action]"],
 ] as const;
 
 export function adminFormPath(path: string, routeId?: string | null): string | undefined {
