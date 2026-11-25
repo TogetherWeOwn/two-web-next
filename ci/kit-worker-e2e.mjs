@@ -996,8 +996,8 @@ export default {
   }
   console.log("PASS generated Worker reserved method/path parity with API families off");
 
-  async function startKit(name, vars) {
-    const instance = await startWorker(name, worker, assets, secret, vars);
+  async function startKit(name, vars, entry = worker) {
+    const instance = await startWorker(name, entry, assets, secret, vars);
     await listen(instance.child, instance.origin, () => instance.log);
     return instance;
   }
@@ -1043,6 +1043,19 @@ export default {
     kit: kitWithSession,
     feedOn,
     databaseUrl,
+    assertSubscriptionRollback: args.length
+      ? async (event) => {
+          const { assertCalendarSubscriptionRollback } = await import(
+            "./fixtures/kit-calendar-subscription-rollback.mjs"
+          );
+          await assertCalendarSubscriptionRollback({
+            event,
+            scratch,
+            worker,
+            startKit,
+          });
+        }
+      : undefined,
     startKit,
     startSecurityTxtPair: async () => {
       const appUrl = "https://policy.example.test";

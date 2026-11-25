@@ -22,6 +22,7 @@ const pastEventKey = "01J00000000000000000001004";
 const sitemap = "/sitemap_index.xml";
 const securityTxt = "/.well-known/security.txt";
 const fixtureIp = "192.0.2.110";
+const subscriptionRollbackIp = "192.0.2.176";
 const wireHeaders = [
   "content-type",
   "content-disposition",
@@ -158,6 +159,7 @@ export async function assertStaticFeedParity({
   startKit,
   startSecurityTxtPair,
   databaseUrl,
+  assertSubscriptionRollback,
 }) {
   await assertMountedEndpoints();
   // Exercise the rollout flags independently on the same installed Workers.
@@ -469,6 +471,16 @@ export async function assertStaticFeedParity({
         (${pastEventKey}, 'Fixture Past Night', null, null, 'past',
         '2026-01-01 16:00+00', '2026-01-01 17:00+00', '2026-01-01 18:00+00')`;
     seeded = true;
+    if (assertSubscriptionRollback) {
+      // The feed parity checks below already exercise the normal bucket limit.
+      buckets.push(`events-read:${subscriptionRollbackIp}`);
+      await assertSubscriptionRollback({
+        key: eventKeys[0],
+        game: "Fixture Racing",
+        cookie: await mintSession(false),
+        clientIp: subscriptionRollbackIp,
+      });
+    }
     await assertSeoParity();
 
     for (const [path, mediaType, disposition] of [
