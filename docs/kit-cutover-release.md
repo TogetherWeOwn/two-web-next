@@ -5,8 +5,11 @@
 Complete the protected [migrator permissions repair](../.github/workflows/db-permissions-repair.yml)
 and its production watch first. Install the
 [readiness projection](db-migrations.md#install-or-remove-the-readiness-projection)
-while direct ledger access still works. Verify the compatible Hono version
-serving 100% of traffic and reading through the projection on `1033` before
+while direct ledger access still works. Use the
+[protected release steps below](#protected-release-and-recovery) to dispatch
+`deploy-production` with `cutover_mode: hono`, the approved compatible
+Hono SHA and its qualification pin, and both undo inputs empty. Verify that
+version serves 100% of traffic and reads through the projection on `1033` before
 applying [serving ledger isolation](../.github/workflows/db-serving-ledger-isolation.yml).
 Verify the effective access for the serving Web and jobs roles and finish the
 isolation watch. Apply the approved web schema advance separately through
@@ -59,14 +62,14 @@ packet.
 
 Pair the isolated packet evidence with the
 [shared staging deploy, smoke, E2E and soak](../CONTRIBUTING.md#merge-and-production-staging-evidence)
-for the same candidate SHA. Match the actual deployed commit, Worker version
-UUID and deployment timestamp in the staging receipts using `/version` and
-`/up`. The Actions run header can identify the trigger context, so use the
-deployed revision recorded by the jobs. Check that the staging version stayed
-in service through the required soak. A replacement before the soak finishes
-leaves the previous candidate unqualified. Shared staging establishes the
-candidate's deploy and soak evidence. The isolated job exercises the exact
-packaged bytes, the selected renderer profile and its undo.
+for the same candidate SHA. Match the deployed commit and Worker version UUID
+against `/version` and `/up`. The `deployedAt` field in `/version` identifies
+the version's upload time. Use the Cloudflare deployment history and the
+staging E2E completion time to verify that version served through the required
+soak. A replacement before the soak finishes leaves the prior candidate
+unqualified. Use the deployed revision recorded by the jobs when the Actions
+run header identifies the trigger context. The isolated job exercises the
+exact packaged bytes, the selected renderer profile and its undo.
 
 ## Protected release and recovery
 
