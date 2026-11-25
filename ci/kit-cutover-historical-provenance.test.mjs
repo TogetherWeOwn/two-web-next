@@ -175,6 +175,31 @@ test("historical isolated cutover binds the selected checkout to the protected d
     await assert.rejects(verify({ selectedSha: dispatcherSha }), /differs from dispatch input/);
   });
 
+  await t.test("accepts a valid dispatch at 1 MiB and refuses larger or invalid JSON", async () => {
+    const maxBytes = 1024 * 1024;
+    const payload = JSON.stringify({ inputs: input });
+    await writeFile(eventPath, payload.padEnd(maxBytes));
+    assert.deepEqual(await verify(), { dispatcherSha, ...identity });
+    for (const raw of [payload.padEnd(maxBytes + 1), "", payload.slice(0, -1)]) {
+      await writeFile(eventPath, raw);
+      await assert.rejects(verify(), /dispatch event payload unavailable/);
+    }
+    await writeEvent();
+  });
+
+  await t.test("requires explicit qualification opt-in and a recognized profile", async () => {
+    for (const changes of [
+      { qualify_cutover: undefined },
+      { qualify_cutover: "false" },
+      { qualify_cutover: true },
+      { cutover_profile: "unknown" },
+    ]) {
+      await writeEvent(changes);
+      await assert.rejects(verify(), /lacks an isolated cutover profile/);
+    }
+    await writeEvent();
+  });
+
   await t.test("refuses an unprotected dispatch or a different producer", async () => {
     for (const changes of [
       { GITHUB_REF_PROTECTED: "false" },
