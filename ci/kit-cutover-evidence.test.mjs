@@ -19,7 +19,7 @@ import {
   writeManifest,
 } from "./kit-cutover-evidence.mjs";
 import { packageCutover } from "./kit-cutover-package.mjs";
-import { exercise, verifyServed } from "./kit-cutover-staging.mjs";
+import { cloudflare, exercise, verifyServed } from "./kit-cutover-staging.mjs";
 import { KIT_ROUTE_FLAGS } from "./production-deploy-gate.mjs";
 
 const sourceSha = "a".repeat(40);
@@ -241,6 +241,113 @@ test("cutover ledger admits exactly 1033 or 1037 and exact version readiness", (
       /canonical/,
     );
   }
+});
+
+test("isolated Workers API GET bounds and disposes provider responses", async (t) => {
+  const account = "a".repeat(32);
+  const token = "synthetic-token";
+  const settingsPath = "scripts/synthetic-worker/settings";
+  const versionPath = `scripts/synthetic-worker/versions/${kit}`;
+  const mockApi = (respond) =>
+    cloudflare({
+      account,
+      token,
+      fetchImpl: async (url, options) => {
+        assert.equal(options.method, "GET");
+        assert.equal(options.headers.Authorization, `Bearer ${token}`);
+        assert.equal(options.redirect, "error");
+        assert.ok(options.signal instanceof AbortSignal);
+        const prefix = `https://api.cloudflare.com/client/v4/accounts/${account}/workers/`;
+        assert.ok(url.startsWith(prefix));
+        return respond(url.slice(prefix.length));
+      },
+    });
+
+  await t.test("cancels an oversized stream before reading to EOF", async () => {
+    const halfMiB = new Uint8Array(512 * 1024).fill(32);
+    const json = new TextEncoder().encode(JSON.stringify({ success: true, result: { id: kit } }));
+    const chunks = [halfMiB, halfMiB, json];
+    let pulls = 0;
+    let cancelled = false;
+    const stream = new ReadableStream(
+      {
+        pull(controller) {
+          const chunk = chunks[pulls++];
+          if (chunk) controller.enqueue(chunk);
+          else controller.close();
+        },
+        cancel() {
+          cancelled = true;
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    const api = mockApi(() => new Response(stream));
+
+    await assert.rejects(api(versionPath), { message: "staging Workers API response too large" });
+    assert.equal(pulls, 3);
+    assert.equal(cancelled, true);
+    assert.equal(stream.locked, false);
+  });
+
+  await t.test("returns null for missing settings and cancels without pulling", async () => {
+    let cancelled = false;
+    const stream = new ReadableStream(
+      {
+        pull() {
+          assert.fail("missing-resource body was read");
+        },
+        cancel() {
+          cancelled = true;
+          throw new Error("synthetic cancellation failure");
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    const api = mockApi(() => new Response(stream, { status: 404 }));
+
+    assert.equal(await api(settingsPath), null);
+    assert.equal(cancelled, true);
+    assert.equal(stream.locked, false);
+  });
+
+  await t.test("returns synthetic version and settings evidence", async () => {
+    const version = {
+      id: kit,
+      resources: { bindings: [{ name: "DATABASE_URL", type: "secret_text" }] },
+    };
+    const settings = { bindings: [{ name: "FIXTURE_NAME", type: "plain_text", text: "Épreuve" }] };
+    const api = mockApi((path) => {
+      if (path === versionPath) return Response.json({ success: true, result: version });
+      assert.equal(path, settingsPath);
+      const bytes = new TextEncoder().encode(JSON.stringify({ success: true, result: settings }));
+      const split = bytes.indexOf(0xc3) + 1;
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(bytes.subarray(0, split));
+            controller.enqueue(bytes.subarray(split));
+            controller.close();
+          },
+        }),
+      );
+    });
+
+    assert.deepEqual(await api(versionPath), version);
+    assert.deepEqual(await api(settingsPath), settings);
+  });
+
+  await t.test("reports malformed JSON and provider errors without response data", async () => {
+    const invalid = mockApi(() => new Response("synthetic private response"));
+    const refused = mockApi(() => Response.json({ success: "synthetic private response" }));
+
+    await assert.rejects(invalid(settingsPath), {
+      message: "staging Workers API response was not valid JSON",
+    });
+    await assert.rejects(refused(settingsPath), {
+      message: "staging Workers API returned an error",
+    });
+  });
 });
 
 test("isolated cutover repeats readiness and smoke when rollback is still propagating", async () => {
