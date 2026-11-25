@@ -95,8 +95,8 @@ async function prepareQueuePreviewFixture(worker, entry, operatorId) {
 import { withEnv } from "cloudflare:workers";
 import worker from ${JSON.stringify(worker)};
 const profiles = {
-  unset: {},
-  off: { KIT_ROUTE_ADMIN_QUEUE_PREVIEW: "false" },
+  unset: { KIT_ROUTE_ADMIN: "true" },
+  off: { KIT_ROUTE_ADMIN: "true", KIT_ROUTE_ADMIN_QUEUE_PREVIEW: "false" },
   on: { KIT_ROUTE_ADMIN_QUEUE_PREVIEW: "true" },
   disabled: { KIT_ROUTE_ADMIN_QUEUE_PREVIEW: "true", QUEUE_RECONCILE_PREVIEW_ENABLED: "false" },
 };
@@ -112,7 +112,7 @@ export default {
     const profile = incoming.headers.get("x-fixture-preview-profile");
     if (!Object.hasOwn(profiles, profile)) return new Response(null, { status: 400 });
     const bindings = {
-      ...env, APP_URL: ${JSON.stringify(STAGING_ORIGIN)}, KIT_ROUTE_ADMIN: "true",
+      ...env, APP_URL: ${JSON.stringify(STAGING_ORIGIN)}, KIT_ROUTE_ADMIN: "false",
       QUEUE_RECONCILE_PREVIEW_ENABLED: "true",
       QUEUE_RECONCILE_OPERATOR_ID: ${JSON.stringify(operatorId)}, ...profiles[profile],
     };
