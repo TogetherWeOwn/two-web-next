@@ -193,7 +193,7 @@ test("manual qualification uses the exact main dispatch revision, not a deploy t
   );
 });
 
-test("a smoke skip is proof only on the exact successful deploy attempt", async () => {
+function deploySmokeFixture() {
   const trigger = {
     ...run,
     id: 55,
@@ -216,6 +216,11 @@ test("a smoke skip is proof only on the exact successful deploy attempt", async 
     conclusion: "success",
     steps: [proof],
   };
+  return { trigger, proof, job };
+}
+
+test("a smoke skip is proof only on the exact successful deploy attempt", async () => {
+  const { trigger, proof, job } = deploySmokeFixture();
   const check = (changes = {}) =>
     deploySmokeWasScoped(trigger, repository, async (url, options) => {
       assert.equal(new URL(url).pathname, "/repos/example/site/actions/runs/55/attempts/2/jobs");
@@ -565,6 +570,13 @@ test("scope never skips candidate helpers using a later revision's import invent
     const script = block[2].replace(/^          /gm, "");
     assert.doesNotMatch(script, /\$\{\{/);
     assert.match(script, /\[ "\$EVENT_NAME" = workflow_dispatch \]/);
+    const readOutput = (path) =>
+      Object.fromEntries(
+        readFileSync(join(directory, path), "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => line.split("=")),
+      );
     const evaluate = (head, trusted, event = "workflow_run", scope = "true", command = script) => {
       write("output", "");
       execFileSync("bash", ["-c", command], {
@@ -582,12 +594,7 @@ test("scope never skips candidate helpers using a later revision's import invent
         },
         timeout: 10_000,
       });
-      return Object.fromEntries(
-        readFileSync(join(directory, "output"), "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => line.split("=")),
-      );
+      return readOutput("output");
     };
     // C removed A's import. C's inventory alone would wrongly skip A's helper change.
     assert.equal(evaluate(deployed, workflowSha).skip_e2e, "false");
@@ -602,6 +609,48 @@ test("scope never skips candidate helpers using a later revision's import invent
     assert.equal(evaluate(prose, prose, "workflow_run", "false").skip_e2e, "false");
     assert.equal(evaluate(prose, prose, "workflow_dispatch").skip_e2e, "false");
     assert.equal(evaluate(base, base).skip_e2e, "false");
+
+    const { trigger, job } = deploySmokeFixture();
+    write(
+      "event.json",
+      JSON.stringify({ workflow_run: { ...trigger, display_title: `deploy ${prose}` } }),
+    );
+    write(
+      "fetch.mjs",
+      'import { readFileSync } from "node:fs";\nconst text = readFileSync(new URL("./jobs.json", import.meta.url), "utf8");\nglobalThis.fetch = async () => new Response(text);\n',
+    );
+    for (const [steps, expected] of [
+      [job.steps, "true"],
+      [[], "false"],
+    ]) {
+      write("jobs.json", JSON.stringify({ total_count: 1, jobs: [{ ...job, steps }] }));
+      write("candidate-output", "");
+      execFileSync(
+        process.execPath,
+        [
+          "--import",
+          join(directory, "fetch.mjs"),
+          new URL("./staging-provenance.mjs", import.meta.url).pathname,
+          "candidate",
+        ],
+        {
+          cwd: directory,
+          env: {
+            GITHUB_EVENT_NAME: "workflow_run",
+            GITHUB_EVENT_PATH: join(directory, "event.json"),
+            GITHUB_OUTPUT: join(directory, "candidate-output"),
+            GITHUB_REPOSITORY: repository,
+            GITHUB_SHA: prose,
+          },
+          timeout: 10_000,
+        },
+      );
+      const result = readOutput("candidate-output");
+      assert.deepEqual(result, { sha: prose, deploy_smoke_scoped: expected });
+      const scope = evaluate(result.sha, prose, "workflow_run", result.deploy_smoke_scoped);
+      assert.equal(scope.docs_only, expected);
+      assert.equal(scope.skip_e2e, expected);
+    }
 
     const deploy = readFileSync(
       new URL("../.github/workflows/deploy.yml", import.meta.url),
