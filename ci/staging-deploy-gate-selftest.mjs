@@ -959,7 +959,10 @@ test("different main push SHAs cannot replace each other in the single pending q
 
   assert.deepEqual(stateOf(context("schedule", sha)), ["ci-nightly", false]);
   assert.deepEqual(stateOf(context("workflow_dispatch", sha)), ["ci-refs/heads/main", false]);
-  assert.deepEqual(stateOf(context("workflow_dispatch", sha, manualRef)), [`ci-${manualRef}`, true]);
+  assert.deepEqual(stateOf(context("workflow_dispatch", sha, manualRef)), [
+    `ci-${manualRef}`,
+    true,
+  ]);
   assert.deepEqual(stateOf(context("push", sha, manualRef)), [`ci-${manualRef}`, true]);
   assert.deepEqual(stateOf(context("merge_group", sha, mergeRef)), [`ci-${mergeRef}`, false]);
 
