@@ -421,6 +421,21 @@ The `unownedByFamily` field groups the same findings by the route map's family
 and exact legacy method, including `ALL` for wildcard method fallbacks. Entries
 without a family, including page cutover rows, appear under `unresolved`.
 
+`honoRemoval` connects the SSR findings to removal work. Start with a finding
+in `chunks` and follow its `entrypoints` to the first Kit source modules on the
+emitted module import paths. Each entrypoint lists the `targets` that retain it.
+The `units` list expands each target to its exact legacy registrations and their
+recorded family, slice or owner. Page targets include their `+page.server.ts`
+companion. The Hono bridge and catch-all are explicit API-10 fallback sources.
+`lazyChunks` lists an emitted dynamic import's target and importing chunks when
+the target or any of its static dependencies appears in `chunks`.
+
+`unownedImporters` names Kit sources where an import path ends without a mapped
+target. A chunk finding has `unowned: true` when an observed dependency has a
+path without a Kit entrypoint. Both can appear alongside known owners. Chunk
+names describe the emitted build and import edges describe module reachability.
+Removing a target still requires checking shared exports and route parity.
+
 With locked dependencies installed, run `KIT_RETIREMENT_GUARD=strict npm run build --prefix web`
 to fail before generating new adapter output when either blocker remains.
 An ordinary build calls the stock adapter. The source baseline has 99 endpoints
