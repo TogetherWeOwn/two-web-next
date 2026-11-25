@@ -2,8 +2,25 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { PLANETSCALE_PRODUCTION_BRANCH_ID, PLANETSCALE_PRODUCTION_HOST } from "../db-migrate.mjs";
 import { planServingIsolation, runServingIsolation } from "../db-serving-ledger-isolation.mjs";
+import { assertServingLedgerIsolation } from "../migration-runtime-rights.mjs";
 
 const ledger = "drizzle.__drizzle_migrations";
+
+export const readServingLedger = async (sql) => [
+  ...(await sql`SELECT created_at::text, hash
+    FROM drizzle.__drizzle_migrations ORDER BY created_at, id`),
+];
+
+export async function probeServingLedger(owner, role, sql, expected, isolated) {
+  if (isolated) {
+    await assertServingLedgerIsolation(owner, role);
+    const denied = { code: "42501" };
+    await assert.rejects(readServingLedger(sql), denied);
+    await assert.rejects(sql`SELECT last_value FROM drizzle.__drizzle_migrations_id_seq`, denied);
+  } else {
+    assert.deepEqual(await readServingLedger(sql), expected);
+  }
+}
 
 async function rehearseDistinctGrantor(owner, login, migrationRole, capture, run) {
   const grantor = `isolation_grantor_${randomUUID().replaceAll("-", "")}`;
@@ -54,26 +71,17 @@ async function rehearseDistinctGrantor(owner, login, migrationRole, capture, run
   }
 }
 
-// The existing bridge rehearsal owns the databases, roles and Worker builds.
-export async function rehearseServingIsolation({
+// Both callers inject their own disposable database connection. Traffic and
+// version lookups use fixture responses even when the caller supplies real /up data.
+export async function prepareServingIsolation({
   owner,
-  reader,
   login,
   database,
-  migrator,
   migrationRole,
-  databasePath,
-  oldHistory,
-  newHistory,
-  probePrincipals,
+  connect,
+  firstEnd,
+  timestamps,
 }) {
-  await owner`GRANT USAGE ON SCHEMA drizzle TO ${owner(login)}`;
-  await owner`GRANT SELECT (created_at) ON drizzle.__drizzle_migrations TO ${owner(login)}`;
-  await owner`GRANT two_web_app TO ${owner(login)}`;
-  const [originalSequence] = await owner`SELECT
-    has_sequence_privilege(${login}::text, 'public.activity_log_id_seq', 'USAGE') AS usage,
-    has_sequence_privilege(${login}::text, 'public.activity_log_id_seq', 'UPDATE') AS "update"`;
-  assert.deepEqual(originalSequence, { usage: false, update: true });
   const version = randomUUID();
   const artifact = { sourceSha: "b".repeat(40), digest: "c".repeat(64) };
   const sha = (data) => createHash("sha256").update(data).digest("hex");
@@ -81,9 +89,6 @@ export async function rehearseServingIsolation({
   const capture = async () =>
     JSON.stringify(await planServingIsolation(owner, identityHash, version, artifact, login));
   const plan = await capture();
-  const firstEnd = oldHistory.at(-1).tag;
-  const lastEnd = newHistory.at(-1).tag;
-  const timestamps = oldHistory.map(({ created_at }) => Number(created_at));
   const health = {
     revision: { version_id: version },
     db: "ok",
@@ -114,10 +119,7 @@ export async function rehearseServingIsolation({
       {
         login,
         owner: migrationRole,
-        connect(config) {
-          config.url.pathname = databasePath;
-          return { begin: migrator.begin, end: async () => {} };
-        },
+        connect,
         fetchImpl(target) {
           assert.equal(operation, "forward");
           if (new URL(target).hostname === "api.cloudflare.com") {
@@ -152,6 +154,43 @@ export async function rehearseServingIsolation({
         },
       },
     );
+  return { capture, run, version };
+}
+
+// The existing bridge rehearsal owns the databases, roles and Worker builds.
+export async function rehearseServingIsolation({
+  owner,
+  reader,
+  login,
+  database,
+  migrator,
+  migrationRole,
+  databasePath,
+  oldHistory,
+  newHistory,
+  probePrincipals,
+}) {
+  await owner`GRANT USAGE ON SCHEMA drizzle TO ${owner(login)}`;
+  await owner`GRANT SELECT (created_at) ON drizzle.__drizzle_migrations TO ${owner(login)}`;
+  await owner`GRANT two_web_app TO ${owner(login)}`;
+  const [originalSequence] = await owner`SELECT
+    has_sequence_privilege(${login}::text, 'public.activity_log_id_seq', 'USAGE') AS usage,
+    has_sequence_privilege(${login}::text, 'public.activity_log_id_seq', 'UPDATE') AS "update"`;
+  assert.deepEqual(originalSequence, { usage: false, update: true });
+  const lastEnd = newHistory.at(-1).tag;
+  const timestamps = oldHistory.map(({ created_at }) => Number(created_at));
+  const { capture, run } = await prepareServingIsolation({
+    owner,
+    login,
+    database,
+    migrationRole,
+    connect(config) {
+      config.url.pathname = databasePath;
+      return { begin: migrator.begin, end: async () => {} };
+    },
+    firstEnd: oldHistory.at(-1).tag,
+    timestamps,
+  });
   assert.equal(await run("readback"), "before");
   await assert.rejects(
     run("forward", { liveVersion: randomUUID() }),

@@ -9,7 +9,11 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { build } from "esbuild";
 import postgres from "postgres";
-import { rehearseServingIsolation } from "./fixtures/web-serving-isolation.mjs";
+import {
+  probeServingLedger,
+  readServingLedger,
+  rehearseServingIsolation,
+} from "./fixtures/web-serving-isolation.mjs";
 import { assertServingLedgerIsolation } from "./migration-runtime-rights.mjs";
 import { readLedgerState } from "./production-deploy-gate.mjs";
 import { buildCutoverApps, probeCutoverEventSync } from "./web-readiness-cutover.mjs";
@@ -240,10 +244,7 @@ export async function rehearseWebReadiness(owner, url, botOwner, botUrl) {
     await botOwner`GRANT USAGE ON SCHEMA web_v1 TO ${botOwner(botViews)}`;
     await botOwner`GRANT SELECT ON web_v1.live_counts TO ${botOwner(botViews)}`;
 
-    const readLedger = async (sql = migrator) => [
-      ...(await sql`SELECT created_at::text, hash
-        FROM drizzle.__drizzle_migrations ORDER BY created_at, id`),
-    ];
+    const readLedger = () => readServingLedger(migrator);
     const pairs = (history) => history.map(({ created_at, hash }) => ({ created_at, hash }));
     await migrate(drizzle(migrator), old);
     assert.deepEqual(await readLedger(), pairs(old.history));
@@ -259,21 +260,13 @@ export async function rehearseWebReadiness(owner, url, botOwner, botUrl) {
 
     const denied = { code: "42501" };
     const probePrincipals = async (history, isolated) => {
-      assert.deepEqual(await readLedger(), pairs(history));
+      const expected = pairs(history);
+      assert.deepEqual(await readLedger(), expected);
       for (const [role, sql] of [
         [webRole, web],
         [jobsRole, jobs],
       ]) {
-        if (isolated) {
-          await assertServingLedgerIsolation(owner, role);
-          await assert.rejects(readLedger(sql), denied);
-          await assert.rejects(
-            sql`SELECT last_value FROM drizzle.__drizzle_migrations_id_seq`,
-            denied,
-          );
-        } else {
-          assert.deepEqual(await readLedger(sql), pairs(history));
-        }
+        await probeServingLedger(owner, role, sql, expected, isolated);
       }
       const description = randomUUID();
       const [{ id }] = await web`INSERT INTO public.activity_log (description, created_at)

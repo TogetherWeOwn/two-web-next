@@ -67,6 +67,7 @@ export async function seed(cluster, sourcePasswords, source) {
       grant usage, create on schema public to fixture_executor, fixture_other, two_web_migrate;
       grant usage on schema drizzle to two_web_app;
       create table public.web_session_grace (id int);
+      alter table public.web_session_grace owner to two_web_migrate;
       create table drizzle.__drizzle_migrations (id serial primary key, hash text, created_at bigint);
       alter table drizzle.__drizzle_migrations owner to fixture_executor;
       grant select on drizzle.__drizzle_migrations to two_web_app;
@@ -101,6 +102,7 @@ export async function seed(cluster, sourcePasswords, source) {
       insert into public.events (id) values (1), (2);
       insert into public.rsvps (id) values (1);
       insert into public.queue_jobs (id) values (1);
+      alter table public.agent_event_grants add column updated_at timestamptz;
       grant select, insert, update, delete on public.events, public.rsvps, public.queue_jobs to two_web_app;
       grant select on public.events, public.rsvps to two_web_backup;
       grant usage, select on sequence public.events_id_seq to two_web_backup;
