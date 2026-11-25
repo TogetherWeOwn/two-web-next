@@ -10,9 +10,10 @@ function sameLease(a, b) {
 
 /**
  * The caller authorizes each request and supplies the reservation parser, which
- * returns the lease identity with issuedAtMs and expiresAtMs. Give each new lease
- * a fresh issuedAt, even for the same owner and allocation, and retain the
- * original lease as the expected record for retry or retirement.
+ * returns the lease identity with issuedAtMs and expiresAtMs. Replacement starts
+ * at or after the prior expiry. If a caller creates leases outside this helper,
+ * it must never reuse an issuance time for the same owner, SHA and allocation.
+ * Keep the original lease as the expected record for retry or retirement.
  * The lane adapter must exclude every staging mutation in `deploy-staging` for
  * the full async callback. Only a successful read of absent state returns null.
  */
@@ -59,6 +60,7 @@ export function createStagingLeaseLifecycle({
         const nowMs = readClock();
         if (nowMs < previous.expiresAtMs) return "not-expired";
         if (nowMs < next.issuedAtMs || nowMs >= next.expiresAtMs) return "replacement-inactive";
+        if (next.issuedAtMs < previous.expiresAtMs) return "replacement-issued-before-expiry";
         if (!matchesPrevious) return "already-replaced";
         await writeLease(record);
         return "replaced";

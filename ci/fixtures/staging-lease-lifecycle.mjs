@@ -109,6 +109,28 @@ test("staging lease cleanup is idempotent at expiry", async () => {
   assert.equal(readState(), null);
 });
 
+test("staging lease retirement compares every identity field", async () => {
+  const { lifecycle, mutations, readState } = fixture();
+  const differences = {
+    ownerId: 102,
+    sha: "b".repeat(40),
+    allocationId: "22222222-2222-4222-8222-222222222222",
+    issuedAt: "2026-11-01T10:00:00.001Z",
+    expiresAt: "2026-11-01T10:29:59.999Z",
+  };
+  for (const [field, value] of Object.entries(differences)) {
+    const stale = { ...previous, [field]: value };
+    assert.equal(await lifecycle.release(stale), "different-lease", `release checks ${field}`);
+    assert.equal(
+      await lifecycle.cleanupExpired(stale),
+      "different-lease",
+      `cleanup checks ${field}`,
+    );
+  }
+  assert.deepEqual(mutations, []);
+  assert.deepEqual(readState(), previous);
+});
+
 test("staging lease retries recognize mutations after lost acknowledgements", async () => {
   const writeError = new Error("synthetic write acknowledgement lost");
   const deleteError = new Error("synthetic delete acknowledgement lost");
@@ -137,6 +159,17 @@ test("staging lease replacement must be active at the write decision", async () 
   const future = { ...renewal, issuedAt: "2026-11-01T10:30:00.001Z" };
   assert.equal(await lifecycle.replaceExpired(previous, future), "replacement-inactive");
   assert.equal(await lifecycle.replaceExpired(previous, previous), "replacement-inactive");
+  assert.deepEqual(mutations, []);
+  assert.deepEqual(readState(), previous);
+});
+
+test("staging lease replacement refuses a still-active record issued before the prior expiry", async () => {
+  const { lifecycle, mutations, readState } = fixture();
+  const reused = { ...renewal, issuedAt: previous.issuedAt };
+  assert.equal(
+    await lifecycle.replaceExpired(previous, reused),
+    "replacement-issued-before-expiry",
+  );
   assert.deepEqual(mutations, []);
   assert.deepEqual(readState(), previous);
 });
