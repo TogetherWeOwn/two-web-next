@@ -608,6 +608,14 @@ export async function assertStaticFeedParity({
 
       const legacyAlias = `/events/${eventKeys[0]}%2Eics`;
       const legacyRedirect = `/%65vents/${eventKeys[0].toLowerCase()}.ics?game=one%20two&ref=%2f`;
+      const legacyMisses = [
+        "/events/outer/inner.ics?ref=%2f",
+        "/events//.ics",
+        "/events/outer%2Finner%2Eics",
+        "/events/outer/inner%2fleaf.ics",
+        "/events/malformed%FF.ics",
+      ];
+      let legacyHits = await throttleHits(bucket);
       for (const method of ["GET", "HEAD"]) {
         const alias = await run(`legacy alias ${method}`, legacyAlias, { method, status: 200 });
         assert.equal(alias.body, method === "HEAD" ? "" : get.body);
@@ -625,13 +633,7 @@ export async function assertStaticFeedParity({
         });
         assert.equal(redirectAlias.headers.get("location"), `${publicPath}?game=one%20two&ref=%2f`);
         assert.equal(redirectAlias.headers.get("set-cookie"), null);
-        for (const path of [
-          "/events/outer/inner.ics?ref=%2f",
-          "/events//.ics",
-          "/events/outer%2Finner%2Eics",
-          "/events/outer/inner%2fleaf.ics",
-          "/events/malformed%FF.ics",
-        ]) {
+        for (const path of legacyMisses) {
           const missing = await run(`legacy ${method} ${path}`, path, {
             method,
             status: 404,
@@ -644,6 +646,13 @@ export async function assertStaticFeedParity({
             assert.equal(missing.headers.get(name), null, name);
           }
         }
+        // One read each for the alias, conditional, redirect and refusals.
+        legacyHits += 3 + legacyMisses.length;
+        assert.equal(
+          await throttleHits(bucket),
+          legacyHits,
+          `${target.name}: legacy ${method} requests charge the shared bucket`,
+        );
       }
 
       const cancelled = await run("cancelled GET", eventCalendar(eventKeys[1]), { status: 200 });
