@@ -639,3 +639,32 @@ test("isolated upload diagnostics keep only the operation, exit status and provi
     assert.equal(refusal.message, "Wrangler rollback failed");
   }
 });
+
+test("isolated cutover removes scratch and withholds proof when the owner close fails", async (t) => {
+  const { finalizeIsolatedCutover } = await import("./kit-cutover-staging.mjs");
+  const runnerTemp = await mkdtemp(join(tmpdir(), "kit-cutover-finalization-test-"));
+  t.after(() => rm(runnerTemp, { recursive: true, force: true }));
+  const scratch = await mkdtemp(join(runnerTemp, "kit-cutover-staging-"));
+  await writeFile(join(scratch, "synthetic-bindings.json"), "disposable fixture");
+  const owner = {
+    end: t.mock.fn(async () => {
+      throw new Error("untrusted synthetic connection detail");
+    }),
+  };
+  const publishProof = t.mock.fn(() =>
+    writeFile(join(runnerTemp, "proof.json"), "synthetic proof", { flag: "wx" }),
+  );
+
+  const failure = await finalizeIsolatedCutover(owner, scratch, publishProof).catch(
+    (error) => error,
+  );
+  assert.deepEqual(await readdir(runnerTemp), []);
+  assert.ok(failure instanceof Error);
+  assert.equal(failure.message, "Cutover staging failed during local fixture finalization");
+  assert.equal(failure.cause, undefined);
+  assert.deepEqual(
+    owner.end.mock.calls.map(({ arguments: args }) => args),
+    [[{ timeout: 0 }]],
+  );
+  assert.equal(publishProof.mock.callCount(), 0);
+});
