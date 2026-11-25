@@ -97,13 +97,19 @@ test("database repair recovery pins an unchanged dispatcher and a main ancestor"
   };
   const repair = ".github/workflows/db-permissions-repair.yml";
   const executor = ".github/workflows/db-repair-executor.yml";
+  const isolation = ".github/workflows/db-serving-ledger-isolation.yml";
   const selector = ".github/scripts/select-db-repair-revision.sh";
+  const isolationSelector = ".github/scripts/select-db-serving-isolation-revision.sh";
   git("init", "-q");
   git("config", "user.name", "Fixture");
   git("config", "user.email", "fixture@example.invalid");
   git("commit", "-qm", "before recovery rollout", "--allow-empty");
   const beforeRollout = git("rev-parse", "HEAD");
   for (const path of [repair, executor, selector]) write(path, read(`../${path}`));
+  git("add", ".");
+  git("commit", "-qm", "repair recovery available");
+  const beforeIsolation = git("rev-parse", "HEAD");
+  for (const path of [isolation, isolationSelector]) write(path, read(`../${path}`));
   git("add", ".");
   git("commit", "-qm", "approved source");
   const approved = git("rev-parse", "HEAD");
@@ -118,7 +124,13 @@ test("database repair recovery pins an unchanged dispatcher and a main ancestor"
     const yaml = parse(readFileSync(join(cwd, path), "utf8"));
     const step = Object.values(yaml.jobs)
       .flatMap((job) => job.steps)
-      .find(({ name }) => name === "Select the approved database repair revision");
+      .find(
+        ({ name }) =>
+          name ===
+          (path === isolation
+            ? "Select the approved serving isolation revision"
+            : "Select the approved database repair revision"),
+      );
     const result = spawnSync("/bin/bash", ["-c", step.run], {
       cwd,
       encoding: "utf8",
@@ -134,10 +146,13 @@ test("database repair recovery pins an unchanged dispatcher and a main ancestor"
   };
   assert.deepEqual(select(repair, "forward", tip, tip), [0, tip]);
   assert.deepEqual(select(executor, "provision", tip, tip), [0, tip]);
+  assert.deepEqual(select(isolation, "forward", tip, tip), [0, tip]);
   for (const [path, operation] of [
     [repair, "undo"],
     [repair, "readback"],
     [executor, "revoke"],
+    [isolation, "undo"],
+    [isolation, "readback"],
   ]) {
     assert.deepEqual(select(path, operation, tip, approved), [0, approved]);
     assert.deepEqual(select(path, operation, tip, unrelated), [1, tip]);
@@ -146,6 +161,23 @@ test("database repair recovery pins an unchanged dispatcher and a main ancestor"
   }
   assert.deepEqual(select(repair, "forward", tip, approved), [1, tip]);
   assert.deepEqual(select(executor, "provision", tip, approved), [1, tip]);
+  assert.deepEqual(select(isolation, "forward", tip, approved), [1, tip]);
+  assert.deepEqual(select(repair, "undo", tip, beforeIsolation), [0, beforeIsolation]);
+  assert.deepEqual(select(repair, "readback", tip, beforeIsolation), [0, beforeIsolation]);
+  assert.deepEqual(select(executor, "revoke", tip, beforeIsolation), [0, beforeIsolation]);
+  assert.deepEqual(select(isolation, "undo", tip, beforeIsolation), [1, tip]);
+  write(isolation, `${read(`../${isolation}`)}\n# changed isolation dispatcher\n`);
+  git("commit", "-qam", "changed isolation dispatcher");
+  const changedIsolationWorkflow = git("rev-parse", "HEAD");
+  assert.deepEqual(select(isolation, "undo", changedIsolationWorkflow, approved), [
+    1,
+    changedIsolationWorkflow,
+  ]);
+  git("checkout", "--detach", tip);
+  write(isolationSelector, `${read(`../${isolationSelector}`)}\n# changed isolation selector\n`);
+  git("commit", "-qam", "changed isolation selector");
+  const changedIsolation = git("rev-parse", "HEAD");
+  assert.deepEqual(select(isolation, "undo", changedIsolation, approved), [1, changedIsolation]);
   write(repair, `${read(`../${repair}`)}\n# changed dispatcher\n`);
   git("commit", "-qam", "changed dispatcher");
   const changed = git("rev-parse", "HEAD");
