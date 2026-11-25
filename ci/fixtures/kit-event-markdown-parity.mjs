@@ -11,6 +11,7 @@ const keys = {
   past: "01J0000000000000000000A004",
   missing: "01J0000000000000000000A005",
 };
+const titleFor = (status) => `Synthetic Markdown ${status}`;
 const detail = (key) => `/e/${key}.md`;
 const markdownType = "text/markdown; charset=utf-8";
 const wireHeaders = [
@@ -26,7 +27,13 @@ const wireHeaders = [
   "x-content-type-options",
 ];
 
-export async function assertEventMarkdownParity({ hono, kit, startKit, databaseUrl }) {
+export async function assertEventMarkdownParity({
+  hono,
+  kit,
+  startKit,
+  assertEventDetail,
+  databaseUrl,
+}) {
   const [off, on] = await Promise.all(
     ["false", "true"].map((flag) =>
       startKit(`kit-event-markdown-${flag}`, {
@@ -95,7 +102,7 @@ export async function assertEventMarkdownParity({ hono, kit, startKit, databaseU
       const starts = status === "past" ? "2020-01-01T18:00:00Z" : "2090-01-01T18:00:00Z";
       const ends = status === "past" ? "2020-01-01T20:00:00Z" : "2090-01-01T20:00:00Z";
       await sql`insert into events (event_key, title, status, starts_at, ends_at, timezone)
-        values (${key}, ${`Synthetic Markdown ${status}`}, ${status}, ${starts}, ${ends}, 'UTC')`;
+        values (${key}, ${titleFor(status)}, ${status}, ${starts}, ${ends}, 'UTC')`;
     }
     await sql`insert into web_sessions (token_hash, status_hash, user_id, username, member, moderator, expires_at)
       values (${sessionHash}, ${sessionHash}, '900000000000009136', 'Synthetic Markdown Moderator', true, true, now() + interval '15 minutes')`;
@@ -222,6 +229,7 @@ export async function assertEventMarkdownParity({ hono, kit, startKit, databaseU
     console.log(
       "PASS installed Worker event Markdown fallback, wire parity, suffix precedence and shared read budget",
     );
+    await assertEventDetail({ key: keys.past, title: titleFor("past"), headers: fixtureClient() });
   } finally {
     try {
       await sql`delete from web_sessions where token_hash = ${sessionHash}`;

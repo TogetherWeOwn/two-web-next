@@ -1122,10 +1122,23 @@ export default machineParityWorker(inner, ${JSON.stringify(probePath)}, ${name =
     );
     await listen(markdownHono.child, markdownHono.origin, () => markdownHono.log);
     const { assertEventMarkdownParity } = await import("./fixtures/kit-event-markdown-parity.mjs");
+    const { assertEventDetailRollback } = await import("./fixtures/kit-event-detail-rollback.mjs");
     await assertEventMarkdownParity({
       hono: markdownHono,
       kit: kitWithSession,
       databaseUrl,
+      assertEventDetail: (event) =>
+        assertEventDetailRollback({
+          event,
+          scratch,
+          kit: { main: worker, assets },
+          hono: { main: join(repo, "src/worker.ts"), assets: join(repo, "public") },
+          startWorker: async (name, main, assetsDirectory, vars) => {
+            const instance = await startWorker(name, main, assetsDirectory, undefined, vars);
+            await listen(instance.child, instance.origin, () => instance.log);
+            return instance;
+          },
+        }),
       startKit: async (name, vars) => {
         const instance = await startWorker(name, worker, assets, secret, vars);
         await listen(instance.child, instance.origin, () => instance.log);
