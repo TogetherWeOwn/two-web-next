@@ -1353,6 +1353,13 @@ async function dispatchKitRequest(
     refused.headers.set("x-request-id", requestId);
     return refused;
   }
+  if (route === KIT_HOTZONE_SIGNAL_ROUTE) {
+    // Share Hono's season-first refusal before the API resolve or any reads.
+    const context = new Context<{ Bindings: Env }>(event.request);
+    const season = context.req.query("season") ?? null;
+    const refused = await refuseHotzone(context, parseSeasonParam(season) ? 404 : 400);
+    return finishKitResponse(refused, event, deps, requestId);
+  }
   // These API handlers own route-level admission, including any conditional
   // session work. The dispatcher supplies correlation and global headers.
   if (api && route.reads === "public") {
@@ -1430,11 +1437,6 @@ async function dispatchKitRequest(
     response = await deps.pastArchive(event.request, () => deps.resolve(event), requestId);
   } else if (isEventsListPage && deps.eventsPage) {
     response = await deps.eventsPage(event.request, () => deps.resolve(event), requestId);
-  } else if (route === KIT_HOTZONE_SIGNAL_ROUTE) {
-    // Match Hono's season-first refusal before any read guard or page load.
-    const context = new Context<{ Bindings: Env }>(event.request);
-    const season = context.req.query("season") ?? null;
-    response = await refuseHotzone(context, parseSeasonParam(season) ? 404 : 400);
   } else if (isHotzonesPage && deps.hotzones) {
     response = await deps.hotzones(event.request, () => deps.resolve(event), requestId);
   } else if (isContentLeafPath(route.path)) {

@@ -68,7 +68,17 @@ export async function assertHotzoneSignalParity({ hono, off, on, databaseUrl }) 
       const [direct] = answers;
       for (const [index, answer] of answers.entries()) {
         assertAnswer(answer, status, index === 2 ? marker : null);
-        assert.equal(answer.body, direct.body, answer.label);
+        const requestId = answer.response.headers.get("x-request-id");
+        assert.ok(requestId, answer.label);
+        if (foreignOrigin) {
+          assert.deepEqual(
+            JSON.parse(answer.body),
+            { error: "cross_origin", request_id: requestId },
+            answer.label,
+          );
+        } else {
+          assert.equal(answer.body, direct.body, answer.label);
+        }
         assert.equal(
           answer.response.headers.get("cache-control"),
           "no-store, private",
@@ -81,7 +91,6 @@ export async function assertHotzoneSignalParity({ hono, off, on, databaseUrl }) 
             answer.label,
           );
         }
-        assert.ok(answer.response.headers.get("x-request-id"), answer.label);
         if (content) assert.match(answer.body, content, answer.label);
         else
           assert.doesNotMatch(
