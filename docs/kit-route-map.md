@@ -468,6 +468,12 @@ redirect in both ownership modes. The loopback-only override exercises the
 native 301, query dropping, moderator admission and session renewal. The fixture
 also checks the legacy edit redirect, the existing POST controller, and the
 trailing-slash, data suffix, percent-encoded, malformed and case-variant paths.
+
+For `POST /admin/events/:key/publish`, the fixture also compares direct Hono,
+installed Kit ownership and installed Hono fallback. It checks no-JS success
+and refusals with synthetic drafts, and verifies that the committed event and
+its audit row are visible before the stubbed write-back queue receives the job.
+
 For API-5, it compares the disabled queue preview guard with the earlier
 source-evidence handler. The two distinct JSON refusals confirm which branch
 answered before the moderator gate. Native queue preview and source evidence
