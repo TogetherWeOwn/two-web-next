@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { first, preRollback, soakEnv, trustedReads } from "../test/fixtures/staging-soak-http.mjs";
 import { verifyOrdinaryLedger } from "./check-production-secrets.mjs";
 import { verifyReady, verifyStagingProof } from "./kit-cutover-evidence.mjs";
@@ -29,6 +31,87 @@ const emberUndoVersion = {
     "workers/message": `two-web-cutover-kit:${undoDigest}`,
   },
 };
+
+const readbackSection = "## Ember release input readback";
+const qualificationPin = `21:3:${digest}`;
+const readbackFields = {
+  candidate_sha: sourceSha,
+  candidate_pin: qualificationPin,
+  hono_sha: sourceSha,
+  hono_pin: qualificationPin,
+  hono_serving_version: hono,
+  hono_version_id: hono,
+  hono_tag: `${sourceSha}-99-1`,
+  hono_annotation: undoMessage(digest),
+};
+
+function evidencePacket(fields) {
+  return [
+    "# Release evidence",
+    "",
+    "Historical candidate and private notes go here.",
+    "",
+    readbackSection,
+    "",
+    "```text",
+    ...Object.entries(fields).map(([field, value]) => `${field}=${value}`),
+    "```",
+    "",
+    "### Further release evidence",
+  ].join("\n");
+}
+
+function offlineReadback(input) {
+  const cli = fileURLToPath(new URL("./read-ember-release-evidence.mjs", import.meta.url));
+  return spawnSync(process.execPath, [cli], { input, encoding: "utf8", env: {}, timeout: 5_000 });
+}
+
+test("offline Ember readback emits only the candidate and bound production undo identifiers", () => {
+  const result = offlineReadback(evidencePacket(readbackFields).replaceAll("\n", "\r\n"));
+  assert.equal(result.status, 0, result.error?.message || result.stderr);
+  assert.equal(result.stderr, "");
+  assert.deepEqual(JSON.parse(result.stdout), {
+    mode: "ember",
+    candidateSha: sourceSha,
+    qualificationPin,
+    honoUndoVersion: hono,
+    undoManifestSha256: digest,
+  });
+});
+
+test("offline Ember readback refuses mismatched, absent and ambiguous evidence without echoing it", () => {
+  const otherSha = "d".repeat(40);
+  const otherEvidence = [
+    { candidate_pin: `21:03:${digest}`, hono_pin: `21:03:${digest}` },
+    { hono_sha: otherSha },
+    { hono_pin: `21:4:${digest}` },
+    { hono_serving_version: kit },
+    { hono_tag: `${otherSha}-99-1` },
+    { hono_annotation: undoMessage(undoDigest) },
+    { hono_annotation: "" },
+    { candidate_sha: "private-note-that-must-not-appear" },
+  ];
+  const packet = evidencePacket(readbackFields);
+  const rejected = [
+    ...otherEvidence.map((changes) => evidencePacket({ ...readbackFields, ...changes })),
+    ...Object.keys(readbackFields).map((absent) =>
+      evidencePacket(
+        Object.fromEntries(Object.entries(readbackFields).filter(([key]) => key !== absent)),
+      ),
+    ),
+    packet.replace(readbackSection, "## Historical candidate"),
+    `${packet}\n${packet}`,
+  ];
+  for (const input of rejected) {
+    const result = offlineReadback(input);
+    assert.equal(result.status, 1, result.error?.message);
+    assert.equal(result.stdout, "");
+    assert.equal(
+      result.stderr,
+      "Ember release readback failed. Check the evidence section, candidate pin and Hono undo binding.\n",
+    );
+  }
+});
 
 test("cutover requires explicit protected selection and the paired Hono UUID", () => {
   const active = {

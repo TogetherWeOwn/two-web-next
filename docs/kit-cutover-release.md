@@ -149,3 +149,38 @@ For Ember or all-off Kit, set
 admin-off Ember UUID. Verify the restored UUID and commit, database readiness,
 and the fallback renderer ownership. The admin undo returns Admin to Hono
 while keeping Ember's public pages on Kit.
+
+## Optional offline Ember input readback
+
+Before constructing the Ember workflow inputs, compare the selected candidate
+and serving Hono undo recorded in the reviewed release evidence. Add this
+section once to the evidence packet, keeping the field names and order.
+Use the approved Ember qualification SHA and pin for the candidate fields.
+Use the protected Hono dispatch's SHA and pin for the next two fields. Copy
+the UUID from the recorded 100% serving readback into `hono_serving_version`.
+Copy the version ID, tag and message annotation from that version's recorded
+metadata into the last three fields.
+
+````markdown
+## Ember release input readback
+
+```text
+candidate_sha=<approved Ember SHA>
+candidate_pin=<Ember run:attempt:manifest SHA-256>
+hono_sha=<protected Hono dispatch SHA>
+hono_pin=<protected Hono dispatch pin>
+hono_serving_version=<recorded serving Hono UUID>
+hono_version_id=<Hono version metadata ID>
+hono_tag=<workers/tag>
+hono_annotation=<workers/message>
+```
+````
+
+```sh
+node ci/read-ember-release-evidence.mjs < release-evidence.md
+```
+
+The command prints the mode, candidate SHA, pin, Hono undo UUID and bound
+manifest digest after checking that the recorded values agree. It reads up to
+512 KiB of local evidence. Keep `cutover_undo_digest` empty for Ember. Follow
+the protected release steps for live verification, approval and dispatch.
