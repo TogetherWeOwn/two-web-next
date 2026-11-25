@@ -368,17 +368,27 @@ export async function assertStaticFeedParity({
   try {
     const eventPath = `/events/${eventKeys[0]}`;
     const readIp = "192.0.2.111";
-    buckets.push(`events-read:${readIp}`);
-    const headers = { "cf-connecting-ip": readIp, "x-forwarded-for": readIp };
-    await request(kit, eventPath, { status: 401, headers });
-    await request(seoOn, eventPath, { status: 401, headers, renderer: "kit" });
-
-    const writeHits = async () => {
+    const readWriteBucket = `event-write:${readIp}`;
+    buckets.push(`events-read:${readIp}`, readWriteBucket);
+    const throttleHits = async (bucket) => {
       const [{ count }] =
-        await sql`select count(*)::int from web_throttle_hits where bucket = ${writeBucket}`;
+        await sql`select count(*)::int from web_throttle_hits where bucket = ${bucket}`;
       return count;
     };
-    let expectedHits = await writeHits();
+    const headers = { "cf-connecting-ip": readIp, "x-forwarded-for": readIp };
+    for (const [target, renderer] of [
+      [kit, null],
+      [seoOn, "kit"],
+    ]) {
+      await request(target, eventPath, { status: 401, headers, renderer });
+      assert.equal(
+        await throttleHits(readWriteBucket),
+        0,
+        `${target.name}: GET leaves write quota intact`,
+      );
+    }
+
+    let expectedHits = await throttleHits(writeBucket);
     for (const [method, path, status, hits] of [
       ["POST", "/events", 401, 1],
       ["PATCH", eventPath, 401, 1],
@@ -390,7 +400,11 @@ export async function assertStaticFeedParity({
     ]) {
       await request(kit, path, { method, status, headers: { origin: kit.origin } });
       expectedHits += hits;
-      assert.equal(await writeHits(), expectedHits, `Hono ${method} ${path}: event-write hits`);
+      assert.equal(
+        await throttleHits(writeBucket),
+        expectedHits,
+        `Hono ${method} ${path}: event-write hits`,
+      );
       const result = await request(seoOn, path, {
         method,
         status,
@@ -398,7 +412,11 @@ export async function assertStaticFeedParity({
         renderer: "kit",
       });
       expectedHits += hits;
-      assert.equal(await writeHits(), expectedHits, `Kit ${method} ${path}: event-write hits`);
+      assert.equal(
+        await throttleHits(writeBucket),
+        expectedHits,
+        `Kit ${method} ${path}: event-write hits`,
+      );
       if (method === "OPTIONS") assert.equal(result.headers.get("allow"), "PUT, DELETE");
     }
     console.log("PASS installed Kit event write mounts with the flag absent and enabled");
