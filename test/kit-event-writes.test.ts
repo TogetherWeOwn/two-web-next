@@ -9,6 +9,7 @@ import { registerRsvpRoutes } from "../src/events/routes-rsvp";
 import type { QueueMessage } from "../src/jobs/types";
 import { dispatchHookRequest, type HookEventLike } from "../src/route-ownership";
 import { sameOrigin } from "../src/same-origin";
+import { fakeRsvpDb } from "./helpers/fake-rsvp-db";
 
 vi.mock("../src/jobs/worker", () => ({
   enqueueSyncEvent: async (env: Env, message: QueueMessage) => {
@@ -213,5 +214,71 @@ describe("Kit event-write admission", () => {
     expect(f.session).toHaveBeenCalledTimes(2);
     expect(f.transaction).not.toHaveBeenCalled();
     expect(f.queueSend).not.toHaveBeenCalled();
+  });
+
+  it("binds rank to the caller and event and waits for commit before dispatch", async () => {
+    const f = fixture();
+    let markAtCommit!: () => void;
+    let releaseCommit!: () => void;
+    const atCommit = new Promise<void>((resolve) => {
+      markAtCommit = resolve;
+    });
+    const commit = new Promise<void>((resolve) => {
+      releaseCommit = resolve;
+    });
+    const eventId = 42;
+    const handle = fakeRsvpDb({
+      event: {
+        id: eventId,
+        eventKey: KEY,
+        status: "published",
+        rsvpOpen: true,
+        startsAt: new Date("2099-01-01T01:00Z"),
+        endsAt: new Date("2099-01-01T02:00Z"),
+        capacity: 1,
+        discordEventId: "fixture-mirror",
+      },
+      existing: null,
+      throttleCount: { n: 0, wait: 0 },
+      goingCount: 1,
+      rejectPromotionLookup: true,
+      waitlistRank: { event_id: eventId, user_id: MEMBER.id, position: 2 },
+      finalRow: () => ({ ...handle.inserted[0], syncedToDiscordAt: null }),
+    });
+    const trace: string[] = [];
+    f.transaction.mockImplementation(async (run) => {
+      const result = await handle.db.transaction(run);
+      markAtCommit();
+      await commit;
+      trace.push("commit");
+      return result;
+    });
+    f.queueSend.mockImplementation(async () => {
+      trace.push("dispatch");
+    });
+    const response = f.request(form(JSON_RSVP, "PUT", "status=going"), "/events/[key]/rsvp");
+    try {
+      await Promise.race([
+        atCommit,
+        response.then((r) => {
+          throw new Error(`RSVP answered ${r.status} before commit`);
+        }),
+      ]);
+      expect(handle.inserted).toMatchObject([{ eventId, userId: MEMBER.id, status: "waitlisted" }]);
+      expect(f.queueSend).not.toHaveBeenCalled();
+    } finally {
+      releaseCommit();
+    }
+    const result = await response;
+    expect(result.status).toBe(201);
+    expect(await result.json()).toEqual({
+      data: { status: "waitlisted", waitlist_position: 2, synced_to_discord_at: null },
+    });
+    expect(f.transaction).toHaveBeenCalledOnce();
+    expect(f.queueSend).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ kind: "sync-event", eventKey: KEY }),
+      { delaySeconds: 10 },
+    );
+    expect(trace).toEqual(["commit", "dispatch"]);
   });
 });
