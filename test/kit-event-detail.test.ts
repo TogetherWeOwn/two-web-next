@@ -17,8 +17,10 @@ import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { jsx } from "hono/jsx";
 import { serializeSigned } from "hono/utils/cookie";
+import { parse } from "parse5";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import app from "./app";
+import { attr, elements, textOf } from "./helpers/kit-edit-controls";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { memberReadResponse } from "../src/member-reads";
@@ -1700,11 +1702,17 @@ describe("event-detail gone presentation", () => {
     expect(outcome.model.title).toBe("Chess night");
   });
 
-  it("renders the branded cancellation, not the generic error shell", async () => {
-    const { outcome } = await resolve(
-      KEY,
-      fakeStore({ event: { ...row({ status: "cancelled" }), goingCount: 3 } as PublicEvent }),
-    );
+  it("renders the branded cancellation with a native next-date link", async () => {
+    const upcoming = RELATED[0]!;
+    const { outcome } = await resolve(KEY, {
+      ...fakeStore({
+        event: {
+          ...row({ status: "cancelled", recurrenceIndex: 1 }),
+          goingCount: 3,
+        } as PublicEvent,
+      }),
+      seriesFn: async () => ({ hosts: [], previous: null, next: null, upcoming }),
+    });
     if (outcome.kind !== "gone") throw new Error("unreachable");
     const { renderGone } = await buildKitEventDetailBundle();
     const html = renderGone(outcome.model as unknown as Record<string, unknown>);
@@ -1715,6 +1723,10 @@ describe("event-detail gone presentation", () => {
     expect(html).toContain('data-testid="event-jsonld"');
     expect(html).not.toContain('data-testid="event-attendees"');
     expect(html).not.toContain('data-testid="join-result"');
+    const nextDateLinks = elements(parse(html))
+      .filter((link) => link.tagName === "a" && textOf(link).trim() === "See the next date")
+      .map((link) => attr(link, "href"));
+    expect(nextDateLinks).toEqual([`/e/${upcoming.eventKey}`]);
   });
 
   it("maps the gone outcome onto the 410 branded error payload", async () => {

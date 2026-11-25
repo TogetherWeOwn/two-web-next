@@ -1,5 +1,4 @@
 <script lang="ts">
-import Button from "#lib/Button.svelte";
 import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
 import Tag from "#lib/Tag.svelte";
@@ -52,7 +51,7 @@ let { model }: { model: EventGoneModel } = $props();
         {/if}
         <p>Nothing else to do.</p>
         {#if model.nextDate}
-          <Button href={model.nextDate.href} fullWidth>See the next date</Button>
+          <a class="next-date-link" href={model.nextDate.href}>See the next date</a>
         {/if}
       </section>
       {#if model.facts.length > 0}
@@ -104,6 +103,35 @@ let { model }: { model: EventGoneModel } = $props();
   .record-head { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: var(--space-2); }
   .record-head h2 { margin: 0; font-size: var(--text-title); font-weight: var(--font-weight-semibold); line-height: var(--leading-title); }
   .record p { margin: var(--space-inset-tight) 0; font-size: var(--text-small); color: var(--color-t2); }
+  /* Keep the full-width ghost pill in the cancelled view's stylesheet. */
+  .next-date-link {
+    display: inline-flex;
+    vertical-align: middle;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 44px;
+    padding: 0 var(--space-5);
+    border: 0;
+    border-radius: var(--radius-pill);
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--color-hair2);
+    color: var(--t1);
+    font-family: var(--font-ui);
+    font-size: var(--text-ui);
+    font-weight: var(--font-weight-semibold);
+    font-stretch: var(--font-width-button);
+    cursor: pointer;
+    text-decoration: none;
+  }
+  .next-date-link:focus-visible { outline: var(--focus-width) solid var(--focus-ring); outline-offset: var(--focus-offset); }
+  @media (hover: hover) {
+    .next-date-link:hover { background: var(--g2); }
+  }
+  @media (forced-colors: active) {
+    .next-date-link { border: 1px solid ButtonText; }
+  }
   .event-facts { padding: var(--space-2) var(--space-inset-card); }
   .event-facts dl { margin: 0; }
   .event-facts dl > div { display: flex; justify-content: space-between; gap: var(--space-4); padding: var(--space-inset-tight) 0; }
