@@ -2111,12 +2111,21 @@ test("live equality: same commit is already live, different or unknown is not", 
   assert.equal(PRODUCTION_ORIGIN, "https://togetherweown.com");
 });
 
-test("live commit reads the /up revision marker and fails open to null", async () => {
+test("live commit reads the exact revision from a successful /up JSON response", async () => {
   const sha = "c".repeat(40);
   const ok = await readLiveProductionCommit({
-    fetchImpl: async () => ({ json: async () => ({ revision: { commit: sha } }) }),
+    fetchImpl: async () =>
+      Response.json({
+        status: "degraded",
+        db: "ok",
+        pending_migrations: 0,
+        revision: { version_id: "11111111-1111-4111-8111-111111111111", commit: sha },
+      }),
   });
   assert.equal(ok, sha);
+});
+
+test("live commit reports unknown for invalid revisions or a failed fetch", async () => {
   for (const body of [
     {},
     { revision: null },
@@ -2124,7 +2133,7 @@ test("live commit reads the /up revision marker and fails open to null", async (
     { revision: { commit: "not-a-sha" } },
   ]) {
     assert.equal(
-      await readLiveProductionCommit({ fetchImpl: async () => ({ json: async () => body }) }),
+      await readLiveProductionCommit({ fetchImpl: async () => Response.json(body) }),
       null,
     );
   }
@@ -2136,6 +2145,63 @@ test("live commit reads the /up revision marker and fails open to null", async (
     }),
     null,
   );
+});
+
+test("live commit requires HTTP 200 JSON even when another response carries a valid revision", async () => {
+  const body = { revision: { commit: "c".repeat(40) } };
+  for (const response of [
+    Response.json(body, { status: 503 }),
+    Response.json(body, { status: 206 }),
+    new Response(JSON.stringify(body), { headers: { "content-type": "text/plain" } }),
+  ]) {
+    assert.equal(await readLiveProductionCommit({ fetchImpl: async () => response }), null);
+  }
+});
+
+test("live commit refuses redirects at the pinned /up request", async () => {
+  const origin = "https://production.invalid";
+  let request;
+  const live = await readLiveProductionCommit({
+    origin,
+    fetchImpl: async (url, options) => {
+      request = { url: url.href, redirect: options.redirect };
+      return Response.json(
+        { revision: { commit: "c".repeat(40) } },
+        { status: 302, headers: { location: "https://redirect.invalid/up" } },
+      );
+    },
+  });
+  assert.deepEqual(request, { url: `${origin}/up`, redirect: "manual" });
+  assert.equal(live, null);
+});
+
+test("live commit cancels a streamed response over 16 KiB without Content-Length", async () => {
+  const sha = "c".repeat(40);
+  const json = JSON.stringify({ revision: { commit: sha } });
+  const chunk = new TextEncoder().encode(json.padEnd(16 * 1024));
+  let pulls = 0;
+  let cancelled = false;
+  const body = new ReadableStream(
+    {
+      pull(controller) {
+        pulls += 1;
+        if (pulls === 1) controller.enqueue(chunk);
+        else if (pulls === 2) controller.enqueue(Uint8Array.of(32));
+        else controller.close();
+      },
+      cancel() {
+        cancelled = true;
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const headers = { "content-type": "application/json; charset=UTF-8" };
+  const atLimit = new Response(chunk, { headers });
+  assert.equal(await readLiveProductionCommit({ fetchImpl: async () => atLimit }), sha);
+  const oversize = new Response(body, { headers });
+  assert.equal(await readLiveProductionCommit({ fetchImpl: async () => oversize }), null);
+  assert.equal(pulls, 2);
+  assert.equal(cancelled, true);
 });
 
 test("pending migrations are target tags the live journal lacks", () => {

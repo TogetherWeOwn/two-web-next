@@ -611,6 +611,17 @@ test("live identity admission exhausts three invalid reads before refusing check
   }
 });
 
+test("automatic promotion refuses a valid revision from an unsuccessful /up response", () => {
+  const result = runLiveAdmission("workflow_run", [{ ...liveBody(LIVE), status: 503 }]);
+  assert.equal(result.written, "already_live=false\nlive_sha=\n");
+  assert.equal(upCalls(result).length, 3);
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /known full 40-hex live production SHA/);
+  assert.deepEqual(compareCalls(result), []);
+  assert.equal(result.checkedOut, false);
+  assert.equal(result.deployed, false);
+});
+
 test("live identity admission stops reading after the first valid identity", () => {
   for (const event of [...AUTOMATIC, "workflow_dispatch"]) {
     const result = runLiveAdmission(event, [liveBody(LIVE), { fail: true }]);

@@ -966,8 +966,9 @@ be older than the commit production currently serves. Staging eligibility is
 not proof of forward ancestry.
 
 Initial `/up` live-SHA capture makes at most three reads, two seconds apart,
-stopping on the first valid 40-hex commit. Exhausted or invalid reads leave
-live identity unknown; they never bypass default ancestry admission.
+stopping on the first HTTP 200 JSON response with a valid 40-hex commit and
+a body no larger than 16 KiB. Redirects, other HTTP statuses and invalid
+bodies leave live identity unknown if all three reads fail.
 After capture, `deploy-production` runs
 `node ci/production-deploy-gate.mjs --check-ancestry` from the trusted
 **workflow-head** checkout, before candidate checkout, migration checks or any
