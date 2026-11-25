@@ -10,6 +10,7 @@ import { newEventKey } from "../../src/admin/validation-event-keys.ts";
 import { attr, elements, submittedFields } from "../../test/helpers/kit-edit-controls.ts";
 import { EMBER_CUTOVER_VARS } from "../kit-cutover-evidence.mjs";
 import { FIXTURE_SECRETS, SESSION_COOKIE } from "../parity/fixture.mjs";
+import { assertAdminDuplicateServing } from "./kit-admin-duplicate.mjs";
 
 const editor = "/admin/events/new";
 const legacyCreate = "/admin/events/create";
@@ -1013,6 +1014,17 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
     assert.equal(events, 3, "the series has two occurrences and duplicate adds one draft");
     assert.equal(writes, 7, "accepted mutations audit each affected row once");
 
+    await assertAdminDuplicateServing({
+      kit,
+      off,
+      hono,
+      sql,
+      moderatorId,
+      moderator,
+      member,
+      visit,
+    });
+
     // A seeded key makes the parameter route observable next to the static
     // form and exact alias. Both installed modes keep the other forms in Kit.
     let kitEdit;
@@ -1035,6 +1047,7 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
       });
       assert.match(existing.text, /<h1[^>]*>Edit Fixture admin draft<\/h1>/);
       assert.ok(existing.text.includes(`action="${eventPath}"`));
+      assert.ok(existing.text.includes(`action="${eventPath}/duplicate"`));
       const current = renewedModerator(existing.headers);
       const ownedRedirect = target === nativeCreate;
       const alias = `${legacyCreate}?ignored=1&next=%2Felsewhere`;
