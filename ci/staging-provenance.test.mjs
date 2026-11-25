@@ -21,6 +21,7 @@ const A = "a".repeat(40);
 const B = "b".repeat(40);
 const C = "c".repeat(40);
 const repository = "example/site";
+const provenanceScript = fileURLToPath(new URL("./staging-provenance.mjs", import.meta.url));
 const deployedAt = "2026-11-01T10:00:00.000Z";
 const now = Date.parse("2026-11-01T11:00:00.000Z");
 const run = {
@@ -326,15 +327,7 @@ test("identity evidence files retain only validated SHA and timestamp, never res
     for (const phase of ["before", "after"]) {
       const output = execFileSync(
         process.execPath,
-        [
-          "--import",
-          mock,
-          new URL("./staging-provenance.mjs", import.meta.url).pathname,
-          "observe",
-          A,
-          phase,
-          "staging-identity/critical",
-        ],
+        ["--import", mock, provenanceScript, "observe", A, phase, "staging-identity/critical"],
         { cwd: directory, encoding: "utf8", timeout: 10_000 },
       );
       assert.ok(!output.includes(canary), "response data must not reach diagnostics");
@@ -627,12 +620,7 @@ test("scope never skips candidate helpers using a later revision's import invent
       write("candidate-output", "");
       execFileSync(
         process.execPath,
-        [
-          "--import",
-          join(directory, "fetch.mjs"),
-          new URL("./staging-provenance.mjs", import.meta.url).pathname,
-          "candidate",
-        ],
+        ["--import", join(directory, "fetch.mjs"), provenanceScript, "candidate"],
         {
           cwd: directory,
           env: {
