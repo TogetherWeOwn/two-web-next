@@ -205,7 +205,9 @@ function checkGreen(evidence, seen = {}, env = greenEnv, options = { checkoutSha
 
 test("allows only an enabled main dispatch with verified protection and green exact-SHA CI", async () => {
   const seen = {};
-  const evidence = await checkGreen(ciEvidence(), seen);
+  const firstAttempt = ciEvidence();
+  delete firstAttempt.jobs.jobs[0].run_attempt;
+  const evidence = await checkGreen(firstAttempt, seen);
   assert.deepEqual(evidence, { sha: dispatchSha, runId: 42, runAttempt: 1 });
   assert.equal(seen.environment, 1);
   assert.equal(seen.ci, 3);

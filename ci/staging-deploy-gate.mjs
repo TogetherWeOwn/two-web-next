@@ -138,8 +138,14 @@ export async function requireSuccessfulMainPushCi(
     "Full CI jobs are not successful on the deployment SHA",
   );
   // The latest job list can contain a successful job from an earlier attempt.
+  // Only attempt 1 can prove its identity without the optional job attempt field.
   requireEvidence(
-    evidence.jobs.every((job) => job.run_id === run.id && job.run_attempt === run.run_attempt),
+    evidence.jobs.every(
+      (job) =>
+        job.run_id === run.id &&
+        (job.run_attempt === run.run_attempt ||
+          (job.run_attempt === undefined && run.run_attempt === 1)),
+    ),
     "CI job run or attempt mismatch",
   );
   // A rerun starting during the query must not reuse a prior attempt's success.

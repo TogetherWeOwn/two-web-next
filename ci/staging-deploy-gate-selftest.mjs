@@ -687,11 +687,14 @@ test("a successful prior CI attempt cannot supply jobs for the selected attempt"
     new RegExp(`Staging gate passed: ${sha}, full CI run 42, attempt 2`),
   );
 
-  evidence.jobs.jobs[1].run_attempt = 1;
-  const refused = executeStaging(ctx, evidence);
-  assert.equal(refused.status, 1, refused.stdout);
-  assert.deepEqual(refused.calls, []);
-  assert.match(refused.stderr, /CI job run or attempt mismatch/);
+  const check = evidence.jobs.jobs[1];
+  for (const mismatch of [{ run_attempt: 1 }, { run_id: 43 }, { run_attempt: undefined }]) {
+    evidence.jobs.jobs[1] = { ...check, ...mismatch };
+    const refused = executeStaging(ctx, evidence);
+    assert.equal(refused.status, 1, refused.stdout);
+    assert.deepEqual(refused.calls, []);
+    assert.match(refused.stderr, /CI job run or attempt mismatch/);
+  }
 });
 
 const mutationCalls = [
