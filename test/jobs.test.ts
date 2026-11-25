@@ -583,9 +583,13 @@ describe("CallInternalAction", () => {
     expect(postAnnouncement).toHaveBeenCalledExactlyOnceWith(ann.action, ann.idempotencyKey);
   });
 
-  it.each([false, true])(
-    "keeps the original retryable, recovery enqueue fails=%s",
-    async (enqueueFails) => {
+  it.each([
+    { tracked: true, enqueueFails: false },
+    { tracked: false, enqueueFails: false },
+    { tracked: true, enqueueFails: true },
+  ])(
+    "keeps the original retryable, tracked=$tracked, enqueue fails=$enqueueFails",
+    async ({ tracked, enqueueFails }) => {
       const announcementClaims = announcementStore();
       announcementClaims.recordAnnouncement.mockRejectedValueOnce(new Error("write unavailable"));
       announcementClaims.recoverAnnouncement.mockRejectedValueOnce(new Error("still unavailable"));
@@ -603,16 +607,16 @@ describe("CallInternalAction", () => {
         announcementClaims,
         enqueueAnnouncementSettlement,
       };
-      const jobId = crypto.randomUUID();
-      const original = msg({ ...ann, jobId });
+      const jobId = tracked ? crypto.randomUUID() : undefined;
+      const original = msg(jobId ? { ...ann, jobId } : ann);
       await consume({ messages: [original] }, deps);
       expect(original.acked).toBe(false);
       expect(original.retried).toBe(5);
       const settlement = enqueueAnnouncementSettlement.mock.calls[0]?.[0];
-      expect(settlement).toEqual({
+      expect(settlement).toStrictEqual({
         kind: "announcement-settlement",
         idempotencyKey: ann.idempotencyKey,
-        jobId,
+        ...(jobId ? { jobId } : {}),
         sendAttempts: 1,
         lastCode: "needs_reconciliation",
         lastStatus: 409,
@@ -638,7 +642,7 @@ describe("CallInternalAction", () => {
         ann.idempotencyKey,
         1,
         expect.objectContaining(settlement!),
-        jobId,
+        jobId ?? null,
       );
       expect(postAnnouncement).toHaveBeenCalledExactlyOnceWith(ann.action, ann.idempotencyKey);
     },
