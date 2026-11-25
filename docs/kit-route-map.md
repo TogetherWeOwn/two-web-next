@@ -197,10 +197,9 @@ redirect without rotating the session. The disabled entry still takes
 precedence over the parameterized edit form.
 
 The event editor's `POST /admin/events/:key/duplicate` has an exact dispatcher
-entry under this same default-off flag. Kit uses the shared admin form action
-to invoke the moderator copy-to-draft controller and releases its redirect or
-source validation response.
-With Admin ownership off, the same POST goes through the Hono app.
+entry gated by `KIT_ROUTE_ADMIN`. With that flag enabled, Kit invokes the
+shared moderator copy-to-draft controller and returns its redirect or source
+validation response. Hono handles the same POST by default.
 
 ### Security disclosure endpoint
 
