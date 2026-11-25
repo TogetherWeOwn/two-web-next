@@ -951,24 +951,21 @@ test("different main push SHAs cannot replace each other in the single pending q
   const mainPush = context("push", sha);
   const manualRef = "refs/heads/check-ci";
   const mergeRef = "refs/heads/gh-readonly-queue/main/pr-7";
-  const cases = [
-    [mainPush, `ci-${sha}`, false],
-    [{ ...mainPush, run_id: 42, run_attempt: 2 }, `ci-${sha}`, false],
-    [context("push", otherSha), `ci-${otherSha}`, false],
-    [context("schedule", sha), "ci-nightly", false],
-    [context("workflow_dispatch", sha), "ci-refs/heads/main", false],
-    [context("workflow_dispatch", sha, manualRef), `ci-${manualRef}`, true],
-    [context("push", sha, manualRef), `ci-${manualRef}`, true],
-    [context("merge_group", sha, mergeRef), `ci-${mergeRef}`, false],
-    [pr(7, sha), "ci-7", true],
-    [pr(7, otherSha), "ci-7", true],
-    [pr(8, sha), "ci-8", true],
-  ];
-  for (const [github, group, cancel] of cases) {
-    const label = `${github.event_name} ${github.ref} ${github.sha}`;
-    assert.equal(groupOf(github), group, label);
-    assert.equal(cancelsOf(github), cancel, label);
-  }
+  const stateOf = (github) => [groupOf(github), cancelsOf(github)];
+
+  assert.deepEqual(stateOf(mainPush), [`ci-${sha}`, false]);
+  assert.deepEqual(stateOf({ ...mainPush, run_id: 42, run_attempt: 2 }), [`ci-${sha}`, false]);
+  assert.deepEqual(stateOf(context("push", otherSha)), [`ci-${otherSha}`, false]);
+
+  assert.deepEqual(stateOf(context("schedule", sha)), ["ci-nightly", false]);
+  assert.deepEqual(stateOf(context("workflow_dispatch", sha)), ["ci-refs/heads/main", false]);
+  assert.deepEqual(stateOf(context("workflow_dispatch", sha, manualRef)), [`ci-${manualRef}`, true]);
+  assert.deepEqual(stateOf(context("push", sha, manualRef)), [`ci-${manualRef}`, true]);
+  assert.deepEqual(stateOf(context("merge_group", sha, mergeRef)), [`ci-${mergeRef}`, false]);
+
+  assert.deepEqual(stateOf(pr(7, sha)), ["ci-7", true]);
+  assert.deepEqual(stateOf(pr(7, otherSha)), ["ci-7", true]);
+  assert.deepEqual(stateOf(pr(8, sha)), ["ci-8", true]);
 });
 
 test("staging guard runs from the workflow revision inside the existing lane before writes", () => {
