@@ -116,17 +116,38 @@ test("production ancestry accepts whole-comparison counts on a large first page"
   assertCompared(calls, LIVE, NEWER);
 });
 
+test("production ancestry accepts a compare body at exactly 16 MiB", async () => {
+  const body = Buffer.alloc(16 * 1024 * 1024, " ");
+  body.write(JSON.stringify(compareBody(LIVE)));
+  const { calls, fetchImpl } = recorder(() => new Response(body));
+  assert.equal(
+    await checkPromotionAncestry(envFor("schedule", NEWER, LIVE), { fetchImpl }),
+    "ahead",
+  );
+  assertCompared(calls, LIVE, NEWER);
+});
+
 test("production ancestry cancels an oversized compare stream before reading to EOF", async () => {
   const metadata = Buffer.from(JSON.stringify(compareBody(LIVE)));
   const padding = Buffer.alloc(1024 * 1024, " ");
+  const chunks = [
+    metadata,
+    padding.subarray(metadata.byteLength),
+    ...Array(15).fill(padding),
+    padding.subarray(0, 1),
+    padding,
+  ];
+  assert.equal(
+    chunks.slice(0, -1).reduce((bytes, chunk) => bytes + chunk.byteLength, 0),
+    16 * 1024 * 1024 + 1,
+  );
   let pulls = 0;
   let cancelled = false;
   const stream = new ReadableStream(
     {
       pull(controller) {
-        pulls += 1;
-        if (pulls === 1) controller.enqueue(metadata);
-        else if (pulls <= 18) controller.enqueue(padding);
+        const chunk = chunks[pulls++];
+        if (chunk) controller.enqueue(chunk);
         else controller.close();
       },
       cancel() {
@@ -144,7 +165,7 @@ test("production ancestry cancels an oversized compare stream before reading to 
     message: "Promotion ancestry response exceeds 16 MiB",
   });
   assertCompared(calls, LIVE, NEWER);
-  assert.equal(pulls, 17, "reads stop at the first chunk over 16 MiB");
+  assert.equal(pulls, chunks.length - 1, "reads stop one byte over 16 MiB");
   assert.equal(cancelled, true);
   assert.equal(stream.locked, false);
 });
