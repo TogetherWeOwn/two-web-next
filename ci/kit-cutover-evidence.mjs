@@ -20,6 +20,7 @@ export const EMBER_CUTOVER_VARS = Object.freeze({
   KIT_ROUTE_SECURITY_TXT: "false",
   DISCORD_LIVE_SOCKET_ENABLED: "false",
 });
+export const ADMIN_STAGING_CHECKS = ["default-denied", "credential-separation", "ownership-undo"];
 const maxFileBytes = 32 * 1024 * 1024;
 const maxPacketBytes = 128 * 1024 * 1024;
 const hex = /^[a-f0-9]{64}$/;
@@ -221,45 +222,56 @@ export function verifyStagingProof(proof, pin) {
   );
   assert.equal(proof.schema, 1);
   assert.equal(proof.worker, `${STAGING_WORKER}-${runId}-${runAttempt}`);
-  assertRollbackVersionId(proof.hono);
+  const admin = pin.mode === "admin";
+  const baseline = admin ? "ember" : "hono";
+  assertRollbackVersionId(proof[baseline]);
   assertRollbackVersionId(proof.kit);
-  assert.notEqual(proof.hono, proof.kit, "staging requires distinct versions on one Worker");
+  assert.notEqual(proof[baseline], proof.kit, "staging requires distinct versions on one Worker");
   assert.ok(
-    hex.test(proof.configs?.hono) && hex.test(proof.configs?.kit),
+    hex.test(proof.configs?.[baseline]) && hex.test(proof.configs?.kit),
     "invalid staged config digests",
   );
   assert.ok(
     Number.isSafeInteger(proof.routeCount) && proof.routeCount > 0,
     "empty staged route smoke",
   );
-  const bindingCheck = pin.mode === "ember" ? "isolated-and-ember" : "isolated-and-all-off";
+  const bindingCheck = `isolated-and-${admin || pin.mode === "ember" ? pin.mode : "all-off"}`;
   assert.ok(
     proof.bindingCheck === bindingCheck ||
       (pin.mode === "hono" && proof.bindingCheck === "isolated-and-ember"),
     "staged bindings do not match the requested cutover profile",
   );
-  assert.equal(proof.kitReadinessSamples, 6);
+  assert.equal(proof.kitReadinessSamples, admin ? 3 : 6);
+  const states = admin ? ["1037"] : LEDGER_STATES;
   assert.deepEqual(
     proof.checks,
-    LEDGER_STATES.flatMap((state) => [
-      { state, step: "hono", version: proof.hono, status: 200, pending: 0, smoke: "passed" },
-      { state, step: "kit", version: proof.kit, status: 200, pending: 0, smoke: "passed" },
-      { state, step: "undo", version: proof.hono, status: 200, pending: 0, smoke: "passed" },
-    ]),
-    "staging must prove both ledger states and both exact Hono undos",
+    states.flatMap((state) =>
+      [baseline, "kit", "undo"].map((step) => ({
+        state,
+        step,
+        version: step === "kit" ? proof.kit : proof[baseline],
+        status: 200,
+        pending: 0,
+        smoke: "passed",
+      })),
+    ),
+    "staging must prove the required ledger states and exact undos",
   );
+  if (admin) assert.deepEqual(proof.adminChecks, ADMIN_STAGING_CHECKS);
 }
 
-export function productionUploadConfig(profile, { root, kit }, ember = false) {
+export function productionUploadConfig(profile, { root, kit }, mode = "all-off") {
   assert.ok(PROFILES.includes(profile));
-  assert.ok(!ember || profile === "kit", "Ember requires the Kit artifact");
+  assert.ok(["all-off", "ember", "admin"].includes(mode), "invalid cutover config mode");
+  assert.ok(mode === "all-off" || profile === "kit", "Ember requires the Kit artifact");
   const { $schema, env, routes, triggers, ...hono } = { ...root, ...root.env.production };
   const config = profile === "hono" ? hono : { ...kit };
   delete config.$schema;
   delete config.triggers;
+  if (mode !== "all-off") config.vars = { ...config.vars, ...EMBER_CUTOVER_VARS };
+  if (mode === "admin") config.vars.KIT_ROUTE_ADMIN = "true";
   return {
     ...config,
-    ...(ember ? { vars: { ...config.vars, ...EMBER_CUTOVER_VARS } } : {}),
     main: profile === "kit" ? "modules/_worker.js" : "modules/worker.js",
     base_dir: "modules",
     ...(profile === "kit" ? { rules: [{ type: "ESModule", globs: ["kit-adapter.js"] }] } : {}),

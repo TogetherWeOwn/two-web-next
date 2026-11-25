@@ -165,6 +165,25 @@ test("isolated cutover proof requires both exact versions and six healthy transi
     () => verifyStagingProof({ ...proof, checks: checks.slice(0, 3) }, identity),
     /must prove/,
   );
+  const adminPin = { ...identity, mode: "admin" };
+  const admin = {
+    ...proof,
+    ember: hono,
+    configs: { kit: digest, ember: digest },
+    checks: checks
+      .slice(3)
+      .map((row) => ({ ...row, step: row.step === "hono" ? "ember" : row.step })),
+    kitReadinessSamples: 3,
+    bindingCheck: "isolated-and-admin",
+    adminChecks: ["default-denied", "credential-separation", "ownership-undo"],
+  };
+  verifyStagingProof(admin, adminPin);
+  assert.throws(
+    () => verifyStagingProof({ ...admin, bindingCheck: ember.bindingCheck }, adminPin),
+    /profile/,
+  );
+  assert.throws(() => verifyStagingProof({ ...admin, adminChecks: [] }, adminPin));
+  assert.throws(() => verifyStagingProof({ ...admin, checks: admin.checks.slice(0, 2) }, adminPin));
 });
 
 test("Ember cutover configuration opts in only the Ember documents", () => {
@@ -172,6 +191,7 @@ test("Ember cutover configuration opts in only the Ember documents", () => {
   assert.equal(allOff.vars.KIT_ROUTE_EMBER_PAGES, "false");
   const vars = {
     ...allOff.vars,
+    KIT_ROUTE_ADMIN: "false",
     KIT_ROUTE_EMBER_PAGES: "true",
     KIT_ROUTE_AUTH: "false",
     KIT_ROUTE_FEEDS: "false",
@@ -179,8 +199,12 @@ test("Ember cutover configuration opts in only the Ember documents", () => {
     KIT_ROUTE_SECURITY_TXT: "false",
     DISCORD_LIVE_SOCKET_ENABLED: "false",
   };
-  assert.deepEqual(productionUploadConfig("kit", inputs, true), { ...allOff, vars });
-  assert.throws(() => productionUploadConfig("hono", inputs, true), /requires the Kit artifact/);
+  assert.deepEqual(productionUploadConfig("kit", inputs, "ember"), { ...allOff, vars });
+  assert.throws(() => productionUploadConfig("hono", inputs, "ember"), /requires the Kit artifact/);
+  assert.deepEqual(productionUploadConfig("kit", inputs, "admin"), {
+    ...allOff,
+    vars: { ...vars, KIT_ROUTE_ADMIN: "true" },
+  });
 });
 
 test("isolated database admission fixes the host, database, owner, and run scope", async () => {

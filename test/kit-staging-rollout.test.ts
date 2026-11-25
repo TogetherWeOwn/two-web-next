@@ -527,6 +527,33 @@ describe("Kit production route selection", () => {
   });
 
   it.each([
+    [apex, "true", "true", "/admin/ops-overrides", false, true],
+    [cutover, "true", "true", "/admin/ops-overrides", false, true],
+    [apex, "true", undefined, "/admin/ops-overrides", false, false],
+    [apex, "false", "true", "/admin/ops-overrides", false, false],
+    [apex, "true", "true", "/admin/ops-overrides", true, false],
+    [apex, "true", "true", "/admin/queue/source-evidence/1", false, false],
+  ] as const)(
+    "admits operator ownership on %s with Ember=%s admin=%s path=%s data=%s",
+    async (origin, emberPages, admin, path, isDataRequest, owned) => {
+      const deps = {
+        ...stagingDeps({ emberPages }),
+        appUrl: origin,
+        admin: {
+          env: { APP_URL: origin, KIT_ROUTE_ADMIN: admin } as Env,
+          completeForm: () => {
+            throw new Error("operator route touched the form layer");
+          },
+        },
+      };
+      const event = productionEvent(path, "GET", origin);
+      const response = await dispatchHookRequest({ ...event, isDataRequest }, deps);
+      expect(response.headers.get(KIT_RENDERER_HEADER)).toBe(owned ? KIT_RENDERER_VALUE : null);
+      expect(deps.sessionFor).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
     ["shipped false flags", shippedFlags, []],
     ["absent flags", {}, []],
     ["malformed archive", { archive: "TRUE", static: "true" }, []],

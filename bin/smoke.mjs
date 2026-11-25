@@ -330,8 +330,11 @@ export async function smoke(
   if (expectedJoinRenderer !== undefined && !["hono", "kit"].includes(expectedJoinRenderer)) {
     throw new Error("SMOKE_EXPECT_JOIN_RENDERER must be hono or kit");
   }
-  if (expectedCutoverRenderer !== undefined && !["hono", "kit"].includes(expectedCutoverRenderer)) {
-    throw new Error("SMOKE_EXPECT_CUTOVER_RENDERER must be hono or kit");
+  if (
+    expectedCutoverRenderer !== undefined &&
+    !["hono", "kit", "admin"].includes(expectedCutoverRenderer)
+  ) {
+    throw new Error("SMOKE_EXPECT_CUTOVER_RENDERER must be hono, kit or admin");
   }
   const baseline = failedBaseline === undefined ? undefined : assertFailedBaseline(failedBaseline);
   const overrideVersionId =
@@ -783,8 +786,11 @@ export async function smoke(
       }
       let expectedRenderer = route.path === "/join" ? expectedJoinRenderer : undefined;
       if (expectedCutoverRenderer !== undefined) {
-        expectedRenderer =
-          emberPages.has(route.path) || route === eventsFragment ? expectedCutoverRenderer : "hono";
+        const kitRoute =
+          ((emberPages.has(route.path) || route === eventsFragment) &&
+            expectedCutoverRenderer !== "hono") ||
+          (route.path === "/admin" && expectedCutoverRenderer === "admin");
+        expectedRenderer = kitRoute ? "kit" : "hono";
       }
       if (expectedRenderer !== undefined) {
         const renderer = headers.get("x-two-renderer");

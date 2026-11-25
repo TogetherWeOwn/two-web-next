@@ -1111,6 +1111,8 @@ async function dispatchOwnedRequest(
       event.isDataRequest,
       deps.appUrl,
       admin.env.KIT_ROUTE_ADMIN,
+      deps.kitRouteEmberPages === "true" &&
+        (deps.appUrl === PRODUCTION_APP_URL || ISOLATED_CUTOVER_ORIGIN.test(deps.appUrl)),
     )
   ) {
     const response = await dispatchKitAdminRequest(event, deps, admin);

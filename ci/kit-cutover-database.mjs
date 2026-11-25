@@ -130,8 +130,8 @@ export async function advanceFixture(owner, expected, runtimeLogin) {
   );
 }
 
-export function stagingConfig(profile, inputs, worker, origin, ember) {
-  const config = productionUploadConfig(profile, inputs, ember);
+export function stagingConfig(profile, inputs, worker, origin, mode) {
+  const config = productionUploadConfig(profile, inputs, mode);
   return {
     name: worker,
     main: config.main,

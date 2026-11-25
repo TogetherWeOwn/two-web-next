@@ -23,11 +23,14 @@ export function selection(env) {
   const mode = env.CUTOVER_MODE || "ordinary";
   const pin = env.CUTOVER_PIN || "";
   const undo = env.CUTOVER_UNDO_VERSION || "";
+  const undoDigest = env.CUTOVER_UNDO_DIGEST || "";
+  if (mode === "admin") assert.match(undoDigest, /^[a-f0-9]{64}$/, "invalid Ember undo digest");
+  else assert.equal(undoDigest, "", "Ember undo digest requires admin mode");
   if (mode === "ordinary") {
     assert.ok(!pin && !undo, "cutover inputs require an explicit cutover mode");
     return { mode };
   }
-  assert.ok(["kit", "ember", "hono"].includes(mode), "unknown cutover mode");
+  assert.ok(["kit", "ember", "hono", "admin"].includes(mode), "unknown cutover mode");
   assert.equal(env.GITHUB_EVENT_NAME, "workflow_dispatch");
   assert.equal(env.GITHUB_REF, "refs/heads/main");
   assert.match(env.INPUT_SHA ?? "", /^[a-f0-9]{40}$/);
@@ -40,9 +43,10 @@ export function selection(env) {
   assert.notEqual(env.MIGRATIONS_APPLIED, "true", "cutover requires observed ledger evidence");
   const parsed = /^([1-9]\d{0,14}):([1-9]\d{0,14}):([a-f0-9]{64})$/.exec(pin);
   assert.ok(parsed, "expected cutover run:attempt:manifest SHA-256");
-  assert.ok(mode === "hono" ? undo === "" : uuid.test(undo), "invalid expected Hono undo version");
+  assert.ok(mode === "hono" ? undo === "" : uuid.test(undo), "invalid expected undo version");
   const [, runId, runAttempt, digest] = parsed;
-  return { mode, sourceSha: env.DEPLOY_SHA, runId, runAttempt, digest, undo };
+  const selected = { mode, sourceSha: env.DEPLOY_SHA, runId, runAttempt, digest, undo };
+  return undoDigest ? { ...selected, undoDigest } : selected;
 }
 
 export async function verifyProducer(pin, token, fetchImpl) {
@@ -64,6 +68,32 @@ export function verifyUndoVersion(version, pin) {
       tagSuffix.test(tag.slice(pin.sourceSha.length + 1)) &&
       version.annotations["workers/message"] === undoMessage(pin.digest),
     "live rollback version does not identify the staged Hono undo artifact",
+  );
+}
+
+export function verifyEmberUndoVersion(version, { undo, undoDigest }, commit) {
+  const tag = version?.annotations?.["workers/tag"];
+  const bindings = version?.resources?.bindings;
+  assert.ok(
+    version?.id === undo &&
+      /^[a-f0-9]{40}$/.test(commit ?? "") &&
+      typeof tag === "string" &&
+      tag.startsWith(`${commit}-`) &&
+      tagSuffix.test(tag.slice(commit.length + 1)) &&
+      version.annotations["workers/message"] === `two-web-cutover-kit:${undoDigest}` &&
+      Array.isArray(bindings),
+    "rollback target is not the recorded Ember release",
+  );
+  const lookup = (name) => {
+    const matches = bindings.filter((binding) => binding.name === name);
+    assert.ok(matches.length === 0 || (matches.length === 1 && matches[0].type === "plain_text"));
+    return matches[0]?.text;
+  };
+  assert.equal(lookup("APP_URL"), PRODUCTION_ORIGIN, "rollback target lacks the production origin");
+  assert.equal(lookup("KIT_ROUTE_EMBER_PAGES"), "true", "rollback target lacks Ember");
+  assert.ok(
+    [undefined, "false"].includes(lookup("KIT_ROUTE_ADMIN")),
+    "rollback target already enables Kit admin",
   );
 }
 
@@ -91,22 +121,27 @@ async function main() {
         process.env.PREV_VERSION === process.env.CUTOVER_UNDO_TARGET,
       "cutover version pair changed",
     );
-    await readReady(PRODUCTION_ORIGIN, prefixes, { version, commit: pin.sourceSha });
+    const state = pin.mode === "admin" ? "1037" : undefined;
+    await readReady(PRODUCTION_ORIGIN, prefixes, { version, commit: pin.sourceSha, state });
+    if (pin.mode === "admin") await verifyOperatorDenial(PRODUCTION_ORIGIN);
     return;
   }
   const version = process.env.ROLLBACK_VERSION_ID;
   assertRollbackVersionId(version);
   const profile = pin.mode === "hono" ? "hono" : "kit";
   if (profile === "kit")
-    assert.equal(version, pin.undo, "recorded rollback target is not the expected Hono UUID");
+    assert.equal(version, pin.undo, "recorded rollback target is not the expected UUID");
   const expected =
-    profile === "kit" ? { version, commit: pin.sourceSha } : { version, allowDeferred: true };
+    profile === "kit"
+      ? { version, commit: pin.mode === "admin" ? process.env.ROLLBACK_COMMIT : pin.sourceSha }
+      : { version, allowDeferred: true };
   assert.equal(
     execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
     pin.sourceSha,
   );
   await verifyPackage(dir, pin, inputs);
   const state = await readReady(PRODUCTION_ORIGIN, prefixes, expected);
+  if (pin.mode === "admin") assert.equal(state, "1037", "admin requires the post-cutover ledger");
   console.info(`Readiness verified at the canonical ${state} ledger`);
   if (profile === "kit") {
     const view = wrangler("hono", [
@@ -117,7 +152,9 @@ async function main() {
       "two-web-next-production",
       "--json",
     ]);
-    verifyUndoVersion(JSON.parse(view), pin);
+    const rollback = JSON.parse(view);
+    if (pin.mode === "admin") verifyEmberUndoVersion(rollback, pin, expected.commit);
+    else verifyUndoVersion(rollback, pin);
   }
   if (command === "prepare") {
     const stat = await lstat(proofPath);
@@ -126,7 +163,8 @@ async function main() {
     return;
   }
   assert.equal(command, "upload");
-  const config = productionUploadConfig(profile, inputs, pin.mode === "ember");
+  const mode = ["ember", "admin"].includes(pin.mode) ? pin.mode : "all-off";
+  const config = productionUploadConfig(profile, inputs, mode);
   const directory = join(dir, profile);
   await writeFile(join(directory, "wrangler.json"), JSON.stringify(config), { flag: "wx" });
   const { GITHUB_RUN_ID: runId, GITHUB_RUN_ATTEMPT: attempt } = process.env;
@@ -143,6 +181,20 @@ async function main() {
   );
   await appendFile(process.env.GITHUB_OUTPUT, `version_id=${uploaded}\n`);
   console.info(`Uploaded staged ${pin.mode} version ${uploaded}, manifest ${pin.digest}`);
+}
+
+async function verifyOperatorDenial(origin) {
+  const response = await fetch(new URL("/admin/ops-overrides", origin), {
+    redirect: "manual",
+    signal: AbortSignal.timeout(10_000),
+  });
+  await response.body?.cancel();
+  assert.ok([401, 404].includes(response.status), "operator route admits anonymous traffic");
+  assert.equal(response.headers.get("x-two-renderer"), "kit");
+  assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+  assert.match(response.headers.get("cache-control") ?? "", /\bno-store\b/);
+  assert.equal(response.headers.get("set-cookie"), null);
+  if (response.status === 401) assert.equal(response.headers.get("www-authenticate"), "Bearer");
 }
 
 if (import.meta.main) await main();

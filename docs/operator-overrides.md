@@ -16,8 +16,8 @@ whitespace. No checked-in Worker config sets it. Missing or invalid
 configuration leaves the route dark (404); a missing, malformed or wrong
 bearer returns 401 without upstream access.
 
-The Kit Worker includes the same adapter behind `KIT_ROUTE_ADMIN`. Only
-canonical staging and HTTP loopback origins accept that opt-in. The
+The Kit Worker includes the same adapter behind `KIT_ROUTE_ADMIN`. The
+production apex and isolated cutover Worker also require the Ember profile. The
 installed-Worker fixture enables it on loopback and checks that bearer
 requests bypass the browser session gate. The Hono admin guard continues
 to handle legacy redirects and the queue tools keep their existing admission.
