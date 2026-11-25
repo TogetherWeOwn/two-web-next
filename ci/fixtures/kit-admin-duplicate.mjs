@@ -1,5 +1,55 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
+import { writeFile } from "node:fs/promises";
+
+const dispatchHeader = "x-fixture-duplicate-dispatches";
+
+export async function prepareAdminDuplicateProbe(worker, entry) {
+  await writeFile(
+    entry,
+    `import worker from ${JSON.stringify(worker)};
+import { withEnv } from "cloudflare:workers";
+import { AsyncLocalStorage } from "node:async_hooks";
+
+const duplicate = new AsyncLocalStorage();
+const transport = globalThis.fetch;
+globalThis.fetch = async (input, init) => {
+  const rejectSend = duplicate.getStore();
+  if (rejectSend) return rejectSend();
+  return transport(input, init);
+};
+
+export default {
+  ...worker,
+  async fetch(request, bindings, context) {
+    const path = new URL(request.url).pathname;
+    if (request.method !== "POST" || !/^\\/admin\\/events\\/[^/]+\\/duplicate$/.test(path)) {
+      return worker.fetch(request, bindings, context);
+    }
+    let sends = 0;
+    function rejectSend() {
+      sends++;
+      throw new Error("Unexpected outbound copy-to-draft dispatch");
+    }
+    const queue = { send: rejectSend, sendBatch: rejectSend };
+    const fixture = {
+      ...bindings,
+      SYNC_EVENT_QUEUE: queue,
+      INTERNAL_ACTION_QUEUE: queue,
+      BOT_ENDPOINT_URL: "https://fixture-copy-draft.invalid",
+      BOT_KEY_ID: "fixture-copy-draft",
+      BOT_SHARED_SECRET: "synthetic-copy-draft-fixture",
+    };
+    const response = await duplicate.run(rejectSend, () =>
+      withEnv(fixture, () => worker.fetch(request, fixture, context)));
+    const headers = new Headers(response.headers);
+    headers.set(${JSON.stringify(dispatchHeader)}, String(sends));
+    return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+  },
+};
+`,
+  );
+}
 
 function fixtureKey() {
   return `0${randomBytes(13).toString("hex").slice(0, 25).toUpperCase()}`;
@@ -102,6 +152,7 @@ export async function assertAdminDuplicateServing({
     const refusals = [];
     for (const test of cases) {
       const { headers, text } = await post(test.path ?? duplicate, test.status, test);
+      assert.equal(headers.get(dispatchHeader), "0", `${target.name}: refusal sends`);
       assert.equal(headers.get("location"), test.location ?? null);
       assert.equal(headers.getSetCookie().length, test.cookies ?? 0);
       if (test.message) assert.match(text, test.message);
@@ -122,6 +173,7 @@ export async function assertAdminDuplicateServing({
     );
 
     const { headers, text } = await post(duplicate, 303, { cookie: moderator });
+    assert.equal(headers.get(dispatchHeader), "0", `${target.name}: successful duplicate sends`);
     const location = headers.get("location") ?? "";
     assert.match(location, /^\/admin\/events\/[0-7][0-9A-HJKMNP-TV-Z]{25}$/);
     assert.notEqual(location, sourcePath);

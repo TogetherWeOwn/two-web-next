@@ -21,17 +21,9 @@ export async function prepareAdminFixture(worker, entry) {
     entry,
     `
 import worker from ${JSON.stringify(worker)};
-import { env, withEnv } from "cloudflare:workers";
+import { env } from "cloudflare:workers";
 const transport = globalThis.fetch;
-let activeDuplicatePosts = 0;
-let duplicateSends = 0;
-function rejectDuplicateSend() {
-  duplicateSends++;
-  throw new Error("Unexpected outbound copy-to-draft dispatch");
-}
-const duplicateQueue = { send: rejectDuplicateSend, sendBatch: rejectDuplicateSend };
 globalThis.fetch = async (input, init) => {
-  if (activeDuplicatePosts > 0) return rejectDuplicateSend();
   if (input !== ${JSON.stringify(`${bot}/ops/config`)}) return transport(input, init);
   if (init?.method !== "GET" || init.redirect !== "manual" ||
       new Headers(init.headers).get("authorization") !== "Bearer " + env.OPS_CONTROL_TOKEN) {
@@ -40,32 +32,13 @@ globalThis.fetch = async (input, init) => {
   return Response.json({ epoch: 42, overrides: { label: "Fixture operator value" },
     baseline: {}, enforcement: "fixture" });
 };
-export default {
-  ...worker,
-  async fetch(request, bindings, context) {
-    if (request.method !== "POST" || !/^\\/admin\\/events\\/[^/]+\\/duplicate$/.test(new URL(request.url).pathname)) {
-      return worker.fetch(request, bindings, context);
-    }
-    const before = duplicateSends;
-    const fixture = { ...bindings, SYNC_EVENT_QUEUE: duplicateQueue, INTERNAL_ACTION_QUEUE: duplicateQueue };
-    activeDuplicatePosts++;
-    try {
-      const response = await withEnv(fixture, () => worker.fetch(request, fixture, context));
-      if (duplicateSends !== before) throw new Error("Copy-to-draft attempted an outbound send");
-      return response;
-    } finally {
-      activeDuplicatePosts--;
-    }
-  },
-};
+export default worker;
 `,
   );
   return {
     KIT_ROUTE_ADMIN: "true",
     KIT_PARITY_FIXTURE_ADMIN_DASHBOARD: "true",
     BOT_ENDPOINT_URL: bot,
-    BOT_KEY_ID: "fixture-copy-draft",
-    BOT_SHARED_SECRET: "synthetic-copy-draft-fixture",
     OPS_CONTROL_TOKEN: FIXTURE_SECRETS.OPS_CONTROL_TOKEN,
   };
 }
