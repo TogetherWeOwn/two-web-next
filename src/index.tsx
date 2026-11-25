@@ -5,9 +5,8 @@ import { secureHeaders } from "hono/secure-headers";
 import postgres from "postgres";
 import { adminApp } from "./admin/routes";
 import { type AuthHooks, registerAuthRoutes, SESSION_COOKIE } from "./auth/routes";
-import { agentEventsAdmission, agentEventsRoute } from "./agent-events/route";
+import { registerAgentEventsRoute } from "./agent-events/route";
 import { registerAlertProbe } from "./alert-probe";
-import { requestBodyLimit } from "./body-limit";
 import { readCounts } from "./counts";
 import { hashToken, SESSION_TTL_SECONDS, type SessionStore, type Sql } from "./sessions";
 import { databaseOptions, databaseUrl } from "./db/connection";
@@ -474,7 +473,7 @@ app.get("/.well-known/security.txt", (c) => {
   c.header("cache-control", "public, max-age=3600");
   return c.body(buildSecurityTxt(c.env.APP_URL));
 });
-app.post("/api/agent-events", requestBodyLimit("agent"), agentEventsAdmission, agentEventsRoute);
+registerAgentEventsRoute(app);
 
 // `GET /up` — session-free DB/schema and secret-presence readiness plus the
 // existing queue signal. A missing required secret, DB/ledger failure or

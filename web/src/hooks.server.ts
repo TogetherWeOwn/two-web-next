@@ -30,6 +30,7 @@ import { dispatchEventsRequest } from "../../src/kit-events";
 import { dispatchHotzonesRequest } from "../../src/kit-hotzones";
 import { dispatchPastArchiveRequest } from "../../src/kit-past-events";
 import { KIT_PROFILE_WRITE_ROUTES } from "../../src/profiles/kit-write-route";
+import { kitAgentEventsFamily } from "#lib/server/agent-events.ts";
 import { authOriginRefusal, kitAuthRoutes } from "#lib/server/auth.ts";
 import { kitOpsFamily } from "#lib/server/ops.ts";
 import { honoFetch, honoRecoveryFetch } from "#lib/server/hono.ts";
@@ -94,6 +95,7 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
         crossOriginRefusal: authOriginRefusal,
       },
       kitOpsFamily(),
+      kitAgentEventsFamily(),
       {
         flag: env.KIT_ROUTE_EVENT_WRITES,
         routes: KIT_EVENT_WRITE_ROUTES,

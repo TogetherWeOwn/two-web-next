@@ -282,6 +282,32 @@ export default opsFixtureWorker(inner, ${JSON.stringify(opsProbePath)});\n`,
   );
 
   if (args.length) {
+    const agentProbePath = "/__fixture/agent-events-parity";
+    const agentFixture = fileURLToPath(
+      new URL("./fixtures/kit-agent-events-worker.mjs", import.meta.url),
+    );
+    const agentEntry = join(scratch, "kit-agent-events.mjs");
+    await writeFile(
+      agentEntry,
+      `import inner from ${JSON.stringify(worker)};
+import { agentEventsFixtureWorker } from ${JSON.stringify(agentFixture)};
+export default agentEventsFixtureWorker(inner, ${JSON.stringify(agentProbePath)});\n`,
+    );
+    const agent = await startWorker("kit-agent-events", agentEntry, assets, undefined, {
+      DATABASE_URL: undefined,
+    });
+    await listen(agent.child, agent.origin, () => agent.log);
+    const agentParity = await fetch(`${agent.origin}${agentProbePath}`, {
+      signal: AbortSignal.timeout(20_000),
+    });
+    assert.equal(agentParity.status, 200, "agent events parity probes passed");
+    assert.deepEqual(await agentParity.json(), {
+      draftOwners: ["hono", "kit"],
+      replayedBothWays: true,
+      dispatches: 0,
+    });
+    console.log("PASS installed agent events Hono and Kit admission, replay and zero dispatch");
+
     const disabled = await fetch(`${origin}/internal/discord-live/v1/ingest`, {
       method: "POST",
       redirect: "manual",

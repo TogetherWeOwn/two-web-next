@@ -1,6 +1,7 @@
-import type { Context, MiddlewareHandler } from "hono";
+import type { Context, Hono, MiddlewareHandler } from "hono";
 import postgres from "postgres";
 import { alertRequestError, exceptionClass } from "../alerts";
+import { requestBodyLimit } from "../body-limit";
 import type { Env } from "../env";
 import { warnInvalidConfigOnce } from "../config-warn";
 import { databaseOptions, databaseUrl } from "../db/connection";
@@ -23,6 +24,10 @@ type IngressEnv = {
 
 // In-process fixture seam only; deployed ingress uses its own binding, then the shared DB.
 export type EnvWithAgentStore = Env & { AGENT_EVENT_SQL?: postgres.Sql };
+
+export function registerAgentEventsRoute(app: Hono<{ Bindings: Env }>) {
+  app.post("/api/agent-events", requestBodyLimit("agent"), agentEventsAdmission, agentEventsRoute);
+}
 
 export function ingressConfig(env: Env): IngressConfig {
   const raw = env.AGENT_EVENTS_ROUTE_PER_MINUTE;
