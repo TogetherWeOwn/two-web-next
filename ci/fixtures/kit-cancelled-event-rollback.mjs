@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import postgres from "postgres";
 import { unstable_dev } from "wrangler";
+import { PRODUCTION_APEX } from "../../src/http/robots.ts";
 import { EMBER_CUTOVER_VARS } from "../kit-cutover-evidence.mjs";
 import { prepareInstalledKitWorker } from "../kit-worker-installed-output.mjs";
 import { requireDisposableDatabase } from "../parity/record.mjs";
@@ -15,7 +16,7 @@ import {
 
 const repo = resolve(import.meta.dirname, "../..");
 const loopback = "http://127.0.0.1";
-const ember = "https://two-web-kit-cutover-proof-1-1.cancelled-event-fixture.workers.dev";
+const apex = `https://${PRODUCTION_APEX}`;
 const cancelledTitle = "Synthetic cancelled tabletop night";
 const key = (n) => `01J0000000000000000000C10${n}`;
 const path = `/e/${key(0)}`;
@@ -23,12 +24,16 @@ const upcoming = ["Synthetic tabletop A", "Synthetic tabletop B", "Synthetic tab
 const game = "Synthetic cancelled tabletop fixture";
 const clientIp = "192.0.2.162";
 
-async function assertCancelledPage(worker, renderer, name) {
-  const response = await worker.fetch(path, {
-    headers: { accept: "text/html", "if-none-match": "*" },
+function getDocument(worker, pathname, headers = {}) {
+  return worker.fetch(pathname, {
+    headers: { accept: "text/html", ...headers },
     redirect: "manual",
     signal: AbortSignal.timeout(10_000),
   });
+}
+
+async function assertCancelledPage(worker, renderer, name) {
+  const response = await getDocument(worker, path, { "if-none-match": "*" });
   const html = parseRenderedPage(await response.text());
   assert.equal(response.status, 410, name);
   assert.equal(response.headers.get("x-two-renderer"), renderer, `${name}: renderer`);
@@ -36,14 +41,16 @@ async function assertCancelledPage(worker, renderer, name) {
   assert.equal(response.headers.get("cache-control"), "private, no-store", name);
   assert.equal(response.headers.get("etag"), null, name);
   assert.deepEqual(response.headers.getSetCookie(), [], `${name}: no cookie effects`);
-  assert.equal(response.headers.get("x-robots-tag"), "noindex, nofollow", name);
+  // Preview policy supplies this header on loopback. On the apex it must
+  // come from the cancellation handler itself.
+  if (renderer === null) {
+    assert.equal(response.headers.get("x-robots-tag"), "noindex, nofollow", name);
+    assert.match(response.headers.get("vary") ?? "", /(?:^|,\s*)cookie(?:,|$)/i, name);
+  }
   const robots = [...renderedElements(html, { tag: "meta" })]
     .filter((meta) => renderedAttribute(meta, "name") === "robots")
     .map((meta) => renderedAttribute(meta, "content"));
   assert.deepEqual(robots, ["noindex, nofollow"], `${name}: cancellation robots metadata`);
-  if (renderer === null) {
-    assert.match(response.headers.get("vary") ?? "", /(?:^|,\s*)cookie(?:,|$)/i, name);
-  }
   const marked = (tag, id) =>
     [...renderedElements(html, { tag })].filter(
       (element) => renderedAttribute(element, "data-testid") === id,
@@ -73,7 +80,11 @@ async function assertCancelledPage(worker, renderer, name) {
   console.log(`PASS ${name}: cancelled event 410, no-store and eligible upcoming links`);
 }
 
-async function checkWorker(scratch, databaseUrl, { name, main, assets, appUrl, vars, renderer }) {
+async function checkWorker(
+  scratch,
+  databaseUrl,
+  { name, main, assets, appUrl, vars, renderer, expectEmber },
+) {
   const entry = join(scratch, `${name}.mjs`);
   // Preserve the synthetic document authority while transport stays on loopback.
   // PostgreSQL is the only allowed network dependency for these renders.
@@ -114,6 +125,14 @@ export default { fetch(request, env, context) {
     experimental: { disableDevRegistry: true },
   });
   try {
+    if (expectEmber) {
+      // Cancelled detail is Hono-owned even with Ember off. A single Join
+      // document distinguishes the active profile without a browser journey.
+      const joinPage = await getDocument(worker, "/join");
+      await joinPage.body?.cancel();
+      assert.equal(joinPage.status, 200, `${name}: Ember Join status`);
+      assert.equal(joinPage.headers.get("x-two-renderer"), "kit", `${name}: Ember is active`);
+    }
     await assertCancelledPage(worker, renderer, name);
   } finally {
     await worker.stop();
@@ -159,9 +178,10 @@ try {
       name: "ember-cancelled-detail",
       main: worker,
       assets,
-      appUrl: ember,
+      appUrl: apex,
       vars: EMBER_CUTOVER_VARS,
       renderer: null,
+      expectEmber: true,
     },
     {
       name: "kit-cancelled-detail",
@@ -175,7 +195,7 @@ try {
       name: "hono-cancelled-fallback",
       main: join(repo, "src/worker.ts"),
       assets: join(repo, "public"),
-      appUrl: ember,
+      appUrl: apex,
       renderer: null,
     },
   ]) {
