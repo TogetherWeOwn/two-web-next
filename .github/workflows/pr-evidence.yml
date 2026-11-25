@@ -4,8 +4,20 @@ on:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft, edited]
   workflow_run:
     workflows: [ci, e2e, pr-gates, pr-size, "PR standards (required entry point)"]
-    types: [requested, in_progress, completed]
+    types: [completed]
 permissions: {}
+
+# Direct events can locate the PR before GitHub indexes its head commit.
+# Completions can replace one another only when they route the same repo and head.
+concurrency:
+  group: >-
+    ${{ github.event_name == 'pull_request_target' && github.base_ref == 'main' &&
+        format('pr-evidence-direct-{0}', github.event.number) ||
+        github.event_name == 'workflow_run' &&
+        contains(fromJSON('["pull_request","pull_request_review"]'), github.event.workflow_run.event) &&
+        format('pr-evidence-completed-{0}-{1}', github.event.workflow_run.head_repository.id, github.event.workflow_run.head_sha) ||
+        'pr-evidence-ignored' }}
+  cancel-in-progress: true
 
 jobs:
   route:
@@ -28,7 +40,8 @@ jobs:
 
   publish:
     needs: route
-    if: needs.route.outputs.numbers != '[]'
+    # Let an active writer finish under the per-PR lock when its run is superseded.
+    if: ${{ always() && needs.route.result == 'success' && needs.route.outputs.numbers != '[]' }}
     strategy:
       fail-fast: false
       matrix:
@@ -44,9 +57,11 @@ jobs:
       pull-requests: write
     steps:
       # The updater executes only the trusted workflow revision, even for fork PRs.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: trusted-source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
-      - env: { GH_TOKEN: "${{ github.token }}", PR_NUMBER: "${{ matrix.number }}" }
+      - if: ${{ always() && steps.trusted-source.outcome == 'success' }}
+        env: { GH_TOKEN: "${{ github.token }}", PR_NUMBER: "${{ matrix.number }}" }
         run: python3 ci/pr_evidence.py

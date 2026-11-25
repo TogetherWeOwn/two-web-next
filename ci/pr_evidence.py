@@ -114,16 +114,27 @@ def route(api, event):
     if "workflow_run" not in event:
         require(positive(event["number"]), "Invalid PR number")
         return [event["number"]]
-    sha = event["workflow_run"]["head_sha"]
+    run = event["workflow_run"]
+    if (event["action"] != "completed" or run["status"] != "completed"
+            or run["event"] not in ("pull_request", "pull_request_review")):
+        return []
+    sha = run["head_sha"]
     require(SHA.fullmatch(sha), "Invalid workflow run head")
+    head_repo = (run["head_repository"] or {}).get("id")
+    if head_repo is None:  # A deleted head repository has no live destination.
+        return []
+    require(positive(head_repo), "Invalid workflow run head repository")
     # Fork workflow events can omit PR associations. Ask GitHub by exact commit.
     numbers = {pr["number"] for pr in pages(api, f"/commits/{sha}/pulls")
-               if pr["state"] == "open" and pr["base"]["ref"] == "main" and pr["head"]["sha"] == sha}
+               if pr["state"] == "open" and pr["base"]["ref"] == "main" and pr["head"]["sha"] == sha
+               and (pr["head"]["repo"] or {}).get("id") == head_repo}
     require(len(numbers) <= 256 and all(map(positive, numbers)), "Invalid PR destinations")
     return sorted(numbers)
 
 
 def publish(api, repository, number):
+    # Only the PR number crosses the routing boundary. Refresh from live metadata
+    # even if an older completion won the pending slot for this PR.
     pull = f"/pulls/{number}"
     comments = f"/issues/{number}/comments"
     web = f"https://github.com/{repository}"
