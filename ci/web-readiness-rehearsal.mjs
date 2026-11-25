@@ -11,6 +11,7 @@ import { build } from "esbuild";
 import postgres from "postgres";
 import { rehearseServingIsolation } from "./fixtures/web-serving-isolation.mjs";
 import { assertServingLedgerIsolation } from "./migration-runtime-rights.mjs";
+import { readLedgerState } from "./production-deploy-gate.mjs";
 import { buildCutoverApps, probeCutoverEventSync } from "./web-readiness-cutover.mjs";
 import { assertScopedAcl, grantScopedAcl, probeWorkloads } from "./web-readiness-scoped-acl.mjs";
 
@@ -99,12 +100,18 @@ async function checkUp(
   assert.equal(response.status, status, `${build.sha} /up status`);
   assert.equal(response.headers.get("cache-control"), "no-store");
   assert.equal(response.headers.has("set-cookie"), false);
-  const { db, pending_migrations, migration_ledger, queue } = await response.json();
+  const body = await response.json();
+  const { db, pending_migrations, migration_ledger, queue } = body;
   const timestamps = expected?.map(({ created_at }) => Number(created_at)) ?? null;
   assert.equal(db, "ok");
   assert.equal(pending_migrations, pending);
   assert.deepEqual(migration_ledger, timestamps);
-  if (status === 200) assert.equal(queue?.status, "healthy", `${build.sha} /up empty queue`);
+  if (status === 200) {
+    assert.equal(queue?.status, "healthy", `${build.sha} /up empty queue`);
+    assert.deepEqual(readLedgerState(body), timestamps);
+  } else {
+    assert.throws(() => readLedgerState(body), /production ledger is not provably current/);
+  }
   const read = (name) => queries.some((query) => query.includes(`FROM ${name}`));
   assert.ok(read(relation), `${build.sha} read ${relation}`);
   if (relation === projection) assert.ok(!read(ledger), `${build.sha} must not fall back`);
@@ -142,7 +149,7 @@ export async function rehearseWebReadiness(owner, url) {
       const pending = expected
         ? hasNewRequirement
           ? webTags.filter((tag) => !applied.has(tag)).length
-          : 0
+          : Number(!applied.has(old.history.at(-1).tag))
         : null;
       for (const app of cutover.apps) {
         await checkUp(
@@ -253,6 +260,16 @@ export async function rehearseWebReadiness(owner, url) {
     await cutoverUp(null, projection);
     await owner`GRANT SELECT ON web_readiness.migration_timestamps TO ${owner(login)}`;
     await probeWorkloads(owner, reader);
+
+    // Keep the real ledger current and the newest projected row visible.
+    // Hiding the required 1033 row alone must fail the /up check used by Web and Jobs.
+    const required = old.history.at(-1);
+    await owner`CREATE OR REPLACE VIEW web_readiness.migration_timestamps AS
+      SELECT created_at FROM drizzle.__drizzle_migrations
+      WHERE created_at <> ${owner.unsafe(required.created_at)} OFFSET 0`;
+    const behind = first.history.filter(({ tag }) => tag !== required.tag);
+    await cutoverUp(behind, projection);
+
     assert.deepEqual(await readLedger(), expanded);
     console.info("Verified scoped ACL, same database/login, workloads and unchanged journal.");
   } finally {
