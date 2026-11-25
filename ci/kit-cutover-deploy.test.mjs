@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import { parse } from "yaml";
 import { verifyOrdinaryLedger } from "./check-production-secrets.mjs";
 import { verifyReady } from "./kit-cutover-evidence.mjs";
 import {
@@ -100,7 +102,7 @@ test("admin rollback admits only the recorded production Ember version with admi
   }
 });
 
-test("only exact successful main XFS dispatch metadata can produce a cutover packet", async () => {
+test("cutover producer requires the exact main attempt and its successful proof upload", async () => {
   const own = { full_name: "TogetherWeOwn/two-web-next", fork: false, id: 23 };
   const run = {
     id: 21,
@@ -114,14 +116,41 @@ test("only exact successful main XFS dispatch metadata can produce a cutover pac
     status: "completed",
     conclusion: "success",
   };
-  assert.equal(
-    (await verifyProducer(identity, "synthetic", async () => Response.json(run))).runAttempt,
-    "3",
+  const workflow = parse(readFileSync(new URL(`../${run.path}`, import.meta.url), "utf8"));
+  const upload = workflow.jobs["isolated-cutover"].steps.find((step) =>
+    step.uses?.startsWith("actions/upload-artifact@"),
   );
-  await assert.rejects(
-    verifyProducer(identity, "synthetic", async () => Response.json({ ...run, run_attempt: 2 })),
-    /attempt metadata/,
-  );
+  assert.equal(upload.with.name, "kit-cutover-proof-${{ github.run_attempt }}");
+  assert.equal(upload.with["if-no-files-found"], "error");
+  const step = { name: upload.name, status: "completed", conclusion: "success" };
+  const job = {
+    id: 25,
+    name: "isolated-cutover",
+    run_id: 21,
+    run_attempt: 3,
+    status: "completed",
+    conclusion: "success",
+    steps: [step],
+  };
+  const check = (attempt = run, isolated = job) =>
+    verifyProducer(identity, "synthetic", async (url) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith("/runs/21/attempts/3")) return Response.json(attempt);
+      assert.ok(path.endsWith("/runs/21/attempts/3/jobs"));
+      return Response.json({ total_count: 1, jobs: [isolated] });
+    });
+  assert.equal((await check()).runAttempt, "3");
+  await assert.rejects(check({ ...run, run_attempt: 2 }), /attempt metadata/);
+  await assert.rejects(check({ ...run, conclusion: "failure" }), /attempt metadata/);
+  for (const changes of [
+    { steps: [] },
+    { steps: [{ ...step, conclusion: "failure" }] },
+    { steps: [{ ...step, conclusion: "skipped" }] },
+    { conclusion: "skipped", steps: [] },
+    { run_attempt: 2 },
+  ]) {
+    await assert.rejects(check(run, { ...job, ...changes }), /proof upload did not succeed/);
+  }
 });
 
 test("only undo preparation may admit confirmed deferred migrations", () => {

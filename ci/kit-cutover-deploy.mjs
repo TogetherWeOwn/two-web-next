@@ -14,6 +14,8 @@ import {
   verifyStagingProof,
   wrangler,
 } from "./kit-cutover-evidence.mjs";
+import { createRouteEvidenceRequest } from "./route-evidence-github.mjs";
+import { fetchRouteEvidenceProducer } from "./route-evidence-jobs.mjs";
 
 export const STAGING_WORKFLOW = ".github/workflows/xfs-qualification.yml";
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
@@ -50,11 +52,33 @@ export function selection(env) {
 }
 
 export async function verifyProducer(pin, token, fetchImpl) {
-  return fetchPureHonoRecoveryRun(
+  const run = await fetchPureHonoRecoveryRun(
     { ...pin, workflow: STAGING_WORKFLOW, event: "workflow_dispatch" },
     token,
     fetchImpl,
   );
+  const job = await fetchRouteEvidenceProducer(
+    createRouteEvidenceRequest(run.repository, token, fetchImpl),
+    Number(run.runId),
+    Number(run.runAttempt),
+    "isolated-cutover",
+  );
+  // A green generic XFS run can skip isolated cutover. Require the upload
+  // itself on the pinned attempt before exporting a usable production pin.
+  const uploads = Array.isArray(job.steps)
+    ? job.steps.filter((step) => step?.name === "Retain successful isolated cutover proof")
+    : [];
+  assert.ok(
+    job.run_id === Number(run.runId) &&
+      job.run_attempt === Number(run.runAttempt) &&
+      job.status === "completed" &&
+      job.conclusion === "success" &&
+      uploads.length === 1 &&
+      uploads[0].status === "completed" &&
+      uploads[0].conclusion === "success",
+    "isolated cutover proof upload did not succeed on the pinned attempt",
+  );
+  return run;
 }
 
 export const undoMessage = (digest) => `two-web-cutover-undo:${digest}`;
