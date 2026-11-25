@@ -404,6 +404,7 @@ export const ALERT_ROUTES = new Set([
   "/auth/status",
   "/__probe/alert",
   "/__probe/voice-move",
+  "/__probe/voice-move/session",
   "/csp-reports",
   "/community",
   "/discord",

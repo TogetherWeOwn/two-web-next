@@ -195,11 +195,8 @@ async function proof(request: ProofRequest = {}) {
     ...probeEnv({ CF_VERSION_METADATA: version, ...request.bindings }),
     THROTTLE_STORE: throttleStore.mockClear(),
   };
-  const headers = request.headers ?? {
-    cookie,
-    origin: new URL(bindings.APP_URL).origin,
-    "content-type": "application/json",
-  };
+  const origin = new URL(bindings.APP_URL).origin;
+  const headers = request.headers ?? { cookie, origin, "content-type": "application/json" };
   const writes = [
     "applyRoleRecheck",
     "create",

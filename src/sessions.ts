@@ -269,8 +269,7 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
     },
     async getLive(tokenHash, options) {
       type LiveRow = { user_id: string; member: boolean; remaining_ms: number };
-      // Only the proof depends on the role stamp column. Ordinary liveness
-      // reads retain compatibility with schemas from before the role recheck.
+      // Only the proof depends on the role stamp column.
       const readLive = () => sql<LiveRow[]>`
         with db_clock as (select clock_timestamp() as observed_at)
         select user_id, member,
