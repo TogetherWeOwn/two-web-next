@@ -213,9 +213,11 @@ async function startWorker(name, main, assetsDirectory, sessionSecret, vars, liv
 }
 
 async function stopWorker(worker) {
-  if (!worker.stopped) worker.child.kill("SIGTERM");
+  if (worker.stopped) return;
+  worker.child.kill("SIGTERM");
   await Promise.race([worker.closed, delay(5_000, undefined, { ref: false })]);
-  if (!worker.stopped) worker.child.kill("SIGKILL");
+  if (worker.stopped) return;
+  worker.child.kill("SIGKILL");
   await Promise.race([worker.closed, delay(5_000, undefined, { ref: false })]);
 }
 
@@ -223,6 +225,57 @@ async function stopWorker(worker) {
 // success quiet while a red check still shows the cause.
 let failed = false;
 try {
+  if (installedBrowser) {
+    // Run the cutover proof before the broader parity suite starts its Workers.
+    const secret = FIXTURE_SECRETS.SESSION_SECRET;
+    const { EMBER_CUTOVER_VARS } = await import("./kit-cutover-evidence.mjs");
+    const {
+      EMBER_FIXTURE_GUILD,
+      EMBER_FIXTURE_ORIGIN,
+      prepareEmberCutoverFixture,
+      verifyEmberCutoverJourney,
+    } = await import("./fixtures/kit-ember-cutover-browser.mjs");
+    const entry = join(scratch, "kit-ember-cutover.mjs");
+    const honoUndoEntry = join(scratch, "hono-ember-undo.mjs");
+    await prepareEmberCutoverFixture(entry, worker);
+    await prepareEmberCutoverFixture(honoUndoEntry, join(repo, "src/worker.ts"));
+    async function startEmberProfile(name, main, assetsDirectory, vars) {
+      const instance = await startWorker(name, main, assetsDirectory, secret, {
+        ...vars,
+        APP_URL: EMBER_FIXTURE_ORIGIN,
+        DISCORD_GUILD_ID: EMBER_FIXTURE_GUILD,
+      });
+      await listen(instance.child, instance.origin, () => instance.log);
+      return instance;
+    }
+    const ember = await startEmberProfile("kit-ember", entry, assets, EMBER_CUTOVER_VARS);
+    const fallback = await startEmberProfile("kit-ember-fallback", entry, assets, {
+      ...EMBER_CUTOVER_VARS,
+      KIT_ROUTE_EMBER_PAGES: "false",
+    });
+    const honoUndo = await startEmberProfile(
+      "hono-ember-undo",
+      honoUndoEntry,
+      join(repo, "public"),
+      {},
+    );
+    await verifyEmberCutoverJourney({
+      kitOrigin: ember.origin,
+      kitAssets: assets,
+      fallbackOrigin: fallback.origin,
+      honoUndoOrigin: honoUndo.origin,
+      databaseUrl,
+      secret,
+    });
+    const profiles = [ember, fallback, honoUndo];
+    await Promise.all(profiles.map(stopWorker));
+    assert.ok(
+      profiles.every(({ stopped }) => stopped),
+      "cutover profile Workers did not stop",
+    );
+    console.log("PASS Ember cutover Workers stopped");
+  }
+
   const textProbe = "/__fixture/static-text-parity";
   const textEntry = join(scratch, "kit-static-text.mjs");
   const textFixture = fileURLToPath(
@@ -1265,37 +1318,6 @@ export default machineParityWorker(inner, ${JSON.stringify(probePath)}, ${name =
         await listen(instance.child, instance.origin, () => instance.log);
         return instance;
       },
-    });
-  }
-
-  if (installedBrowser) {
-    const { EMBER_CUTOVER_VARS } = await import("./kit-cutover-evidence.mjs");
-    const {
-      EMBER_FIXTURE_GUILD,
-      EMBER_FIXTURE_ORIGIN,
-      prepareEmberCutoverFixture,
-      verifyEmberCutoverJourney,
-    } = await import("./fixtures/kit-ember-cutover-browser.mjs");
-    const entry = join(scratch, "kit-ember-cutover.mjs");
-    await prepareEmberCutoverFixture(entry, worker);
-    const [ember, fallback] = await Promise.all(
-      ["true", "false"].map(async (enabled) => {
-        const name = enabled === "true" ? "kit-ember" : "kit-ember-fallback";
-        const instance = await startWorker(name, entry, assets, secret, {
-          ...EMBER_CUTOVER_VARS,
-          KIT_ROUTE_EMBER_PAGES: enabled,
-          APP_URL: EMBER_FIXTURE_ORIGIN,
-          DISCORD_GUILD_ID: EMBER_FIXTURE_GUILD,
-        });
-        await listen(instance.child, instance.origin, () => instance.log);
-        return instance;
-      }),
-    );
-    await verifyEmberCutoverJourney({
-      kitOrigin: ember.origin,
-      fallbackOrigin: fallback.origin,
-      databaseUrl,
-      secret,
     });
   }
 } catch (error) {

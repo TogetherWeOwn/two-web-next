@@ -1823,7 +1823,7 @@ for (const job of ["preflight", "rollback-production"]) {
     assert.match(gate, /ROLLBACK_ENVIRONMENT: \$\{\{ inputs\.environment \}\}/);
     assert.match(gate, /PRODUCTION_AUTO_APPROVE: \$\{\{ vars\.PRODUCTION_AUTO_APPROVE \}\}/);
     assert.match(gate, /PRODUCTION_DEPLOY_ENABLED: \$\{\{ vars\.PRODUCTION_DEPLOY_ENABLED \}\}/);
-    assert.match(gate, /DEPLOY_SHA: \$\{\{ inputs\.ref \|\| github\.sha \}\}/);
+    assert.match(gate, /DEPLOY_SHA: \$\{\{ env\.LEGACY_SCRIPTS_REF \}\}/);
     assert.match(gate, /GITHUB_TOKEN: \$\{\{ github\.token \}\}/);
   });
 }
@@ -1845,7 +1845,7 @@ test("refuses a missing or malformed DEPLOY_SHA before any API call", async () =
   }
 });
 
-test("rollback-production passes the checked-out commit as DEPLOY_SHA to both gate steps", () => {
+test("rollback-production passes the legacy scripts ref to both reusable and staging gates", () => {
   const rollback = readFileSync(
     new URL("../.github/workflows/rollback-production.yml", import.meta.url),
     "utf8",
@@ -1853,13 +1853,10 @@ test("rollback-production passes the checked-out commit as DEPLOY_SHA to both ga
   const gates = rollback.split("run: node ci/production-deploy-gate.mjs --rollback\n").slice(1);
   assert.equal(gates.length, 2);
   for (const gate of gates) {
-    assert.match(
-      gate.split("\n      - ")[0],
-      /DEPLOY_SHA: \$\{\{ inputs\.ref \|\| github\.sha \}\}/,
-    );
+    assert.match(gate.split("\n      - ")[0], /DEPLOY_SHA: \$\{\{ env\.LEGACY_SCRIPTS_REF \}\}/);
   }
   // Both checkouts use the same scripts commit the gate verifies.
-  assert.equal(rollback.split("ref: ${{ inputs.ref || github.sha }}").length - 1, 2);
+  assert.equal(rollback.split("ref: ${{ env.LEGACY_SCRIPTS_REF }}").length - 1, 2);
 });
 
 test("CI runs the promotion resolver selftest beside the production gate selftest", () => {

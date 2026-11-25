@@ -45,8 +45,26 @@ export function deploymentTarget({ eventName, event, repository, ref, sha, check
 // https://docs.github.com/en/rest/actions/workflow-jobs#list-jobs-for-a-workflow-run
 export async function requireSuccessfulCi(context, { token, fetchImpl = fetch } = {}) {
   const target = deploymentTarget(context);
+  return requireSuccessfulMainPushCi(
+    {
+      repository: context.repository,
+      sha: target,
+      triggeringRun: context.eventName === "workflow_run" ? context.event.workflow_run : undefined,
+    },
+    { token, fetchImpl },
+  );
+}
+
+// Also used by the trusted manual rollback dispatcher before checking out the
+// requested scripts. That caller proves main ancestry separately.
+export async function requireSuccessfulMainPushCi(
+  { repository, sha: target, triggeringRun },
+  { token, fetchImpl = fetch } = {},
+) {
+  requireEvidence(/^[\w.-]+\/[\w.-]+$/.test(repository ?? ""), "Invalid repository");
+  requireEvidence(shaPattern.test(target ?? ""), "Invalid deployment SHA");
   requireEvidence(Boolean(token), "Missing read-only Actions token");
-  const base = `https://api.github.com/repos/${context.repository}/actions`;
+  const base = `https://api.github.com/repos/${repository}/actions`;
   async function get(path) {
     const response = await fetchImpl(`${base}${path}`, {
       headers: {
@@ -85,7 +103,7 @@ export async function requireSuccessfulCi(context, { token, fetchImpl = fetch } 
       "CI revision/branch/event mismatch",
     );
     requireEvidence(
-      candidate.path === ciPath && candidate.head_repository?.full_name === context.repository,
+      candidate.path === ciPath && candidate.head_repository?.full_name === repository,
       "CI workflow/repository mismatch",
     );
     requireEvidence(
@@ -94,10 +112,9 @@ export async function requireSuccessfulCi(context, { token, fetchImpl = fetch } 
     );
   }
   validateRun(run);
-  if (context.eventName === "workflow_run") {
+  if (triggeringRun) {
     requireEvidence(
-      run.id === context.event.workflow_run.id &&
-        run.run_attempt === context.event.workflow_run.run_attempt,
+      run.id === triggeringRun.id && run.run_attempt === triggeringRun.run_attempt,
       "Stale or mismatched CI trigger",
     );
   }
