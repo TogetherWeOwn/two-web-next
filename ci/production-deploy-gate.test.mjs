@@ -209,9 +209,24 @@ test("allows only an enabled main dispatch with verified protection and green ex
   assert.equal(seen.ci, 3);
 });
 
+const productionEnvironmentLimit = 64 * 1024;
+
+test("production Environment response at exactly 64 KiB advances to CI", async () => {
+  const body = JSON.stringify(protectedEnvironment).padEnd(productionEnvironmentLimit);
+  assert.equal(Buffer.byteLength(body), productionEnvironmentLimit);
+  const seen = {};
+  const evidence = await checkProductionGate(greenEnv, async () => new Response(body), {
+    checkoutSha: dispatchSha,
+    fetchCi: stubProductionApi(ciEvidence(), seen),
+  });
+  assert.deepEqual(evidence, { sha: dispatchSha, runId: 42, runAttempt: 1 });
+  assert.equal(seen.ci, 3);
+});
+
 test("oversized production Environment response cancels before further API calls", async () => {
   const protection = new TextEncoder().encode(JSON.stringify(protectedEnvironment));
-  const chunks = [protection, new Uint8Array(64 * 1024).fill(0x20)];
+  const padding = new Uint8Array(productionEnvironmentLimit + 1 - protection.byteLength);
+  const chunks = [protection, padding.fill(0x20)];
   let reads = 0;
   let cancelled = false;
   const response = new Response(
