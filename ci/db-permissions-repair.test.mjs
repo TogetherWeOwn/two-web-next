@@ -155,6 +155,7 @@ test("executor CLI distinguishes acknowledged membership from an unconfirmed tra
           events.push(options);
           await callback(tx);
           events.push("callback complete");
+          if (FIXTURE_FAILURE === "unsettled") await new Promise(() => {});
           if (FIXTURE_FAILURE.includes("commit")) throw new Error("synthetic commit error");
           events.push("acknowledged");
         },
@@ -179,13 +180,14 @@ test("executor CLI distinguishes acknowledged membership from an unconfirmed tra
   for (const [operation, failure, code] of [
     ["provision", "", 0],
     ["revoke", "", 0],
-    ["provision", "close", 12],
-    ["revoke", "close", 13],
-    ["provision", "no-op close", 12],
-    ["revoke", "no-op close", 13],
+    ["provision", "close", 20],
+    ["revoke", "close", 21],
+    ["provision", "no-op close", 20],
+    ["revoke", "no-op close", 21],
     ["revoke", "commit", 1],
     ["provision", "commit and close", 1],
     ["provision", "rights", 1],
+    ["revoke", "unsettled", 13],
   ]) {
     const label = `${operation} with ${failure || "no failure"}`;
     const result = spawnSync(process.execPath, ["--import", preload, executor, operation], {
@@ -200,9 +202,14 @@ test("executor CLI distinguishes acknowledged membership from an unconfirmed tra
     });
     const wanted = operation === "provision";
     const alreadyCompliant = failure.includes("no-op");
+    const unsettled = failure === "unsettled";
     assert.ifError(result.error);
     assert.equal(result.stdout, "", label);
-    assert.equal(result.stderr, "", label);
+    if (unsettled) {
+      assert.doesNotMatch(result.stderr, /fixture-password|fixture_executor/, label);
+    } else {
+      assert.equal(result.stderr, "", label);
+    }
     assert.deepEqual(
       JSON.parse(result.output[3]),
       [
@@ -211,8 +218,10 @@ test("executor CLI distinguishes acknowledged membership from an unconfirmed tra
         `rights:${alreadyCompliant ? wanted : !wanted}`,
         ...(alreadyCompliant ? [] : [wanted ? "grant" : "revoke", `rights:${wanted}`]),
         ...(failure === "rights" ? [] : ["callback complete"]),
-        ...(failure === "rights" || failure.includes("commit") ? [] : ["acknowledged"]),
-        "close:5",
+        ...(unsettled || failure === "rights" || failure.includes("commit")
+          ? []
+          : ["acknowledged"]),
+        ...(unsettled ? [] : ["close:5"]),
       ],
       label,
     );
@@ -569,7 +578,7 @@ test("executor dispatch scopes its credential and suppresses subprocess output",
   assert.equal(run.env.PRODUCTION_DB_EXECUTOR_DATABASE_URL, dsn);
   assert.equal(JSON.stringify(workflow).split(dsn).length, 2);
   assert.ok(!JSON.stringify(workflow).includes("PRODUCTION_DB_REPAIR_DATABASE_URL"));
-  for (const code of [0, 1, 12, 13]) {
+  for (const code of [0, 1, 13, 20, 21]) {
     const result = shell(
       run.run,
       { OPERATION: "revoke" },

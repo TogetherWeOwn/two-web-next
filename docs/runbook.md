@@ -713,10 +713,10 @@ Derive each target's repair pins after provisioning under its approved executor.
 The snapshot hashes the membership row OID. Recreating the edge changes the
 digest, so retain the same edge through the recovery window.
 Keep the repair credential separate. If closing the connection fails after
-transaction acknowledgement, the executor CLI exits `12` for confirmed
-membership after `provision` or `13` for confirmed absence after `revoke`.
-Exit `1` carries no confirmed outcome. The protected workflow reports a generic
-failure for every nonzero exit, so a failed run can leave the grant in place.
+transaction acknowledgement, the executor CLI exits `20` for confirmed
+membership after `provision` or `21` for confirmed absence after `revoke`.
+Treat other nonzero exits as unconfirmed. The protected workflow reports a
+generic failure for every nonzero exit, so a failed run can leave the grant in place.
 
 After that failure, stop writes and have the authorized operator check the
 approved database, provisioner and executor in a read-only catalog transaction.

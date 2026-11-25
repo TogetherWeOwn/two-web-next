@@ -113,7 +113,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   } catch (error) {
     process.exitCode = 1;
     if (error instanceof ExecutorCloseError) {
-      process.exitCode = operation === "provision" ? 12 : 13;
+      // Use statuses outside Node's runtime exit codes.
+      process.exitCode = operation === "provision" ? 20 : 21;
     }
   }
 }
