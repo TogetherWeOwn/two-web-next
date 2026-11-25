@@ -55,7 +55,7 @@ import { expiredWriteBanner } from "./write-recovery";
 import { freezeBanner } from "./freeze-banner";
 import { withStreamedBody } from "./html-stream";
 import { webmcpPilot } from "./webmcp-pilot";
-import { registerStagingVoiceMove } from "./staging-voice-move";
+import { registerStagingVoiceMove } from "./probes/staging-voice-move";
 
 export { faqLastReviewed } from "./faq-last-reviewed";
 export { rulesLastUpdated } from "./rules-last-updated";

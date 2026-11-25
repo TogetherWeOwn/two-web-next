@@ -119,7 +119,7 @@ RSVP writes use
 | Public event reads | 60 / 60 s | `PUBLIC_EVENT_READS_PER_MINUTE` in [`src/events/routes-shared.ts`](../src/events/routes-shared.ts) | `events-read:<clientKey>` across public event pages and feeds; see [`event-read-admission.md`](event-read-admission.md) |
 | Shared public reads | 60 / 60 s | `PUBLIC_EVENT_READS_PER_MINUTE` via `publicReadGuard` in [`src/events/routes-shared.ts`](../src/events/routes-shared.ts) | `events-read:<clientKey>`, the same bucket as public event reads, shared by `GET /api/public/*` (via `admitted` in [`src/public-data/routes.ts`](../src/public-data/routes.ts)) and `POST /mcp` (via `mcpRefused` in [`src/mcp/routes.ts`](../src/mcp/routes.ts)) |
 | RSVP write | 12 / 60 s | `RSVP_RATE_LIMIT` (`maxAttempts: 12`, `decaySeconds: 60`) in [`src/islands/contracts-rsvp-button.ts`](../src/islands/contracts-rsvp-button.ts) | `rsvp-write:<userId>` per member, shared by RSVP PUT and DELETE across events in [`src/events/rsvp.ts`](../src/events/rsvp.ts) |
-| Staging voice self-move | 10 / 60 s | `AUTH_THROTTLE_PER_MINUTE` | `staging-voice-move:<clientKey>` in [`src/staging-voice-move.ts`](../src/staging-voice-move.ts) after the staging flag, origin and body cap |
+| Staging voice self-move | 10 / 60 s | `AUTH_THROTTLE_PER_MINUTE` | `staging-voice-move:<clientKey>` in [`src/probes/staging-voice-move.ts`](../src/probes/staging-voice-move.ts) after the staging flag, origin and body cap |
 
 The `qa-login` Auth budget is per runner IP and shared across every suite in
 a run, including local runs: the whole sequential smoke presents a single

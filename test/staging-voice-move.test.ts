@@ -50,12 +50,9 @@ function post(
   };
   const headers: Record<string, string> = { cookie: bearer, "content-type": "application/json" };
   if (origin === null) headers["sec-fetch-site"] = "same-origin";
-  else headers.origin = origin ?? bindings.APP_URL;
-  return app.request(
-    "/__probe/voice-move",
-    { method: "POST", body: JSON.stringify(body), headers },
-    bindings,
-  );
+  else headers.origin = origin ?? new URL(bindings.APP_URL).origin;
+  const init = { method: "POST", body: JSON.stringify(body), headers };
+  return app.request("/__probe/voice-move", init, bindings);
 }
 
 async function botReply(response: Response | null, channel = target) {
@@ -108,6 +105,7 @@ it.each([
   Response.json({ ...limited, ok: "false" }, { status: 429 }),
   Response.json({ ...limited, error: { ...limited.error, retryable: undefined } }, { status: 429 }),
   Response.json(moved, { status: 502 }),
+  Response.json({ ...moved, request_id: "provider text" }),
   Response.json(success({ outcome: "moved", from_channel_id: "100000000000000013" })),
   Response.json(moved, { headers: { "Idempotent-Replay": "true" } }),
   Response.redirect("https://elsewhere.example", 307),
@@ -127,9 +125,10 @@ it.each([
   { STAGING_VOICE_MOVE_ENABLED: undefined },
   { STAGING_VOICE_MOVE_ENABLED: "false" },
   { APP_URL: "https://togetherweown.com" },
+  { APP_URL: `${STAGING_APP_URL}/` },
   { STAGING_VOICE_MOVE_MEMBER_ID: QA_IDENTITIES["qa-member"]!.discordId },
   { BOT_ENDPOINT_URL: "https://two-bot-next.5150.workers.dev" },
-])("keeps a disabled or misconfigured probe dark", async (bind) => {
+])("keeps a disabled or misconfigured probe dark with %j", async (bind) => {
   const get = vi.spyOn(store, "get");
   expect((await post(bind)).status).toBe(404);
   expect(get).not.toHaveBeenCalled();

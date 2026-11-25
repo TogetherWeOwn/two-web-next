@@ -151,9 +151,8 @@ normal cache policy.
 
 ### Staging voice self-move
 
-`POST /__probe/voice-move` takes JSON with only `channel_id` (4 KiB cap) and requires the staging
-`Origin` and dedicated Discord member's current session. Web signs once using the session ID and
-staging Bot signer. A `moved` reply from outside the fixture returns unconfirmed 502 without retry.
+`POST /__probe/voice-move` requires a staging `Origin`, the dedicated Discord member's current session, and JSON with only `channel_id` (4 KiB cap).
+Set `BOT_ENDPOINT_URL` to `https://two-bot-next-staging.5150.workers.dev`. An outside-fixture source yields unconfirmed 502 without retry.
 
 Live qualification needs the dedicated account, two fixture channels, verified occupancy and
 Connect permissions, and an exclusive staging window with the [Bot lease opt-in](https://github.com/TogetherWeOwn/two-bot-next/pull/2427).

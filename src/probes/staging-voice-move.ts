@@ -1,14 +1,14 @@
 import type { Context, Hono } from "hono";
-import { requestBodyLimit } from "./body-limit";
-import { send } from "./bot/client-transport";
-import type { Env } from "./env";
-import { jsonRefusal } from "./json-refusal";
-import { isJsonMediaType } from "./media-type";
-import { isQaFixtureId, STAGING_APP_URL } from "./qa";
-import { safeRequestId } from "./request-log";
-import { crossOriginRefusal } from "./same-origin";
-import { readContextSession } from "./session-hono";
-import { AUTH_THROTTLE_PER_MINUTE, throttle } from "./throttle";
+import { requestBodyLimit } from "../body-limit";
+import { send } from "../bot/client-transport";
+import type { Env } from "../env";
+import { jsonRefusal } from "../json-refusal";
+import { isJsonMediaType } from "../media-type";
+import { isQaFixtureId, STAGING_APP_URL } from "../qa";
+import { safeRequestId } from "../request-log";
+import { crossOriginRefusal } from "../same-origin";
+import { readContextSession } from "../session-hono";
+import { AUTH_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 
 const STAGING_BOT_ORIGIN = "https://two-bot-next-staging.5150.workers.dev";
 type Web = { Bindings: Env };
