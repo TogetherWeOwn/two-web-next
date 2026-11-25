@@ -367,6 +367,12 @@ export async function assertStaticFeedParity({
 
   try {
     const eventPath = `/events/${eventKeys[0]}`;
+    const readIp = "192.0.2.111";
+    buckets.push(`events-read:${readIp}`);
+    const headers = { "cf-connecting-ip": readIp, "x-forwarded-for": readIp };
+    await request(kit, eventPath, { status: 401, headers });
+    await request(seoOn, eventPath, { status: 401, headers, renderer: "kit" });
+
     const writeHits = async () => {
       const [{ count }] =
         await sql`select count(*)::int from web_throttle_hits where bucket = ${writeBucket}`;
@@ -375,7 +381,6 @@ export async function assertStaticFeedParity({
     let expectedHits = await writeHits();
     for (const [method, path, status, hits] of [
       ["POST", "/events", 401, 1],
-      ["GET", eventPath, 401, 0],
       ["PATCH", eventPath, 401, 1],
       ["POST", `${eventPath}/publish`, 401, 1],
       ["PUT", `${eventPath}/rsvp`, 401, 0],
