@@ -18,6 +18,7 @@ import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
 import { QA_IDENTITIES } from "../../src/qa";
 import { BODY_LIMIT_BYTES } from "../../src/http/body-limit";
 import {
+  frozenSeasonFixture,
   memberBoardDocument,
   prepareMemberBoardFixtures,
   prepareSeasonBoardFixtures,
@@ -3885,6 +3886,39 @@ test("isolated Kit season board shows the named viewer at both widths", async ({
         await page.screenshot({ path, animations: "disabled", caret: "hide" });
         await test.info().attach(capture, { path, contentType: "image/png" });
       }
+    }
+  }
+});
+
+test("isolated Kit frozen season standings fit both widths in each state", async ({ page }) => {
+  await prepareSeasonBoardFixtures();
+  await page.route("**/*", (route) => route.abort("blockedbyclient"));
+  for (const { name, size } of PARITY_VIEWPORTS) {
+    await page.setViewportSize(size);
+    for (const state of ["ranked", "opted-out", "zero", "unavailable"] as const) {
+      await page.setContent(memberBoardDocument("season", "overall", frozenSeasonFixture(state)));
+      await expect(
+        page.getByRole("heading", { name: "Season attendance standings" }),
+      ).toBeVisible();
+      await expect(page.getByRole("form", { name: "Filter the leaderboard" })).toHaveCount(0);
+      const table = page.getByRole("table", { name: "Recorded events, season 2000-02" });
+      if (state === "ranked" || state === "opted-out") {
+        await expect(table.getByRole("columnheader", { name: "Recorded events" })).toBeVisible();
+        await expect(table.getByRole("rowheader", { name: `${VIEWER} (you)` })).toHaveCount(
+          state === "ranked" ? 1 : 0,
+        );
+      } else {
+        await expect(table).toHaveCount(0);
+      }
+      if (state !== "ranked") await expect(page.getByRole("status")).toBeVisible();
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth),
+        `frozen ${state} page fits ${name}`,
+      ).toBeLessThanOrEqual(size.width);
+      const capture = `kit-review-frozen-season-${state}-${name}`;
+      const path = test.info().outputPath(`${capture}.png`);
+      await page.screenshot({ path, animations: "disabled", caret: "hide", fullPage: true });
+      await test.info().attach(capture, { path, contentType: "image/png" });
     }
   }
 });
