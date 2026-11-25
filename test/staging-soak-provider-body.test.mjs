@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { STAGING_ORIGIN } from "../ci/operator-constants.mjs";
 import { captureAllocationSoak } from "../ci/staging-soak-receipt.mjs";
 import { first, preRollback } from "./fixtures/staging-soak-http.mjs";
@@ -19,6 +19,7 @@ const analytics = "https://api.cloudflare.com/client/v4/graphql";
 const route = `${STAGING_ORIGIN}/version`;
 const readiness = `${STAGING_ORIGIN}/up`;
 const reads = [deployments, version, route, readiness, analytics, route, readiness, deployments];
+const responseBudget = 1024 * 1024;
 const replies = {
   [deployments]: { success: true, result: { deployments: [first] } },
   [version]: {
@@ -71,6 +72,12 @@ function capture(calls, replaceResponse = () => undefined) {
   );
 }
 
+function providerBodyAtLimit(url) {
+  const payload = { ...replies[url], note: "synthetic-provider-body é" };
+  const prefix = new TextEncoder().encode(JSON.stringify(payload));
+  return [prefix, new Uint8Array(responseBudget - prefix.byteLength).fill(32)];
+}
+
 test("captures a qualifying synthetic allocation with ordinary provider responses", async () => {
   const calls = [];
   const receipt = await capture(calls);
@@ -81,44 +88,66 @@ test("captures a qualifying synthetic allocation with ordinary provider response
   assert.deepEqual(calls, reads);
 });
 
+test("qualifies a provider body of exactly 1 MiB", async () => {
+  const calls = [];
+  const receipt = await capture(calls, (url) => {
+    if (url === deployments || url === version) {
+      return new Response(new Blob(providerBodyAtLimit(url)).stream());
+    }
+  });
+  assert.equal(receipt.status, "sampled");
+  assert.deepEqual(calls, reads);
+});
+
 test.each([
   ["initial deployments", 1],
   ["version", 2],
   ["final deployments", reads.length],
-])("cancels an oversized %s body even after a valid JSON prefix", async (_path, readNumber) => {
+])(
+  "cancels a %s body one byte over the limit after a valid JSON prefix",
+  async (_path, readNumber) => {
+    const calls = [];
+    const chunks = [...providerBodyAtLimit(reads[readNumber - 1]), Uint8Array.of(32)];
+    let cancelled = false;
+    let reachedEof = false;
+    const body = new ReadableStream(
+      {
+        pull(controller) {
+          const chunk = chunks.shift();
+          if (chunk) controller.enqueue(chunk);
+          else {
+            reachedEof = true;
+            controller.close();
+          }
+        },
+        cancel() {
+          cancelled = true;
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    await assert.rejects(
+      capture(calls, (_url, index) => (index === readNumber ? new Response(body) : undefined)),
+      { message: "Cannot read staging provider evidence" },
+    );
+    assert.equal(cancelled, true);
+    assert.equal(reachedEof, false);
+    assert.deepEqual(calls, reads.slice(0, readNumber));
+  },
+);
+
+test.each([
+  ["empty", ""],
+  ["malformed", '{"success":true,"result":synthetic-provider-body}'],
+])("refuses an %s provider body without exposing details", async (_kind, text) => {
   const calls = [];
-  const encoder = new TextEncoder();
-  const payload = { ...replies[reads[readNumber - 1]], note: "synthetic-provider-body" };
-  const chunks = [
-    encoder.encode(JSON.stringify(payload)),
-    encoder.encode(" ".repeat(512 * 1024)),
-    encoder.encode(" ".repeat(512 * 1024)),
-  ];
-  let cancelled = false;
-  let reachedEof = false;
-  const body = new ReadableStream(
-    {
-      pull(controller) {
-        const chunk = chunks.shift();
-        if (chunk) controller.enqueue(chunk);
-        else {
-          reachedEof = true;
-          controller.close();
-        }
-      },
-      cancel() {
-        cancelled = true;
-      },
-    },
-    { highWaterMark: 0 },
-  );
   await assert.rejects(
-    capture(calls, (_url, index) => (index === readNumber ? new Response(body) : undefined)),
-    { message: "Cannot read staging provider evidence" },
+    capture(calls, () => new Response(text)),
+    {
+      message: "Cannot read staging provider evidence",
+    },
   );
-  assert.equal(cancelled, true);
-  assert.equal(reachedEof, false);
-  assert.deepEqual(calls, reads.slice(0, readNumber));
+  assert.deepEqual(calls, [deployments]);
 });
 
 test("refuses a provider stream that fails after a complete JSON prefix", async () => {
@@ -139,5 +168,45 @@ test("refuses a provider stream that fails after a complete JSON prefix", async 
     { message: "Cannot read staging provider evidence" },
   );
   assert.equal(sentPrefix, true);
+  assert.deepEqual(calls, [deployments]);
+});
+
+test("refuses a stalled provider read at the deadline while cancellation is pending", async ({
+  onTestFinished,
+}) => {
+  const calls = [];
+  const deadline = new AbortController();
+  const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValueOnce(deadline.signal);
+  const { promise: reading, resolve: startRead } = Promise.withResolvers();
+  const { promise: cleanup, resolve: finishCleanup } = Promise.withResolvers();
+  onTestFinished(() => {
+    finishCleanup();
+    timeout.mockRestore();
+  });
+  let cancelled = false;
+  const body = new ReadableStream(
+    {
+      pull() {
+        startRead();
+      },
+      cancel() {
+        cancelled = true;
+        return cleanup;
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const refusal = assert.rejects(
+    capture(calls, () => new Response(body)),
+    {
+      message: "Cannot read staging provider evidence",
+    },
+  );
+  await reading;
+  assert.deepEqual(timeout.mock.calls[0], [10_000]);
+  deadline.abort(new Error("synthetic-provider-deadline"));
+  await refusal;
+  assert.equal(cancelled, true);
+  assert.equal(body.locked, false);
   assert.deepEqual(calls, [deployments]);
 });
