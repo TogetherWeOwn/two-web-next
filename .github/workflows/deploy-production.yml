@@ -217,15 +217,7 @@ jobs:
 
   staging-soak:
     name: staging-soak
-    # Least privilege with no approval wait: the candidate's staging Worker
-    # versions (tagged with its commit; every tagged version counts) and
-    # their invocation errors since the oldest deployed, from the staging
-    # account's Workers API and analytics. Staging credentials only, under
-    # the staging Environment (branch policy only, no reviewers, so this
-    # still starts at once in reviewer mode too). The
-    # job only reads (versions list, analytics query) and never mutates, but
-    # the token is the staging deploy token, not a read-only credential; the
-    # production comparison runs in regression below.
+    # Read executed E2E, active staging allocation and version-tagged analytics.
     needs: preflight
     if: needs.preflight.outputs.sha != '' && needs.preflight.outputs.already_live != 'true'
     runs-on: ubuntu-latest
@@ -238,6 +230,8 @@ jobs:
     outputs:
       requests: ${{ steps.soak.outputs.requests }}
       errors: ${{ steps.soak.outputs.errors }}
+      e2e_run_id: ${{ steps.soak.outputs.e2e_run_id }}
+      attempt: ${{ steps.soak.outputs.soak_attempt }}
     steps:
       # Tip checkout, like the preflight checks: an older candidate cannot
       # skip the gate with a script that lacks this mode.
@@ -248,7 +242,9 @@ jobs:
           sparse-checkout: |
             /ci/
             /bin/version-check.mjs
-            /wrangler.jsonc
+            /bin/revision-check.mjs
+            /bin/smoke.mjs
+            /.github/actions/gradual-promote/
           sparse-checkout-cone-mode: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -258,8 +254,16 @@ jobs:
         run: node ci/production-deploy-gate.mjs --staging-soak
         env:
           DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
+          INPUT_SHA: ${{ inputs.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: staging-soak-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/staging-soak.json
+          if-no-files-found: error
+          retention-days: 30
 
   regression:
     name: production-regression
@@ -271,6 +275,8 @@ jobs:
     # when the staging soak error rate exceeds 1.5x production's last 24 hours
     # (1% floor). GET-only, no auth, no writes.
     needs: [preflight, staging-soak]
+    outputs:
+      soak_attempt: ${{ needs.staging-soak.outputs.attempt }}
     if: needs.preflight.outputs.sha != '' && needs.preflight.outputs.already_live != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -309,6 +315,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
+          STAGING_E2E_RUN_ID: ${{ needs.staging-soak.outputs.e2e_run_id }}
       - name: Passive set against production (ledgers only)
         # Exit codes are reported in the log; the gate below judges the
         # ledgers against the candidate's staging outcomes.
@@ -386,6 +393,14 @@ jobs:
       name: production
       url: https://togetherweown.com
     steps:
+      - name: Require staging soak evidence from this attempt
+        env:
+          SOAK_ATTEMPT: ${{ needs.regression.outputs.soak_attempt }}
+        run: |
+          if [ "$SOAK_ATTEMPT" != "$GITHUB_RUN_ATTEMPT" ]; then
+            echo '::error::Staging soak evidence is from a different attempt. Re-run all jobs to sample again.'
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Deploy the dispatch SHA that passed preflight, not a newer main head.

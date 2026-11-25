@@ -398,6 +398,9 @@ function githubArtifacts({ runs, artifacts, commit = SHA, seen = {} }) {
     if (parsed.pathname.endsWith("/actions/workflows/e2e-staging.yml/runs")) {
       return { ok: true, json: async () => ({ workflow_runs: runs }) };
     }
+    if (/\/actions\/runs\/\d+$/.test(parsed.pathname)) {
+      return Response.json(runs.find((run) => parsed.pathname.endsWith(`/${run.id}`)) ?? {});
+    }
     if (/\/actions\/runs\/\d+\/artifacts$/.test(parsed.pathname)) {
       seen.artifactsRun = parsed.pathname.match(/runs\/(\d+)\//)[1];
       return { ok: true, json: async () => ({ artifacts }) };
@@ -416,7 +419,13 @@ function githubArtifacts({ runs, artifacts, commit = SHA, seen = {} }) {
 function fetchLedgers(options, unzipSeen = {}) {
   const dir = mkdtempSync(join(tmpdir(), "passive-"));
   return fetchPassiveLedgers(
-    { repository: "fixture/repo", sha: SHA, token: "fixture-only", dir },
+    {
+      repository: "fixture/repo",
+      sha: SHA,
+      token: "fixture-only",
+      dir,
+      expectedRunId: options.expectedRunId,
+    },
     {
       fetchImpl: githubArtifacts(options),
       // The fake archive carries the commit plus the producer's observations.
@@ -441,6 +450,21 @@ const e2eRun = (id, overrides = {}) => ({
   path: ".github/workflows/e2e-staging.yml",
   head_repository: { full_name: "fixture/repo" },
   ...overrides,
+});
+
+test("passive ledgers use the soak E2E run even when a newer run exists", async () => {
+  const run = e2eRun(9, { event: "workflow_run", run_attempt: 1, conclusion: "success" });
+  const seen = {};
+  assert.deepEqual(
+    await fetchLedgers({
+      runs: [run, e2eRun(10)],
+      seen,
+      expectedRunId: 9,
+      artifacts: [{ id: 77, name: "staging-passive-ledger-9", expired: false }],
+    }),
+    { runId: 9, artifactId: 77 },
+  );
+  assert.equal(seen.artifactsRun, "9");
 });
 
 test("passive ledgers come from the newest e2e-staging run for the candidate, without the token on the blob", async () => {
@@ -598,6 +622,12 @@ test("deploy-production runs the regression check before the deploy job", () => 
     workflow.slice(workflow.indexOf(`\n  ${name}:\n`), workflow.indexOf(`\n  ${next}:\n`));
   const regression = job("regression", "deploy-production");
   assert.match(regression, /needs: \[preflight, staging-soak\]/);
+  assert.match(job("preflight", "staging-soak"), /INPUT_SHA: \$\{\{ inputs\.sha \}\}/);
+  assert.match(
+    regression,
+    /STAGING_E2E_RUN_ID: \$\{\{ needs\.staging-soak\.outputs\.e2e_run_id \}\}/,
+  );
+  assert.match(regression, /soak_attempt: \$\{\{ needs\.staging-soak\.outputs\.attempt \}\}/);
   assert.match(regression, /environment:\n {6}name: production\n/);
   // Least privilege: analytics reads use the repo-level read-only token, so
   // the regression check never holds the production deployment token. The
@@ -642,6 +672,8 @@ test("deploy-production runs the regression check before the deploy job", () => 
   assert.match(regression, /ref: \$\{\{ needs\.preflight\.outputs\.sha \}\}/);
   assert.match(regression, /ref: \$\{\{ github\.sha \}\}\n {10}path: gate-tip\n/);
   const deploy = job("deploy-production", "post-deploy-watch");
+  assert.match(deploy, /SOAK_ATTEMPT: \$\{\{ needs\.regression\.outputs\.soak_attempt \}\}/);
+  assert.match(deploy, /if \[ "\$SOAK_ATTEMPT" != "\$GITHUB_RUN_ATTEMPT" \]/);
   assert.match(deploy, /\n {4}needs: \[preflight, regression\]\n/);
 });
 

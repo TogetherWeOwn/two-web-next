@@ -992,13 +992,10 @@ The rollback workflow remains a separate already-served-version route.
 Before the deploy job, `deploy-production` runs two more gates
 (`ci/production-deploy-gate.mjs`):
 
-- `staging-soak` (staging credentials, under the staging Environment —
-  branch policy only, no reviewers, so it still starts at once) finds the
-  candidate's staging Worker versions by commit tag — every tagged version
-  counts, since a deploy retry tags twice — and sums their Workers
-  invocation errors since the oldest deployed (at most 24 hours). The job
-  only reads (versions list, analytics query) and never mutates, but its
-  token is the staging deploy token, not a read-only credential.
+- `staging-soak` requires one 100% Cloudflare allocation through E2E and its
+  30-minute soak. Analytics starts at E2E start. Regression uses that run's
+  ledger. After the rollback drill, run fresh E2E and soak. Exact main SHA
+  manual E2E can qualify explicit selection. Re-run all jobs after failure.
 - `production-regression` (production Environment as the reviewer
   checkpoint, analytics via the repo-level read-only token) downloads the
   `staging-passive-ledger-<run>` artifact that `e2e-staging` recorded for the
@@ -1026,7 +1023,9 @@ forward: land a new commit and promote it once its own staging
 run passes on the first attempt. A re-run can still diagnose a flake, but its
 green is not promotion evidence.
 
-#### Manual staging soak receipt
+#### Archived staging soak receipts
+
+The job archives `staging-soak/2` per attempt. The example covers `staging-soak/1` only.
 
 Use [`ci/staging-soak-receipt.mjs`](../ci/staging-soak-receipt.mjs) with the
 verified deploy SHA, Worker UUID and `/version` timestamp. Supply the retained
@@ -1043,9 +1042,8 @@ await writeFile(receiptPath, JSON.stringify(receipt, null, 2) + "\n", { flag: "w
 
 Use an existing analytics credential and `writeFile` from `node:fs/promises`.
 The helper checks serving identity around a tagged query from E2E completion
-to the sample, at least 30 minutes later. Analytics can lag, and identity reads
-describe the Worker serving at capture time. The automated regression gate
-computes its own counts across all candidate-tagged versions.
+to the sample, at least 30 minutes later. These historical identity reads
+describe the Worker serving at capture time.
 
 For a verified replacement, supply `evidence.replacement = { sha, workerVersion,
 observedAt }` at capture and validation. Write `superseded` to a new path and

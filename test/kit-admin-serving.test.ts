@@ -9,7 +9,7 @@ import {
   usesKitDefaultAction,
 } from "../src/admin/kit-serving";
 import { STAGING_APP_URL } from "../src/qa";
-import { type HookDispatchDeps, dispatchHookRequest } from "../src/route-ownership";
+import { type HookDispatchDeps, dispatchHookRequest, ROUTE_MANIFEST } from "../src/route-ownership";
 import { MODERATOR, env as baseEnv } from "./helpers/member-data";
 
 const loopback = "http://127.0.0.1:8787";
@@ -48,6 +48,67 @@ it("requires the original path, origin and mounted form ID", () => {
     events + "/:key/publish",
   );
   expect(adminFormPath(events + "/%30/publish")).toBeUndefined();
+});
+
+it.each([
+  { appUrl: loopback, flag: "true", native: false },
+  { appUrl: loopback, flag: "true", fixture: "true", native: true },
+  { appUrl: loopback, fixture: "true", native: false },
+  { appUrl: STAGING_APP_URL, flag: "true", fixture: "true", native: false },
+])("admits the legacy event-create redirect only in its enabled admin lane (%j)", async (mode) => {
+  const path = "/admin/events/create";
+  const request = new Request(`${mode.appUrl}${path}?ignored=1`);
+  const resolve = vi.fn(async () => new Response("", { status: 301 }));
+  const honoFetch = vi.fn(async () => new Response("fallback"));
+  const result = await dispatchHookRequest(
+    { request, url: new URL(request.url), route: { id: path } },
+    {
+      appUrl: mode.appUrl,
+      admin: {
+        env: {
+          ...env,
+          APP_URL: mode.appUrl,
+          KIT_ROUTE_ADMIN: mode.flag,
+          KIT_PARITY_FIXTURE_ADMIN_EVENT_CREATE_REDIRECT: mode.fixture,
+        },
+        completeForm: () => {
+          throw new Error("unexpected form submission");
+        },
+      },
+      sessionFor: async () => ({
+        status: "authenticated",
+        session: { ...MODERATOR, avatar: null, moderator: true },
+        returnTo: null,
+        joinResult: null,
+        expiredWrite: null,
+      }),
+      resolve,
+      honoFetch,
+    },
+  );
+  expect(result.headers.get("x-two-renderer")).toBe(mode.native ? "kit" : null);
+  expect(resolve).toHaveBeenCalledTimes(mode.native ? 1 : 0);
+  expect(honoFetch).toHaveBeenCalledTimes(mode.native ? 0 : 1);
+});
+
+it("keeps the legacy event-create endpoint behind admin admission when its manifest entry is enabled", async () => {
+  const path = "/admin/events/create";
+  const request = new Request(`${loopback}${path}`);
+  const resolve = vi.fn(async () => new Response());
+  const honoFetch = vi.fn(async () => new Response());
+  await dispatchHookRequest(
+    { request, url: new URL(request.url), route: { id: path } },
+    {
+      appUrl: loopback,
+      manifest: ROUTE_MANIFEST.map((entry) =>
+        entry.method === "GET" && entry.path === path ? { ...entry, enabled: true } : entry,
+      ),
+      resolve,
+      honoFetch,
+    },
+  );
+  expect(honoFetch).toHaveBeenCalledExactlyOnceWith(request);
+  expect(resolve).not.toHaveBeenCalled();
 });
 
 it.each(["guest", "unknown", "member", "moderator"] as const)(
