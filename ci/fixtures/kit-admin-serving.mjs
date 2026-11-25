@@ -7,7 +7,6 @@ import { generateSignedCookie } from "hono/cookie";
 import postgres from "postgres";
 import { EMBER_CUTOVER_VARS } from "../kit-cutover-evidence.mjs";
 import { FIXTURE_SECRETS, SESSION_COOKIE } from "../parity/fixture.mjs";
-import { assertRecurringCreateParity } from "./kit-admin-recurring-create.mjs";
 
 const editor = "/admin/events/new";
 const operator = "/admin/ops-overrides";
@@ -532,6 +531,7 @@ export async function assertKitAdminServing({ kit, off, hono, databaseUrl }) {
   const memberId = String(actor + 1n);
   const sql = postgres(databaseUrl, { max: 1 });
   try {
+    const { assertRecurringCreateParity } = await import("./kit-admin-recurring-create.mjs");
     await assertRecurringCreateParity({
       kit,
       sql,
