@@ -141,7 +141,7 @@ export default {
     if (original.pathname === "/favicon.ico") return inner.fetch(incoming, env, context);
     const profile = incoming.headers.get("x-fixture-mixed-profile");
     if (!Object.hasOwn(profiles, profile)) return new Response(null, { status: 400 });
-    const bindings = { ...env, ...profiles[profile] };
+    const bindings = { ...env, ...profiles[profile], APP_URL: ${JSON.stringify(appUrl)} };
     const url = new URL(bindings.APP_URL);
     url.pathname = original.pathname;
     url.search = original.search;
@@ -160,7 +160,6 @@ export default {
   );
   const origin = await start(entry, {
     ...EMBER_CUTOVER_VARS,
-    APP_URL: appUrl,
     BOT_ENDPOINT_URL,
     OPS_CONTROL_TOKEN,
   });
