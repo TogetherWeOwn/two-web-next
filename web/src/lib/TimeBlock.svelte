@@ -1,7 +1,6 @@
 <script lang="ts">
 import { onMount } from "svelte";
 import { structuredTime, toInstant, type Instant } from "./structured-time";
-import Tag from "./Tag.svelte";
 import TextLink from "./TextLink.svelte";
 
 // Only no-store SSR callers with a native watcher may opt into a dated Live snapshot.
@@ -110,7 +109,7 @@ onMount(() => {
 {#if time}
   <div class="time-block" data-state={eventState}>
     <time datetime={time.datetime} class:cancelled={eventState === "cancelled"}>{#if nativeLive}<span data-live-fresh>Live</span><span hidden data-live-stale>{time.localTime}</span>{:else}{eventState === "ended" ? shortDate : eventState === "live" && !withdrawn ? "Live" : time.localTime}{/if}</time>
-    {#if nativeLive}<span hidden data-live-stale><Tag variant="warn">Stale</Tag></span>{/if}
+    {#if nativeLive}<span hidden data-live-stale><span class="event-tag">Stale</span></span>{/if}
     <div class="details">
       <div>{time.localDate}{#if eventState !== "live" || !serverLive}{#if (viewerZone || browserZone) && time.zone === (viewerZone || browserZone)}, your time{#if browserZone && !viewerZone}{" (from your browser)"}{/if}{:else}, UTC fallback{/if}{/if}</div>
       <div class="anchor">
@@ -126,6 +125,13 @@ onMount(() => {
 {/if}
 
 <style>
+  @import "./event-tag.css";
+
+  .event-tag {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 45%, transparent);
+    color: var(--warn);
+  }
+
   .time-block { border-top: 1px solid var(--two-color-hair-2); padding-top: var(--two-space-inset-card-lg); display: flex; align-items: baseline; gap: var(--two-space-4); flex-wrap: wrap; color: var(--two-color-text-primary); font-size: var(--two-font-size-body-reading); }
   .time-block > time { font-family: var(--two-font-display); font-size: var(--two-font-size-figure); font-weight: var(--two-font-weight-display); letter-spacing: var(--two-tracking-figure); font-variant-numeric: tabular-nums; }
   time.cancelled { text-decoration: line-through; }

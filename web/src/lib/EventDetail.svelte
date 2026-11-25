@@ -4,7 +4,6 @@ import EventVoicePlacement from "#lib/EventVoicePlacement.svelte";
 import JsonLd from "#lib/JsonLd.svelte";
 import Lifeline from "#lib/Lifeline.svelte";
 import Shell from "#lib/Shell.svelte";
-import Tag from "#lib/Tag.svelte";
 import TimeBlock from "#lib/TimeBlock.svelte";
 import type { KitEventDetailModel } from "../../../src/events/kit-detail";
 import { kitEventFacts } from "../../../src/events/kit-event-facts";
@@ -68,8 +67,8 @@ const detailIslands = $derived([
 </script>
 
 {#snippet liveTag(testid?: string)}
-  <span data-live-fresh data-testid={testid}><Tag variant="live">Live</Tag></span>
-  <span hidden data-live-stale><Tag variant="warn">Stale</Tag></span>
+  <span data-live-fresh data-testid={testid}><span class="event-tag live">Live</span></span>
+  <span hidden data-live-stale><span class="event-tag warn">Stale</span></span>
 {/snippet}
 
 <svelte:head>
@@ -164,10 +163,10 @@ const detailIslands = $derived([
     {#if live}
       <div class="lifecycle-tags">
         {@render liveTag(EVENT_ONGOING_TESTID)}
-        {#if savedLive}<Tag variant="you">You're in</Tag>{/if}
+        {#if savedLive}<span class="event-tag you">You're in</span>{/if}
       </div>
     {/if}
-    {#if openSeat}<span class="seat-open-snapshot"><Tag variant="ok">{KIT_SIGNUPS_OPEN}</Tag></span>{/if}
+    {#if openSeat}<span class="seat-open-snapshot"><span class="event-tag ok">{KIT_SIGNUPS_OPEN}</span></span>{/if}
     <h1 data-waitlist-position={model.waitlistPosition ?? ""}>{model.title}</h1>
   </section>
   {#if model.joinResult}
@@ -221,7 +220,7 @@ const detailIslands = $derived([
               <span class="seat-open-snapshot">{seatHeading}</span><span class="seat-open-fallback">{model.seatCard.heading}</span>
             {:else}{seatHeading}{/if}
           </h2>
-          {#if openSeat}<span class="seat-open-snapshot"><Tag variant="ok">{KIT_SIGNUPS_OPEN}</Tag></span>
+          {#if openSeat}<span class="seat-open-snapshot"><span class="event-tag ok">{KIT_SIGNUPS_OPEN}</span></span>
           {:else if model.seatCard.tag}<span class="seat-card-tag">{model.seatCard.tag.text}</span>{/if}
         </div>
       {/if}
@@ -374,6 +373,16 @@ const detailIslands = $derived([
 </Shell>
 
 <style>
+  @import "./event-tag.css";
+
+  .event-tag {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 45%, transparent);
+  }
+  .event-tag.live { color: var(--live); }
+  .event-tag.warn { color: var(--warn); }
+  .event-tag.you { color: var(--ember); }
+  .event-tag.ok { color: var(--ok); }
+
   .event-layout-head { grid-area: head; min-width: 0; }
   .lifecycle-time { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2) var(--space-4); padding-top: var(--space-7); margin-bottom: var(--space-4); border-top: 1px solid var(--color-hair2); }
   .lifecycle-figure { font-size: var(--text-figure); line-height: 1; font-variant-numeric: tabular-nums; }
