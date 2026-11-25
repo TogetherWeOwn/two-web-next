@@ -316,7 +316,7 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
     }
   });
 
-  it("settles an observed hard stop and its tracked dispatch in the same recovery", async () => {
+  it.each([false, true])("settles a tracked hard stop, lease expired=%s", async (expired) => {
     const store = pgReconciliationStore(sql);
     const key = crypto.randomUUID();
     const jobId = crypto.randomUUID();
@@ -325,6 +325,9 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
     expect(await store.claimAnnouncement(key, "fixture-channel", now)).toMatchObject({
       kind: "claimed",
     });
+    if (expired)
+      await sql`update announcement_send_claims set claim_until = clock_timestamp()
+        where idempotency_key = ${key}`;
     expect(
       await store.recoverAnnouncement(
         key,

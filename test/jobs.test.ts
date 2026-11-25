@@ -603,7 +603,8 @@ describe("CallInternalAction", () => {
         announcementClaims,
         enqueueAnnouncementSettlement,
       };
-      const original = msg(ann);
+      const jobId = crypto.randomUUID();
+      const original = msg({ ...ann, jobId });
       await consume({ messages: [original] }, deps);
       expect(original.acked).toBe(false);
       expect(original.retried).toBe(5);
@@ -611,6 +612,7 @@ describe("CallInternalAction", () => {
       expect(settlement).toEqual({
         kind: "announcement-settlement",
         idempotencyKey: ann.idempotencyKey,
+        jobId,
         sendAttempts: 1,
         lastCode: "needs_reconciliation",
         lastStatus: 409,
@@ -636,7 +638,7 @@ describe("CallInternalAction", () => {
         ann.idempotencyKey,
         1,
         expect.objectContaining(settlement!),
-        null,
+        jobId,
       );
       expect(postAnnouncement).toHaveBeenCalledExactlyOnceWith(ann.action, ann.idempotencyKey);
     },
