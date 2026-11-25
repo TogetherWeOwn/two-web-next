@@ -377,6 +377,11 @@
       "reason": "Private operator record behind independent control-bearer admission."
     },
     {
+      "route": "GET /admin/queue/failed/:id/preview",
+      "binding": "web/src/routes/admin/queue/failed/[id]/preview/+server.ts",
+      "reason": "Private queue advice requires the staging Origin, a moderator session and the dedicated operator. The installed Worker fixture covers the response and audit refusals. There is no Kit data representation."
+    },
+    {
       "route": "GET /e/:key",
       "binding": "web/src/routes/e/[key]/+page.server.ts",
       "reason": "Hono-owned member-read boundary (detail + neighbors); covered by the Hono payload audit, not this contract."
