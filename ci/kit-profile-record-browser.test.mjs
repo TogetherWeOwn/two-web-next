@@ -3,16 +3,14 @@ import { spawnSync } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
+import { profileRecordEntries } from "../test/fixtures/profile-record-preview.ts";
 import { withKitOfflineBrowser } from "./kit-offline-browser.mjs";
 
 const fixture = `<script lang="ts">
 import { page } from '$app/state';
 import ProfileRecordPreview from '#lib/ProfileRecordPreview.svelte';
 const state = page.url.searchParams.get('state');
-const entries = [
-  { day: '2026-10-18', date: '18 Oct 2026', title: 'Guide role given', detail: 'Helps new members find their feet.', kind: 'Guide' },
-  { day: '2026-09-04', date: '4 Sep 2026', title: 'Joined Together We Own', detail: 'Joined the Discord community.', kind: 'Joined' },
-] as const;
+const entries = ${JSON.stringify(profileRecordEntries)} as const;
 </script>
 <svelte:head><link rel="stylesheet" href="/theme.css" /></svelte:head>
 <div class="base-theme">
