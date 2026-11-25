@@ -13,9 +13,8 @@
 // verdict for published undecodable bounds. Dates cross into the view as UTC ISO strings, with
 // the exact saved SQL text alongside for driver-undecodable bounds (BC,
 // infinity). The
-// POST /admin/featured/:id and POST /admin/featured/:id/delete siblings and
-// the guarded /admin/featured-contents/:id/edit legacy redirect stay
-// Hono-owned, so this model carries no write.
+// POST /admin/featured/:id and POST /admin/featured/:id/delete have their
+// own ownership contract, so this read model carries no write.
 import type { Db } from "../db/index";
 import { isDatabaseUnavailable } from "../db/errors";
 import { alertRequestError } from "../alerts";

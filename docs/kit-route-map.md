@@ -213,6 +213,15 @@ The `POST /admin/events/:key/rsvp-pause` and `POST /admin/events/:key/rsvp-reope
 endpoints use the shared Hono moderator guard and transition controller. With
 Admin ownership off, the Hono app serves both POSTs directly.
 
+#### Legacy featured-content bookmarks
+
+The installed Worker fixture can opt in to the three legacy featured-content
+bookmarks with `KIT_PARITY_FIXTURE_ADMIN_FEATURED_REDIRECTS=true` alongside
+`KIT_ROUTE_ADMIN=true` on the exact HTTP loopback origin. Both runtimes use
+the same moderator guard and redirect handlers. The fixture matches literal
+GET and HEAD paths. Encoded and malformed segments, trailing slashes, Kit data
+requests and other methods retain Hono ownership.
+
 ### Admin queue preview
 
 `KIT_ROUTE_ADMIN_QUEUE_PREVIEW=true` selects Kit for the exact queue preview GET

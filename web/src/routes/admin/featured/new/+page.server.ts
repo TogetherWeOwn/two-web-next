@@ -16,8 +16,7 @@ import type { PageServerLoad } from "./$types";
 // POST /admin/featured stays Hono-owned: the manifest lists only this GET,
 // so the ported form keeps submitting to the unchanged Hono create handler
 // (parseFeaturedForm + createFeatured, 422 re-render / 303 redirect) during
-// mixed mode. The guarded /admin/featured-contents/create legacy redirect
-// stays Hono-owned too.
+// mixed mode.
 export const csr = false;
 
 export const load: PageServerLoad = async ({ parent, setHeaders }) => {

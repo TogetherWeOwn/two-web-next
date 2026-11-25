@@ -311,6 +311,42 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
   return buildAdminApp(adminGuard(overrides));
 }
 
+// Share the Hono registrations with the Kit bookmark endpoints, including
+// the original ID decoding, read declaration and error envelopes.
+export function mountFeaturedLegacyRoutes(admin: Hono<Vars>) {
+  admin.get("/featured-contents", (c) =>
+    legacyRedirect(c, "/admin/featured", "featured_contents", "admin.featured.legacy-index"),
+  );
+  admin.get("/featured-contents/create", (c) =>
+    legacyRedirect(c, "/admin/featured/new", "featured_contents", "admin.featured.legacy-create"),
+  );
+  admin.get("/featured-contents/:id/edit", async (c) => {
+    declareAccess(c, {
+      resource: "featured_contents",
+      action: "view",
+      route: "admin.featured.legacy-edit",
+    });
+    const legacyId = c.req.param("id");
+    if (!/^[1-9]\d*$/.test(legacyId)) return featuredNotFound(c);
+    try {
+      const db = await dbOr503(c);
+      if (!db) return adminUnavailable(c);
+      const id = await getFeaturedIdByLegacyId(db, legacyId);
+      if (id === null) return featuredNotFound(c);
+      return legacyRedirect(
+        c,
+        `/admin/featured/${id}`,
+        "featured_contents",
+        "admin.featured.legacy-edit",
+      );
+    } catch (err) {
+      // The guard's read boundary renders the shared outage envelope.
+      if (isDatabaseUnavailable(err)) throw err;
+      return adminUnavailable(c);
+    }
+  });
+}
+
 export function buildAdminApp(admit: MiddlewareHandler<Vars>) {
   const admin = new Hono<Vars>();
   // Control-token holders only: no session lookup, role admission or writes.
@@ -372,37 +408,7 @@ export function buildAdminApp(admit: MiddlewareHandler<Vars>) {
       "admin.events.legacy-edit",
     ),
   );
-  admin.get("/featured-contents", (c) =>
-    legacyRedirect(c, "/admin/featured", "featured_contents", "admin.featured.legacy-index"),
-  );
-  admin.get("/featured-contents/create", (c) =>
-    legacyRedirect(c, "/admin/featured/new", "featured_contents", "admin.featured.legacy-create"),
-  );
-  admin.get("/featured-contents/:id/edit", async (c) => {
-    declareAccess(c, {
-      resource: "featured_contents",
-      action: "view",
-      route: "admin.featured.legacy-edit",
-    });
-    const legacyId = c.req.param("id");
-    if (!/^[1-9]\d*$/.test(legacyId)) return featuredNotFound(c);
-    try {
-      const db = await dbOr503(c);
-      if (!db) return adminUnavailable(c);
-      const id = await getFeaturedIdByLegacyId(db, legacyId);
-      if (id === null) return featuredNotFound(c);
-      return legacyRedirect(
-        c,
-        `/admin/featured/${id}`,
-        "featured_contents",
-        "admin.featured.legacy-edit",
-      );
-    } catch (err) {
-      // The guard's read boundary renders the shared outage envelope.
-      if (isDatabaseUnavailable(err)) throw err;
-      return adminUnavailable(c);
-    }
-  });
+  mountFeaturedLegacyRoutes(admin);
 
   admin.get("/", async (c) => {
     declareAccess(c, { resource: "dashboard", action: "view", route: "admin.dashboard" });

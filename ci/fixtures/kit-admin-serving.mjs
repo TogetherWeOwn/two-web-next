@@ -590,6 +590,139 @@ export async function assertKitAttendanceDisabled(off, databaseUrl) {
   console.log("PASS built Kit Worker keeps attendance disabled for a moderator by default");
 }
 
+export async function assertFeaturedLegacyRedirects({ on, off, hono, databaseUrl }) {
+  const actor = 900000000000000000n + BigInt(`0x${randomBytes(7).toString("hex")}`);
+  const moderatorId = String(actor);
+  const memberId = String(actor + 1n);
+  const legacyId = moderatorId;
+  const root = "/admin/featured-contents";
+  const edit = (id) => `${root}/${id}/edit`;
+  const query = "?next=%2Felsewhere&filter=drop&filter=again";
+  const sql = postgres(databaseUrl, { max: 1 });
+  try {
+    const member = await session(sql, memberId, false);
+    const [{ id }] = await sql`
+      insert into featured_contents (legacy_id, title, created_by)
+      values (${legacyId}, 'Synthetic imported bookmark', ${moderatorId}) returning id
+    `;
+    const targets = [hono, off, on];
+    const bearers = new Map();
+    for (const target of targets) {
+      let moderator = await session(sql, moderatorId, true);
+      const owned = target === on;
+      const destination = `/admin/featured/${id}`;
+      for (const [path, location] of [
+        [root, "/admin/featured"],
+        [`${root}/create`, "/admin/featured/new"],
+        [edit(legacyId), destination],
+      ]) {
+        const requested = path + query;
+        for (const method of ["GET", "HEAD"]) {
+          const guest = await visit(target, requested, 302, { method, owned });
+          assert.equal(guest.headers.get("location"), "/auth/discord");
+          assert.ok(
+            guest.headers
+              .getSetCookie()[0]
+              ?.startsWith(`__Host-two_login_intended=${encodeURIComponent(requested)}.`),
+            "guest login preserves the path and query",
+          );
+          const denied = await visit(target, requested, 403, {
+            method,
+            owned,
+            headers: { ...html, cookie: member },
+          });
+          assert.equal(denied.headers.get("location"), null);
+          assert.equal(denied.headers.getSetCookie().length, 0);
+        }
+        const head = await visit(target, requested, 301, {
+          method: "HEAD",
+          owned,
+          headers: { cookie: moderator },
+        });
+        assert.equal(head.headers.get("location"), location);
+        assert.equal(head.headers.getSetCookie().length, 0);
+        const get = await visit(target, requested, 301, { owned, headers: { cookie: moderator } });
+        assert.equal(get.headers.get("location"), location);
+        assert.equal(get.text, "");
+        assert.match(get.headers.get("content-type") ?? "", /^text\/plain\b/);
+        moderator = renewedModerator(get.headers);
+        for (const method of ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
+          const refusal = await visit(target, requested, 403, {
+            method,
+            owned: false,
+            headers: { cookie: member },
+          });
+          assert.equal(refusal.headers.get("location"), null);
+          assert.equal(refusal.headers.get("allow"), null);
+        }
+        const post = await visit(target, requested, 404, {
+          method: "POST",
+          owned: false,
+          headers: { cookie: moderator },
+        });
+        assert.equal(post.headers.get("location"), null);
+        assert.equal(post.headers.get("allow"), null);
+      }
+      for (const invalid of [id, "0", `0${legacyId}`, "create", "unmapped"]) {
+        const missing = await visit(target, edit(invalid), 404, {
+          owned,
+          headers: { cookie: moderator },
+        });
+        assert.equal(missing.headers.get("location"), null);
+        assert.match(missing.text, /Featured content not found/);
+        moderator = renewedModerator(missing.headers);
+      }
+      const encoded = await visit(target, edit(`%39${legacyId.slice(1)}`) + query, 301, {
+        owned: false,
+        headers: { cookie: moderator },
+      });
+      assert.equal(encoded.headers.get("location"), destination);
+      moderator = renewedModerator(encoded.headers);
+      for (const invalid of [`%2539${legacyId.slice(1)}`, "%2F", "%ZZ"]) {
+        const missing = await visit(target, edit(invalid), 404, {
+          owned: false,
+          headers: { cookie: moderator },
+        });
+        assert.equal(missing.headers.get("location"), null);
+        moderator = renewedModerator(missing.headers);
+      }
+      for (const path of [`${root}/`, `${root}/create/__data.json`, `${edit(legacyId)}/extra`]) {
+        const fallback = await visit(target, path, 302, { owned: false });
+        assert.equal(fallback.headers.get("location"), "/auth/discord");
+      }
+      bearers.set(target, moderator);
+    }
+
+    // The per-request statement timeout turns a lookup blocked on the
+    // disposable table lock into the classified outage response.
+    await sql.begin(async (tx) => {
+      await tx`lock table featured_contents in access exclusive mode`;
+      await Promise.all(
+        targets.map(async (target) => {
+          const outage = await visit(target, edit(legacyId), 503, {
+            owned: target === on,
+            headers: { accept: "application/json", cookie: bearers.get(target) },
+          });
+          assert.equal(outage.headers.get("location"), null);
+          assert.equal(outage.headers.get("retry-after"), "60");
+          const body = JSON.parse(outage.text);
+          assert.equal(body.error, "db_unavailable");
+          assert.equal(body.request_id, outage.headers.get("x-request-id"));
+          renewedModerator(outage.headers);
+        }),
+      );
+    });
+  } finally {
+    try {
+      await sql`delete from featured_contents where created_by = ${moderatorId}`;
+      await sql`delete from web_sessions where user_id in (${moderatorId}, ${memberId})`;
+    } finally {
+      await sql.end({ timeout: 1 });
+    }
+  }
+  console.log("PASS installed Worker legacy featured redirects with Kit ownership off and on");
+}
+
 export async function assertStagedAdminServing({ origin, owner, secrets, enabled }) {
   const worker = { name: "isolated admin cutover", origin };
   const actor = 900000000000000000n + BigInt(`0x${randomBytes(7).toString("hex")}`);
