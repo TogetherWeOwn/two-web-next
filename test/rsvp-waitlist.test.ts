@@ -10,10 +10,13 @@ import { eventSaveBaseline } from "../src/admin/save-baseline";
 import { events, rsvps } from "../src/db/admin-schema";
 import { users } from "../src/db/schema";
 import type { Env } from "../src/env";
+import { fetchKitEventWrite } from "../src/events/kit-event-write-fetch";
+import { KIT_EVENT_WRITE_ROUTES } from "../src/events/kit-event-write-routes";
 import { uniqueKey } from "../src/jobs/sync-event";
 import type { QueueMessage } from "../src/jobs/types";
 import { withdrawRsvp, writeRsvp } from "../src/events/rsvp";
 import { CAPACITY_BELOW_GOING, waitlistPosition } from "../src/events/waitlist";
+import { dispatchHookRequest } from "../src/route-ownership";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import {
   createMemberDataFixture,
@@ -303,6 +306,56 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
       await client`select count(*)::int as n from web_throttle_hits where bucket = 'rsvp-write:waiter'`;
     expect(hit!.n).toBe(2);
     await assertTracked([ev.eventKey], "0123456789abcdef-LHR"); // Re-answers in one burst share a tracked carrier.
+  });
+
+  it("preserves the same waitlisted RSVP when event writes roll back from Kit to Hono", async () => {
+    const ev = await fullWithLine(1);
+    const userId = PAGE_MEMBER_KEYS[0]!;
+    const cookie = await cookieFor(userId);
+    const detailPath = `/events/${ev.eventKey}`;
+    const rsvpPath = `${detailPath}/rsvp`;
+    const send = (path: string, routeId: string, flag: "true" | "false", status?: string) => {
+      const url = new URL(path, APP_URL);
+      const request = new Request(url, {
+        method: status === undefined ? "GET" : "PUT",
+        headers: { cookie, origin: APP_URL, "content-type": "application/json" },
+        body: status === undefined ? undefined : JSON.stringify({ status }),
+      });
+      return dispatchHookRequest(
+        { request, url, route: { id: routeId } },
+        {
+          appUrl: APP_URL,
+          apiFamilies: [{ flag, routes: KIT_EVENT_WRITE_ROUTES }],
+          honoFetch: async (input) => app.request(input, undefined, env),
+          resolve: ({ request, locals }) =>
+            fetchKitEventWrite(request, env, (locals as { requestId: string }).requestId),
+        },
+      );
+    };
+
+    const joined = await send(rsvpPath, "/events/[key]/rsvp", "true", "going");
+    expect(joined.headers.get("x-two-renderer")).toBe("kit");
+    expect(joined.status).toBe(201);
+    expect(await answer(joined)).toMatchObject({ status: "waitlisted", waitlist_position: 2 });
+
+    const detail = await send(detailPath, "/events/[key]", "false");
+    expect(detail.headers.get("x-two-renderer")).toBeNull();
+    expect(detail.status).toBe(200);
+    expect(await answer(detail)).toMatchObject({ event_key: ev.eventKey, waitlist_position: 2 });
+    const committed = await rows(ev.id);
+    expect(committed.filter((row) => row.userId === userId)).toEqual([
+      expect.objectContaining({ status: "waitlisted", syncedToDiscordAt: null }),
+    ]);
+
+    // Pause the synthetic event so an otherwise valid replacement is refused.
+    await db.update(events).set({ rsvpOpen: false }).where(eq(events.id, ev.id));
+    const refused = await send(rsvpPath, "/events/[key]/rsvp", "false", "maybe");
+    expect(refused.headers.get("x-two-renderer")).toBeNull();
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({ reason: "event_not_open", why: "paused" });
+    expect(await rows(ev.id)).toEqual(committed);
+    expect(await waitlistPosition(db, ev.id, userId)).toBe(2);
+    await assertTracked([ev.eventKey], joined.headers.get("x-request-id")!);
   });
 
   // Legacy WaitlistTest.php:322-351 at 2eaefb8d: the first five rows are its
