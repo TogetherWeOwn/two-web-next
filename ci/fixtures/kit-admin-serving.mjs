@@ -4,8 +4,10 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { generateSignedCookie } from "hono/cookie";
+import { parse } from "parse5";
 import postgres from "postgres";
 import { newEventKey } from "../../src/admin/validation-event-keys.ts";
+import { attr, elements, submittedFields } from "../../test/helpers/kit-edit-controls.ts";
 import { EMBER_CUTOVER_VARS } from "../kit-cutover-evidence.mjs";
 import { FIXTURE_SECRETS, SESSION_COOKIE } from "../parity/fixture.mjs";
 
@@ -718,40 +720,68 @@ async function assertAdminPublish({ kit, off, hono, sql, moderatorId, member }) 
   console.log("PASS installed Worker admin publish admission, transitions, audit, and write-back");
 }
 
+function eventEditFields(html, path) {
+  const forms = elements(parse(html)).filter(
+    (el) => el.tagName === "form" && attr(el, "data-event-editor") !== undefined,
+  );
+  assert.equal(forms.length, 1, "one event editor form");
+  assert.equal(attr(forms[0], "method"), "post");
+  assert.equal(attr(forms[0], "action"), path);
+  return submittedFields(forms[0]);
+}
+
 async function assertEventEditFallback({
   kit,
   off,
   sql,
   eventPath,
   editHtml,
-  fields,
   moderatorId,
   moderatorCookie,
   member,
 }) {
   const key = eventPath.split("/").at(-1);
-  const baseline = editHtml.match(/name="saved_baseline" value="([0-9a-f]{64})"/)?.[1];
-  assert.ok(baseline, "the Kit event editor renders the saved baseline");
+  const fields = eventEditFields(editHtml, eventPath);
+  const baseline = fields.saved_baseline;
+  assert.match(baseline ?? "", /^[0-9a-f]{64}$/, "the Kit editor renders a saved baseline");
   const moderator = { ...html, cookie: moderatorCookie };
   const title = "Fixture admin draft edited on Kit";
-  const body = new URLSearchParams({ ...fields, title, saved_baseline: baseline });
+  const body = new URLSearchParams({ ...fields, title });
   const post = { method: "POST", body };
 
   async function snapshot() {
-    const [event] = await sql`
-      select title, description, status, starts_at, ends_at, timezone, updated_at,
+    const series = await sql`
+      select id, event_key, title, description, status, starts_at, ends_at, timezone, updated_at,
         recurrence_frequency, recurrence_count, recurrence_ends_on, recurrence_index, parent_event_id
-      from events where event_key = ${key}
+      from events
+      where event_key = ${key} or parent_event_id = (select id from events where event_key = ${key})
+      order by recurrence_index
     `;
+    const event = series.find((row) => row.event_key === key);
     assert.ok(event, "the synthetic event exists");
+    const occurrences = series.filter((row) => row !== event);
     const activity = await sql`
       select id, description, causer_id, properties from activity_log
-      where subject_type = 'Event' and subject_id = ${key} order by id
+      where subject_type = 'Event' and subject_id in ${sql(series.map((row) => row.event_key))}
+      order by id
     `;
-    return { event, activity: [...activity] };
+    return { event, occurrences, activity: [...activity] };
   }
 
   const before = await snapshot();
+  assert.equal(fields.title, before.event.title, "the Kit editor renders the original title");
+  assert.equal(before.event.recurrence_frequency, "weekly");
+  assert.equal(before.event.recurrence_count, 2);
+  assert.equal(before.event.recurrence_ends_on?.toISOString().slice(0, 10), "2099-10-08");
+  assert.equal(before.event.recurrence_index, 1);
+  assert.deepEqual(
+    before.occurrences.map(({ recurrence_index, parent_event_id }) => [
+      recurrence_index,
+      parent_event_id,
+    ]),
+    [[2, before.event.id]],
+    "one future occurrence belongs to the event",
+  );
   await visit(kit, eventPath, 403, { ...post, headers: { ...html, cookie: member } });
   assert.deepEqual(await snapshot(), before, "a member cannot edit the event or append audit");
 
@@ -766,6 +796,7 @@ async function assertEventEditFallback({
     { ...previousEvent, title },
     "the edit preserves schedule and recurrence",
   );
+  assert.deepEqual(committed.occurrences, before.occurrences, "the edit preserves the occurrence");
   assert.equal(committed.activity.length, before.activity.length + 1, "one audit row for the edit");
   assert.deepEqual(committed.activity.slice(0, -1), before.activity);
   const receipt = committed.activity.at(-1);
@@ -774,9 +805,10 @@ async function assertEventEditFallback({
   assert.deepEqual(receipt.properties.title, { before: before.event.title, after: title });
 
   const fallback = await visit(off, eventPath, 200, { owned: false, headers: moderator });
-  assert.ok(fallback.text.includes(`value="${title}"`), "Hono renders the committed title");
-  const current = fallback.text.match(/name="saved_baseline" value="([0-9a-f]{64})"/)?.[1];
-  assert.ok(current && current !== baseline, "Hono renders a fresh baseline after the Kit edit");
+  const current = eventEditFields(fallback.text, eventPath);
+  assert.equal(current.title, title, "Hono renders the committed title in the edit control");
+  assert.match(current.saved_baseline ?? "", /^[0-9a-f]{64}$/);
+  assert.notEqual(current.saved_baseline, baseline, "Hono renders a fresh baseline after the edit");
 
   const unsavedTitle = "Keep this unsaved event title";
   const unsavedDescription = "Keep these unsaved event notes";
@@ -794,12 +826,10 @@ async function assertEventEditFallback({
   assert.equal(stale.headers.get("location"), null);
   assert.match(stale.text, /data-testid="stale-save"/);
   assert.match(stale.text, /data-event-draft=""/);
-  assert.ok(stale.text.includes(`value="${unsavedTitle}"`));
-  const description = stale.text.match(
-    /<textarea\b[^>]*name="description"[^>]*>([^<]*)<\/textarea>/,
-  )?.[1];
-  assert.equal(description, unsavedDescription);
-  assert.ok(stale.text.includes(`name="saved_baseline" value="${baseline}"`));
+  const retained = eventEditFields(stale.text, eventPath);
+  assert.equal(retained.title, unsavedTitle);
+  assert.equal(retained.description, unsavedDescription);
+  assert.equal(retained.saved_baseline, baseline);
   assert.deepEqual(await snapshot(), committed, "the stale save leaves the event and audit intact");
 }
 
@@ -906,15 +936,18 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
     assert.match(direct.text, /Give the event a title\./);
     assert.equal(invalid.headers.get("content-type"), direct.headers.get("content-type"));
 
-    const draftValues = {
-      title: "Fixture admin draft",
-      starts_at: "2099-10-01T12:00",
-      ends_at: "2099-10-01T13:00",
-      timezone: "UTC",
-    };
     const draft = await visit(kit, "/admin/events", 303, {
       ...form,
-      body: new URLSearchParams(draftValues),
+      body: new URLSearchParams({
+        title: "Fixture admin draft",
+        description: "Fixture draft notes\nSecond line & example",
+        starts_at: "2099-10-01T12:00",
+        ends_at: "2099-10-01T13:00",
+        timezone: "UTC",
+        recurrence_frequency: "weekly",
+        recurrence_count: "2",
+        recurrence_ends_on: "2099-10-08",
+      }),
     });
     const eventPath = draft.headers.get("location")?.split("?")[0];
     assert.match(eventPath ?? "", /^\/admin\/events\/[0-9A-Z]{26}$/);
@@ -965,8 +998,8 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
       await sql`select count(*)::int from events where created_by = ${moderatorId}`;
     const [{ count: writes }] =
       await sql`select count(*)::int from activity_log where causer_id = ${moderatorId}`;
-    assert.equal(events, 2, "event create and duplicate each persist once");
-    assert.equal(writes, 6, "six accepted actions each audit once; refusals do not write");
+    assert.equal(events, 3, "the series has two occurrences and duplicate adds one draft");
+    assert.equal(writes, 7, "accepted mutations audit each affected row once");
 
     // A seeded key makes the parameter route observable next to the static
     // form and exact alias. Both installed modes keep the other forms in Kit.
@@ -1068,7 +1101,6 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
       sql,
       eventPath,
       editHtml: kitEdit,
-      fields: draftValues,
       moderatorId,
       moderatorCookie: moderator,
       member,
