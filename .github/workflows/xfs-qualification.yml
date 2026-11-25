@@ -140,14 +140,6 @@ jobs:
             | tee "$RUNNER_TEMP/kit-installed-output.log" || result=$?
           grep -Fx 'Fixture mounts and backing file removed' "$RUNNER_TEMP/kit-installed-output.log"
           exit "$result"
-      - name: Retain installed Kit public voice screenshots
-        if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && steps.installed.outcome != 'skipped' }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: kit-public-voice-${{ env.EXPECTED_HEAD_SHA }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/kit-public-voice/
-          if-no-files-found: ${{ steps.installed.outcome == 'success' && 'error' || 'warn' }}
-          retention-days: 14
       - name: Build the Kit cutover server readiness profile
         run: npm run build --prefix web
         env:
@@ -197,6 +189,15 @@ jobs:
           docker stop "$POSTGRES_CONTAINER"
           test "$(docker inspect --format '{{.State.Running}}' "$POSTGRES_CONTAINER")" = false
           printf '%s\n' 'Disposable Postgres stopped; the runner removes job services at teardown'
+      # Keep browser artifact I/O off the path to parity and service teardown.
+      - name: Retain installed Kit public voice screenshots
+        if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && steps.installed.outcome != 'skipped' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-public-voice-${{ env.EXPECTED_HEAD_SHA }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/kit-public-voice/
+          if-no-files-found: ${{ steps.installed.outcome == 'success' && 'error' || 'warn' }}
+          retention-days: 14
 
   isolated-cutover:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.qualify_cutover

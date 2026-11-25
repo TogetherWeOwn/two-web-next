@@ -226,7 +226,7 @@ jobs:
           echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $lint_dir/actionlint.tgz" | sha256sum -c -
           tar -xzf "$lint_dir/actionlint.tgz" -C "$lint_dir" actionlint
           export ACTIONLINT="$lint_dir/actionlint"
-          node --test ci/workflow-lint.test.mjs ci/actionlint-wiring.test.mjs
+          node --test ci/workflow-lint.test.mjs ci/actionlint-wiring.test.mjs ci/xfs-qualification-workflow.test.mjs
           node ci/workflow-lint.mjs "$ACTIONLINT"
       - name: Verify stock actionlint inventory
         if: github.event_name == 'pull_request'
