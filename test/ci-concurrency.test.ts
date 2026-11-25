@@ -11,9 +11,8 @@ const workflows = readdirSync(dir)
   .filter((name) => name.endsWith(".yml"))
   .map((name) => ({ name, text: readFileSync(join(dir, name), "utf8") }));
 const triggers = (text: string) => text.split(/\non:\n/)[1]?.split(/\n\S/)[0] ?? "";
-// ci.yml alone exempts main from cancellation (a cancelled main run cannot
-// trigger the staging deploy); its concurrency group stays per ref so main runs
-// finish in push order and an older SHA never deploys over a newer one.
+// ci.yml exempts main from cancellation and gives each push its own slot.
+// A cancelled main run cannot trigger the staging deploy.
 const cancels = (text: string) =>
   /\nconcurrency:\n  group: [^\n]+\n  cancel-in-progress: (true|\$\{\{ github\.ref != 'refs\/heads\/main' && github\.event_name != 'merge_group' \}\}|\$\{\{ github\.event_name == 'pull_request' \}\})\n/.test(
     text,
@@ -105,8 +104,8 @@ describe("workflow concurrency", () => {
     // A pending nightly in main's group would cancel a pending push run, and
     // deploy.yml only deploys push-event runs, so staging would miss that SHA.
     expect(triggers(ci)).toMatch(/\n  schedule:\n    - cron: /);
-    expect(ci).toMatch(
-      /\n  group: \$\{\{ github\.workflow \}\}-\$\{\{ github\.event\.pull_request\.number \|\| \(github\.event_name == 'schedule' && 'nightly'\) \|\| github\.ref \}\}\n/,
+    expect(ci).toContain(
+      "group: ${{ github.workflow }}-${{ github.event.pull_request.number || (github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha) || (github.event_name == 'schedule' && 'nightly') || github.ref }}",
     );
   });
 
