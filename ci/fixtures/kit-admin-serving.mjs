@@ -164,12 +164,11 @@ export async function assertKitQueuePreviewServing({
     return contractHeaders.map((name) => result.headers.get(name));
   }
 
-  let failureId;
   try {
     const [failure] = await sql`insert into queue_failed_jobs (job_id, kind, key, reason)
       values (${jobId}, 'sync-event', ${sourceKey}, 'synthetic private diagnostics')
       returning id::text, failed_at`;
-    failureId = failure.id;
+    const failureId = failure.id;
     const path = `/admin/queue/failed/${failureId}/preview`;
     const targets = {};
     for (const [name, entrypoint] of [
@@ -353,8 +352,8 @@ export async function assertKitQueuePreviewServing({
     );
   } finally {
     try {
-      await sql`delete from activity_log where subject_type = 'queue_failed_jobs'
-        and subject_id = ${failureId ?? ""} and causer_id = ${operatorId}`;
+      // The audit table is append-only. Its synthetic receipts leave with the
+      // job's disposable database, as do the other installed admin receipts.
       await sql`delete from queue_failed_jobs where job_id = ${jobId}`;
       await sql`delete from web_sessions where user_id in (${operatorId}, ${otherModerator}, ${member})`;
     } finally {
