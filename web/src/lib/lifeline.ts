@@ -17,7 +17,7 @@ export interface LifelineFacts {
   viewerRsvp?: EventFact;
   terminalSiteReminder?: EventFact & { sent: number; unavailable: number };
   roomSnapshot?: { observedAt: number; fetchFailed: boolean; eventKeys: readonly string[] };
-  echo?: EventFact;
+  echo?: EventFact & { attendance?: { attendedCount: number; peakConcurrent: number } };
   cancelled?: EventFact & { reason?: string };
 }
 
@@ -98,8 +98,13 @@ export function composeLifeline(
     const state = now >= windowStart ? "current" : "planned";
     add("counting", "Bot", "Bot counts who’s in", state, windowStart);
   }
-  if (echo && matches(echo)) add("echo", "Site", "Echo frozen", "recorded", echo.at);
-  else plan("echo", "Site", "Echo freezes", windowEnd + grace);
+  if (echo && matches(echo)) {
+    const { attendance } = echo;
+    const detail = attendance
+      ? `${attendance.attendedCount} attended · peak ${attendance.peakConcurrent} in voice`
+      : undefined;
+    add("echo", "Site", "Echo frozen", "recorded", echo.at, detail);
+  } else plan("echo", "Site", "Echo freezes", windowEnd + grace);
 
   // Real timestamps can move a late fact past another step. Place an untimed
   // seat plan alongside the reminder, without giving it a displayed timestamp.
