@@ -1,13 +1,15 @@
 import type postgres from "postgres";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { pgReconciliationReads } from "../src/admin/reconciliation-reads";
 import {
   reconciliationService,
   reconciliationServiceFor,
 } from "../src/admin/reconciliation-service";
 import { CALL_INTERNAL_ACTION } from "../src/jobs/constants";
-import { pgPruneStores, pgSingleFlight, pgUniqueLock } from "../src/jobs/postgres";
+import { consume } from "../src/jobs/consumer";
+import { pgPruneStores, pgQueueLedger, pgSingleFlight, pgUniqueLock } from "../src/jobs/postgres";
 import { pgReconciliationStore } from "../src/jobs/reconciliation";
+import type { BotClient, BotFailure, EventStore } from "../src/jobs/types";
 import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
 import { registerJobsServerTimeoutsAcceptance } from "./helpers/jobs-server-timeouts-acceptance";
 import { env } from "./helpers/member-data";
@@ -185,6 +187,44 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
       await sql`select state from announcement_send_claims
       where idempotency_key in (${sending}, ${retryable}) order by state`,
     ).toEqual([{ state: "retryable" }, { state: "sending" }]);
+  });
+
+  it("closes the original claim during consumer reconciliation and acks its duplicate", async () => {
+    const key = crypto.randomUUID();
+    const body = {
+      kind: "announcement",
+      idempotencyKey: key,
+      action: { channelKey: "fixture-channel", body: "synthetic" },
+    };
+    const timestamp = new Date();
+    const postAnnouncement = vi.fn(
+      async (): Promise<BotFailure> => ({
+        ok: false,
+        code: "needs_reconciliation",
+        status: 409,
+        retryable: true,
+        retryAfterSeconds: null,
+        requestId: null,
+        message: "synthetic",
+      }),
+    );
+    const deps = {
+      bot: { postAnnouncement } as unknown as BotClient,
+      events: {} as EventStore,
+      lock: pgUniqueLock(sql),
+      ledger: pgQueueLedger(sql),
+      announcementClaims: pgReconciliationStore(sql),
+    };
+    for (const attempts of [1, 2]) {
+      const message = { body, attempts, timestamp, ack: vi.fn(), retry: vi.fn() };
+      await consume({ messages: [message] }, deps);
+      expect(message.ack).toHaveBeenCalledOnce();
+      expect(message.retry).not.toHaveBeenCalled();
+    }
+    expect(postAnnouncement).toHaveBeenCalledExactlyOnceWith(body.action, key);
+    expect(
+      await sql`select state from announcement_send_claims where idempotency_key = ${key}`,
+    ).toEqual([{ state: "closed" }]);
   });
 
   it("never admits a pruned original carrier after the fall clock change", async () => {
