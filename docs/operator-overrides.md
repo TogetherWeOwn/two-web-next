@@ -22,8 +22,7 @@ installed-Worker fixture enables it on loopback and checks that bearer
 requests bypass the browser session gate. The Hono admin guard continues
 to handle legacy redirects and the queue tools keep their existing admission.
 
-Credential binding and activation follow the protected release and secret
-procedures.
+Credential binding and activation follow the protected release and secret procedures.
 Do not paste the token into a URL, page, screenshot, log or shell history;
 use an approved header-injection client with in-memory credentials. Never
 use a QA token as an operator credential. An ordinary navigation/reload

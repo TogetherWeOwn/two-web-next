@@ -117,11 +117,8 @@ async function main() {
         process.env.PREV_VERSION === process.env.CUTOVER_UNDO_TARGET,
       "cutover version pair changed",
     );
-    await readReady(PRODUCTION_ORIGIN, prefixes, {
-      version,
-      commit: pin.sourceSha,
-      ...(pin.mode === "admin" ? { state: "1037" } : {}),
-    });
+    const state = pin.mode === "admin" ? "1037" : undefined;
+    await readReady(PRODUCTION_ORIGIN, prefixes, { version, commit: pin.sourceSha, state });
     if (pin.mode === "admin") await verifyOperatorDenial(PRODUCTION_ORIGIN);
     return;
   }

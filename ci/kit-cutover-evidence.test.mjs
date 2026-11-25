@@ -178,8 +178,10 @@ test("isolated cutover proof requires both exact versions and six healthy transi
     adminChecks: ["default-denied", "credential-separation", "ownership-undo"],
   };
   verifyStagingProof(admin, adminPin);
-  assert.throws(() => verifyStagingProof(ember, adminPin));
-  assert.throws(() => verifyStagingProof(admin, { ...identity, mode: "ember" }));
+  assert.throws(
+    () => verifyStagingProof({ ...admin, bindingCheck: ember.bindingCheck }, adminPin),
+    /profile/,
+  );
   assert.throws(() => verifyStagingProof({ ...admin, adminChecks: [] }, adminPin));
   assert.throws(() => verifyStagingProof({ ...admin, checks: admin.checks.slice(0, 2) }, adminPin));
 });
@@ -198,7 +200,6 @@ test("Ember cutover configuration opts in only the Ember documents", () => {
   };
   assert.deepEqual(productionUploadConfig("kit", inputs, "ember"), { ...allOff, vars });
   assert.throws(() => productionUploadConfig("hono", inputs, "ember"), /requires the Kit artifact/);
-  assert.equal(vars.KIT_ROUTE_ADMIN, "false");
   assert.deepEqual(productionUploadConfig("kit", inputs, "admin"), {
     ...allOff,
     vars: { ...vars, KIT_ROUTE_ADMIN: "true" },

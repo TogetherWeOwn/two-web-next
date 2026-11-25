@@ -1126,6 +1126,7 @@ test("Ember cutover smoke requires Kit documents and Hono fallback", async (t) =
     `<link rel="canonical" href="${origin}/events"><section data-island="events-calendar">${["head", "subscribe", "actions", "miss", "content"].map((zone) => `<div data-cal-zone="${zone}"></div>`).join("")}</section>`;
   const fragments = { "/events?view=calendar": [200, "text/html", fragment] };
   let missingAttribute = "";
+  let admin = false;
   const render = (path, response) => {
     if (["/", "/events", "/events?view=calendar", "/join"].includes(path))
       response.headers["x-two-renderer"] = "kit";
@@ -1139,7 +1140,8 @@ test("Ember cutover smoke requires Kit documents and Hono fallback", async (t) =
       delete response.headers["x-two-renderer"];
       response.body = response.body.replace(missingAttribute, "");
     }
-    if (missingAttribute && path === "/admin") response.headers["x-two-renderer"] = "kit";
+    if ((admin || missingAttribute) && path === "/admin")
+      response.headers["x-two-renderer"] = "kit";
   };
   const good = await stub(t, render, fragments);
   const override = 'two-web-next-production="22345678-1234-1234-1234-123456789abc"';
@@ -1159,6 +1161,14 @@ test("Ember cutover smoke requires Kit documents and Hono fallback", async (t) =
     assert.match(result.output, /calendar canonical and swap zones; actual invalid fragment/);
     assert.match(result.output, /FAIL \/admin: expected no x-two-renderer/);
   }
+  missingAttribute = "";
+  const adminOptions = { ...options, expectedCutoverRenderer: "admin" };
+  assert.match(
+    (await run(good.url, adminOptions)).output,
+    /FAIL \/admin: expected x-two-renderer: kit/,
+  );
+  admin = true;
+  assert.equal((await run(good.url, adminOptions)).ok, true);
 });
 
 test("CLI enforces the selected staging Join renderer and its public action", async (t) => {

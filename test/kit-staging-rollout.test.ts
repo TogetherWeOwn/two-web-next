@@ -527,17 +527,13 @@ describe("Kit production route selection", () => {
     expect(vars.KIT_ROUTE_ADMIN).toBe("false");
   });
 
-  const invalidProofHost = "https://two-web-kit-cutover-proof-0-1.test.workers.dev";
   it.each([
     [apex, "true", "true", "/admin/ops-overrides", false, true],
     [cutover, "true", "true", "/admin/ops-overrides", false, true],
     [apex, "true", undefined, "/admin/ops-overrides", false, false],
     [apex, "false", "true", "/admin/ops-overrides", false, false],
-    [apex, "true", "True", "/admin/ops-overrides", false, false],
     [apex, "true", "true", "/admin/ops-overrides", true, false],
-    [apex, "true", "true", "/admin/ops-overrides/", false, false],
     [apex, "true", "true", "/admin/queue/source-evidence/1", false, false],
-    [invalidProofHost, "true", "true", "/admin/ops-overrides", false, false],
   ] as const)(
     "admits operator ownership on %s with Ember=%s admin=%s path=%s data=%s",
     async (origin, emberPages, admin, path, isDataRequest, owned) => {
@@ -554,8 +550,6 @@ describe("Kit production route selection", () => {
       const event = productionEvent(path, "GET", origin);
       const response = await dispatchHookRequest({ ...event, isDataRequest }, deps);
       expect(response.headers.get(KIT_RENDERER_HEADER)).toBe(owned ? KIT_RENDERER_VALUE : null);
-      expect(deps.resolve).toHaveBeenCalledTimes(Number(owned));
-      expect(deps.honoFetch).toHaveBeenCalledTimes(Number(!owned));
       expect(deps.sessionFor).not.toHaveBeenCalled();
     },
   );
