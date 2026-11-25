@@ -112,6 +112,19 @@ async function verifyAgentEvents(inner, { APP_URL }, ctx) {
         await alias.body?.cancel();
       }
 
+      // Postgres opens lazily. An overlong bearer is refused before any query,
+      // but the route owns this client and must schedule its close via waitUntil.
+      checkDenial(
+        await json(flag, 401, {
+          body: payload,
+          headers: { authorization: `Bearer ${"x".repeat(513)}` },
+          overrides: {
+            AGENT_DB: { connectionString: "postgres://fixture@127.0.0.1:1/fixture" },
+          },
+        }),
+        "unauthenticated",
+      );
+
       const db = makeFakeAgentDb();
       await db.addGrant(agentCredential, {
         id: grantId,

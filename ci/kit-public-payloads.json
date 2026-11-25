@@ -432,6 +432,11 @@
       "reason": "Native POST revokes member sessions and clears session cookies. The installed Worker auth fixture covers this endpoint without a Kit data response."
     },
     {
+      "route": "POST /api/agent-events",
+      "binding": "web/src/routes/api/agent-events/+server.ts",
+      "reason": "Bearer-authenticated machine ingress returns JSON. The installed Worker agent events fixture checks admission and response parity without a Kit data payload."
+    },
+    {
       "route": "GET /up",
       "binding": "web/src/routes/up/+server.ts",
       "reason": "Operational JSON readiness with aggregate counts and migration timestamps. The installed Worker ops fixture checks healthy and unavailable responses without a Kit data payload."
