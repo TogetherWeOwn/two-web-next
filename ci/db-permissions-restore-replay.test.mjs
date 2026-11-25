@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   copyFileSync,
@@ -12,6 +13,7 @@ import {
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { readMigrationFiles } from "drizzle-orm/migrator";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { build } from "esbuild";
@@ -23,6 +25,7 @@ import {
 import { runRepair } from "./db-permissions-repair.mjs";
 import { runReadinessProjection } from "./db-readiness-projection.mjs";
 import { runExecutorAuthority } from "./db-repair-executor.mjs";
+import { planServingIsolation, runServingIsolation } from "./db-serving-ledger-isolation.mjs";
 import {
   bootstrap,
   fixtureCluster,
@@ -56,6 +59,7 @@ import {
 } from "./fixtures/web-serving-isolation.mjs";
 import { assertRuntimeDefaultAcl } from "./migration-runtime-rights.mjs";
 import { readLedgerState } from "./production-deploy-gate.mjs";
+import { addedAfter1033, publicServingRights } from "./web-readiness-scoped-acl.mjs";
 
 const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
 const hash = (input) => createHash("sha256").update(input).digest("hex");
@@ -290,6 +294,120 @@ const expansion = [
   "1037_waitlist-offers",
 ];
 const expandedEnd = expansion.at(-1);
+
+// Both serving logins deliberately have the same ACLs in the same database.
+function principalFixture(owners, ledger, executor) {
+  const tx = async ([query]) => {
+    if (query.startsWith("set local ")) return [];
+    if (query.includes("pg_catalog.current_database()")) {
+      return [{ database: "postgres", authenticated: executor, effective: executor }];
+    }
+    if (query.includes("select hash, created_at from drizzle.")) return ledger;
+    if (query.startsWith("with objects as")) return owners;
+    if (query.includes("from pg_auth_members m")) {
+      return ["pg_read_all_data", "pg_write_all_data"].map((role) => ({
+        role,
+        grantor: executor,
+        admin: false,
+        inherit: true,
+        set: false,
+      }));
+    }
+    throw new Error("Unexpected serving isolation fixture query");
+  };
+  return { tx, begin: async (_, work) => work(tx), end: async () => {} };
+}
+
+test("recovered serving isolation proof is bound to its serving principal", async () => {
+  const otherLogin = "fixture_other_serving";
+  const version = "97ff7cb6-896b-4a53-9130-ee4f3f31d278";
+  const artifact = { sourceSha: "b".repeat(40), digest: "c".repeat(64) };
+  const objects = publicServingRights
+    .filter(({ name }) => !addedAfter1033.has(name))
+    .map(({ kind, name, column }) => ({ kind, name, column, owner: migrator, direct: [] }));
+  const owners = [...new Map(objects.map((row) => [JSON.stringify(row), row])).values()];
+  const { entries } = JSON.parse(read("../drizzle/meta/_journal.json"));
+  const prefixLength = entries.findIndex(({ tag }) => tag === originalEnd) + 1;
+  assert.ok(prefixLength > 0);
+  const ledger = readMigrationFiles({
+    migrationsFolder: fileURLToPath(new URL("../drizzle", import.meta.url)),
+  })
+    .slice(0, prefixLength)
+    .map(({ hash, folderMillis }) => ({ hash, created_at: folderMillis }));
+  const fixture = principalFixture(owners, ledger, migrator);
+  const capture = (login) =>
+    planServingIsolation(fixture.tx, identity(migrator), version, artifact, login);
+  const original = await capture(app);
+  const recovered = await capture(otherLogin);
+  assert.equal(recovered.before, original.before);
+  assert.equal(recovered.after, original.after);
+  assert.equal(recovered.version, original.version);
+
+  const environment = (plan) => {
+    const raw = JSON.stringify(plan);
+    return {
+      PRODUCTION_DB_ISOLATION_PLAN: raw,
+      PRODUCTION_DB_ISOLATION_PLAN_SHA256: hash(raw),
+      PRODUCTION_DB_ISOLATION_DATABASE_URL: planUrl,
+    };
+  };
+  const dataModule = (source) => `data:text/javascript,${encodeURIComponent(source)}`;
+  const driver = dataModule(
+    `export default () => (${principalFixture.toString()})(${JSON.stringify(owners)}, ${JSON.stringify(ledger)}, ${JSON.stringify(migrator)});`,
+  );
+  const preload = dataModule(`
+import { registerHooks } from "node:module";
+globalThis.fetch = () => { throw new Error("Traffic must stay offline"); };
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier === "postgres") {
+      return { url: ${JSON.stringify(driver)}, shortCircuit: true };
+    }
+    return nextResolve(specifier, context);
+  }
+});
+`);
+  const cli = (plan, expectedStatus) => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        preload,
+        fileURLToPath(new URL("./db-serving-ledger-isolation-cli.mjs", import.meta.url)),
+        "readback",
+        originalEnd,
+      ],
+      { env: environment(plan), encoding: "utf8", timeout: 10_000 },
+    );
+    assert.ifError(result.error);
+    assert.equal(result.status, expectedStatus);
+    assert.equal(result.stdout, "");
+    assert.equal(result.stderr, "");
+  };
+  cli(original, 10);
+  cli(recovered, 1);
+
+  const connect = () => fixture;
+  const fetchImpl = () => assert.fail("Traffic must stay offline");
+  assert.equal(
+    await runServingIsolation("readback", originalEnd, environment(recovered), {
+      login: otherLogin,
+      connect,
+      fetchImpl,
+    }),
+    "before",
+  );
+  for (const operation of ["readback", "forward", "undo"]) {
+    await assert.rejects(
+      runServingIsolation(operation, originalEnd, environment(original), {
+        login: otherLogin,
+        connect: () => assert.fail("Cross-principal reuse reached the database connector"),
+        fetchImpl,
+      }),
+      { message: "Serving isolation plan belongs to a different serving role" },
+    );
+  }
+});
 
 function writeWebSlice(directory, originalLength) {
   const journal = JSON.parse(read("../drizzle/meta/_journal.json"));
