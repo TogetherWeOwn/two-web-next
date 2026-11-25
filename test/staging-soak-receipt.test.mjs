@@ -1,6 +1,18 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { STAGING_ORIGIN } from "../ci/operator-constants.mjs";
+import { verifyAllocationSoak } from "../ci/production-deploy-gate.mjs";
+import {
+  assertSoakCli,
+  failedManual,
+  first,
+  fresh,
+  preRollback,
+  restored,
+  rollback,
+  soakEnv,
+  trustedReads,
+} from "./fixtures/staging-soak-http.mjs";
 import {
   captureStagingSoakReceipt,
   validateStagingSoakReceipt,
@@ -14,6 +26,7 @@ const otherSha = "b".repeat(40);
 const otherVersion = "22222222-2222-2222-2222-222222222222";
 const revision = { commit: sha, version_id: workerVersion };
 const byFloor = Date.parse(floorAt);
+test("the staging soak CLI writes allocation evidence and outputs", () => assertSoakCli());
 const graphUrl = "https://api.cloudflare.com/client/v4/graphql";
 const tag = (version = workerVersion, requests = 250, errors = 2) => ({
   dimensions: { scriptVersion: version },
@@ -171,4 +184,60 @@ test("records explicit supersession before or after the floor and preserves earl
     /Invalid staging supersession/,
   );
   assert.equal(JSON.stringify(historical), saved);
+});
+
+test("a restored Worker needs continuous soak and fresh E2E for its new allocation", async () => {
+  let deployments = () => [first];
+  const sample = ({
+    run = preRollback,
+    nowMs = byFloor,
+    analytics,
+    skipped,
+    manual = false,
+  } = {}) => {
+    const { queries, options } = mockReads({ nowMs, analytics });
+    const env = {
+      ...soakEnv(options),
+      ...(manual && { GITHUB_EVENT_NAME: "workflow_dispatch", INPUT_SHA: sha }),
+    };
+    return {
+      queries,
+      result: verifyAllocationSoak(env, {
+        now: options.now,
+        fetchImpl: trustedReads(options, { deployments, run, skipped }),
+      }),
+    };
+  };
+  const historical = await sample().result;
+  assert.equal(historical.allocationId, first.id);
+  assert.deepEqual(historical.sample, expected.sample);
+  const saved = JSON.stringify(historical);
+  await assert.rejects(sample({ run: failedManual }).result, /failed or was re-run/);
+  let reads = 0;
+  deployments = () => (reads++ === 0 ? [first] : [rollback, restored, first]);
+  const during = sample();
+  await assert.rejects(during.result, /allocation changed during sampling/);
+  assert.equal(during.queries.length, 1);
+  deployments = () => [rollback, restored, first];
+  const stale = sample({ nowMs: Date.parse("2026-01-01T10:44:00Z") });
+  await assert.rejects(stale.result, /fresh E2E is required/);
+  assert.deepEqual(stale.queries, []);
+  assert.equal(JSON.stringify(historical), saved);
+  assert.deepEqual(validateStagingSoakReceipt(evidence, expected, { nowMs: byFloor }), expected);
+
+  const floor = Date.parse("2026-01-01T11:20:00Z");
+  const manual = { run: fresh, manual: true };
+  await assert.rejects(sample({ ...manual, nowMs: floor - 1 }).result, /has not soaked 30 minutes/);
+  await assert.rejects(
+    sample({ ...manual, nowMs: floor, skipped: true }).result,
+    /Missing executed staging-journeys/,
+  );
+  await assert.rejects(sample({ run: fresh, nowMs: floor }).result, /fresh E2E is required/);
+  const ready = sample({ ...manual, nowMs: floor, analytics: graph() });
+  const receipt = await ready.result;
+  assert.equal(receipt.allocationId, restored.id);
+  assert.equal(receipt.workerVersion, workerVersion);
+  assert.equal(receipt.e2e.runId, fresh.id);
+  assert.deepEqual([receipt.sample.requests, receipt.sample.errors], [0, 0]);
+  assert.equal(ready.queries[0].variables.since, fresh.run_started_at);
 });
