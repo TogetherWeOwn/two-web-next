@@ -46,6 +46,12 @@ export default {
     url.pathname = local.pathname;
     url.search = local.search;
     const request = new Request(url, incoming);
+    if (request.headers.has("x-fixture-evidence-stream")) {
+      if (!request.body || request.headers.has("content-length")) {
+        throw new Error("Expected streamed evidence fixture upload without Content-Length");
+      }
+      request.headers.delete("x-fixture-evidence-stream");
+    }
     request.headers.delete("x-fixture-evidence-profile");
     request.headers.delete("x-fixture-evidence-owner");
     request.headers.set("host", url.host);
@@ -115,6 +121,7 @@ export async function assertKitSourceEvidence({ worker, honoWorker, scratch, dat
         method = "GET",
         headers,
         body,
+        streamed = false,
         status,
         error,
         profile = "normal",
@@ -125,7 +132,16 @@ export async function assertKitSourceEvidence({ worker, honoWorker, scratch, dat
       const requestId = "0123456789abcdef";
       const response = await fetch(`${target.origin}${url}`, {
         method,
-        body,
+        body: streamed
+          ? new ReadableStream({
+              start(controller) {
+                controller.enqueue(new Uint8Array(3 * 1024));
+                controller.enqueue(new Uint8Array(3 * 1024));
+                controller.close();
+              },
+            })
+          : body,
+        duplex: streamed ? "half" : undefined,
         redirect: "manual",
         headers: {
           accept: "text/html",
@@ -134,6 +150,7 @@ export async function assertKitSourceEvidence({ worker, honoWorker, scratch, dat
           authorization: `Bearer ${token}`,
           "x-fixture-evidence-owner": mode,
           "x-fixture-evidence-profile": profile,
+          ...(streamed ? { "x-fixture-evidence-stream": "1" } : {}),
           ...headers,
         },
         signal: AbortSignal.timeout(15_000),
@@ -289,6 +306,12 @@ export async function assertKitSourceEvidence({ worker, honoWorker, scratch, dat
       method: "POST",
       headers: { accept: "application/json" },
       body: "x".repeat(5 * 1024),
+    });
+    await compare({
+      status: 413,
+      method: "POST",
+      headers: { accept: "application/json" },
+      streamed: true,
     });
     assert.deepEqual(await Promise.all([fixtureRows(), fixtureSessions(), readAudits()]), before);
     console.log(

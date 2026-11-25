@@ -440,11 +440,11 @@ It checks that `/admin/events/new` selects the create form, a seeded `/admin/eve
 selects the edit form for a moderator and refuses a non-moderator, and the exact
 `/admin/events/create` alias still selects the Hono redirect with its query dropped.
 For API-5, it compares the disabled queue preview guard with the earlier
-source-evidence handler. The two distinct JSON refusals confirm which branch
-answered before the moderator gate. Native queue preview, source evidence and
-the legacy create redirect remain blocked on Kit ownership. The fixture covers
-their Hono fallback responses and leaves enabled queue admission and audit,
-the remaining middleware registrations, and named matcher targets open.
+source-evidence handler on Hono fallback. The two distinct JSON refusals
+confirm which branch answered before the moderator gate. This fixture also
+covers Hono fallback for the legacy create redirect and leaves enabled queue
+preview admission and audit, the remaining middleware registrations, and named
+matcher targets open.
 
 The separate [installed source-evidence fixture](../ci/fixtures/kit-source-evidence.mjs)
 adds the native comparison for `/admin/queue/source-evidence/:id`, with direct
