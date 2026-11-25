@@ -1,4 +1,9 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { STAGING_ORIGIN } from "../../ci/operator-constants.mjs";
 import fixture from "./staging-soak-receipt.json" with { type: "json" };
 
 const { sha, workerVersion, deployedAt } = fixture.receipt;
@@ -123,4 +128,64 @@ export function trustedReads({ fetchImpl }, { deployments, run, skipped = false 
     }
     return response;
   };
+}
+
+export function installSoakCliReads() {
+  Date.now = () => Date.parse(fixture.receipt.floorAt);
+  globalThis.fetch = trustedReads(
+    {
+      fetchImpl: async (input) => {
+        const url = String(input);
+        if (url === `${STAGING_ORIGIN}/version`) return Response.json({ sha, deployedAt });
+        if (url === `${STAGING_ORIGIN}/up`) {
+          return Response.json(
+            { revision: { commit: sha, version_id: workerVersion } },
+            {
+              headers: { "x-two-origin": "two-web-next", "cache-control": "no-store" },
+            },
+          );
+        }
+        assert.equal(url, "https://api.cloudflare.com/client/v4/graphql");
+        return Response.json({
+          data: { viewer: { accounts: [{ workersInvocationsAdaptive: [] }] } },
+        });
+      },
+    },
+    { deployments: () => [first], run: preRollback },
+  );
+}
+
+export function assertSoakCliWritesProof() {
+  const dir = mkdtempSync(join(tmpdir(), "staging-soak-cli-"));
+  const output = join(dir, "outputs");
+  const preload = `import { installSoakCliReads } from ${JSON.stringify(import.meta.url)}; installSoakCliReads();`;
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        `data:text/javascript,${encodeURIComponent(preload)}`,
+        "ci/production-deploy-gate.mjs",
+        "--staging-soak",
+      ],
+      {
+        cwd: new URL("../..", import.meta.url),
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          ...soakEnv({ accountId: "c".repeat(32), token: "synthetic-analytics-token" }),
+          RUNNER_TEMP: dir,
+          GITHUB_OUTPUT: output,
+          GITHUB_RUN_ATTEMPT: "1",
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.error?.message ?? result.stderr);
+    const receipt = JSON.parse(readFileSync(join(dir, "staging-soak.json"), "utf8"));
+    assert.equal(receipt.schema, "staging-soak/2");
+    assert.equal(receipt.allocationId, first.id);
+    assert.match(readFileSync(output, "utf8"), /^e2e_run_id=101\nsoak_attempt=1$/m);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }

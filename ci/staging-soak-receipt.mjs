@@ -205,8 +205,7 @@ async function versionTaggedCounts(base, sampledAt, { accountId, token, fetchImp
   return { observedAt, workerVersion: versionId, ...counts };
 }
 
-// Every traffic change gets a new allocation, even when restoring a Worker.
-// The same latest allocation must span E2E and sampling.
+// A restored Worker gets a new allocation that must span fresh E2E and sampling.
 export async function captureAllocationSoak(
   { sha, e2e },
   { accountId, token, fetchImpl = fetch, now = Date.now },

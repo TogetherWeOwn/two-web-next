@@ -1297,7 +1297,7 @@ export async function checkRollbackGate(env, fetchImpl = fetch, options = {}) {
 export const PRODUCTION_DEPLOY_GATE_USAGE =
   "Usage: node ci/production-deploy-gate.mjs [--credentials | --version-id | --rollback | --staging-soak | --fetch-passive-ledgers <dir> | --regression | --already-live | --check-ancestry | --check-migrations | --kit-candidate | --help]\nWith no flag, runs the full production gate.";
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+async function runCli() {
   try {
     if (process.argv[2] === "--help") {
       // Safe discovery: usage to stdout, exit 0, zero side effects — no gate
@@ -1317,11 +1317,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     } else if (process.argv[2] === "--staging-soak") {
       const receipt = await verifyAllocationSoak(process.env);
       const { sample, workerVersion: serving } = receipt;
-      writeFileSync(
-        join(process.env.RUNNER_TEMP, "staging-soak.json"),
-        `${JSON.stringify(receipt)}\n`,
-        { flag: "wx" },
-      );
+      const path = join(process.env.RUNNER_TEMP, "staging-soak.json");
+      writeFileSync(path, `${JSON.stringify(receipt)}\n`, { flag: "wx" });
       console.log(
         `Staging allocation ${receipt.allocationId}, Worker ${serving}, E2E run ${receipt.e2e.runId}: ${sample.errors} errors over ${sample.requests} requests`,
       );
@@ -1528,3 +1525,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     process.exitCode = 1;
   }
 }
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) void runCli();

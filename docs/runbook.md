@@ -992,11 +992,10 @@ The rollback workflow remains a separate already-served-version route.
 Before the deploy job, `deploy-production` runs two more gates
 (`ci/production-deploy-gate.mjs`):
 
-- `staging-soak` requires one 100% Cloudflare allocation from before executed
-  E2E through its 30-minute soak and counts analytics from E2E start.
-  Regression uses that run's ledger. The rollback drill restores the UUID
-  under a new allocation, so run fresh E2E and soak. Exact main SHA manual E2E
-  can qualify explicit selection. Re-run all jobs after failure to resample.
+- `staging-soak` requires one 100% Cloudflare allocation through E2E and its
+  30-minute soak. Analytics starts at E2E start. Regression uses that run's
+  ledger. After the rollback drill, run fresh E2E and soak. Exact main SHA
+  manual E2E can qualify explicit selection. Re-run all jobs after failure.
 - `production-regression` (production Environment as the reviewer
   checkpoint, analytics via the repo-level read-only token) downloads the
   `staging-passive-ledger-<run>` artifact that `e2e-staging` recorded for the
@@ -1026,8 +1025,7 @@ green is not promotion evidence.
 
 #### Archived staging soak receipts
 
-The staging-soak job verifies live evidence and archives `staging-soak/2` per attempt.
-The `staging-soak/1` example below applies to historical records only.
+The job archives `staging-soak/2` per attempt. The example covers `staging-soak/1` only.
 
 Use [`ci/staging-soak-receipt.mjs`](../ci/staging-soak-receipt.mjs) with the
 verified deploy SHA, Worker UUID and `/version` timestamp. Supply the retained
