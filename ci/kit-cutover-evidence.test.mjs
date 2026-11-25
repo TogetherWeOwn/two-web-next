@@ -121,18 +121,22 @@ test("isolated cutover repeats readiness and smoke when rollback is still propag
   const origin = "https://cutover.example.invalid";
   const prefixes = ledgerPrefixes(ledgerJournal);
   const calls = [];
+  let attempt = 0;
   const routeCount = await verifyServed(origin, prefixes, identity, hono, "1033", "hono", {
     probeReady: async (url, ledger, expected) => {
       assert.equal(url, origin);
       assert.equal(ledger, prefixes);
       assert.deepEqual(expected, { version: hono, commit: sourceSha, state: "1033" });
       calls.push("readiness");
+      attempt += 1;
+      if (attempt === 2) throw new Error("Worker readiness version or commit mismatch");
     },
     probeRoutes: async (url, { expectedVersionId, expectedCutoverRenderer, onRoute }) => {
       assert.equal(url, origin);
       assert.equal(expectedVersionId, hono);
       assert.equal(expectedCutoverRenderer, "hono");
-      const converged = calls.includes("wait");
+      // Smoke would pass on attempt two even though readiness just regressed.
+      const converged = attempt > 1;
       calls.push("smoke");
       onRoute("/up", converged ? 0 : 1);
       onRoute("/", converged ? 0 : 1);
@@ -144,7 +148,15 @@ test("isolated cutover repeats readiness and smoke when rollback is still propag
     },
   });
   assert.equal(routeCount, 2);
-  assert.deepEqual(calls, ["readiness", "smoke", "wait", "readiness", "smoke"]);
+  assert.deepEqual(calls, [
+    "readiness",
+    "smoke",
+    "wait",
+    "readiness",
+    "wait",
+    "readiness",
+    "smoke",
+  ]);
 });
 
 test("isolated cutover refuses persistent smoke failures after six attempts", async () => {
