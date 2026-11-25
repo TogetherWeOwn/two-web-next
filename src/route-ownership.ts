@@ -31,6 +31,7 @@ import { newRequestId, safeRequestId, writeHttpRequestLog } from "./request-log"
 import { setReleaseMetadata } from "./release-tag";
 import { withStreamedBody } from "./html-stream";
 import { applySingleValidator } from "./http/conditional";
+import { brandedNotFoundFallback } from "./http/not-found";
 import { PRODUCTION_APEX } from "./http/robots";
 import { EVENTS_CALENDAR_ISLAND } from "./islands/contracts-calendar";
 import { transformContentLeafChunk } from "./kit-content-chunk";
@@ -241,8 +242,8 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   },
   { method: "GET", path: "/auth/recover", enabled: true, reads: "public" },
   // Profile reads: one Svelte view/model behind both Hono handlers. Native
-  // rendering stays off until edit parity reviews enablement; write siblings
-  // and the retired /members directory have no entries and stay Hono-owned.
+  // rendering stays off until edit parity reviews enablement. The retired
+  // directory's terminal 404s are handled separately from these reads.
   {
     method: "GET",
     path: "/profile",
@@ -732,6 +733,10 @@ export interface HookDispatchDeps {
   kitRouteHome?: string;
   kitRouteJoin?: string;
   kitRouteEmberPages?: string;
+  membersNotFound?: {
+    flag: string | undefined;
+    render: (path: string) => Promise<string>;
+  };
   featuredImageHosts?: string;
   honoFetch: (request: Request) => Promise<Response>;
   resolve: (event: HookEventLike, opts?: KitResolveOptions) => Promise<Response>;
@@ -1125,6 +1130,25 @@ async function dispatchOwnedRequest(
 ): Promise<Response> {
   if (!isTrustedHost(deps.appUrl, [event.request.headers.get("host"), event.url.host])) {
     return deps.honoFetch(event.request);
+  }
+  const members = deps.membersNotFound;
+  if (
+    members?.flag === "true" &&
+    !event.isDataRequest &&
+    (event.request.method === "GET" || event.request.method === "HEAD")
+  ) {
+    const url = new URL(event.request.url);
+    const path = url.pathname;
+    // Read the original literal path before Kit can normalize it or run loads.
+    if ((path === "/members" || path === "/members/") && isTrustedHost(deps.appUrl, [url.host])) {
+      const started = performance.now();
+      const requestId = safeRequestId(event.request.headers.get("cf-ray")) ?? newRequestId();
+      setReleaseMetadata(deps.versionMetadata);
+      const response = await brandedNotFoundFallback(event.request, () => members.render(path));
+      const result = await finishKitResponse(response, event, deps, requestId);
+      writeHttpRequestLog(event.request, requestId, path, result.status, started);
+      return result;
+    }
   }
   const admin = deps.admin;
   if (

@@ -2,6 +2,7 @@ import { captureRefusal, captureResponse } from "../../src/render-clock";
 import { redirect } from "@sveltejs/kit";
 import { type Handle, sequence } from "@sveltejs/kit/hooks";
 import { env } from "cloudflare:workers";
+import { renderNotFoundDocument } from "../../src/error-pages";
 import { KIT_EVENT_MARKDOWN_ROUTES } from "../../src/ai-friendly/kit-event-markdown-routes";
 import { recordBoardView, recordQueuedBoardView } from "../../src/hotzones/board-log";
 import { prepareKitHomePanels } from "../../src/kit-home-panels";
@@ -10,6 +11,7 @@ import { KIT_SEO_ROUTES } from "../../src/kit-seo-routes";
 import { KIT_STATIC_TEXT_ROUTES } from "../../src/static-public";
 import { kitAccessSink } from "../../src/kit-access-sink";
 import { preserveHonoDataResponse } from "../../src/kit-worker-facade";
+import { cachedNotFoundSuggestions } from "../../src/not-found-suggestions";
 import {
   kitAdminRenewalFor,
   kitAuthStatusCookieFor,
@@ -71,6 +73,10 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
     kitRouteHome: env.KIT_ROUTE_HOME,
     kitRouteJoin: env.KIT_ROUTE_JOIN,
     kitRouteEmberPages: env.KIT_ROUTE_EMBER_PAGES,
+    membersNotFound: {
+      flag: env.KIT_ROUTE_MEMBERS_NOT_FOUND,
+      render: async (path) => renderNotFoundDocument(await cachedNotFoundSuggestions(env, path)),
+    },
     // End Kit's action before it starts another layout or page load. The
     // dispatcher returns the controller's native HTTP response in its place.
     admin: { env, completeForm: () => redirect(303, "/admin") },
