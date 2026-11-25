@@ -42,6 +42,8 @@ function fixture() {
       total_count: 2,
       jobs: ["a11y", "check"].map((name) => ({
         name,
+        run_id: run.id,
+        run_attempt: run.run_attempt,
         head_sha: sha,
         status: "completed",
         conclusion: "success",
@@ -667,6 +669,30 @@ for (const eventName of ["workflow_run", "workflow_dispatch"]) {
     assert.match(result.stderr, /Checkout does not match deployment SHA/);
   });
 }
+
+test("a successful prior CI attempt cannot supply jobs for the selected attempt", () => {
+  const ctx = context("workflow_run");
+  const evidence = fixture();
+  ctx.event.workflow_run.run_attempt = 2;
+  evidence.runs.workflow_runs[0].run_attempt = 2;
+  evidence.current.run_attempt = 2;
+  for (const job of evidence.jobs.jobs) job.run_attempt = 2;
+
+  // A later workflow definition SHA still deploys the CI source when its jobs match.
+  const accepted = executeStaging(ctx, evidence);
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.deepEqual(accepted.calls, mutationCalls);
+  assert.match(
+    accepted.stdout,
+    new RegExp(`Staging gate passed: ${sha}, full CI run 42, attempt 2`),
+  );
+
+  evidence.jobs.jobs[1].run_attempt = 1;
+  const refused = executeStaging(ctx, evidence);
+  assert.equal(refused.status, 1, refused.stdout);
+  assert.deepEqual(refused.calls, []);
+  assert.match(refused.stderr, /CI job run or attempt mismatch/);
+});
 
 const mutationCalls = [
   "wrangler queues create two-sync-event",

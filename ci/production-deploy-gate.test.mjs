@@ -154,6 +154,8 @@ function ciEvidence() {
       total_count: 2,
       jobs: ["a11y", "check"].map((name) => ({
         name,
+        run_id: run.id,
+        run_attempt: run.run_attempt,
         head_sha: dispatchSha,
         status: "completed",
         conclusion: "success",
