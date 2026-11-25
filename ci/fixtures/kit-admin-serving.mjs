@@ -246,6 +246,11 @@ export default {
       if (attributes.includes("Max-Age=0")) jar.delete(name);
       else jar.set(name, pair);
     }
+    assert.equal(
+      jar.has("__Host-two_login_next"),
+      false,
+      "login did not set an explicit next page",
+    );
     const oauth = [...jar.values()].join("; ");
     const returnPath = `${callback}?${new URLSearchParams({ state, code: "fixture-code" })}`;
     console.log("PASS mixed cutover Admin enabled on Kit while Auth stays on Hono");
