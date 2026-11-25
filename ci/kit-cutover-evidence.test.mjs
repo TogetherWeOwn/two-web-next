@@ -73,8 +73,8 @@ test("readReady admits exact 200 and approved deferred 503 responses", async () 
 test("readReady cancels and refuses an oversized stream without Content-Length", {
   timeout: 2_000,
 }, async () => {
-  const encode = new TextEncoder();
-  const chunks = [encode.encode(JSON.stringify(readyBody)), encode.encode(" ".repeat(16 * 1024))];
+  const atLimit = new TextEncoder().encode(JSON.stringify(readyBody).padEnd(16 * 1024));
+  const chunks = [atLimit, Uint8Array.of(0x20)];
   let pulls = 0;
   let cancelled = false;
   const stream = new ReadableStream(
@@ -103,9 +103,13 @@ test("readReady cancels and refuses an oversized stream without Content-Length",
   assert.equal(stream.locked, false);
 });
 
-test("readReady refuses invalid or truncated JSON", async () => {
+test("readReady refuses empty, invalid or truncated JSON", async () => {
+  await assert.rejects(
+    readReady(readyOrigin, readyPrefixes, readyIdentity, async () => new Response()),
+    /missing readiness response body/i,
+  );
   const json = JSON.stringify(readyBody);
-  for (const body of [`${json} garbage`, json.slice(0, -1)]) {
+  for (const body of ["", `${json} garbage`, json.slice(0, -1)]) {
     await assert.rejects(
       readReady(readyOrigin, readyPrefixes, readyIdentity, async () => new Response(body)),
       /invalid readiness JSON/i,
