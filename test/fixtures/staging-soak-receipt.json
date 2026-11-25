@@ -1,0 +1,45 @@
+{
+  "evidence": {
+    "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "deployment": {
+      "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "deployedAt": "2026-01-01T10:00:00.000Z",
+      "workerVersion": "11111111-1111-1111-1111-111111111111",
+      "runId": 100,
+      "attempt": 1
+    },
+    "e2e": {
+      "runId": 101,
+      "attempt": 1,
+      "conclusion": "success",
+      "completedAt": "2026-01-01T10:09:00Z",
+      "before": {
+        "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "deployedAt": "2026-01-01T10:00:00.000Z"
+      },
+      "after": {
+        "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "deployedAt": "2026-01-01T10:00:00.000Z"
+      }
+    }
+  },
+  "receipt": {
+    "schema": "staging-soak/1",
+    "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "workerVersion": "11111111-1111-1111-1111-111111111111",
+    "deployedAt": "2026-01-01T10:00:00.000Z",
+    "deployRunId": 100,
+    "deployAttempt": 1,
+    "e2eRunId": 101,
+    "e2eAttempt": 1,
+    "e2eCompletedAt": "2026-01-01T10:09:00.000Z",
+    "floorAt": "2026-01-01T10:39:00.000Z",
+    "status": "sampled",
+    "sample": {
+      "observedAt": "2026-01-01T10:39:00.000Z",
+      "workerVersion": "11111111-1111-1111-1111-111111111111",
+      "requests": 250,
+      "errors": 2
+    }
+  }
+}

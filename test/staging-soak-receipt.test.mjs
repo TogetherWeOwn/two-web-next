@@ -5,28 +5,15 @@ import {
   captureStagingSoakReceipt,
   validateStagingSoakReceipt,
 } from "../ci/staging-soak-receipt.mjs";
+import fixture from "./fixtures/staging-soak-receipt.json" with { type: "json" };
 
-const sha = "a".repeat(40);
+const { evidence, receipt: expected } = fixture;
+const { sha, workerVersion, e2eCompletedAt: completedAt, floorAt } = expected;
+const identity = evidence.e2e.before;
 const otherSha = "b".repeat(40);
-const workerVersion = "11111111-1111-1111-1111-111111111111";
 const otherVersion = "22222222-2222-2222-2222-222222222222";
-const identity = { sha, deployedAt: "2026-01-01T10:00:00.000Z" };
 const revision = { commit: sha, version_id: workerVersion };
-const completedAt = "2026-01-01T10:09:00.000Z";
-const floorAt = "2026-01-01T10:39:00.000Z";
 const byFloor = Date.parse(floorAt);
-const evidence = {
-  sha,
-  deployment: { ...identity, workerVersion, runId: 100, attempt: 1 },
-  e2e: {
-    runId: 101,
-    attempt: 1,
-    conclusion: "success",
-    completedAt,
-    before: identity,
-    after: identity,
-  },
-};
 const graphUrl = "https://api.cloudflare.com/client/v4/graphql";
 const tag = (version = workerVersion, requests = 250, errors = 2) => ({
   dimensions: { scriptVersion: version },
@@ -82,18 +69,8 @@ test("captures bounded post-floor counts for the same version on ordinary stagin
     since: completedAt,
     until: floorAt,
   });
-  assert.equal(receipt.status, "sampled");
-  assert.equal(receipt.floorAt, floorAt);
-  assert.deepEqual(receipt.sample, {
-    observedAt: floorAt,
-    workerVersion,
-    requests: 250,
-    errors: 2,
-  });
-  assert.deepEqual(
-    validateStagingSoakReceipt(evidence, JSON.parse(JSON.stringify(receipt))),
-    receipt,
-  );
+  assert.deepEqual(receipt, expected);
+  assert.deepEqual(validateStagingSoakReceipt(evidence, expected, { nowMs: byFloor }), expected);
 });
 
 test("a late sample still queries the interval from E2E completion", async () => {
@@ -105,15 +82,22 @@ test("a late sample still queries the interval from E2E completion", async () =>
 });
 
 test("refuses early and mismatched deploy or E2E evidence before any reads", async () => {
-  const { calls, options } = mockReads({ nowMs: byFloor - 1 });
-  await assert.rejects(captureStagingSoakReceipt(evidence, options), /floor has not elapsed/);
-  for (const after of [
-    undefined,
-    { ...identity, sha: otherSha },
-    { ...identity, deployedAt: completedAt },
+  const { calls, options } = mockReads();
+  await assert.rejects(
+    captureStagingSoakReceipt(evidence, { ...options, now: () => byFloor - 1 }),
+    /floor has not elapsed/,
+  );
+  for (const invalid of [
+    { attempt: 2 },
+    { conclusion: "skipped" },
+    { before: undefined },
+    { after: undefined },
+    { after: { ...identity, sha: otherSha } },
+    { after: { ...identity, deployedAt: completedAt } },
+    { completedAt: "2026-02-30T10:09:00Z" },
   ]) {
     await assert.rejects(
-      captureStagingSoakReceipt({ ...evidence, e2e: { ...evidence.e2e, after } }, options),
+      captureStagingSoakReceipt({ ...evidence, e2e: { ...evidence.e2e, ...invalid } }, options),
     );
   }
   assert.deepEqual(calls, []);
@@ -152,10 +136,13 @@ test("validates stored receipts against independent pins and rejects partial or 
     { floorAt: completedAt },
     { sample: undefined },
     { sample: { ...receipt.sample, observedAt: completedAt } },
+    { sample: { ...receipt.sample, observedAt: "2026-01-01T10:39:00.001Z" } },
     { sample: { ...receipt.sample, workerVersion: otherVersion } },
     { sample: { ...receipt.sample, debug: "synthetic-response-body" } },
   ]) {
-    assert.throws(() => validateStagingSoakReceipt(evidence, { ...receipt, ...altered }));
+    assert.throws(() =>
+      validateStagingSoakReceipt(evidence, { ...receipt, ...altered }, { nowMs: byFloor }),
+    );
   }
 });
 
@@ -174,5 +161,10 @@ test("records explicit supersession before or after the floor and preserves earl
     assert.deepEqual(validateStagingSoakReceipt(known, receipt), receipt);
     assert.throws(() => validateStagingSoakReceipt(known, historical), /receipt mismatch/);
   }
+  const sameVersion = { sha, workerVersion, observedAt: floorAt };
+  await assert.rejects(
+    captureStagingSoakReceipt({ ...evidence, replacement: sameVersion }, mockReads().options),
+    /Invalid staging supersession/,
+  );
   assert.equal(JSON.stringify(historical), saved);
 });

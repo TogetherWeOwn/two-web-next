@@ -1001,8 +1001,9 @@ await writeFile(receiptPath, JSON.stringify(receipt, null, 2) + "\n", { flag: "w
 ```
 
 Use an existing analytics credential and `writeFile` from `node:fs/promises`.
-The helper rechecks ordinary staging identity and readiness around one tagged
-query. Missing counts or mismatches leave the soak unverified.
+The helper rechecks staging identity and readiness around a tagged query from
+E2E completion through the sample, at least 30 minutes later. The counts are
+evidence for the existing release gates.
 
 For a verified replacement, supply `evidence.replacement = { sha, workerVersion,
 observedAt }` at capture and validation. Write the resulting `superseded`
