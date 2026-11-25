@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { createServer, request } from "node:http";
+import { join } from "node:path";
 import { chromium, expect } from "@playwright/test";
 import postgres from "postgres";
 import { fixtureSession } from "../kit-live-socket.mjs";
@@ -15,6 +17,8 @@ const viewerId = "900000000000001374";
 const viewer = "Synthetic Ember Viewer";
 const documents = new Set(["/", "/events", "/join", "/members"]);
 const joinPath = "/join?next=%2Fevents";
+const immutableStylesheet = /^\/_app\/immutable\/assets\/[\w.-]+\.[\w-]+\.css$/;
+const sharedLogo = "/logo.svg";
 
 export function prepareEmberCutoverFixture(entry, worker) {
   return writeFile(
@@ -200,9 +204,104 @@ async function guestJourney(page, renderer) {
   await follow(page, page.getByTestId("error-home"), "/", renderer);
 }
 
+async function fetchFromOpenDocument(page, path) {
+  const url = new URL(path, page.url()).href;
+  const [response] = await Promise.all([
+    page.waitForResponse(
+      (response) => response.url() === url && response.request().resourceType() === "fetch",
+    ),
+    page.evaluate(async (asset) => {
+      // Force the original URL to the current Worker even if the old browser
+      // cache entry is still fresh. Leave the document itself open.
+      const response = await fetch(asset, {
+        cache: "no-store",
+        redirect: "error",
+        signal: AbortSignal.timeout(10_000),
+      });
+      await response.arrayBuffer();
+    }, path),
+  ]);
+  return response;
+}
+
+async function verifyOpenEmberAssets(browser, proxy, { kitOrigin, kitAssets, honoUndoOrigin }) {
+  const context = await browser.newContext({ baseURL: proxy.origin, serviceWorkers: "block" });
+  try {
+    context.setDefaultTimeout(10_000);
+    const page = await context.newPage();
+    proxy.switchBackend(kitOrigin);
+    const logoUrl = new URL(sharedLogo, proxy.origin).href;
+    const [stylesheet, emberLogo, ember] = await Promise.all([
+      page.waitForResponse(
+        (response) =>
+          response.request().resourceType() === "stylesheet" &&
+          new URL(response.url()).origin === proxy.origin &&
+          immutableStylesheet.test(new URL(response.url()).pathname),
+      ),
+      page.waitForResponse(
+        (response) => response.url() === logoUrl && response.request().resourceType() === "image",
+      ),
+      page.goto("/"),
+    ]);
+    await assertDocument(page, ember, "/", "kit");
+    assert.equal(await ember.headerValue("cache-control"), "private, no-store");
+    await expect(page.locator(".ember-home h1#home-heading")).toBeVisible();
+    await expect(page.locator(`header img[src="${sharedLogo}"]`).first()).toBeVisible();
+
+    const path = new URL(stylesheet.url()).pathname;
+    assert.equal(stylesheet.status(), 200, path);
+    assert.match((await stylesheet.headerValue("content-type")) ?? "", /^text\/css\b/i, path);
+    assert.equal(
+      await stylesheet.headerValue("cache-control"),
+      "public, immutable, max-age=31536000",
+      path,
+    );
+    assert.ok(
+      (await stylesheet.body()).equals(await readFile(join(kitAssets, path.slice(1)))),
+      `${path}: browser received the installed Kit bytes`,
+    );
+    const logo = await readFile(join(kitAssets, sharedLogo.slice(1)));
+    assert.equal(emberLogo.status(), 200, sharedLogo);
+    assert.match((await emberLogo.headerValue("content-type")) ?? "", /^image\/svg\+xml\b/i);
+    assert.ok((await emberLogo.body()).equals(logo), `${sharedLogo}: installed Kit bytes`);
+
+    proxy.switchBackend(honoUndoOrigin);
+    const refused = await fetchFromOpenDocument(page, path);
+    assert.equal(refused.status(), 404, path);
+    assert.equal(await refused.headerValue("cache-control"), "no-store, private", path);
+    assert.equal(await refused.headerValue("x-content-type-options"), "nosniff", path);
+    assert.equal(await refused.headerValue("x-two-renderer"), null, path);
+    assert.equal(await refused.headerValue("location"), null, path);
+    assert.equal(await refused.headerValue("set-cookie"), null, path);
+
+    const shared = await fetchFromOpenDocument(page, sharedLogo);
+    assert.equal(shared.status(), 200, sharedLogo);
+    assert.match((await shared.headerValue("content-type")) ?? "", /^image\/svg\+xml\b/i);
+    assert.ok(
+      (await shared.body()).equals(logo),
+      `${sharedLogo}: Hono and installed Kit serve the same bytes`,
+    );
+    await expect(page.locator(".ember-home h1#home-heading")).toBeVisible();
+
+    const recovered = await page.reload();
+    await assertDocument(page, recovered, "/", null);
+    await expect(page.locator("h1#home-heading")).toBeVisible();
+    await expect(page.locator(".ember-home")).toHaveCount(0);
+    assert.ok(!(await recovered.text()).includes(path), "Hono Home omits the retired stylesheet");
+    console.log(
+      `PASS open Ember tab after pure Hono undo: ${path} 404 (no-store, private; nosniff), ${sharedLogo} 200 (same SHA-256 ${createHash("sha256").update(logo).digest("hex")}), Home reload 200 (Hono)`,
+    );
+  } finally {
+    proxy.switchBackend(kitOrigin);
+    await context.close();
+  }
+}
+
 export async function verifyEmberCutoverJourney({
   kitOrigin,
+  kitAssets,
   fallbackOrigin,
+  honoUndoOrigin,
   databaseUrl,
   secret,
 }) {
@@ -217,6 +316,8 @@ export async function verifyEmberCutoverJourney({
       // fixture document and asset GETs and rejects CONNECT.
       proxy: { server: proxy.origin, bypass: "<-loopback>" },
     });
+    // Exercise the asset transition before the signed-in journey adds fixture state.
+    await verifyOpenEmberAssets(browser, proxy, { kitOrigin, kitAssets, honoUndoOrigin });
     const context = await browser.newContext({
       baseURL: proxy.origin,
       javaScriptEnabled: false,

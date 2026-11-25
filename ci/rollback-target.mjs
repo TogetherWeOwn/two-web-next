@@ -88,9 +88,24 @@ export function previousVersion(deployments) {
 // restore after a rollback that never moved traffic), and a refusal when
 // anything else is live: someone deployed in between, and rolling back now
 // would discard that deploy.
-export function rollbackAction(deployments, { expected, target }) {
+export function rollbackAction(deployments, { expected, target, allowKnownSplit = false }) {
   assertRollbackVersionId(expected);
   assertRollbackVersionId(target);
+  const versions = allowKnownSplit ? newestFirst(deployments)[0]?.versions : null;
+  if (Array.isArray(versions) && versions.length === 2) {
+    const serving = new Set(versions.map((version) => version?.version_id));
+    if (
+      expected !== target &&
+      serving.has(expected) &&
+      serving.has(target) &&
+      versions.every(({ percentage }) => Number.isFinite(percentage) && percentage > 0) &&
+      versions[0].percentage + versions[1].percentage === 100
+    )
+      return "rollback";
+    throw new Error(
+      "Refusing rollback: split traffic must serve only the expected and target versions",
+    );
+  }
   const current = liveVersion(deployments);
   if (current === target) return "skip";
   if (current === expected) return "rollback";
@@ -312,7 +327,7 @@ function output(lines) {
 }
 
 export const ROLLBACK_TARGET_USAGE =
-  "Usage: node ci/rollback-target.mjs (--environment | --live-version | --previous-version | --action | --check-target | --check-drill | --staging-busy)";
+  "Usage: node ci/rollback-target.mjs (--environment | --live-version | --previous-version | --action | --manual-action | --check-target | --check-drill | --staging-busy)";
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
@@ -331,16 +346,17 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       process.stdout.write(`${liveVersion(JSON.parse(readStdin()))}\n`);
     } else if (flag === "--previous-version") {
       process.stdout.write(`${previousVersion(JSON.parse(readStdin()))}\n`);
-    } else if (flag === "--action") {
+    } else if (flag === "--action" || flag === "--manual-action") {
       const action = rollbackAction(JSON.parse(readStdin()), {
         expected: process.env.EXPECTED_CURRENT_VERSION_ID,
         target: process.env.ROLLBACK_VERSION_ID,
+        allowKnownSplit: flag === "--manual-action",
       });
       output([`action=${action}`]);
       console.log(
         action === "skip"
           ? `Target ${process.env.ROLLBACK_VERSION_ID} already serves; nothing to roll back`
-          : `Live version is the expected ${process.env.EXPECTED_CURRENT_VERSION_ID}; rolling back`,
+          : `Expected version ${process.env.EXPECTED_CURRENT_VERSION_ID} serves; rolling back`,
       );
     } else if (flag === "--check-target") {
       const result = await checkRollbackTarget({

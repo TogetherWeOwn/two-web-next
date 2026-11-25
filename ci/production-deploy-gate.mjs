@@ -11,7 +11,7 @@ import {
   PROMOTION_SOAK_MS,
   stagingRunsSinceCommit,
 } from "./resolve-promotion-sha.mjs";
-import { requireSuccessfulCi } from "./staging-deploy-gate.mjs";
+import { requireSuccessfulCi, requireSuccessfulMainPushCi } from "./staging-deploy-gate.mjs";
 import { validateStagingIdentityPair } from "./staging-provenance.mjs";
 import { readWranglerConfig } from "./wrangler-config.mjs";
 
@@ -113,7 +113,7 @@ export function isAlreadyLive(deploySha, liveSha) {
 // an older green. Run from the workflow-head checkout before candidate code.
 // An explicit dispatch only selects the existing recovery route; it grants no
 // authorization and does not replace any of that route's other gates.
-export async function checkPromotionAncestry(env, { fetchImpl = fetch } = {}) {
+export async function checkPromotionAncestry(env, { fetchImpl = fetch, refusal } = {}) {
   const targetSha = env.DEPLOY_SHA;
   if (!/^[0-9a-f]{40}$/.test(targetSha)) {
     throw new Error("Promotion ancestry requires a full 40-hex DEPLOY_SHA");
@@ -166,7 +166,8 @@ export async function checkPromotionAncestry(env, { fetchImpl = fetch } = {}) {
     comparison.merge_base_commit?.sha !== liveSha
   ) {
     throw new Error(
-      `Default promotion refused: ${targetSha} is not a verified forward descendant of live ${liveSha} (behind, divergent or invalid ancestry evidence)`,
+      refusal ??
+        `Default promotion refused: ${targetSha} is not a verified forward descendant of live ${liveSha} (behind, divergent or invalid ancestry evidence)`,
     );
   }
   return "ahead";
@@ -1047,7 +1048,7 @@ export async function checkRegression(
   };
 }
 
-export function assertRollbackVersionId(versionId) {
+export function assertRollbackVersionId(versionId, field = "version_id") {
   // Worker Version IDs are lowercase UUIDs: the same format wrangler rollback
   // itself requires. Reject empty values, wrong shapes and shell metacharacters
   // before the id ever reaches a shell command or the Cloudflare API.
@@ -1056,7 +1057,7 @@ export function assertRollbackVersionId(versionId) {
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(versionId)
   ) {
     throw new Error(
-      "Rollback version_id must be a Worker Version ID (lowercase UUID); list versions with `wrangler versions list`",
+      `Rollback ${field} must be a Worker Version ID (lowercase UUID); list versions with \`wrangler versions list\``,
     );
   }
 }
@@ -1203,6 +1204,7 @@ export async function checkProductionGate(env, fetchEnvironment = fetch, options
         Accept: "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
       },
+      redirect: "error",
       signal: AbortSignal.timeout(15_000),
     },
   );
@@ -1211,6 +1213,31 @@ export async function checkProductionGate(env, fetchEnvironment = fetch, options
   }
   const autoApprove = autoApproveEnabled(env);
   assertProductionProtection(await response.json(), { autoApprove });
+  if (rollback && options.beforeScriptsCheckout) {
+    const sha = env.DEPLOY_SHA;
+    // The same compare proof binds two exact SHAs. Clear explicit promotion
+    // input so rollback always verifies ancestry through this shared guard.
+    const requireAncestor = (base, head, refusal) =>
+      checkPromotionAncestry(
+        { ...env, INPUT_SHA: "", LIVE_SHA: base, DEPLOY_SHA: head },
+        { fetchImpl: fetchEnvironment, refusal },
+      );
+    await requireAncestor(
+      sha,
+      env.GITHUB_SHA,
+      "Rollback scripts ref is not an ancestor of the protected main dispatch",
+    );
+    // The first revision with the rollback target resolver and identity smoke.
+    await requireAncestor(
+      "77de045d40bcf597dce813ce62b8de69029b2412",
+      sha,
+      "Rollback scripts ref predates the supported rollback tooling (#1991)",
+    );
+    return requireSuccessfulMainPushCi(
+      { repository: env.GITHUB_REPOSITORY, sha },
+      { token: env.GITHUB_TOKEN, fetchImpl: fetchCi },
+    );
+  }
   // Exact-SHA green main CI, shared with the staging gate: a red or pending
   // ci.yml run on this SHA must never reach production.
   checkoutSha ??= currentCheckoutSha();
@@ -1248,6 +1275,30 @@ export async function checkProductionGate(env, fetchEnvironment = fetch, options
     { token: env.GITHUB_TOKEN, fetchImpl: fetchCi, allowManual: explicitSelection(env, ci.sha) },
   );
   return { ...ci, autoApprove: true, staging };
+}
+
+// Direct production dispatch runs this from the protected dispatcher checkout
+// in both jobs, before the requested scripts are checked out or executed.
+async function resolveManualRollbackScripts(env, fetchImpl = fetch) {
+  if (
+    env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
+    env.GITHUB_REF !== "refs/heads/main" ||
+    env.GITHUB_REF_PROTECTED !== "true"
+  ) {
+    throw new Error("Manual production rollback requires workflow_dispatch on protected main");
+  }
+  if (!/^[0-9a-f]{40}$/.test(env.DEPLOY_SHA ?? "")) {
+    throw new Error("Manual production rollback ref must be a full lowercase 40-hex SHA");
+  }
+  if (currentCheckoutSha() !== env.GITHUB_SHA) {
+    throw new Error("Manual production rollback requires the exact dispatcher checkout");
+  }
+  assertRollbackVersionId(env.ROLLBACK_VERSION_ID);
+  assertRollbackVersionId(env.EXPECTED_CURRENT_VERSION_ID, "expected_current_version_id");
+  if (env.ROLLBACK_VERSION_ID === env.EXPECTED_CURRENT_VERSION_ID) {
+    throw new Error("Rollback version_id and expected_current_version_id must differ");
+  }
+  return checkProductionGate(env, fetchImpl, { rollback: true, beforeScriptsCheckout: true });
 }
 
 // Rollback gate for rollback-production.yml, per environment. Production
@@ -1295,7 +1346,7 @@ export async function checkRollbackGate(env, fetchImpl = fetch, options = {}) {
 // gate. A bare invocation (or a non-flag positional, as before) runs the
 // full gate.
 export const PRODUCTION_DEPLOY_GATE_USAGE =
-  "Usage: node ci/production-deploy-gate.mjs [--credentials | --version-id | --rollback | --staging-soak | --fetch-passive-ledgers <dir> | --regression | --already-live | --check-ancestry | --check-migrations | --kit-candidate | --help]\nWith no flag, runs the full production gate.";
+  "Usage: node ci/production-deploy-gate.mjs [--credentials | --version-id | --rollback | --manual-rollback | --staging-soak | --fetch-passive-ledgers <dir> | --regression | --already-live | --check-ancestry | --check-migrations | --kit-candidate | --help]\nWith no flag, runs the full production gate.";
 
 async function runCli() {
   try {
@@ -1309,6 +1360,12 @@ async function runCli() {
     } else if (process.argv[2] === "--version-id") {
       assertRollbackVersionId(process.env.ROLLBACK_VERSION_ID);
       console.log("Rollback version_id is a valid Worker Version ID");
+    } else if (process.argv[2] === "--manual-rollback") {
+      const evidence = await resolveManualRollbackScripts(process.env);
+      appendFileSync(process.env.GITHUB_OUTPUT, `sha=${evidence.sha}\n`);
+      console.log(
+        `Manual production rollback scripts ${evidence.sha} passed ancestry and CI: run ${evidence.runId}, attempt ${evidence.runAttempt}`,
+      );
     } else if (process.argv[2] === "--rollback") {
       const evidence = await checkRollbackGate(process.env);
       console.log(
