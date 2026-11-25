@@ -570,6 +570,9 @@ export async function assertKitAdminServing({ kit, off, hono, databaseUrl }) {
     await visit(kit, editor, 403, { headers: { ...html, cookie: member } });
     await visit(kit, editor, 200, { method: "HEAD", headers: { cookie: moderator } });
 
+    const { assertJoinAttemptDetailParity } = await import("./kit-admin-join-attempt-detail.mjs");
+    await assertJoinAttemptDetailParity({ kit, off, sql, visit, session, renewedModerator });
+
     const refused = await visit(kit, operator, 401, { headers: { cookie: moderator } });
     assert.equal(refused.headers.get("www-authenticate"), "Bearer");
     assert.equal(refused.headers.getSetCookie().length, 0);
