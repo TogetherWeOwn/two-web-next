@@ -157,6 +157,11 @@ async function assertNowLine(page, auditPage, open, capture, compact) {
       open(page, { ...fixture, state, nowLineCase, nowLineMember: member });
     await show("before");
     assert.equal(await line.count(), 0);
+    const fallbackTimes = page.locator(".event-layout-head .event-meta time:visible");
+    assert.deepEqual(await fallbackTimes.allTextContents(), [
+      "Sat, 21 Nov, 20:00 (Europe/London)",
+      "Sat, 21 Nov, 21:00 (Europe/London)",
+    ]);
     const before = await existingControls(page);
     await capture(`now-line-before-${audience}`);
 

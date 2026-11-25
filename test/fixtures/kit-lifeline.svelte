@@ -72,6 +72,8 @@ const examples = {
   ended: { now: time("21:50"), facts: { terminalSiteReminder } },
 } satisfies Record<typeof state, { now: number; facts: LifelineFacts }>;
 const ended = $derived(state === "ended");
+// The Now Line fixtures exercise the ordinary time fallback around the snapshot.
+const ongoingDetail = $derived(!nowLineCase && state === "frozen");
 
 const _model: KitEventDetailModel = $derived(
   withEventDetailHtml({
@@ -95,14 +97,11 @@ const _model: KitEventDetailModel = $derived(
     status: state === "cancelled" ? "cancelled" : "published",
     isDraft: false,
     isPast: ended,
-    isOngoing: state === "frozen",
+    isOngoing: ongoingDetail,
     isEnded: ended,
     lifecycle: ended ? { date: "21 Nov 2026", endTime: "21:00" } : null,
     endedNext: null,
-    liveTime:
-      !nowLineCase && state === "frozen"
-        ? { asOf: iso("20:12"), staleAt: iso("20:14") }
-        : undefined,
+    liveTime: ongoingDetail ? { asOf: iso("20:12"), staleAt: iso("20:14") } : undefined,
     goingCount: 8,
     goingOccupancy: 8,
     capacity: 10,
