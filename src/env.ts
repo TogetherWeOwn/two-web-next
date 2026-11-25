@@ -126,6 +126,8 @@ export type Env = AgentEventsEnv & {
   KIT_ROUTE_STATIC_TEXT?: string;
   KIT_ROUTE_EVENT_JSON?: string;
   KIT_ROUTE_PUBLIC_API?: string;
+  // Default off. Generic Hotzones signal refusals only.
+  KIT_ROUTE_HOTZONE_SIGNAL?: string;
   // Public MCP POST and OPTIONS. Only the literal string "true" opts in.
   KIT_ROUTE_MCP?: string;
   // RSVP and moderator event mutations. Only the literal string "true" opts in.

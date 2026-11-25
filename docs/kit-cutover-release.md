@@ -73,6 +73,22 @@ before the soak finishes leaves the prior candidate unqualified. The isolated
 job exercises the exact packaged bytes, the selected renderer profile and
 its undo.
 
+On pull requests and pushes to `main`, the
+[XFS qualification job](../.github/workflows/xfs-qualification.yml) runs the
+[installed Worker browser fixture](../ci/fixtures/kit-ember-cutover-browser.mjs).
+It keeps Ember Home open in Chromium while the same loopback origin switches
+from installed Kit output to the Hono entry point with its `public/` asset tree.
+It reads a hashed stylesheet the browser loaded from Ember and checks its
+immutable cache policy and build bytes. Fresh requests from the still-open
+document must get a non-cacheable, `nosniff` 404 for the old stylesheet and the
+same logo bytes that Ember served before the switch. Reloading Home must
+return the Hono document. Use the hosted job log for this result. For a
+manual rehearsal, get the serving version and public-route smoke results
+from `kit-cutover-proof-<attempt>` in the isolated cutover job.
+Existing browser cache entries can outlive the switch, and the fixture tests
+fresh requests without depending on edge asset retention or browser cache
+eviction.
+
 ## Protected release and recovery
 
 Follow the [production release gate](../CONTRIBUTING.md#production-release-gate)
@@ -114,8 +130,11 @@ the intended renderer ownership. Ordinary promotion requires the full target
 ledger and uses its own build path.
 
 On regression, use [`rollback-production`](../.github/workflows/rollback-production.yml)
-with `environment: production`. Set `expected_current_version_id` to the
-promoted production UUID being undone. For Ember or all-off Kit, set
+from protected `main` with `environment: production`. Set `ref` to a supported
+scripts SHA with green main push CI, as described in the
+[rollback runbook](runbook.md#production-one-click-workflow). Set
+`expected_current_version_id` to the promoted production UUID being undone.
+For Ember or all-off Kit, set
 `version_id` to the paired Hono UUID. For admin, set it to the recorded
 admin-off Ember UUID. Verify the restored UUID and commit, database readiness,
 and the fallback renderer ownership. The admin undo returns Admin to Hono

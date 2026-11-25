@@ -7,30 +7,16 @@
 // functions call, per web/src/routes/events/past/ precedent.
 import { dbFor } from "../admin/db";
 import { publicReadGuard, type App, type Ctx } from "../events/routes-shared";
-import {
-  HotzoneBadSeasonPage,
-  HotzoneSignalNotFoundPage,
-  HotzoneSignalPage,
-  HotzonesIndexPage,
-} from "./pages";
+import { HotzoneSignalPage, HotzonesIndexPage } from "./pages";
 import { isHotzoneSignal, joinsRetentionNote, loadJoinsGrid, priorGrid } from "./aggregates";
 import { recordBoardView } from "./board-log";
+import { refuseHotzone } from "./refusal";
 import { parseSeasonParam, seasonLabel } from "./season";
-
-const badSeason = (c: Ctx) => {
-  c.header("cache-control", "no-store, private");
-  return c.html(<HotzoneBadSeasonPage />, 400);
-};
-
-const unknownSignal = (c: Ctx) => {
-  c.header("cache-control", "no-store, private");
-  return c.html(<HotzoneSignalNotFoundPage />, 404);
-};
 
 async function renderIndex(c: Ctx) {
   const raw = c.req.query("season");
   const window = parseSeasonParam(raw ?? null);
-  if (!window) return badSeason(c);
+  if (!window) return refuseHotzone(c, 400);
   const limited = await publicReadGuard(c);
   if (limited) return limited;
   const label = window.kind === "all" ? "all" : window.label;
@@ -71,9 +57,9 @@ async function renderIndex(c: Ctx) {
 async function renderSignal(c: Ctx) {
   const raw = c.req.query("season");
   const window = parseSeasonParam(raw ?? null);
-  if (!window) return badSeason(c);
+  if (!window) return refuseHotzone(c, 400);
   const signal = c.req.param("signal") ?? "";
-  if (!isHotzoneSignal(signal)) return unknownSignal(c);
+  if (!isHotzoneSignal(signal)) return refuseHotzone(c, 404);
   const limited = await publicReadGuard(c);
   if (limited) return limited;
   const label = window.kind === "all" ? "all" : window.label;
