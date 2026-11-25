@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { kitRouteFlagsForFamily, requireEnabledEmberRoutes } from "./kit-route-flags.mjs";
 import { deploymentTarget, requireSuccessfulCi } from "./staging-deploy-gate.mjs";
+import { requireForwardStaging } from "./staging-forward.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const repository = "TogetherWeOwn/two-web-next";
@@ -961,4 +962,105 @@ test("main CI runs are never cancelled in progress and finish in push order", ()
   assert.equal(groupOf(pr(7, "refs/pull/7/merge")), groupOf(pr(7, "refs/pull/7/merge")));
   assert.notEqual(groupOf(pr(7, "refs/pull/7/merge")), groupOf(pr(8, "refs/pull/8/merge")));
   assert.equal(cancelsOf(pr(7, "refs/pull/7/merge")), true);
+});
+
+test("staging guard runs from the workflow revision inside the existing lane before writes", () => {
+  assert.equal(step("Require a forward staging rollout"), "node ci/staging-forward.mjs");
+  assert.match(
+    workflow,
+    /ref: \$\{\{ github\.workflow_sha \}\}[\s\S]*?- name: Staging admission hold[\s\S]*?- name: Require a forward staging rollout[\s\S]*?CANDIDATE_SHA: (\$\{\{ github\.event_name == 'workflow_run' && github\.event\.workflow_run\.head_sha \|\| github\.sha \}\})[\s\S]*?ref: \1/,
+  );
+});
+
+const activeVersion = "12345678-1234-1234-1234-123456789abc";
+const stagingGuardEnv = {
+  CANDIDATE_SHA: sha,
+  GITHUB_REPOSITORY: repository,
+  GITHUB_TOKEN: "fake-github",
+  CLOUDFLARE_ACCOUNT_ID: "c".repeat(32),
+  CLOUDFLARE_API_TOKEN: "fake-cloudflare",
+};
+const forward = {
+  status: "ahead",
+  ahead_by: 2,
+  total_commits: 2,
+  behind_by: 0,
+  base_commit: { sha: otherSha },
+  merge_base_commit: { sha: otherSha },
+};
+const stagedDeployment = {
+  created_on: "2026-11-25T07:00:00+01:00",
+  versions: [{ version_id: activeVersion, percentage: 100 }],
+};
+function stagingReads({
+  live = otherSha,
+  served = activeVersion,
+  compare = forward,
+  deployments = [stagedDeployment],
+} = {}) {
+  return async (url, options) => {
+    switch (String(url)) {
+      case `https://api.cloudflare.com/client/v4/accounts/${stagingGuardEnv.CLOUDFLARE_ACCOUNT_ID}/workers/scripts/two-web-next/deployments`:
+        assert.equal(options.headers.Authorization, "Bearer fake-cloudflare");
+        return Response.json({
+          success: true,
+          result: { deployments },
+        });
+      case "https://next.togetherweown.com/up":
+        assert.equal(Object.hasOwn(options.headers, "Authorization"), false);
+        return Response.json({ revision: { version_id: served, commit: live } });
+      case `https://api.github.com/repos/${repository}/compare/${otherSha}...${sha}?per_page=1`:
+        assert.equal(options.headers.Authorization, "Bearer fake-github");
+        assert.notEqual(compare, null, "Equal SHA or a mismatched version must avoid comparing");
+        return Response.json(compare);
+      default:
+        assert.fail(`Unexpected request ${url}`);
+    }
+  };
+}
+
+test("staging admits the same SHA or a forward candidate independent of the main tip", async () => {
+  assert.equal(await requireForwardStaging(stagingGuardEnv, stagingReads()), otherSha);
+  assert.equal(
+    await requireForwardStaging(stagingGuardEnv, stagingReads({ live: sha, compare: null })),
+    sha,
+  );
+});
+
+test("staging refuses an older or divergent candidate and a lagging edge", async () => {
+  for (const compare of [
+    { ...forward, status: "behind", ahead_by: 0, behind_by: 2, merge_base_commit: { sha } },
+    { ...forward, status: "diverged", behind_by: 2 },
+    { ...forward, merge_base_commit: { sha } },
+  ]) {
+    await assert.rejects(
+      requireForwardStaging(stagingGuardEnv, stagingReads({ compare })),
+      /not a verified descendant/,
+    );
+  }
+  await assert.rejects(
+    requireForwardStaging(stagingGuardEnv, stagingReads({ served: null, compare: null })),
+    /does not identify the active Cloudflare version/,
+  );
+});
+
+test("staging refuses a newer split deployment and ambiguous or malformed timestamps", async () => {
+  const split = {
+    created_on: "2026-11-25T01:00:00.000001-05:00",
+    versions: [{ version_id: activeVersion, percentage: 40 }],
+  };
+  for (const [entry, reason] of [
+    [split, /not a single-version 100% deployment/],
+    [{ ...split, created_on: "2026-11-25T06:00:00.0Z" }, /Cannot determine the newest/],
+    [{ ...split, created_on: "2026-02-30T06:00:00Z" }, /Invalid staging deployment timestamp/],
+    [{ ...split, created_on: undefined }, /Invalid staging deployment timestamp/],
+  ]) {
+    await assert.rejects(
+      requireForwardStaging(
+        stagingGuardEnv,
+        stagingReads({ deployments: [stagedDeployment, entry] }),
+      ),
+      reason,
+    );
+  }
 });
