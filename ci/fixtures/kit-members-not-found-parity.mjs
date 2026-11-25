@@ -1,14 +1,10 @@
 import assert from "node:assert/strict";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomInt } from "node:crypto";
 import { signedCookieHeader } from "../../src/http/signed-cookie.ts";
 import { SESSION_COOKIE } from "../../src/session-cookie.ts";
 import postgres from "postgres";
 
-const owner = "900000000000091960";
-const viewers = ["900000000000091961", "900000000000091962", "900000000000091963"];
-const profilePath = `/members/${owner}`;
 const query = "?q=fixture-eligibility-canary&filter=guides&page=2";
-const privateContent = /fixture-eligibility-canary|Synthetic retired profile|90000000000009196\d/;
 const parityHeaders = [
   "cache-control",
   "content-type",
@@ -45,6 +41,15 @@ async function read(worker, path, method = "GET", cookie, accept = "application/
 
 // Run only against the installed Worker and the runner's disposable database.
 export async function assertMembersNotFoundParity({ hono, off, on, databaseUrl, secret }) {
+  // The positive control writes an append-only audit row. Use a fresh range
+  // so repeat fixture runs on the same disposable database stay independent.
+  const namespace = `900000${String(randomInt(10 ** 12)).padStart(12, "0")}`;
+  const owner = `${namespace}0`;
+  const viewers = [1, 2, 3].map((suffix) => `${namespace}${suffix}`);
+  const profilePath = `/members/${owner}`;
+  const privateContent = new RegExp(
+    `fixture-eligibility-canary|Synthetic (?:retired profile|viewer)|${namespace}[0-3]`,
+  );
   const sql = postgres(databaseUrl, { max: 1 });
   const sessions = await Promise.all(
     viewers.map(async (id, index) => {
@@ -159,7 +164,7 @@ export async function assertMembersNotFoundParity({ hono, off, on, databaseUrl, 
         await sql.begin(async (tx) => {
           await tx`delete from web_session_grace where user_id in ${tx(viewers)}`;
           await tx`delete from web_sessions where user_id in ${tx(viewers)}`;
-          await tx`delete from member_data_access_logs where viewer_discord_id in ${tx(viewers)}`;
+          // The synthetic access receipt expires with the disposable database.
           await tx`delete from profiles where user_id = ${owner}`;
           await tx`delete from users where id = ${owner}`;
         });
