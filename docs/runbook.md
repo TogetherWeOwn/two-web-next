@@ -842,7 +842,10 @@ successful push CI on that exact SHA. The dispatch can run from protected
 `main` while unrelated CI for its tip is pending or red. The dispatcher
 verifies ancestry and CI before checking out the selected scripts and repeats
 the checks inside the protected job. The current-version guard skips the
-mutation if the target already serves and refuses if a third version serves.
+mutation if the target already serves 100% and refuses if a third version
+serves. If a gradual promotion stopped at partial traffic, use the promoted
+UUID as `expected_current_version_id`. The workflow restores the target only
+when those two recorded UUIDs account for the entire split.
 
 The workflow requires `PRODUCTION_DEPLOY_ENABLED` exactly `true` and uses the
 same `production` Environment gate as a deploy. Both preflight and the
@@ -915,9 +918,8 @@ call restores through the production Environment binding, so in reviewer
 mode it waits for a reviewer like any other production mutation; in
 auto-approve mode it runs on its own. If `auto-rollback` itself fails (or
 waits on an approval nobody gives), the failure mode is a live promoted
-version, never a silent rollback: restore manually with this workflow using
-the recorded restoration target, the promoted version UUID if it still serves,
-and an exact green `main` scripts SHA.
+version, never a silent rollback: restore manually with the recorded target,
+the promoted version UUID, and an exact green `main` scripts SHA.
 
 The watch measures its retained 30 minutes with a monotonic clock, not UTC;
 UTC still identifies the analytics query window. Readiness and rate-check

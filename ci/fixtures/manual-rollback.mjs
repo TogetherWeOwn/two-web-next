@@ -1,9 +1,13 @@
-export const repository = "TogetherWeOwn/two-web-next";
+import { spawnSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+const repository = "TogetherWeOwn/two-web-next";
 // Protected main push CI runs 45628441721 (green) and 45613104834 (red).
 export const green = "4afdce3da8ed9b5c5df1647f1d055eb700a7b5db";
 export const red = "b7e08dad6cc34864709f9d76a01ef80a062d13a1";
 export const previous = "77777777-7777-4777-8777-777777777777";
-export const expected = "88888888-8888-4888-8888-888888888888";
+const expected = "88888888-8888-4888-8888-888888888888";
 export const other = "99999999-9999-4999-8999-999999999999";
 
 function ciResponses(sha, id, status, conclusion) {
@@ -29,7 +33,7 @@ function ciResponses(sha, id, status, conclusion) {
   ];
 }
 
-export function githubResponses(sha, dispatcher, rerun) {
+function githubResponses(sha, dispatcher, rerun) {
   const ancestor = [red, green].includes(sha);
   const preflight = [
     {
@@ -67,8 +71,72 @@ set -eu
 printf '%s\\n' "$*" >> "$RUNNER_TEMP/wrangler"
 case "$*" in
   'wrangler deployments list --name stub-worker --json')
-    printf '[{"versions":[{"version_id":"%s","percentage":100}]}]\\n' "$LIVE" ;;
+    if [ -n "$SPLIT" ]; then
+      printf '[{"versions":[{"version_id":"%s","percentage":5},{"version_id":"%s","percentage":95}]}]\\n' "$LIVE" "$SPLIT"
+    else
+      printf '[{"versions":[{"version_id":"%s","percentage":100}]}]\\n' "$LIVE"
+    fi ;;
   'wrangler rollback ${previous} --name stub-worker') exit 0 ;;
   *) exit 2 ;;
 esac
 `;
+
+// Provide a fresh set of canned responses and command logs to each case.
+export function runFixture(dir, steps, dispatcher, overrides) {
+  const { dispatchGuard, resolve, recheck, guard, mutation } = steps;
+  const script = `
+        ${dispatchGuard.run}
+        ${resolve.run}
+        read -r pinned < "$GITHUB_OUTPUT"
+        test "$pinned" = "sha=$DEPLOY_SHA"
+        : > "$GITHUB_OUTPUT"
+        FETCH_STUB_JSON="$RECHECK_JSON" DEPLOY_SHA="\${pinned#sha=}" ${recheck.run}
+        export MANUAL_GUARD_DIR="$(sed -n 's/^guard_dir=//p' "$GITHUB_OUTPUT")"
+        : > "$GITHUB_OUTPUT"
+        ${guard.run}
+        if [ "$(cat "$GITHUB_OUTPUT")" = "action=rollback" ]; then
+          ${mutation.run}
+        fi
+      `;
+
+  const sha = overrides.DEPLOY_SHA ?? green;
+  const responses = githubResponses(sha, dispatcher, overrides.RERUN);
+  const output = join(dir, "output");
+  const requests = join(dir, "requests");
+  const wrangler = join(dir, "wrangler");
+  for (const path of [output, requests, wrangler]) writeFileSync(path, "");
+
+  const result = spawnSync("bash", ["-euo", "pipefail", "-c", script], {
+    encoding: "utf8",
+    env: {
+      PATH: `${dir}:${process.env.PATH}`,
+      NODE_OPTIONS: `--import=${new URL("../test-fetch-stub.mjs", import.meta.url).href}`,
+      RUNNER_TEMP: dir,
+      GITHUB_OUTPUT: output,
+      FETCH_STUB_LOG: requests,
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+      GITHUB_REF: "refs/heads/main",
+      GITHUB_REF_PROTECTED: "true",
+      GITHUB_REPOSITORY: repository,
+      GITHUB_SHA: dispatcher,
+      GITHUB_TOKEN: "fixture",
+      TRUSTED_WORKFLOW: "true",
+      MANUAL_PRODUCTION_ROLLBACK: "true",
+      PRODUCTION_DEPLOY_ENABLED: "true",
+      DEPLOY_SHA: sha,
+      ROLLBACK_VERSION_ID: previous,
+      EXPECTED_CURRENT_VERSION_ID: expected,
+      ROLLBACK_WORKER_NAME: "stub-worker",
+      LIVE: expected,
+      SPLIT: "",
+      FETCH_STUB_JSON: JSON.stringify(responses.preflight),
+      RECHECK_JSON: JSON.stringify(responses.recheck),
+      ...overrides,
+    },
+  });
+  return {
+    result,
+    calls: readFileSync(requests, "utf8"),
+    commands: readFileSync(wrangler, "utf8"),
+  };
+}

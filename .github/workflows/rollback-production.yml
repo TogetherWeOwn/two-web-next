@@ -24,7 +24,7 @@ on:
         description: "Full lowercase 40-hex main SHA with green push CI for the rollback scripts (required for production; staging uses the dispatch SHA)"
         type: string
       expected_current_version_id:
-        description: "Exact currently serving UUID (required for production and must differ from version_id)"
+        description: "Currently serving UUID or partial promotion UUID (required for production, distinct from version_id)"
         type: string
   workflow_call:
     inputs:
@@ -118,9 +118,15 @@ jobs:
       sha: ${{ steps.manual-scripts.outputs.sha }}
     steps:
       - name: Require a protected main production dispatch
-        if: env.MANUAL_PRODUCTION_ROLLBACK == 'true'
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TRUSTED_WORKFLOW: ${{ github.workflow_ref == format('{0}/.github/workflows/rollback-production.yml@{1}', github.repository, github.ref) || github.workflow_ref == format('{0}/.github/workflows/deploy-production.yml@{1}', github.repository, github.ref) || github.workflow_ref == format('{0}/.github/workflows/staging-rollback-drill.yml@{1}', github.repository, github.ref) }}
         run: |
-          if [[ "$GITHUB_REF" != refs/heads/main || "$GITHUB_REF_PROTECTED" != true ]]; then
+          if [[ "$TRUSTED_WORKFLOW" != true ]]; then
+            echo "::error::Unknown rollback dispatch workflow"
+            exit 1
+          fi
+          if [[ "$MANUAL_PRODUCTION_ROLLBACK" == true && ( "$GITHUB_REF" != refs/heads/main || "$GITHUB_REF_PROTECTED" != true ) ]]; then
             echo "::error::Manual production rollback requires workflow_dispatch on protected main"
             exit 1
           fi
@@ -204,8 +210,14 @@ jobs:
         with:
           node-version: 24
       - name: Recheck the verified manual rollback SHA after Environment approval
+        id: manual-recheck
         if: env.MANUAL_PRODUCTION_ROLLBACK == 'true'
-        run: node ci/production-deploy-gate.mjs --manual-rollback
+        run: |
+          node ci/production-deploy-gate.mjs --manual-rollback
+          # Keep the dispatcher's live-version guard across the older scripts checkout.
+          guard_dir=$(mktemp -d "$RUNNER_TEMP/rollback-dispatcher.XXXXXX")
+          cp -R ci bin "$guard_dir/"
+          echo "guard_dir=$guard_dir" >> "$GITHUB_OUTPUT"
         env:
           DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
           PRODUCTION_DEPLOY_ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
@@ -270,13 +282,18 @@ jobs:
         id: guard
         run: |
           set -euo pipefail
-          if [ -z "$EXPECTED_CURRENT_VERSION_ID" ]; then
+          if [ "$MANUAL_PRODUCTION_ROLLBACK" != true ] && [ -z "$EXPECTED_CURRENT_VERSION_ID" ]; then
             echo "action=rollback" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           npx wrangler deployments list --name "$ROLLBACK_WORKER_NAME" --json > "$RUNNER_TEMP/deployments.json"
-          node ci/rollback-target.mjs --action < "$RUNNER_TEMP/deployments.json"
+          if [ "$MANUAL_PRODUCTION_ROLLBACK" = true ]; then
+            node "$MANUAL_GUARD_DIR/ci/rollback-target.mjs" --manual-action < "$RUNNER_TEMP/deployments.json"
+          else
+            node ci/rollback-target.mjs --action < "$RUNNER_TEMP/deployments.json"
+          fi
         env:
+          MANUAL_GUARD_DIR: ${{ steps.manual-recheck.outputs.guard_dir }}
           EXPECTED_CURRENT_VERSION_ID: ${{ inputs.expected_current_version_id }}
           ROLLBACK_VERSION_ID: ${{ inputs.version_id }}
           ROLLBACK_WORKER_NAME: ${{ steps.target.outputs.worker }}
