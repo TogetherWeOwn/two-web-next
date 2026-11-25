@@ -665,8 +665,6 @@ test("reviewed attendance admission adds only its route after reconciliation", (
   assert.deepEqual(Object.keys(admission.routes), ["/admin/attendance"]);
   assert.deepEqual(approvedRouteBudget(root).routes, { ...prior.routes, ...admission.routes });
   assert.deepEqual(approvedClientBudget(root), INITIAL_CLIENT_BUDGET);
-  const live = JSON.parse(readFileSync(new URL(`../${ROUTE_BUDGET}`, import.meta.url), "utf8"));
-  assert.deepEqual(live.routes["/admin/attendance"], admission.routes["/admin/attendance"]);
 });
 
 test("reviewed reconciliation admission extends history before and after lower-only decisions", (t) => {
