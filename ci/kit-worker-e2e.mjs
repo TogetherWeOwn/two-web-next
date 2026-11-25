@@ -15,6 +15,7 @@ import { STAGING_STATIC_DOCUMENT_READY } from "../src/kit-staging-static.ts";
 import {
   assertKitAdminServing,
   assertKitAttendanceDisabled,
+  assertMixedAdminAuthRollback,
   prepareAdminFixture,
 } from "./fixtures/kit-admin-serving.mjs";
 import { assertEventReadsParity } from "./fixtures/kit-event-reads-parity.mjs";
@@ -822,6 +823,16 @@ export default {
   );
   if (!args.length) {
     await assertKitAttendanceDisabled(kitWithSession, databaseUrl);
+    await assertMixedAdminAuthRollback({
+      worker,
+      scratch,
+      databaseUrl,
+      start: async (entry, vars) => {
+        const instance = await startWorker("kit-mixed-admin-auth", entry, assets, secret, vars);
+        await listen(instance.child, instance.origin, () => instance.log);
+        return instance.origin;
+      },
+    });
     const profile = await startWorker("kit-profile-write", worker, assets, secret, {
       KIT_ROUTE_PROFILE_WRITES: "true",
     });

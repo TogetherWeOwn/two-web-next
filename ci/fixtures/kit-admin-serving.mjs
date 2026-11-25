@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { generateSignedCookie } from "hono/cookie";
 import postgres from "postgres";
+import { EMBER_CUTOVER_VARS } from "../kit-cutover-evidence.mjs";
 import { FIXTURE_SECRETS, SESSION_COOKIE } from "../parity/fixture.mjs";
 
 const editor = "/admin/events/new";
@@ -59,23 +61,257 @@ async function session(sql, userId, moderator, secret = FIXTURE_SECRETS.SESSION_
   return cookie.split(";", 1)[0];
 }
 
-async function visit(worker, path, status, { method = "GET", headers, body, owned = true } = {}) {
-  const label = `${worker.name} ${method} ${path}`;
+async function visit(
+  worker,
+  path,
+  status,
+  { method = "GET", headers, body, owned = true, noStore = true } = {},
+) {
+  const label = `${worker.name} ${method} ${path.split("?")[0]}`;
   const response = await fetch(`${worker.origin}${path}`, {
     method,
     redirect: "manual",
-    headers: { origin: worker.origin, ...headers },
+    headers: { origin: worker.origin, ...worker.headers, ...headers },
     body,
     signal: AbortSignal.timeout(10_000),
   });
   const text = await response.text();
   assert.equal(response.status, status, label);
   assert.equal(response.headers.get("x-two-renderer"), owned ? "kit" : null, label);
-  assert.match(response.headers.get("cache-control") ?? "", /\bno-store\b/, label);
+  if (noStore) assert.match(response.headers.get("cache-control") ?? "", /\bno-store\b/, label);
   assert.ok(response.headers.get("x-request-id"), label);
   assert.match(response.headers.get("content-security-policy") ?? "", /form-action 'self'/, label);
   if (method === "HEAD") assert.equal(text.length, 0, label);
   return { headers: response.headers, text };
+}
+
+export async function assertMixedAdminAuthRollback({ worker, scratch, databaseUrl, start }) {
+  // Use the isolated cutover host gate with one installed Worker and one
+  // cookie jar per actor. The loopback transport never resolves this host.
+  const appUrl = "https://two-web-kit-cutover-proof-174-1.fixture.workers.dev";
+  const ip = "192.0.2.174";
+  const actor = 900000000000000000n + BigInt(`0x${randomBytes(7).toString("hex")}`);
+  const moderatorId = String(actor);
+  const memberId = String(actor + 1n);
+  const stateName = "__Host-two_oauth_state";
+  const intendedName = "__Host-two_login_intended";
+  const statusName = "__Host-two_session_status";
+  const callback = "/auth/discord/callback";
+  const adminEntry = join(scratch, "kit-mixed-operator.mjs");
+  const { BOT_ENDPOINT_URL, OPS_CONTROL_TOKEN } = await prepareAdminFixture(worker, adminEntry);
+  const entry = join(scratch, "kit-mixed-admin-auth.mjs");
+  await writeFile(
+    entry,
+    `import { withEnv } from "cloudflare:workers";
+import inner from ${JSON.stringify(adminEntry)};
+const operatorFetch = globalThis.fetch;
+const profiles = {
+  ember: { KIT_ROUTE_ADMIN: "false", KIT_ROUTE_AUTH: "false" },
+  admin: { KIT_ROUTE_ADMIN: "true", KIT_ROUTE_AUTH: "false" },
+  both: { KIT_ROUTE_ADMIN: "true", KIT_ROUTE_AUTH: "true" },
+};
+const memberId = ${JSON.stringify(memberId)};
+let exchanges = 0;
+let unexpectedHttp = false;
+globalThis.fetch = async (input, init) => {
+  if (input === ${JSON.stringify(`${BOT_ENDPOINT_URL}/ops/config`)}) return operatorFetch(input, init);
+  const url = new URL(input instanceof Request ? input.url : input);
+  const method = init?.method ?? "GET";
+  if (url.origin === "https://discord.com") {
+    if (url.pathname === "/api/v10/oauth2/token" && method === "POST" &&
+        new URLSearchParams(init.body).get("code") === "fixture-code") {
+      exchanges++;
+      return Response.json({ access_token: "fixture-mixed-access" });
+    }
+    if (url.pathname === "/api/v10/users/@me" && method === "GET") {
+      return Response.json({
+        id: memberId, username: "Synthetic mixed member", global_name: null, avatar: null,
+      });
+    }
+    if (url.pathname.endsWith("/members/" + memberId) && method === "PUT") {
+      return new Response(null, { status: 204 });
+    }
+  }
+  unexpectedHttp = true;
+  throw new Error("Unexpected outbound mixed cutover fixture request");
+};
+export default {
+  async fetch(incoming, env, context) {
+    const original = new URL(incoming.url);
+    if (original.pathname === "/favicon.ico") return inner.fetch(incoming, env, context);
+    const profile = incoming.headers.get("x-fixture-mixed-profile");
+    if (!Object.hasOwn(profiles, profile)) return new Response(null, { status: 400 });
+    const bindings = { ...env, ...profiles[profile] };
+    const url = new URL(bindings.APP_URL);
+    url.pathname = original.pathname;
+    url.search = original.search;
+    const request = new Request(url, incoming);
+    request.headers.delete("x-fixture-mixed-profile");
+    request.headers.set("host", url.host);
+    request.headers.set("cf-connecting-ip", ${JSON.stringify(ip)});
+    if (request.headers.get("origin") === original.origin) request.headers.set("origin", url.origin);
+    const response = await withEnv(bindings, () => inner.fetch(request, bindings, context));
+    if (unexpectedHttp) throw new Error("Mixed cutover fixture attempted unexpected outbound HTTP");
+    const headers = new Headers(response.headers);
+    headers.set("x-fixture-exchanges", String(exchanges));
+    return new Response(response.body, { status: response.status, headers });
+  },
+};\n`,
+  );
+  const origin = await start(entry, {
+    ...EMBER_CUTOVER_VARS,
+    APP_URL: appUrl,
+    BOT_ENDPOINT_URL,
+    OPS_CONTROL_TOKEN,
+  });
+  const adminForm = { method: "POST", body: new URLSearchParams() };
+  const operatorAuth = { authorization: `Bearer ${OPS_CONTROL_TOKEN}` };
+  const sql = postgres(databaseUrl, { max: 1 });
+  let moderator;
+  let stateHash;
+  let visitPhase;
+
+  function readCookie(headers, name, age) {
+    const lines = headers.getSetCookie().filter((line) => line.startsWith(`${name}=`));
+    assert.equal(lines.length, 1, `one ${name} cookie`);
+    assert.ok(lines[0].endsWith(`; Max-Age=${age}; Path=/; HttpOnly; Secure; SameSite=Lax`), name);
+    return lines[0].split(";", 1)[0];
+  }
+
+  async function status(headers, authenticated, owned) {
+    const result = await visitPhase("/auth/status", 200, { headers, owned });
+    assert.equal(result.headers.get("vary"), "Cookie");
+    assert.equal(result.headers.getSetCookie().length, 0);
+    assert.deepEqual(JSON.parse(result.text), { authenticated });
+  }
+
+  async function enter(name, profile, admin, auth) {
+    visitPhase = visit.bind(null, {
+      name,
+      origin,
+      headers: { "x-fixture-mixed-profile": profile },
+    });
+    const edit = await visitPhase(editor, 200, {
+      headers: { ...html, cookie: moderator },
+      owned: admin,
+    });
+    assert.match(edit.text, /<form[^>]+method="post"[^>]+action="\/admin\/events"/);
+    const renewed = renewedModerator(edit.headers);
+    assert.ok(renewed !== moderator, "the editor rotates the existing moderator bearer");
+    moderator = renewed;
+    const probe = readCookie(edit.headers, statusName, 7200);
+    await status({ cookie: probe }, true, auth);
+    await status(operatorAuth, false, auth);
+
+    const allowed = await visitPhase(operator, 200, { headers: operatorAuth, owned: admin });
+    assert.match(allowed.text, /Fixture operator value/);
+    assert.equal(allowed.headers.getSetCookie().length, 0);
+    const refused = await visitPhase(operator, 401, {
+      headers: { cookie: moderator },
+      owned: admin,
+    });
+    assert.equal(refused.headers.get("www-authenticate"), "Bearer");
+    assert.equal(refused.headers.getSetCookie().length, 0);
+    for (const headers of [operatorAuth, { cookie: probe }]) {
+      const denied = await visitPhase(editor, 302, { headers, owned: admin });
+      assert.equal(denied.headers.get("location"), "/auth/discord");
+    }
+  }
+
+  try {
+    moderator = await session(sql, moderatorId, true);
+    await enter("Ember baseline", "ember", false, false);
+    await enter("Admin enabled", "admin", true, false);
+
+    // Follow the intended-page cookie from the Kit Admin guest gate into Hono Auth.
+    const guest = await visitPhase(editor, 302);
+    assert.equal(guest.headers.get("location"), "/auth/discord");
+    const intended = readCookie(guest.headers, intendedName, 600);
+    const login = await visitPhase("/auth/discord", 302, { owned: false });
+    const authorize = new URL(login.headers.get("location"));
+    assert.equal(authorize.origin + authorize.pathname, "https://discord.com/oauth2/authorize");
+    assert.equal(authorize.searchParams.get("redirect_uri"), appUrl + callback);
+    const state = authorize.searchParams.get("state");
+    assert.ok(state && /^[0-9a-f-]{36}$/.test(state), "the Hono sign-in issued a state");
+    stateHash = createHash("sha256").update(state).digest("hex");
+    const oauth = `${readCookie(login.headers, stateName, 600)}; ${intended}`;
+    const returnPath = `${callback}?${new URLSearchParams({ state, code: "fixture-code" })}`;
+    console.log("PASS mixed cutover Admin enabled on Kit while Auth stays on Hono");
+
+    await enter("Auth enabled", "both", true, true);
+    const signedIn = await visitPhase(returnPath, 302, { headers: { cookie: oauth } });
+    assert.equal(signedIn.headers.get("location"), editor);
+    assert.equal(signedIn.headers.get("x-fixture-exchanges"), "1");
+    const member = readCookie(signedIn.headers, SESSION_COOKIE, 7200);
+    const memberProbe = readCookie(signedIn.headers, statusName, 7200);
+    await status({ cookie: member }, true, true);
+    const memberDenied = await visitPhase(editor, 403, { headers: { cookie: member } });
+    assert.equal(memberDenied.headers.get("location"), null);
+    await visitPhase(operator, 401, { headers: { cookie: member } });
+    console.log("PASS mixed cutover Kit Auth completes Hono sign-in and Kit Admin enforces roles");
+
+    await enter("Auth undone", "admin", true, false);
+    for (const cookie of [member, memberProbe]) await status({ cookie }, true, false);
+    await visitPhase(editor, 403, { headers: { cookie: member } });
+    await visitPhase("/admin/events", 403, { ...adminForm, headers: { cookie: member } });
+    const operatorWrite = await visitPhase("/admin/events", 303, {
+      ...adminForm,
+      headers: { ...html, ...operatorAuth },
+    });
+    assert.equal(
+      operatorWrite.headers.get("location"),
+      "/auth/recover?next=%2Fadmin%2Fevents%2Fnew",
+    );
+    assert.deepEqual(
+      [
+        ...(await sql`select user_id, member, moderator from web_sessions where user_id = ${memberId}`),
+      ],
+      [{ user_id: memberId, member: true, moderator: false }],
+      "the callback issued exactly one session for the synthetic member",
+    );
+    const replay = await visitPhase(returnPath, 302, { headers: { cookie: oauth }, owned: false });
+    assert.equal(replay.headers.get("location"), "/?n=signin_failed");
+    assert.equal(replay.headers.getSetCookie().length, 0);
+    assert.equal(replay.headers.get("x-fixture-exchanges"), "1");
+    const logout = await visitPhase("/logout", 303, {
+      method: "POST",
+      headers: { cookie: member },
+      body: new URLSearchParams(),
+      owned: false,
+      noStore: false,
+    });
+    assert.equal(logout.headers.get("location"), "/");
+    readCookie(logout.headers, SESSION_COOKIE, 0);
+    readCookie(logout.headers, statusName, 0);
+    for (const cookie of [member, memberProbe]) await status({ cookie }, false, false);
+    const revoked = await visitPhase(editor, 302, { headers: { cookie: member } });
+    assert.equal(revoked.headers.get("location"), "/auth/discord");
+    console.log(
+      "PASS mixed cutover Auth undo preserves Kit Admin and revokes the Kit-issued session",
+    );
+
+    await enter("Admin undone", "ember", false, false);
+    const fallback = await visitPhase(editor, 302, { headers: { cookie: member }, owned: false });
+    assert.equal(fallback.headers.get("location"), "/auth/discord");
+    console.log("PASS mixed cutover Admin undo restores Hono with the moderator session intact");
+  } finally {
+    try {
+      await sql.begin(async (tx) => {
+        const ids = [moderatorId, memberId];
+        await tx`delete from web_session_grace where user_id in ${tx(ids)}`;
+        await tx`delete from web_sessions where user_id in ${tx(ids)}`;
+        await tx`delete from users where id = ${memberId}`;
+        if (stateHash) await tx`delete from web_oauth_journeys where state_hash = ${stateHash}`;
+        await tx`delete from web_throttle_hits where bucket in ${tx(
+          ["login-redirect", "login-callback", "events-read", "logout"].map(
+            (name) => `${name}:${ip}`,
+          ),
+        )}`;
+      });
+    } finally {
+      await sql.end({ timeout: 1 });
+    }
+  }
 }
 
 export async function assertKitAttendanceDisabled(off, databaseUrl) {
