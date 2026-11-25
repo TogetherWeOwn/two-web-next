@@ -366,8 +366,8 @@ export function kitDocumentRotationFor(env: Env): (event: HookEventLike) => Prom
  * admin-guard re-stamp (src/admin/guard.ts: a current bearer mints a fresh
  * token with a fresh 120-minute window, grace reads never refresh cookies).
  * The hook core calls this only after the member-read boundary releases a
- * successful GET document, so a refused, failed, bounced or redirected read
- * never burns the presented bearer.
+ * successful GET document or the authorized legacy event-create redirect.
+ * Refusals, failures and login bounces leave the presented bearer intact.
  *
  * Rotate, not slide: re-verify the signed bearer (locals are never trusted
  * alone), gate on a current bearer (statusHash present) so grace/predecessor
