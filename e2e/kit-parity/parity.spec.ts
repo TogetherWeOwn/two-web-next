@@ -3903,7 +3903,21 @@ test("isolated Kit frozen season standings fit both widths in each state", async
       await expect(page.getByRole("form", { name: "Filter the leaderboard" })).toHaveCount(0);
       const table = page.getByRole("table", { name: "Recorded events, season 2000-02" });
       if (state === "ranked" || state === "opted-out") {
-        await expect(table.getByRole("columnheader", { name: "Recorded events" })).toBeVisible();
+        const countHeader = table.getByRole("columnheader", { name: "Recorded events" });
+        await expect(countHeader).toBeVisible();
+        expect(
+          await countHeader.evaluate((cell) => {
+            const word = document.createRange();
+            word.setStart(cell.firstChild!, 0);
+            word.setEnd(cell.firstChild!, "Recorded".length);
+            const lines = word.getClientRects();
+            const bounds = cell.getBoundingClientRect();
+            return (
+              lines.length === 1 && lines[0]!.left >= bounds.left && lines[0]!.right <= bounds.right
+            );
+          }),
+          `the count heading keeps “Recorded” intact on ${name}`,
+        ).toBe(true);
         await expect(table.getByRole("rowheader", { name: `${VIEWER} (you)` })).toHaveCount(
           state === "ranked" ? 1 : 0,
         );

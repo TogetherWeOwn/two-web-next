@@ -202,7 +202,7 @@ const destination = (
             {/each}
           </ol>
         {/if}
-        <table class="member-board-table">
+        <table class="member-board-table" class:frozen-standings={frozen !== null}>
           <caption>{frozen ? `Recorded events, season ${season}` : boardCaption({ season, scope, activity })}</caption>
           <thead><tr><th scope="col">Rank</th><th scope="col">Member</th><th scope="col">{frozen ? "Recorded events" : "Going"}</th></tr></thead>
           <tbody>
@@ -288,6 +288,10 @@ const destination = (
   .board-layout :global(.member-board-table thead th) {
     top: var(--two-layout-sticky-offset);
     background: var(--two-color-bg-surface);
+  }
+  .board-layout :global(.member-board-table.frozen-standings thead th:last-child) {
+    inline-size: 7rem;
+    overflow-wrap: normal;
   }
   .board-layout :global(.member-board-table td) { font-variant-numeric: tabular-nums; }
   .board-layout :global(.member-board-table :is(td, th):last-child) { text-align: right; }
