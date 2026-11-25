@@ -35,6 +35,7 @@ async function assertCancelledPage(worker, renderer, name) {
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/, name);
   assert.equal(response.headers.get("cache-control"), "private, no-store", name);
   assert.equal(response.headers.get("etag"), null, name);
+  assert.deepEqual(response.headers.getSetCookie(), [], `${name}: no cookie effects`);
   assert.equal(response.headers.get("x-robots-tag"), "noindex, nofollow", name);
   const robots = [...renderedElements(html, { tag: "meta" })]
     .filter((meta) => renderedAttribute(meta, "name") === "robots")
@@ -78,8 +79,8 @@ async function checkWorker(scratch, databaseUrl, { name, main, assets, appUrl, v
   // PostgreSQL is the only allowed network dependency for these renders.
   await writeFile(
     entry,
-    `import worker from ${JSON.stringify(main)};
-globalThis.fetch = () => { throw new Error("Cancelled event fixture blocks outbound fetch"); };
+    `import "./block-outbound.mjs";
+import worker from ${JSON.stringify(main)};
 export default { fetch(request, env, context) {
   const url = new URL(env.APP_URL);
   url.pathname = new URL(request.url).pathname;
@@ -119,12 +120,22 @@ export default { fetch(request, env, context) {
   }
 }
 
-const databaseUrl = requireDisposableDatabase(process.env.KIT_WORKER_TEST_DATABASE_URL).href;
+const fixtureDatabase = process.env.KIT_WORKER_TEST_DATABASE_URL;
+assert.ok(
+  fixtureDatabase,
+  "KIT_WORKER_TEST_DATABASE_URL must name the disposable fixture database",
+);
+const databaseUrl = requireDisposableDatabase(fixtureDatabase).href;
 const { worker, assets } = await prepareInstalledKitWorker(repo);
 const scratch = await mkdtemp(join(process.env.XFS_FIXTURE_ROOT, "cancelled-event-"));
 const sql = postgres(databaseUrl, { max: 1 });
 let inserted = [];
 try {
+  // This first dependency runs before either Worker module is evaluated.
+  await writeFile(
+    join(scratch, "block-outbound.mjs"),
+    'globalThis.fetch = () => { throw new Error("Cancelled event fixture blocks outbound fetch"); };\n',
+  );
   const rows = [
     [cancelledTitle, "cancelled", "2090-01-01"],
     ...upcoming.map((title, i) => [title, "published", `2090-01-0${i + 3}`]),
