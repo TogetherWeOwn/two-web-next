@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -125,7 +125,7 @@ export function rollbackRouting(workflow, dispatcher, overrides = {}) {
 
 // Provide a fresh set of canned responses and command logs to each case.
 export function runFixture(dir, workflow, steps, dispatcher, overrides) {
-  const { dispatchGuard, resolve, recheck, guard, mutation } = steps;
+  const { dispatchGuard, resolve, recheck, scriptsCheckout, guard, mutation } = steps;
   const routing = rollbackRouting(workflow, dispatcher, overrides);
   const script = `
         ${dispatchGuard.run}
@@ -136,6 +136,8 @@ export function runFixture(dir, workflow, steps, dispatcher, overrides) {
         : > "$GITHUB_OUTPUT"
         FETCH_STUB_JSON="$RECHECK_JSON" DEPLOY_SHA="\${pinned#sha=}" ${recheck.run}
         export MANUAL_GUARD_DIR="$(sed -n 's/^guard_dir=//p' "$GITHUB_OUTPUT")"
+        export DEPLOY_SHA="\${pinned#sha=}"
+        ${scriptsCheckout.run}
         : > "$GITHUB_OUTPUT"
         ${guard.run}
         if [ "$(cat "$GITHUB_OUTPUT")" = "action=rollback" ]; then
@@ -150,37 +152,46 @@ export function runFixture(dir, workflow, steps, dispatcher, overrides) {
   const wrangler = join(dir, "wrangler");
   for (const path of [output, requests, wrangler]) writeFileSync(path, "");
 
-  const result = spawnSync("bash", ["-euo", "pipefail", "-c", script], {
-    encoding: "utf8",
-    env: {
-      PATH: `${dir}:${process.env.PATH}`,
-      NODE_OPTIONS: `--import=${new URL("../test-fetch-stub.mjs", import.meta.url).href}`,
-      RUNNER_TEMP: dir,
-      GITHUB_OUTPUT: output,
-      FETCH_STUB_LOG: requests,
-      GITHUB_EVENT_NAME: "workflow_dispatch",
-      GITHUB_REF: "refs/heads/main",
-      GITHUB_REF_PROTECTED: "true",
-      GITHUB_REPOSITORY: repository,
-      GITHUB_SHA: dispatcher,
-      GITHUB_TOKEN: "fixture",
-      TRUSTED_WORKFLOW: String(routing.trusted),
-      MANUAL_PRODUCTION_ROLLBACK: String(routing.manual),
-      PRODUCTION_DEPLOY_ENABLED: "true",
-      DEPLOY_SHA: sha,
-      ROLLBACK_VERSION_ID: previous,
-      EXPECTED_CURRENT_VERSION_ID: expected,
-      ROLLBACK_WORKER_NAME: "stub-worker",
-      LIVE: expected,
-      SPLIT: "",
-      FETCH_STUB_JSON: JSON.stringify(responses.preflight),
-      RECHECK_JSON: JSON.stringify(responses.recheck),
-      ...overrides,
-    },
-  });
-  return {
-    result,
-    calls: readFileSync(requests, "utf8"),
-    commands: readFileSync(wrangler, "utf8"),
-  };
+  const checkout = join(dir, "checkout");
+  const git = (...args) =>
+    execFileSync("git", ["-c", `safe.directory=${process.cwd()}`, ...args], { stdio: "pipe" });
+  git("worktree", "add", "--detach", checkout, dispatcher);
+  try {
+    const result = spawnSync("bash", ["-euo", "pipefail", "-c", script], {
+      cwd: checkout,
+      encoding: "utf8",
+      env: {
+        PATH: `${dir}:${process.env.PATH}`,
+        NODE_OPTIONS: `--import=${new URL("../test-fetch-stub.mjs", import.meta.url).href}`,
+        RUNNER_TEMP: dir,
+        GITHUB_OUTPUT: output,
+        FETCH_STUB_LOG: requests,
+        GITHUB_EVENT_NAME: "workflow_dispatch",
+        GITHUB_REF: "refs/heads/main",
+        GITHUB_REF_PROTECTED: "true",
+        GITHUB_REPOSITORY: repository,
+        GITHUB_SHA: dispatcher,
+        GITHUB_TOKEN: "fixture",
+        TRUSTED_WORKFLOW: String(routing.trusted),
+        MANUAL_PRODUCTION_ROLLBACK: String(routing.manual),
+        PRODUCTION_DEPLOY_ENABLED: "true",
+        DEPLOY_SHA: sha,
+        ROLLBACK_VERSION_ID: previous,
+        EXPECTED_CURRENT_VERSION_ID: expected,
+        ROLLBACK_WORKER_NAME: "stub-worker",
+        LIVE: expected,
+        SPLIT: "",
+        FETCH_STUB_JSON: JSON.stringify(responses.preflight),
+        RECHECK_JSON: JSON.stringify(responses.recheck),
+        ...overrides,
+      },
+    });
+    return {
+      result,
+      calls: readFileSync(requests, "utf8"),
+      commands: readFileSync(wrangler, "utf8"),
+    };
+  } finally {
+    git("worktree", "remove", "--force", checkout);
+  }
 }

@@ -20,21 +20,23 @@ test("protected manual rollback proves admission and live-version refusals befor
   const workflow = parse(readFileSync(".github/workflows/rollback-production.yml", "utf8"));
   const { jobs } = workflow;
   const rollback = jobs["rollback-production"];
-  const [dispatchGuard, checkout, , resolve] = jobs.preflight.steps;
-  const [dispatcherCheckout, setupNode, recheck, scriptsCheckout, checkoutGuard] = rollback.steps;
+  const [dispatchGuard, checkout, preflightNode, resolve] = jobs.preflight.steps;
+  const [dispatcherCheckout, setupNode, recheck, scriptsCheckout] = rollback.steps;
   const guard = rollback.steps.find((step) => step.id === "guard");
   const mutation = rollback.steps.find((step) => step.id === "rollback");
   const approvedSha = "${{ needs.preflight.outputs.sha }}";
   assert.equal(checkout.with.ref, "${{ env.LEGACY_SCRIPTS_REF }}");
   assert.equal(dispatcherCheckout.with.ref, "${{ github.sha }}");
+  assert.equal(dispatcherCheckout.with["fetch-depth"], 0);
+  assert.equal(preflightNode.with["package-manager-cache"], false);
   assert.equal(setupNode.with["package-manager-cache"], false);
+  assert.equal(setupNode.if, undefined);
   assert.equal(resolve.env.DEPLOY_SHA, "${{ inputs.ref }}");
   assert.equal(jobs.preflight.outputs.sha, "${{ steps.manual-scripts.outputs.sha }}");
   assert.equal(rollback.needs, "preflight");
   assert.equal(recheck.env.DEPLOY_SHA, approvedSha);
-  assert.equal(scriptsCheckout.with.ref, approvedSha);
-  assert.equal(checkoutGuard.env.DEPLOY_SHA, approvedSha);
-  for (const step of [resolve, dispatcherCheckout, recheck, scriptsCheckout, checkoutGuard]) {
+  assert.equal(scriptsCheckout.env.DEPLOY_SHA, approvedSha);
+  for (const step of [resolve, dispatcherCheckout, recheck, scriptsCheckout]) {
     assert.equal(step.if, "env.MANUAL_PRODUCTION_ROLLBACK == 'true'");
   }
   assert.equal(guard.env.MANUAL_GUARD_DIR, "${{ steps.manual-recheck.outputs.guard_dir }}");
@@ -92,7 +94,7 @@ test("protected manual rollback proves admission and live-version refusals befor
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   writeFileSync(join(dir, "npx"), stubWrangler, { mode: 0o700 });
 
-  const steps = { dispatchGuard, resolve, recheck, guard, mutation };
+  const steps = { dispatchGuard, resolve, recheck, scriptsCheckout, guard, mutation };
   for (const [name, overrides, error] of cases) {
     await t.test(name, () => {
       const { result, calls, commands } = runFixture(dir, workflow, steps, dispatcher, overrides);
