@@ -16,11 +16,15 @@ const html = { accept: "text/html" };
 
 export async function prepareAdminFixture(worker, entry) {
   const bot = "https://fixture-operator-bot.invalid";
+  const recurringProbe = fileURLToPath(
+    new URL("./kit-admin-recurring-create-worker.mjs", import.meta.url),
+  );
   await writeFile(
     entry,
     `
 import worker from ${JSON.stringify(worker)};
 import { env } from "cloudflare:workers";
+import { withRecurringCreateProbe } from ${JSON.stringify(recurringProbe)};
 const transport = globalThis.fetch;
 globalThis.fetch = async (input, init) => {
   if (input !== ${JSON.stringify(`${bot}/ops/config`)}) return transport(input, init);
@@ -31,7 +35,7 @@ globalThis.fetch = async (input, init) => {
   return Response.json({ epoch: 42, overrides: { label: "Fixture operator value" },
     baseline: {}, enforcement: "fixture" });
 };
-export default worker;
+export default withRecurringCreateProbe(worker);
 `,
   );
   return {
@@ -724,6 +728,14 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
   const memberId = String(actor + 1n);
   const sql = postgres(databaseUrl, { max: 1 });
   try {
+    const { assertRecurringCreateParity } = await import("./kit-admin-recurring-create.mjs");
+    await assertRecurringCreateParity({
+      kit,
+      sql,
+      visit,
+      session,
+      actors: { kit: String(actor + 2n), hono: String(actor + 3n) },
+    });
     let moderator = await session(sql, moderatorId, true);
     const member = await session(sql, memberId, false);
     const operatorAuth = { authorization: `Bearer ${FIXTURE_SECRETS.OPS_CONTROL_TOKEN}` };
