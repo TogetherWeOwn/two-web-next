@@ -1233,23 +1233,31 @@ export default machineParityWorker(inner, ${JSON.stringify(probePath)}, ${name =
       verifyEmberCutoverJourney,
     } = await import("./fixtures/kit-ember-cutover-browser.mjs");
     const entry = join(scratch, "kit-ember-cutover.mjs");
+    const honoUndoEntry = join(scratch, "hono-ember-undo.mjs");
     await prepareEmberCutoverFixture(entry, worker);
-    const [ember, fallback] = await Promise.all(
-      ["true", "false"].map(async (enabled) => {
-        const name = enabled === "true" ? "kit-ember" : "kit-ember-fallback";
-        const instance = await startWorker(name, entry, assets, secret, {
-          ...EMBER_CUTOVER_VARS,
-          KIT_ROUTE_EMBER_PAGES: enabled,
-          APP_URL: EMBER_FIXTURE_ORIGIN,
-          DISCORD_GUILD_ID: EMBER_FIXTURE_GUILD,
-        });
-        await listen(instance.child, instance.origin, () => instance.log);
-        return instance;
+    await prepareEmberCutoverFixture(honoUndoEntry, join(repo, "src/worker.ts"));
+    async function startEmberProfile(name, main, assetsDirectory, vars) {
+      const instance = await startWorker(name, main, assetsDirectory, secret, {
+        ...vars,
+        APP_URL: EMBER_FIXTURE_ORIGIN,
+        DISCORD_GUILD_ID: EMBER_FIXTURE_GUILD,
+      });
+      await listen(instance.child, instance.origin, () => instance.log);
+      return instance;
+    }
+    const [ember, fallback, honoUndo] = await Promise.all([
+      startEmberProfile("kit-ember", entry, assets, EMBER_CUTOVER_VARS),
+      startEmberProfile("kit-ember-fallback", entry, assets, {
+        ...EMBER_CUTOVER_VARS,
+        KIT_ROUTE_EMBER_PAGES: "false",
       }),
-    );
+      startEmberProfile("hono-ember-undo", honoUndoEntry, join(repo, "public"), {}),
+    ]);
     await verifyEmberCutoverJourney({
       kitOrigin: ember.origin,
+      kitAssets: assets,
       fallbackOrigin: fallback.origin,
+      honoUndoOrigin: honoUndo.origin,
       databaseUrl,
       secret,
     });
