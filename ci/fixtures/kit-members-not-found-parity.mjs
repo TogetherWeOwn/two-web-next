@@ -26,11 +26,11 @@ const parityHeaders = [
   "cross-origin-resource-policy",
 ];
 
-async function read(worker, path, method = "GET", cookie) {
+async function read(worker, path, method = "GET", cookie, accept = "application/json") {
   const response = await fetch(worker.origin + path, {
     method,
     redirect: "manual",
-    headers: { origin: worker.origin, accept: "application/json", ...(cookie ? { cookie } : {}) },
+    headers: { origin: worker.origin, accept, ...(cookie ? { cookie } : {}) },
     signal: AbortSignal.timeout(20_000),
   });
   assert.ok(response.headers.get("x-request-id"), "request correlation survives");
@@ -55,6 +55,9 @@ export async function assertMembersNotFoundParity({ hono, off, on, databaseUrl, 
   );
   const auditRows = () => sql`
     select route, subject_user_ids from member_data_access_logs where viewer_discord_id in ${sql(viewers)}`;
+  const sessionRows = () => sql`
+    select token_hash, expires_at, roles_checked_at from web_sessions
+    where user_id in ${sql(viewers)} order by user_id`;
   let seeded = false;
   try {
     await sql.begin(async (tx) => {
@@ -77,6 +80,11 @@ export async function assertMembersNotFoundParity({ hono, off, on, databaseUrl, 
     });
     seeded = true;
 
+    const active = await sessionRows();
+    assert.deepEqual(
+      active.map(({ token_hash }) => token_hash),
+      sessions.map(({ hash }) => hash),
+    );
     const reference = await read(hono, "/members");
     assert.equal(reference.status, 404);
     assert.equal(reference.headers["cache-control"], "no-store, private");
@@ -103,11 +111,7 @@ export async function assertMembersNotFoundParity({ hono, off, on, databaseUrl, 
         }
       }
     }
-    const active = await sql`select token_hash from web_sessions where user_id in ${sql(viewers)}`;
-    assert.deepEqual(
-      active.map(({ token_hash }) => token_hash).sort(),
-      sessions.map(({ hash }) => hash).sort(),
-    );
+    assert.deepEqual(await sessionRows(), active);
     assert.deepEqual(await auditRows(), []);
 
     // The neighboring profile, aliases, data URLs and unsafe methods retain Hono.
@@ -116,7 +120,7 @@ export async function assertMembersNotFoundParity({ hono, off, on, databaseUrl, 
       [`${profilePath}/__data.json`, "GET", 302, "/auth/discord"],
       ["/members/__data.json", "GET", 302, "/auth/discord"],
       ["/%6dembers", "GET", 404, null],
-      ["/members/", "POST", 303, "/auth/recover?next=%2Fprofile"],
+      ["/members/", "POST", 401, null],
       [`/__browser_fixture__${query}`, "GET", 404, null],
     ]) {
       const result = await read(on, path, method);
@@ -125,6 +129,11 @@ export async function assertMembersNotFoundParity({ hono, off, on, databaseUrl, 
       assert.equal(result.headers.location, location);
       assert.doesNotMatch(result.body, privateContent);
     }
+    const form = await read(on, "/members/", "POST", undefined, "text/html");
+    assert.equal(form.status, 303);
+    assert.equal(form.renderer, null);
+    assert.equal(form.headers.location, "/auth/recover?next=%2Fprofile");
+    assert.doesNotMatch(form.body, privateContent);
     for (const path of [profilePath, `${profilePath}/__data.json`]) {
       const denied = await read(on, path, "GET", sessions[0].cookie);
       assert.equal(denied.status, 403);
