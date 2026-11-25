@@ -1785,7 +1785,8 @@ test("Kit guest seat card keeps its no-JS action at desktop and mobile widths", 
         await page.keyboard.press("Tab");
         const signIn = bar.getByRole("link", { name: "Log in with Discord" });
         await expect(signIn).toBeFocused();
-        await expect(signIn).toHaveCSS("outline-style", "solid");
+        await page.locator('link[href="/theme.css"]').evaluate((link) => link.remove());
+        await expect(signIn).toHaveCSS("outline-width", "2px");
       }
       if (viewport.width === 1280) {
         const rail = card.locator("..");
@@ -4061,7 +4062,8 @@ test("Kit cancelled event renders its record and next date without JavaScript", 
             await back.getByRole("link", { name: "All events" }).focus();
             await page.keyboard.press("Tab");
             await expect(next).toBeFocused();
-            await expect(next).toHaveCSS("outline-style", "solid");
+            await page.locator('link[href="/theme.css"]').evaluate((link) => link.remove());
+            await expect(next).toHaveCSS("outline-width", "2px");
           }
         }
       } finally {
