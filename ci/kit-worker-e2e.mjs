@@ -19,6 +19,7 @@ import {
   prepareAdminFixture,
 } from "./fixtures/kit-admin-serving.mjs";
 import { assertEventReadsParity } from "./fixtures/kit-event-reads-parity.mjs";
+import { assertEventCreateFormParity } from "./fixtures/kit-event-create-form-parity.mjs";
 import { assertResponseContracts } from "./fixtures/kit-response-contracts.mjs";
 import { assertStaticFeedParity } from "./fixtures/kit-static-feed-parity.mjs";
 import { expectedMarkerFor, kitHomeHeadingText } from "./kit-parity-gates.mjs";
@@ -1063,6 +1064,12 @@ export default {
     }),
   ]);
   await assertResponseContracts({ hono: honoWithSession, off: kitWithSession, on: eventWritesOn });
+  await assertEventCreateFormParity({
+    hono: honoWithSession,
+    off: kitWithSession,
+    on: eventWritesOn,
+    databaseUrl,
+  });
   await assertEventReadsParity({
     hono: honoWithSession,
     unset: kitWithSession,
