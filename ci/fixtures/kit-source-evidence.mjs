@@ -38,7 +38,8 @@ export default {
       ...env,
       APP_URL: profile === "outside" ? local.origin : ${JSON.stringify(STAGING_ORIGIN)},
       KIT_ROUTE_ADMIN: mode === "on" ? "false" : "true",
-      KIT_ROUTE_ADMIN_SOURCE_EVIDENCE: mode === "default" ? undefined : String(mode === "on"),
+      KIT_ROUTE_ADMIN_SOURCE_EVIDENCE: mode === "default" ? undefined :
+        String(mode === "on" || mode === "both"),
       ...profiles[profile],
     };
     const url = new URL(bindings.APP_URL);
@@ -142,7 +143,7 @@ export async function assertKitSourceEvidence({ worker, honoWorker, scratch, dat
       const transportRefusal = error === "cross_origin" || status === 413;
       assert.equal(
         response.headers.get("x-two-renderer"),
-        mode === "on" && exact ? "kit" : null,
+        (mode === "on" || mode === "both") && exact ? "kit" : null,
         label,
       );
       assert.equal(
@@ -218,7 +219,15 @@ export async function assertKitSourceEvidence({ worker, honoWorker, scratch, dat
       assert.equal(await read(kit, "on", options), direct);
       return direct;
     }
-    assert.equal(await read(kit, "default", { status: 200 }), await compare({ status: 200 }));
+    const successfulRead = { status: 200 };
+    const expectedHash = await compare(successfulRead);
+    assert.equal(await read(kit, "default", successfulRead), expectedHash);
+    assert.equal(await read(kit, "both", successfulRead), expectedHash);
+    await read(kit, "both", {
+      status: 403,
+      error: "evidence_forbidden",
+      headers: { authorization: "Bearer wrong", cookie },
+    });
     await compare({ status: 200, method: "HEAD" });
     for (const profile of ["disabled", "outside"]) {
       await compare({ status: 404, error: "evidence_disabled", profile });
