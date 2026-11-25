@@ -51,9 +51,14 @@ function fixture() {
 }
 
 const workflow = readFileSync(join(root, ".github/workflows/deploy.yml"), "utf8");
-function step(name) {
+function stepBlock(name) {
   const block = workflow.split(`      - name: ${name}\n`)[1]?.split(/\n      - /)[0];
   assert.ok(block, `Missing workflow step: ${name}`);
+  return block;
+}
+
+function step(name) {
+  const block = stepBlock(name);
   assert.doesNotMatch(
     block,
     /^        if:/m,
@@ -68,6 +73,31 @@ function step(name) {
     .replace(/^          /gm, "")
     .trim();
 }
+
+test("deploy receipt uses the admission outputs and completed Worker step", () => {
+  assert.match(
+    stepBlock("Re-verify exact-SHA full CI before Worker deploy"),
+    /^        id: web-deploy-ci$/m,
+  );
+  assert.match(stepBlock("Deploy to Cloudflare Workers"), /^        id: web-deploy$/m);
+  const receipt = stepBlock("Summarize staging deploy evidence");
+  assert.match(
+    receipt,
+    /if: \$\{\{ !cancelled\(\) && steps\.web-deploy-ci\.outputs\.sha != '' && hashFiles\('ci\/staging-receipt\.mjs'\) != '' \}\}/,
+  );
+  assert.match(receipt, /^        continue-on-error: true$/m);
+  assert.match(receipt, /^        run: node ci\/staging-receipt\.mjs deploy$/m);
+  for (const [key, source] of Object.entries({
+    STAGING_JOB_STATUS: "job.status",
+    STAGING_WEB_DEPLOY_OUTCOME: "steps.web-deploy.outcome",
+    STAGING_CANDIDATE: "steps.web-deploy-ci.outputs.sha",
+    STAGING_CI_RUN_ID: "steps.web-deploy-ci.outputs.run_id",
+    STAGING_CI_RUN_ATTEMPT: "steps.web-deploy-ci.outputs.run_attempt",
+  })) {
+    assert.ok(receipt.split("\n").includes(`          ${key}: \${{ ${source} }}`));
+  }
+});
+
 const gateCommand = step("Require successful exact-SHA full CI");
 const queueCommand = step("Ensure queues exist");
 const tailCommand = `${step("Re-verify exact-SHA full CI before Tail Worker deploy")}\n${step("Deploy alert Tail Worker before attaching the app")}`;

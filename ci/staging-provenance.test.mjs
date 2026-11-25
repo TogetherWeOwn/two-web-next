@@ -107,7 +107,7 @@ test("staging receipts follow the served candidate through an out-of-order main 
   const disagreement = await e2e({}, fetchOrigins(B, A));
   assert.ok(disagreement.includes(`Live /up source \`${B}\``));
   assert.ok(disagreement.includes(`Live /version source \`${A}\``));
-  assert.match(disagreement, /Identity receipt refused/);
+  assert.match(disagreement, /Identity receipt refused \(disagreement or missing proof\)/);
   assert.match(disagreement, /Soak eligibility\*\* Unproven/);
   assert.doesNotMatch(disagreement, /matched at observation|Pending successful qualification/);
   assert.match(await e2e({}, fetchOrigins(B, B)), /Identity receipt refused/);
