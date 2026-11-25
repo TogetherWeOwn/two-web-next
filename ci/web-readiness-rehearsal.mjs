@@ -274,7 +274,7 @@ export async function rehearseWebReadiness(owner, url, botOwner, botUrl) {
       const [row] = await audit`SELECT description FROM public.activity_log WHERE id = ${id}`;
       assert.equal(row.description, description);
       await assert.rejects(
-        audit`INSERT INTO public.activity_log (description) VALUES ('denied')`,
+        audit`INSERT INTO public.activity_log (id, description, created_at) VALUES (${id}, 'denied', now())`,
         denied,
       );
       assert.equal((await bot`SELECT count FROM web_v1.live_counts`)[0].count, 2);
