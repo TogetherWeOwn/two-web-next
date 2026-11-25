@@ -9,16 +9,14 @@ import {
   validRecoveryZipPath,
 } from "./pure-hono-recovery-members.mjs";
 
-const WRANGLER_INTEGRITIES = new Map([
-  [
-    "4.156.1",
-    "sha512-aZngeNRosSVly6wgxpaJAtFPtEoyM3hD8mLMMcHNXTnofMq4ZN+RMXOdHETyttNP+//+mfiD1hb5E8YFtiMMRQ==",
-  ],
-  [
-    "4.161.0",
-    "sha512-yOHZUYEq9AP7vutWmkCADzCKAH9ynfvZdoKJRIGTzkiailf9/L+jhT7WRb+9p6jRDtuBXVFtCzLo7kGAcGw+pA==",
-  ],
-]);
+const WRANGLER_INTEGRITIES = new Map(
+  Object.entries({
+    "4.156.1":
+      "sha512-aZngeNRosSVly6wgxpaJAtFPtEoyM3hD8mLMMcHNXTnofMq4ZN+RMXOdHETyttNP+//+mfiD1hb5E8YFtiMMRQ==",
+    "4.161.0":
+      "sha512-yOHZUYEq9AP7vutWmkCADzCKAH9ynfvZdoKJRIGTzkiailf9/L+jhT7WRb+9p6jRDtuBXVFtCzLo7kGAcGw+pA==",
+  }),
+);
 const CONFIG = "wrangler.jsonc";
 const LOCK = "package-lock.json";
 const DIRECTORY = "public";
@@ -27,6 +25,7 @@ const LOCK_LIMIT = 2 * 1024 * 1024;
 const ASSET_LIMIT = 25 * 1024 * 1024;
 const { maxEntries, maxTotalBytes, maxManifestBytes } = RECOVERY_MEMBER_LIMITS;
 const CONTROL_PATHS = ["_headers", "_redirects"];
+const SELECTION = { directory: DIRECTORY, binding: "ASSETS", runWorkerFirst: true };
 const refusal = (reason) => new Error(`pure Hono recovery assets refused: ${reason}`);
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const fileRow = (path, bytes) => ({ path, bytes: bytes.length, sha256: sha256(bytes) });
@@ -60,13 +59,11 @@ function listSource(repo, sourceSha) {
     (maxEntries + 4) * 600,
   ).toString("latin1");
   if (!output.endsWith("\0")) throw refusal("source tree");
-  const rows = output.slice(0, -1).split("\0");
-  if (rows.length > maxEntries + 1) throw refusal("file count");
   const paths = new Map();
   const aliases = new Map();
   let count = 0;
   let total = 0;
-  for (const row of rows) {
+  for (const row of output.slice(0, -1).split("\0")) {
     const match = /^(100644|100755) blob ([0-9a-f]{40}) +([0-9]+)\t(.+)$/s.exec(row);
     if (!match) throw refusal("non-regular source member");
     const [, , oid, size, path] = match;
@@ -105,12 +102,8 @@ function listSource(repo, sourceSha) {
 function sourceBytes(repo, paths) {
   const entries = [...paths.values()];
   const capacity = entries.reduce((sum, { length }) => sum + length + 80, 0);
-  const output = git(
-    repo,
-    ["cat-file", "--batch"],
-    capacity,
-    entries.map(({ oid }) => `${oid}\n`).join(""),
-  );
+  const input = entries.map(({ oid }) => `${oid}\n`).join("");
+  const output = git(repo, ["cat-file", "--batch"], capacity, input);
   const files = new Map();
   let start = 0;
   for (const [path, { oid, length }] of paths) {
@@ -163,15 +156,12 @@ function sourceSelection(configBytes, lockBytes) {
     ) ||
     !assets ||
     Object.keys(assets).length !== 3 ||
-    assets.directory !== "./public" ||
-    assets.binding !== "ASSETS" ||
-    assets.run_worker_first !== true
+    assets.directory !== `./${SELECTION.directory}` ||
+    assets.binding !== SELECTION.binding ||
+    assets.run_worker_first !== SELECTION.runWorkerFirst
   )
     throw refusal("unsupported Wrangler asset config");
-  return {
-    version: pin.version,
-    selection: { directory: DIRECTORY, binding: "ASSETS", runWorkerFirst: true },
-  };
+  return pin.version;
 }
 
 // Read only Git objects. The caller supplies the trusted repository and source SHA
@@ -186,7 +176,7 @@ export function inventoryPureHonoSourceAssets({ repo, sourceSha }) {
   const files = sourceBytes(repo, paths);
   const config = files.get(CONFIG);
   const lock = files.get(LOCK);
-  const { version, selection } = sourceSelection(config, lock);
+  const version = sourceSelection(config, lock);
   const controls = {};
   const controlFiles = {};
   for (const name of CONTROL_PATHS) {
@@ -208,7 +198,7 @@ export function inventoryPureHonoSourceAssets({ repo, sourceSha }) {
       schema: "two.pure-hono-source-assets.v1",
       sourceSha,
       wrangler: { version, configSha256: sha256(config), lockSha256: sha256(lock) },
-      selection,
+      selection: SELECTION,
       controlFiles,
       assetCount: count,
       assetBytes: total,

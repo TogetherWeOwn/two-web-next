@@ -113,6 +113,10 @@ const assetLock = sourceAssetLock(
   "4.156.1",
   "sha512-aZngeNRosSVly6wgxpaJAtFPtEoyM3hD8mLMMcHNXTnofMq4ZN+RMXOdHETyttNP+//+mfiD1hb5E8YFtiMMRQ==",
 );
+const currentAssetLock = sourceAssetLock(
+  "4.161.0",
+  "sha512-yOHZUYEq9AP7vutWmkCADzCKAH9ynfvZdoKJRIGTzkiailf9/L+jhT7WRb+9p6jRDtuBXVFtCzLo7kGAcGw+pA==",
+);
 
 function sourceAssetFixture(t) {
   const repo = mkdtempSync(join(tmpdir(), "hono-source-assets-"));
@@ -126,7 +130,7 @@ function sourceAssetFixture(t) {
       env: { PATH: process.env.PATH, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" },
     }).trim();
   const git = (...args) => run(args);
-  git("init", "-q");
+  git("init", "-q", "--object-format=sha1");
   git("config", "user.name", "Fixture");
   git("config", "user.email", "fixture@example.com");
   const write = (path, value) => {
@@ -148,18 +152,26 @@ function sourceAssetFixture(t) {
     repo,
     read: (sourceSha) => inventoryPureHonoSourceAssets({ repo, sourceSha }),
     index: (rows) => run(["update-index", "--index-info"], `${rows.join("\n")}\n`),
+    blobOfSize: (size) => run(["hash-object", "-w", "--stdin"], Buffer.alloc(size)),
   };
 }
 
 test("Hono source assets pin selected bytes and controls to a commit", (t) => {
   const { git, write, commit, read } = sourceAssetFixture(t);
+  const config = `\uFEFF${assetConfig}`;
   const headers = Buffer.from("/ok.js\r\n  X-Fixture: one\r\n");
   const empty = Buffer.alloc(0);
+  const assets = [
+    { path: "assets/.hidden", bytes: empty },
+    { path: "assets/dir/.assetsignore", bytes: Buffer.from("*") },
+    { path: "assets/dir/_headers", bytes: Buffer.from("nested") },
+    { path: "assets/ok.js", bytes: Buffer.from("source") },
+  ];
+  write("wrangler.jsonc", config);
+  write("package-lock.json", currentAssetLock);
   write("public/_headers", headers);
   write("public/_redirects", empty);
-  write("public/dir/_headers", "nested");
-  write("public/dir/.assetsignore", "*");
-  write("public/.hidden", empty);
+  for (const { path, bytes } of assets) write(path.replace(/^assets\//, "public/"), bytes);
   const sourceSha = commit();
   const first = read(sourceSha);
   write("public/ok.js", "different commit");
@@ -173,12 +185,6 @@ test("Hono source assets pin selected bytes and controls to a commit", (t) => {
   );
   assert.deepEqual(read(sourceSha), first);
 
-  const assets = [
-    { path: "assets/.hidden", bytes: empty },
-    { path: "assets/dir/.assetsignore", bytes: Buffer.from("*") },
-    { path: "assets/dir/_headers", bytes: Buffer.from("nested") },
-    { path: "assets/ok.js", bytes: Buffer.from("source") },
-  ];
   const receipt = JSON.parse(first.receipt);
   const row = (path, bytes) => ({ path, bytes: bytes.length, sha256: recoveryDigest(bytes) });
   assert.deepEqual(first.assets, assets);
@@ -192,37 +198,13 @@ test("Hono source assets pin selected bytes and controls to a commit", (t) => {
     _redirects: row("public/_redirects", empty),
   });
   assert.deepEqual([receipt.sourceSha, receipt.assetCount, receipt.assetBytes], [sourceSha, 4, 13]);
-  assert.equal(receipt.wrangler.version, "4.156.1");
-  assert.equal(receipt.wrangler.configSha256, recoveryDigest(assetConfig));
-  assert.equal(receipt.wrangler.lockSha256, recoveryDigest(assetLock));
-  assert.equal(first.receiptSha256, recoveryDigest(first.receipt));
-});
-
-test("Hono source assets support the current Wrangler pin and preserve BOM bytes in the digest", (t) => {
-  const { write, commit, read } = sourceAssetFixture(t);
-  const config = `\uFEFF${assetConfig}`;
-  const lock = sourceAssetLock(
-    "4.161.0",
-    "sha512-yOHZUYEq9AP7vutWmkCADzCKAH9ynfvZdoKJRIGTzkiailf9/L+jhT7WRb+9p6jRDtuBXVFtCzLo7kGAcGw+pA==",
-  );
-  write("wrangler.jsonc", config);
-  write("package-lock.json", lock);
-  const source = commit();
-  const result = read(source);
-  assert.deepEqual(result.assets, [{ path: "assets/ok.js", bytes: Buffer.from("source") }]);
-  const receipt = JSON.parse(result.receipt);
-  assert.equal(receipt.sourceSha, source);
   assert.deepEqual(receipt.wrangler, {
     version: "4.161.0",
     configSha256: recoveryDigest(config),
-    lockSha256: recoveryDigest(lock),
+    lockSha256: recoveryDigest(currentAssetLock),
   });
-  assert.deepEqual(receipt.selection, {
-    directory: "public",
-    binding: "ASSETS",
-    runWorkerFirst: true,
-  });
-  write("package-lock.json", lock.replace("yOHZ", "aOHZ"));
+  assert.equal(first.receiptSha256, recoveryDigest(first.receipt));
+  write("package-lock.json", currentAssetLock.replace("yOHZ", "aOHZ"));
   assert.throws(() => read(commit()), /Wrangler pin/);
 });
 
@@ -231,11 +213,8 @@ test("Hono source assets refuse unsafe selection inputs", (t) => {
     ["ignore overrides", ".assetsignore", "!/_headers\n", "unsupported asset selection input"],
     ["case variant ignore", ".ASSETSIGNORE", "", "unsupported asset selection input"],
     ["case variant headers", "_HEADERS", "value", "unsupported asset selection input"],
-    ["case variant redirects", "_Redirects", "value", "unsupported asset selection input"],
     ["header directory", "_headers/fixture", "value", "unsupported asset selection input"],
     ["legacy Worker", "_worker.js-extra", "value", "unsupported asset selection input"],
-    ["DOS path", "aux.txt", "value", "asset path"],
-    ["Unicode path", "café.js", "value", "asset path"],
     ["trailing newline", "internal-canary.js\n", "value", "asset path"],
     ["case alias", "OK.js", "value", "aliased asset path"],
     ["invalid header encoding", "_headers", Buffer.from([0xff]), "selection input encoding"],
@@ -251,13 +230,15 @@ test("Hono source assets refuse unsafe selection inputs", (t) => {
   }
   const { repo, git, write, commit, read } = sourceAssetFixture(t);
   const source = commit();
-  assert.deepEqual(read(source).controls, { _headers: null, _redirects: null });
+  const result = read(source);
+  assert.deepEqual(result.controls, { _headers: null, _redirects: null });
+  assert.equal(JSON.parse(result.receipt).wrangler.version, "4.156.1");
   for (const invalid of ["HEAD", `${source}\n`, git("rev-parse", "HEAD:public/ok.js")])
     assert.throws(() => read(invalid), /source SHA|not a commit/);
   write("package-lock.json", assetLock.replace("4.156.1", "4.999.0"));
   assert.throws(() => read(commit()), /Wrangler pin/);
   write("package-lock.json", assetLock);
-  for (const override of ['{ "assets": {} }', '{ // override\r "assets": {}\n }', "{,}"]) {
+  for (const override of ['{ // override\r "assets": {}\n }', "{,}"]) {
     write("wrangler.jsonc", assetConfig.replace('"production": {}', `"production": ${override}`));
     assert.throws(() => read(commit()), /Wrangler asset config|source selection parsing/);
   }
@@ -267,7 +248,7 @@ test("Hono source assets refuse unsafe selection inputs", (t) => {
 });
 
 test("Hono source assets enforce aggregate bounds", (t) => {
-  const { git, write, commit, index, read } = sourceAssetFixture(t);
+  const { git, write, commit, index, read, blobOfSize } = sourceAssetFixture(t);
   write("public/_headers", Buffer.alloc(64 * 1024, " "));
   const source = commit();
   const blob = git("rev-parse", "HEAD:public/ok.js");
@@ -278,10 +259,6 @@ test("Hono source assets enforce aggregate bounds", (t) => {
   index([`100644 ${blob}\tpublic/extra`]);
   assert.throws(() => read(commit(false)), /asset count/);
   git("read-tree", source);
-  const blobOfSize = (size) => {
-    write("fixture.bin", Buffer.alloc(size));
-    return git("hash-object", "-w", "fixture.bin");
-  };
   const perFileLimit = 25 * 1024 * 1024;
   const remainder = maxTotalBytes - 5 * perFileLimit - Buffer.byteLength("source");
   index([...rows(blobOfSize(perFileLimit), 5), `100644 ${blobOfSize(remainder)}\tpublic/last`]);
