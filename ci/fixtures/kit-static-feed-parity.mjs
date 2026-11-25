@@ -158,6 +158,7 @@ export async function assertStaticFeedParity({
   startKit,
   startSecurityTxtPair,
   databaseUrl,
+  assertSubscriptionRollback,
 }) {
   await assertMountedEndpoints();
   // Exercise the rollout flags independently on the same installed Workers.
@@ -469,6 +470,14 @@ export async function assertStaticFeedParity({
         (${pastEventKey}, 'Fixture Past Night', null, null, 'past',
         '2026-01-01 16:00+00', '2026-01-01 17:00+00', '2026-01-01 18:00+00')`;
     seeded = true;
+    if (assertSubscriptionRollback) {
+      await assertSubscriptionRollback({
+        key: eventKeys[0],
+        game: "Fixture Racing",
+        cookie: await mintSession(false),
+        clientIp: fixtureIp,
+      });
+    }
     await assertSeoParity();
 
     for (const [path, mediaType, disposition] of [
