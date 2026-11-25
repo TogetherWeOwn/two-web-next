@@ -290,8 +290,10 @@ are private-cacheable.
 `/__probe/alert`, and GET and HEAD `/up` and `/version`. Hono owns the
 routes by default and handles other methods, path aliases and Kit data URLs.
 The CSP sink keeps its exact origin exemption and returns 204 on oversize or
-timeout. The alert probe keeps the origin and staging QA gates, then the body
-cap and throttle. The existing queue and request alert run only after admission.
+timeout. The Kit CSP endpoint uses the shared bounded processor without a
+Hono runtime dependency. The alert probe keeps the origin and staging QA gates,
+then the body cap and throttle. The existing queue and request alert run only
+after admission.
 The built and installed Worker fixture uses synthetic inputs, counts diagnostics
 and intercepts the queue and outbound network.
 
