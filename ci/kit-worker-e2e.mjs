@@ -404,6 +404,25 @@ function fetch(request, env, context) {
   );
   console.log("PASS generated Worker archive request");
 
+  if (args.length) {
+    const { assertArchiveRollback } = await import("./fixtures/kit-archive-rollback.mjs");
+    await assertArchiveRollback({
+      worker,
+      scratch,
+      databaseUrl,
+      start: async (entry) => {
+        const instance = await startWorker(
+          "kit-archive-rollback",
+          entry,
+          assets,
+          FIXTURE_SECRETS.SESSION_SECRET,
+        );
+        await listen(instance.child, instance.origin, () => instance.log);
+        return instance.origin;
+      },
+    });
+  }
+
   const manifest = await readFile(join(repo, "src/route-ownership.ts"), "utf8");
   const homeMarker = expectedMarkerFor(manifest, "/");
   const home = await fetch(`${origin}/`);
