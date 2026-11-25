@@ -12,6 +12,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 import { STAGING_STATIC_DOCUMENT_READY } from "../src/kit-staging-static.ts";
+import { prepareAdminDuplicateProbe } from "./fixtures/kit-admin-duplicate.mjs";
 import {
   assertKitAdminServing,
   assertKitAttendanceDisabled,
@@ -935,22 +936,26 @@ export default {
   }
 
   const secret = FIXTURE_SECRETS.SESSION_SECRET;
+  async function startAdminProbe(name, source, directory, vars) {
+    if (!args.length) return startWorker(name, source, directory, secret, vars);
+    const entry = join(scratch, `${name}-duplicate-probe.mjs`);
+    await prepareAdminDuplicateProbe(source, entry);
+    return startWorker(name, entry, directory, secret, vars);
+  }
   const honoEntry = join(repo, "src/worker.ts");
-  const honoWithSession = await startWorker(
+  const honoWithSession = await startAdminProbe(
     "hono-session",
     args.length
       ? await prepareAdminPublishFixture(honoEntry, join(scratch, "hono-publish.mjs"))
       : honoEntry,
     join(repo, "public"),
-    secret,
   );
-  const kitWithSession = await startWorker(
+  const kitWithSession = await startAdminProbe(
     "kit-session",
     args.length
       ? await prepareAdminPublishFixture(worker, join(scratch, "kit-off-publish.mjs"))
       : worker,
     assets,
-    secret,
   );
   await Promise.all(
     [honoWithSession, kitWithSession].map((instance) =>
@@ -987,7 +992,7 @@ export default {
     const entry = join(scratch, "kit-admin.mjs");
     const vars = await prepareAdminFixture(worker, entry);
     const publishEntry = await prepareAdminPublishFixture(entry, join(scratch, "kit-publish.mjs"));
-    const admin = await startWorker("kit-admin", publishEntry, assets, secret, vars);
+    const admin = await startAdminProbe("kit-admin", publishEntry, assets, vars);
     const nativeCreate = await startWorker("kit-admin-native-create", entry, assets, secret, {
       ...vars,
       KIT_PARITY_FIXTURE_ADMIN_EVENT_CREATE_REDIRECT: "true",

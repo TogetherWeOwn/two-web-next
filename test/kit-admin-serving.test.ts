@@ -111,6 +111,15 @@ it("keeps the legacy event-create endpoint behind admin admission when its manif
   expect(resolve).not.toHaveBeenCalled();
 });
 
+it("registers the exact event duplication path on the shared action route", () => {
+  const path = `${events}/seed-calendar-01/duplicate`;
+  const id = "/admin/[...action]";
+  expect(adminFormPath(path, id)).toBe(`${events}/:key/duplicate`);
+  expect(adminFormPath(path, `${events}/[key]`)).toBeUndefined();
+  expect(adminFormPath(`${path}/`, id)).toBeUndefined();
+  expect(adminFormPath(`${events}/seed-calendar-01/duplicate/extra`, id)).toBeUndefined();
+});
+
 it.each(["guest", "unknown", "member", "moderator"] as const)(
   "admits %s via shared session state",
   async (role) => {

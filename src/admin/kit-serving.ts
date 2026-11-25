@@ -26,7 +26,8 @@ const formPaths = [
   ["/admin/events/:key", "/admin/events/[key]"],
   ["/admin/featured/:id", "/admin/featured/[id]"],
   ...rsvpFormPaths,
-  ...["publish", "cancel", "duplicate"].map(
+  ["/admin/events/:key/duplicate", "/admin/[...action]"],
+  ...["publish", "cancel"].map(
     (action) => [`/admin/events/:key/${action}`, "/admin/[...action]"] as const,
   ),
   ...["delete", "unpublish"].map(
