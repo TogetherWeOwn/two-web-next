@@ -1,4 +1,5 @@
 <script lang="ts">
+import type { Snippet } from "svelte";
 import EventVoicePlacement from "#lib/EventVoicePlacement.svelte";
 import JsonLd from "#lib/JsonLd.svelte";
 import Lifeline from "#lib/Lifeline.svelte";
@@ -29,12 +30,15 @@ let {
   model,
   restoredWrite = false,
   lifeline,
+  nowLine,
   publicVoiceEnabled = false,
 }: {
   model: KitEventDetailModel;
   restoredWrite?: boolean;
   /** Composed server presentation. */
   lifeline?: readonly LifelineStep[];
+  /** Optional presentation supplied by the offline Event Detail fixture. */
+  nowLine?: Snippet;
   publicVoiceEnabled?: boolean;
 } = $props();
 const facts = $derived(kitEventFacts(model));
@@ -249,6 +253,9 @@ const detailIslands = $derived([
   </div>
   <div class="event-layout-body" class:ended={Boolean(lifecycle)}>
   {#if lifecycle || live}{@html model.detailHtml.metadata}{/if}
+  {#if model.status === "published" && !model.isDraft && !model.isPast && !model.isEnded && !model.review}
+    {@render nowLine?.()}
+  {/if}
   {#if lifeline?.length}<Lifeline steps={lifeline} zone={model.zoneLabel} />{/if}
   <div class="event-detail-grid">
     <div>

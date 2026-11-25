@@ -1,7 +1,9 @@
 <script lang="ts">
+import { timeStaleAt } from "../../lib/time-freshness-clock";
 import { withEventDetailHtml } from "../../src/events/detail-leaves";
 import type { KitEventDetailModel } from "../../src/events/kit-detail";
 import EventDetail from "../../web/src/lib/EventDetail.svelte";
+import EventNowLine from "../../web/src/lib/EventNowLine.svelte";
 import { composeLifeline, type LifelineFacts } from "../../web/src/lib/lifeline";
 
 let {
@@ -10,12 +12,24 @@ let {
   attendeePage = 2,
   savedSeat = false,
   echo,
+  nowLineCase,
+  nowLineMember = false,
 }: {
   state: "upcoming" | "frozen" | "cancelled" | "ended";
   showLifeline?: boolean;
   attendeePage?: 1 | 2;
   savedSeat?: boolean;
   echo?: LifelineFacts["echo"];
+  nowLineCase?:
+    | "before"
+    | "current"
+    | "stale"
+    | "absent"
+    | "invalid"
+    | "atEnd"
+    | "noFreshWindow"
+    | "futureObservation";
+  nowLineMember?: boolean;
 } = $props();
 
 const eventKey = "fixture-raid";
@@ -25,6 +39,28 @@ const time = (clock: string) => Date.parse(`2026-11-21T${clock}:00Z`);
 const iso = (clock: string) => new Date(time(clock)).toISOString();
 const fact = (clock: string) => ({ eventKey, at: time(clock) });
 const schedule = { eventKey, startsAt: time("20:00"), endsAt: time("21:00") };
+const observedAt = time("20:12");
+const expiry = timeStaleAt("live", observedAt, schedule.startsAt, schedule.endsAt);
+if (expiry === null || !Number.isFinite(expiry)) throw new Error("Missing fixture snapshot expiry");
+const observation = {
+  asOf: new Date(observedAt).toISOString(),
+  staleAt: new Date(expiry).toISOString(),
+};
+const nowLineExamples = {
+  before: { at: observedAt },
+  current: { at: observedAt, snapshot: observation },
+  stale: { at: expiry, snapshot: observation },
+  absent: { at: observedAt },
+  invalid: { at: observedAt, snapshot: { ...observation, staleAt: "unknown" } },
+  atEnd: { at: schedule.endsAt, snapshot: { asOf: iso("21:00"), staleAt: iso("21:05") } },
+  noFreshWindow: { at: observedAt, snapshot: { ...observation, staleAt: observation.asOf } },
+  futureObservation: { at: observedAt - 1, snapshot: observation },
+} satisfies Record<
+  NonNullable<typeof nowLineCase>,
+  { at: number; snapshot?: KitEventDetailModel["liveTime"] }
+>;
+const _nowLine = $derived(nowLineExamples[nowLineCase ?? "before"]);
+const viewerMember = $derived(nowLineCase ? nowLineMember : true);
 const viewerRsvp = fact("18:23");
 const terminalSiteReminder = { ...fact("19:32"), sent: 8, unavailable: 2 };
 const roomSnapshot = { observedAt: time("20:00"), fetchFailed: false, eventKeys: [eventKey] };
@@ -36,6 +72,8 @@ const examples = {
   ended: { now: time("21:50"), facts: { terminalSiteReminder } },
 } satisfies Record<typeof state, { now: number; facts: LifelineFacts }>;
 const ended = $derived(state === "ended");
+// The Now Line fixtures exercise the ordinary time fallback around the snapshot.
+const ongoingDetail = $derived(!nowLineCase && state === "frozen");
 
 const _model: KitEventDetailModel = $derived(
   withEventDetailHtml({
@@ -59,11 +97,11 @@ const _model: KitEventDetailModel = $derived(
     status: state === "cancelled" ? "cancelled" : "published",
     isDraft: false,
     isPast: ended,
-    isOngoing: state === "frozen",
+    isOngoing: ongoingDetail,
     isEnded: ended,
     lifecycle: ended ? { date: "21 Nov 2026", endTime: "21:00" } : null,
     endedNext: null,
-    liveTime: state === "frozen" ? { asOf: iso("20:12"), staleAt: iso("20:14") } : undefined,
+    liveTime: ongoingDetail ? { asOf: iso("20:12"), staleAt: iso("20:14") } : undefined,
     goingCount: 8,
     goingOccupancy: 8,
     capacity: 10,
@@ -81,7 +119,7 @@ const _model: KitEventDetailModel = $derived(
     durationText: "1h",
     zoneLabel: "Europe/London",
     timeDatetime: iso("20:00"),
-    attendees: attendeePage === 1 ? [{ id: "1", name: "Fixture attendee" }] : [],
+    attendees: !nowLineCase && attendeePage === 1 ? [{ id: "1", name: "Fixture attendee" }] : [],
     attendeesPaging: {
       page: attendeePage,
       prevHref: attendeePage === 2 ? path : null,
@@ -95,10 +133,10 @@ const _model: KitEventDetailModel = $derived(
     showJoinPitch: false,
     joinReturnTo: path,
     joinResult: null,
-    viewerAuthenticated: true,
-    viewerMember: true,
+    viewerAuthenticated: viewerMember,
+    viewerMember,
     viewerModerator: false,
-    viewerUsername: "Fixture player",
+    viewerUsername: nowLineCase ? null : "Fixture player",
     endsAt: iso("21:00"),
     jsonLd: "{}",
     siteJsonLd: "{}",
@@ -121,4 +159,9 @@ const _steps = $derived(
 );
 </script>
 
-<EventDetail model={_model} lifeline={_steps} />
+{#snippet fixtureNowLine()}
+  <EventNowLine startsAt={_model.timeDatetime} endsAt={_model.endsAt} zone={_model.zoneLabel}
+    snapshot={"snapshot" in _nowLine ? _nowLine.snapshot : undefined} renderedAt={_nowLine.at} />
+{/snippet}
+
+<EventDetail model={_model} lifeline={_steps} nowLine={nowLineCase && nowLineCase !== "before" ? fixtureNowLine : undefined} />
