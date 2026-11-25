@@ -5,7 +5,7 @@ const manifest = JSON.parse(readFileSync("web/package.json", "utf8"));
 const lock = JSON.parse(readFileSync("web/package-lock.json", "utf8"));
 const floors = [
   ["@sveltejs/kit", [3, 1, 1]],
-  ["@sveltejs/adapter-cloudflare", [8, 0, 2]],
+  ["@sveltejs/adapter-cloudflare", [9, 0, 0]],
 ] as const;
 
 describe("Kit defensive patch pins", () => {
@@ -31,14 +31,15 @@ describe("Kit defensive patch pins", () => {
   });
 
   it.each([
-    ["@sveltejs/adapter-cloudflare", "8.0.2"],
+    ["@sveltejs/adapter-cloudflare", "9.0.0"],
+    ["@cloudflare/workers-types", "5.20261117.1"],
     ["@sveltejs/kit", "3.4.0"],
     ["@sveltejs/vite-plugin-svelte", "7.3.1"],
     ["svelte", "5.58.0"],
     ["svelte-check", "4.7.8"],
     ["typescript", "6.0.3"],
     ["vite", "8.3.8"],
-    ["wrangler", "4.156.1"],
+    ["wrangler", "4.164.0"],
   ])("retains the held %s toolchain pin", (name, version) => {
     expect(manifest.devDependencies[name]).toBe(version);
     expect(lock.packages[""].devDependencies[name]).toBe(version);
@@ -46,9 +47,9 @@ describe("Kit defensive patch pins", () => {
   });
 
   it.each([
-    ["@cloudflare/workers-types", "5.20261101.1"],
-    ["miniflare", "5.20261101.0-beta"],
-    ["workerd", "1.20261101.1"],
+    ["@cloudflare/vite-plugin", "1.70.1"],
+    ["miniflare", "5.20261117.0-beta"],
+    ["workerd", "1.20261117.1"],
     ["sharp", "0.35.5"],
     ["undici", "7.30.1"],
     ["lightningcss", "1.32.0"],
@@ -60,7 +61,7 @@ describe("Kit defensive patch pins", () => {
   it("retains all held workerd and Lightning CSS platform copies", () => {
     for (const platform of ["darwin-64", "darwin-arm64", "linux-64", "linux-arm64", "windows-64"]) {
       expect(lock.packages[`node_modules/@cloudflare/workerd-${platform}`].version).toBe(
-        "1.20261101.1",
+        "1.20261117.1",
       );
     }
     for (const platform of [

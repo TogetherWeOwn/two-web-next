@@ -80,6 +80,7 @@ async function verifyEventVoice(browser, offOrigin, liveOrigin, source, mintSess
   const path = `/e/${eventKey}`;
   const panelSelector = "[data-public-voice-panel]";
   const guest = await browser.newPage();
+  await guest.clock.install();
   const sockets = observe(guest);
   const panel = guest.locator(panelSelector);
   const count = panel.locator("[data-public-voice-count]");
@@ -117,12 +118,14 @@ async function verifyEventVoice(browser, offOrigin, liveOrigin, source, mintSess
   assert.equal(await ingest(liveOrigin, 106, upsert("105")), 204);
   await expect(count).toHaveText(voice(5));
 
+  await guest.clock.pauseAt(Date.now() + 60_000);
   await source(108, 6, true);
   assert.equal(await ingest(liveOrigin, 108, upsert("106")), 409);
   await expect(panel).toBeHidden();
   await expect(rsvp).toBeVisible();
   await capture(guest, "event-recovering");
   await source(108, 6);
+  await guest.clock.resume();
   await expect(count).toHaveText(voice(6), { timeout: 12_000 });
   assert.deepEqual(sockets[0].sent, [subscribe, resync]);
   assert.ok(
@@ -250,6 +253,7 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
     await guest.close();
 
     const page = await browser.newPage();
+    await page.clock.install();
     const sockets = observe(page);
     await source(100, 4);
     const html = await openDocument(page, liveOrigin);
@@ -307,6 +311,8 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
 
     // A producer gap withdraws the old value before the covering source is available.
     const heading = await page.locator("#home-heading").textContent();
+    // Keep the clock running through the initial socket handshake.
+    await page.clock.pauseAt(Date.now() + 60_000);
     await source(104, 5, true);
     assert.equal(await ingest(liveOrigin, 104, upsert("106")), 409);
     await expect(count).toHaveText(unavailable);
@@ -315,6 +321,9 @@ export async function verifyKitPublicVoice(offOrigin, liveOrigin, databaseUrl, s
     await expect(page.getByTestId("join")).toBeVisible();
     await capture(page, "unavailable");
     await source(104, 5);
+    // Give the browser its resync timer only after the covering source is ready.
+    // Screenshot time must not consume the first pull's deadline.
+    await page.clock.resume();
     await expect(count).toHaveText(voice(5), { timeout: 12_000 });
     assert.equal(sockets.length, 1);
     assert.deepEqual(sockets[0].sent, [subscribe, resync]);

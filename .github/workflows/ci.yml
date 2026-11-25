@@ -993,7 +993,8 @@ jobs:
         run: node ci/check-kit-route-perf.mjs --report-only
       - name: Kit Worker bundle dry run (no deploy)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
-        run: npx wrangler deploy --config web/wrangler.jsonc --dry-run --outdir "$RUNNER_TEMP/kit-worker-dry-run"
+        working-directory: web
+        run: npm run preview:deploy -- --dry-run --outdir "$RUNNER_TEMP/kit-worker-dry-run"
       - name: Kit staging Worker config dry run (no deploy)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npx wrangler deploy --config web/wrangler.staging.jsonc --dry-run --outdir "$RUNNER_TEMP/kit-staging-worker-dry-run"

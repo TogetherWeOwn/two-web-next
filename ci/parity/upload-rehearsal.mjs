@@ -12,7 +12,7 @@ const installedAssetPath = "../cloudflare";
 export const moduleMime = "application/javascript+module";
 export const rehearsalSchema = "two.kit-parity-upload-rehearsal.v2";
 export const productionConfig = "web/wrangler.production.jsonc";
-export const wranglerVersion = "4.156.1";
+export const wranglerVersion = "4.164.0";
 
 export function rehearsalContext(sourceSha, env = process.env) {
   assert.match(sourceSha, /^[a-f0-9]{40}$/);
