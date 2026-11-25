@@ -1,11 +1,7 @@
-import type { AccessSink } from "../../../../src/access-log";
-import type { KitRequestSession } from "../../../../src/kit-session";
-import {
-  declareMemberResult,
-  memberReadResponse,
-  refuseMemberRead,
-} from "../../../../src/member-reads";
-import { SNOWFLAKE } from "../../../../src/profiles/routes-shared";
+import type { AccessSink } from "./access-log";
+import type { KitRequestSession } from "./kit-session";
+import { declareMemberResult, memberReadResponse, refuseMemberRead } from "./member-reads";
+import { SNOWFLAKE } from "./profiles/routes-shared";
 
 export const DIRECTORY_ROW_LIMIT = 20;
 export const DIRECTORY_READ_TIMEOUT_MS = 500;

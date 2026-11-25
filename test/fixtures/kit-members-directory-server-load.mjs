@@ -1,5 +1,5 @@
 import { projectMembersDirectory } from "#lib/members-directory";
-import { memberDirectoryResponse } from "#lib/server/members-directory";
+import { memberDirectoryResponse } from "../../../../src/members-directory.server";
 
 // Installed only in the scratch fixture route. These are synthetic identities.
 const viewerId = "9000000001";

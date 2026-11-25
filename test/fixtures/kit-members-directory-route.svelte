@@ -2,7 +2,11 @@
 import { page } from "$app/state";
 import MembersDirectory from "#lib/MembersDirectory.svelte";
 import SiteMetadata from "#lib/SiteMetadata.svelte";
-import { type DirectoryFixtureMember, type MembersDirectoryView, projectMembersDirectory } from "#lib/members-directory";
+import {
+  type DirectoryFixtureMember,
+  type MembersDirectoryView,
+  projectMembersDirectory,
+} from "#lib/members-directory";
 
 let { data }: { data: { serverDirectory?: MembersDirectoryView } } = $props();
 

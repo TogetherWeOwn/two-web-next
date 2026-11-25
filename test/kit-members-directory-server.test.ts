@@ -8,7 +8,7 @@ import {
   type DirectoryRow,
   type DirectorySource,
   memberDirectoryResponse,
-} from "../web/src/lib/server/members-directory";
+} from "../src/members-directory.server";
 
 const viewerId = "1000000000";
 const member: KitRequestSession = {

@@ -67,7 +67,7 @@ lookups by ID and the scoped member leaderboard. The saved leaderboard switch
 applies to boards. The web roster records guild membership at last sign-in.
 Neither establishes current directory membership or permission to list a profile.
 
-The [unmounted directory boundary](../web/src/lib/server/members-directory.ts)
+The [unmounted directory boundary](../src/members-directory.server.ts)
 requires a member session and an injected source and audit sink. It projects
 only display name and a link to the existing profile for explicitly listed,
 current members. It makes one capped read and requires an audit of fetched
