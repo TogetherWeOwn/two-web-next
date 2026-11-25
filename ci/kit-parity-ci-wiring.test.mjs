@@ -98,10 +98,11 @@ test("the Kit browser worker uses shipped join and recovery ownership", () => {
   assert.doesNotMatch(deployed, /KIT_PARITY_FIXTURE_JOIN/);
 });
 
-test("the Kit dashboard fixture flag is absent from deployed configuration", () => {
+test("Kit admin fixture flags are absent from deployed configuration", () => {
   for (const file of ["wrangler.jsonc", "web/wrangler.jsonc", "web/wrangler.staging.jsonc"]) {
     const deployed = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
     assert.doesNotMatch(deployed, /KIT_PARITY_FIXTURE_ADMIN_DASHBOARD/, file);
+    assert.doesNotMatch(deployed, /KIT_PARITY_FIXTURE_ADMIN_ATTENDANCE/, file);
   }
 });
 

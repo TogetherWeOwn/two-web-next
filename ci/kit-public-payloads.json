@@ -203,6 +203,11 @@
       "reads": "activity log (audited)"
     },
     {
+      "route": "GET /admin/attendance",
+      "binding": "web/src/routes/admin/attendance/+page.server.ts",
+      "reads": "moderator-only loopback fixture (synthetic data, no store reads)"
+    },
+    {
       "route": "GET /admin/join-attempts",
       "binding": "web/src/routes/admin/join-attempts/+page.server.ts",
       "reads": "join_attempts/list (audited)"
