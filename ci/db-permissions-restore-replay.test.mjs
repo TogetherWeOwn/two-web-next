@@ -19,6 +19,7 @@ import {
   assertMigrationPrefix,
   PLANETSCALE_PRODUCTION_BRANCH_ID,
   PLANETSCALE_PRODUCTION_HOST,
+  webMigrationLockKey,
 } from "./db-migrate.mjs";
 import { runRepair } from "./db-permissions-repair.mjs";
 import { runReadinessProjection } from "./db-readiness-projection.mjs";
@@ -237,6 +238,41 @@ const runAuthority = (connect, operation) => {
     () => connect(provisioner),
   );
 };
+
+async function assertExecutorLockRefused(restore, connect, operation) {
+  await withClient(restore.admin(), (holder) =>
+    holder.begin(async (tx) => {
+      const [{ acquired }] =
+        await tx`select pg_try_advisory_xact_lock(${webMigrationLockKey}) as acquired`;
+      assert.equal(acquired, true, "The competing transaction must hold the Web migration lock");
+      const before = await roleCatalog(tx);
+      await withClient(connect(provisioner), async (client) => {
+        const statements = [];
+        let closed = false;
+        client.options.debug = (_id, statement) => statements.push(statement.trim());
+        client.options.onclose = () => {
+          closed = true;
+        };
+        await assert.rejects(
+          runAuthority(() => client, operation),
+          {
+            code: "ERR_ASSERTION",
+            actual: false,
+            expected: true,
+            operator: "strictEqual",
+          },
+        );
+        assert.ok(statements.includes("select pg_try_advisory_xact_lock($1) as acquired"));
+        assert.doesNotMatch(statements.join("\n"), /\bpg_auth_members\b|^(?:grant|revoke)\b/im);
+        // Check cleanup before withClient performs its fallback close.
+        assert.equal(closed, true, "The executor must await connection shutdown");
+        await assert.rejects(client`select 1`, { code: "CONNECTION_ENDED" });
+      });
+      assert.deepEqual(await roleCatalog(tx), before);
+    }),
+  );
+}
+
 const run = (connect, direction, before, after) => {
   const plan = JSON.stringify({ before, after, owners, identity: identity(executor) });
   return runRepair(
@@ -633,7 +669,14 @@ test("PostgreSQL 18 branch replay preserves repair and Bot scope with alternate 
     phase = "refuse repair during a snapshot write";
     const unprovisioned = await inspect(connect);
     assert.deepEqual(namedRepairScope(unprovisioned), namedRepairScope(originalRepairState));
+    await assertExecutorLockRefused(restore, connect, "provision");
     await runAuthority(connect, "provision");
+    changes(
+      replayed.edges,
+      (await readRestore()).edges,
+      [],
+      [[migrator, executor, provisioner, false, true, true]],
+    );
     const pre = await inspect(connect);
     const before = pre.digest;
     const expected = await withClient(connect(executor), expectedForward);
@@ -659,11 +702,15 @@ test("PostgreSQL 18 branch replay preserves repair and Bot scope with alternate 
     assert.equal(await repair("undo"), "committed");
     assert.equal(await repair("readback"), "before");
     assert.deepEqual(await readRestore(), provisionedRoles);
+    await assertExecutorLockRefused(restore, connect, "revoke");
     await runAuthority(connect, "revoke");
     assert.deepEqual(await inspect(connect), unprovisioned);
     assert.deepEqual(await readRestore(), replayed);
     await webReads(fresh, false);
     await botReads(connect);
+    t.diagnostic(
+      "The held Web migration lock refused provision and revoke before membership access and closed both clients. Both scoped transitions passed after release.",
+    );
     t.diagnostic(
       "Exact undo restored the original digest and the first revoke removed temporary authority.",
     );
