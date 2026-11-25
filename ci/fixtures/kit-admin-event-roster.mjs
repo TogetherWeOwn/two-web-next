@@ -14,19 +14,23 @@ const eventPath = `/admin/events/${eventKey}`;
 const filteredPath = `${eventPath}?roster_status=waitlisted`;
 const actors = ["900000000000021500", "900000000000021501", "900000000000021502"];
 const memberPrefix = "Synthetic roster member ";
-// The extra matching row crosses the 100-row boundary. Newer decoys would
-// enter the first page if either the status or event predicate were lost.
+const waitlistSize = 101;
+// The last joiner answered first, so answer sorting moves them to page two
+// without changing their FIFO position. The other-event decoy joined before
+// this roster and both decoys answered recently enough to expose a lost filter.
 const members = Array.from({ length: 103 }, (_, index) => {
   const position = index + 1;
+  const joinedMinute = index === 102 ? -1 : index;
+  const answeredMinute = index < waitlistSize ? (index + 1) % waitlistSize : index;
   return {
     id: String(900000000000021510n + BigInt(index)),
     username: `${memberPrefix}${position}`,
-    created: new Date(Date.UTC(2099, 0, 1, 10, index)),
-    answered: new Date(Date.UTC(2099, 0, 1, 12, index)),
+    created: new Date(Date.UTC(2099, 0, 1, 10, joinedMinute)),
+    answered: new Date(Date.UTC(2099, 0, 1, 12, answeredMinute)),
     position,
   };
 });
-const waitlist = members.slice(0, 101);
+const waitlist = members.slice(0, waitlistSize);
 
 function pageLink(roster, rel, origin) {
   const links = [...renderedElements(roster, { tag: "a" })];
@@ -126,8 +130,8 @@ export async function assertAdminEventRosterParity({ kit, fallback, databaseUrl 
     });
     seeded = true;
 
-    const first = waitlist.slice(1).reverse();
-    const second = waitlist.slice(0, 1);
+    const first = waitlist.slice(0, -1).reverse();
+    const second = waitlist.slice(-1);
     const member = await session(sql, memberId, false);
     for (const [worker, owned, moderatorId] of [
       [kit, true, kitModerator],
