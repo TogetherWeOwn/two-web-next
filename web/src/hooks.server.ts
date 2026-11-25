@@ -146,6 +146,7 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
     fixtureEventDetail: env.KIT_PARITY_FIXTURE_EVENT_DETAIL === "true",
     fixtureJoin: env.KIT_PARITY_FIXTURE_JOIN === "true",
     fixtureAdminDashboard: env.KIT_PARITY_FIXTURE_ADMIN_DASHBOARD === "true",
+    fixtureAdminAttendance: env.KIT_PARITY_FIXTURE_ADMIN_ATTENDANCE === "true",
     // The member board's anonymous view log, written only after the
     // member-read boundary released a 200 (no-op for every other route).
     afterMemberRead: (event, response) =>

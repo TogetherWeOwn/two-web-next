@@ -157,6 +157,9 @@ writeFileSync(
       ...(process.env.KIT_PARITY_FIXTURE_ADMIN_DASHBOARD === "true"
         ? { KIT_PARITY_FIXTURE_ADMIN_DASHBOARD: "true" }
         : {}),
+      ...(process.env.KIT_PARITY_FIXTURE_ADMIN_ATTENDANCE === "true"
+        ? { KIT_PARITY_FIXTURE_ADMIN_ATTENDANCE: "true" }
+        : {}),
       // Same shared `events-read:anon` bucket as the Hono loopback worker
       // (same disposable Postgres, no forwarded client headers), so the Kit
       // legs need the same raised budget (docs/event-read-admission.md).

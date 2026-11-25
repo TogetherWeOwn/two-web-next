@@ -15,6 +15,57 @@ import {
 // non-loopback APP_URL or a missing flag keeps the shipped manifest, and
 // the fixture seam still supplies no override on a deployed APP_URL.
 describe("fixtureManifestFor (Kit parity fixture only)", () => {
+  it("adds attendance only to the opted-in loopback fixture manifest", () => {
+    const path = "/admin/attendance";
+    expect(ROUTE_MANIFEST.some((route) => route.path === path)).toBe(false);
+    expect(
+      fixtureManifestFor({
+        APP_URL: "http://127.0.0.1:8788",
+        includeReconciliation: true,
+      })?.some((route) => route.path === path),
+    ).toBe(false);
+    for (const APP_URL of ["https://127.0.0.1:8788", "http://next.example.test"]) {
+      expect(fixtureManifestFor({ APP_URL, includeAttendance: true })).toBeUndefined();
+    }
+    expect(
+      fixtureManifestFor({ APP_URL: "http://127.0.0.1:8788", includeAttendance: true }),
+    ).toEqual([
+      ...ROUTE_MANIFEST,
+      {
+        method: "GET",
+        path,
+        enabled: true,
+        reads: { resource: "event_attendance", action: "view", route: "admin.attendance.show" },
+      },
+    ]);
+  });
+
+  it.each([
+    ["GET", "/admin/attendance", false, false],
+    ["GET", "/admin/attendance/__data.json", true, true],
+    ["GET", "/admin/attendance/", true, false],
+    ["HEAD", "/admin/attendance", true, false],
+    ["POST", "/admin/attendance", true, false],
+  ] as const)(
+    "keeps %s %s on Hono when off or outside the fixture document",
+    async (method, requestPath, fixtureAdminAttendance, isDataRequest) => {
+      const appUrl = "http://127.0.0.1:8788";
+      const path = "/admin/attendance";
+      const request = new Request(appUrl + requestPath, { method });
+      const honoFetch = vi.fn(async () => new Response(null, { status: 404 }));
+      const resolve = vi.fn(async () => new Response("unexpected fixture"));
+      const sessionFor = vi.fn();
+      const response = await dispatchHookRequest(
+        { request, url: new URL(appUrl + path), route: { id: path }, isDataRequest },
+        { appUrl, honoFetch, resolve, sessionFor, fixtureAdminAttendance },
+      );
+      expect(response.status).toBe(404);
+      expect(honoFetch).toHaveBeenCalledExactlyOnceWith(request);
+      expect(resolve).not.toHaveBeenCalled();
+      expect(sessionFor).not.toHaveBeenCalled();
+    },
+  );
+
   it("returns no override without the fixture flag", () => {
     expect(fixtureManifestFor({ APP_URL: "http://127.0.0.1:8788" })).toBeUndefined();
     expect(

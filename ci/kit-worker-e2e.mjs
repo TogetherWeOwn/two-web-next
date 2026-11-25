@@ -12,7 +12,11 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 import { STAGING_STATIC_DOCUMENT_READY } from "../src/kit-staging-static.ts";
-import { assertKitAdminServing, prepareAdminFixture } from "./fixtures/kit-admin-serving.mjs";
+import {
+  assertKitAdminServing,
+  assertKitAttendanceDisabled,
+  prepareAdminFixture,
+} from "./fixtures/kit-admin-serving.mjs";
 import { assertEventReadsParity } from "./fixtures/kit-event-reads-parity.mjs";
 import { assertStaticFeedParity } from "./fixtures/kit-static-feed-parity.mjs";
 import { expectedMarkerFor, kitHomeHeadingText } from "./kit-parity-gates.mjs";
@@ -769,8 +773,8 @@ export default {
       listen(instance.child, instance.origin, () => instance.log),
     ),
   );
-
   if (!args.length) {
+    await assertKitAttendanceDisabled(kitWithSession, databaseUrl);
     const profile = await startWorker("kit-profile-write", worker, assets, secret, {
       KIT_ROUTE_PROFILE_WRITES: "true",
     });

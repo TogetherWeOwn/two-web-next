@@ -289,6 +289,8 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   },
 ];
 
+const ATTENDANCE_FIXTURE_PATH = "/admin/attendance";
+
 // Fixture-only manifest for executed parity journeys. The generated loopback
 // worker can enable specific routes for their Kit journeys and captures.
 // Flags are honoured only for an HTTP loopback APP_URL;
@@ -304,13 +306,22 @@ export function fixtureManifestFor(env: {
   KIT_PARITY_FIXTURE_JOIN?: string;
   KIT_PARITY_FIXTURE_ADMIN_DASHBOARD?: string;
   includeReconciliation?: boolean;
+  includeAttendance?: boolean;
 }): OwnedRoute[] | undefined {
   const wantBoard = env.KIT_PARITY_FIXTURE_MEMBER_BOARD === "true";
   const wantDetail = env.KIT_PARITY_FIXTURE_EVENT_DETAIL === "true";
   const wantJoin = env.KIT_PARITY_FIXTURE_JOIN === "true";
   const wantDashboard = env.KIT_PARITY_FIXTURE_ADMIN_DASHBOARD === "true";
   const wantReconciliation = env.includeReconciliation === true;
-  if (!wantBoard && !wantDetail && !wantJoin && !wantDashboard && !wantReconciliation)
+  const wantAttendance = env.includeAttendance === true;
+  if (
+    !wantBoard &&
+    !wantDetail &&
+    !wantJoin &&
+    !wantDashboard &&
+    !wantReconciliation &&
+    !wantAttendance
+  )
     return undefined;
   let app: URL;
   try {
@@ -354,6 +365,14 @@ export function fixtureManifestFor(env: {
       enabled: true,
       // The service audits the submit; the detail boundary keeps its response private.
       reads: { resource: "reconciliation", action: "view", route: "admin.reconciliation.show" },
+    });
+  }
+  if (wantAttendance) {
+    routes.push({
+      method: "GET",
+      path: ATTENDANCE_FIXTURE_PATH,
+      enabled: true,
+      reads: { resource: "event_attendance", action: "view", route: "admin.attendance.show" },
     });
   }
   return routes;
@@ -733,6 +752,7 @@ export interface HookDispatchDeps {
   // Recovery retains Hono middleware and controller; only SSR is delegated.
   recoveryPage?: (request: Request, render: RecoveryRender) => Promise<Response>;
   fixtureAdminDashboard?: boolean;
+  fixtureAdminAttendance?: boolean;
   // Optional read-only session bridge. Runs only after a Kit
   // ownership decision and merges its decision into event.locals before
   // resolve, so Kit loads share one session decision. Absent by default:
@@ -1133,6 +1153,13 @@ async function dispatchOwnedRequest(
         KIT_PARITY_FIXTURE_EVENT_DETAIL: deps.fixtureEventDetail ? "true" : undefined,
         KIT_PARITY_FIXTURE_JOIN: deps.fixtureJoin ? "true" : undefined,
         includeReconciliation: deps.fixtureAdminDashboard,
+        // The fixture has only a document representation. Keep data requests,
+        // other methods and aliases on the default Hono path.
+        includeAttendance:
+          deps.fixtureAdminAttendance &&
+          event.request.method === "GET" &&
+          !event.isDataRequest &&
+          new URL(event.request.url).pathname === ATTENDANCE_FIXTURE_PATH,
         // Use the original URL: Kit strips the data suffix from event.url.
         KIT_PARITY_FIXTURE_ADMIN_DASHBOARD:
           deps.fixtureAdminDashboard &&

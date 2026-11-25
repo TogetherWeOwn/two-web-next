@@ -78,6 +78,30 @@ async function visit(worker, path, status, { method = "GET", headers, body, owne
   return { headers: response.headers, text };
 }
 
+export async function assertKitAttendanceDisabled(off, databaseUrl) {
+  const moderatorId = String(900000000000000000n + BigInt(`0x${randomBytes(7).toString("hex")}`));
+  const sql = postgres(databaseUrl, { max: 1 });
+  try {
+    const cookie = await session(sql, moderatorId, true);
+    const { text } = await visit(off, "/admin/attendance", 404, {
+      headers: { ...html, cookie },
+      owned: false,
+    });
+    assert.match(text, /We cannot find that page/);
+    assert.doesNotMatch(text, /Event attendance|Sample participant/);
+  } finally {
+    try {
+      await sql.begin(async (tx) => {
+        await tx`delete from web_session_grace where user_id = ${moderatorId}`;
+        await tx`delete from web_sessions where user_id = ${moderatorId}`;
+      });
+    } finally {
+      await sql.end({ timeout: 1 });
+    }
+  }
+  console.log("PASS built Kit Worker keeps attendance disabled for a moderator by default");
+}
+
 export async function assertStagedAdminServing({ origin, owner, secrets, enabled }) {
   const worker = { name: "isolated admin cutover", origin };
   const actor = 900000000000000000n + BigInt(`0x${randomBytes(7).toString("hex")}`);
