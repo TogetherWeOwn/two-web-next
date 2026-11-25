@@ -57,6 +57,7 @@ export async function assertKitAdminRsvpControls({ hono, off, on, databaseUrl })
       SESSION_COOKIE,
       token,
       FIXTURE_SECRETS.SESSION_SECRET,
+      { path: "/", secure: true },
     );
     return cookie.split(";", 1)[0];
   }
