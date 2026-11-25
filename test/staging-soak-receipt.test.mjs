@@ -190,6 +190,47 @@ test("records explicit supersession before or after the floor and preserves earl
   assert.equal(JSON.stringify(historical), saved);
 });
 
+test("requires a different Worker's supersession observation to follow the selected deployment", async () => {
+  const deployedAtMs = Date.parse(evidence.deployment.deployedAt);
+  const { sample: _sample, ...base } = expected;
+  const { calls, options } = mockReads();
+  const validationClock = { nowMs: byFloor };
+  const invalidSupersession = /Invalid staging supersession evidence/;
+  const observation = (offset) => ({
+    sha: otherSha,
+    workerVersion: otherVersion,
+    observedAt: new Date(deployedAtMs + offset).toISOString(),
+  });
+
+  for (const offset of [-1, 0]) {
+    const replacement = observation(offset);
+    const observed = { ...evidence, replacement };
+    const superseded = { ...base, status: "superseded", replacement };
+
+    await assert.rejects(captureStagingSoakReceipt(observed, options), invalidSupersession);
+    assert.throws(
+      () => validateStagingSoakReceipt(observed, superseded, validationClock),
+      invalidSupersession,
+    );
+    assert.throws(
+      () => validateStagingSoakReceipt(observed, expected, validationClock),
+      invalidSupersession,
+    );
+  }
+
+  const replacement = observation(1);
+  const observed = { ...evidence, replacement };
+  const superseded = { ...base, status: "superseded", replacement };
+  assert.deepEqual(await captureStagingSoakReceipt(observed, options), superseded);
+  assert.deepEqual(validateStagingSoakReceipt(observed, superseded, validationClock), superseded);
+  assert.throws(
+    () => validateStagingSoakReceipt(observed, expected, validationClock),
+    /receipt mismatch/,
+  );
+  assert.deepEqual(calls, []);
+  assert.deepEqual(validateStagingSoakReceipt(evidence, expected, validationClock), expected);
+});
+
 test("allocation soak refuses a new allocation for the same Worker and candidate", async () => {
   const soakEvidence = {
     sha,
