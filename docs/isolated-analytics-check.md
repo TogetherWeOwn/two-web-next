@@ -9,7 +9,7 @@ Serve direct UTF-8 HTML without cookies at `/__analytics-fixture` (minimal eligi
 `X-Two-Analytics-Jurisdiction` at the isolated edge on both responses. Derive jurisdiction from
 trusted provider country and EU classification. Use `eu` for a classified EU visit, `uk` for
 `GB`, `unknown` for unavailable geography like `XX`, and `allowed` for a confirmed permitted visit
-like `US`. Trace can simulate rule evaluation. Browser delivery requires verified egress.
+like `US`. Trace checks rules only. If approved egress is unavailable, record the case as unverified.
 
 With pinned dependencies and Chromium, run from each approved egress. Set `ISOLATED_ANALYTICS_ORIGIN`
 without a trailing slash. `--expect` compares the edge response and sends no location override.
