@@ -205,7 +205,8 @@ export async function assertEventMarkdownParity({
       assert.equal(error.headers.get("x-robots-tag"), "noindex, nofollow", spelling);
     }
     await parity(`${nested}${query}`, { status: 404, method: "HEAD" });
-    await request(kit, nested, { status: 404, headers: fixtureClient() });
+    const absent = await request(kit, nested, { status: 404, headers: fixtureClient() });
+    assert.equal(absent.headers.get("content-type"), markdownType, `${nested}: binding absent`);
     const lineBreak = await parity(detail("bad%0Akey"), { status: 404, native: false });
     assert.match(lineBreak.headers.get("content-type"), /^text\/html/);
     for (const miss of [
@@ -244,34 +245,39 @@ export async function assertEventMarkdownParity({
       assert.match(bare.headers.get("content-type"), /^text\/html/);
     }
 
-    const headers = { ...fixtureClient(), accept: "application/json" };
-    const bucket = buckets.at(-1);
-    async function hits(expected) {
+    async function hits(bucket, expected) {
       const [{ count }] =
         await sql`select count(*)::int from web_throttle_hits where bucket = ${bucket}`;
       assert.equal(count, expected, "one shared events-read charge per admitted read");
     }
-    await request(off, "/events.md", { status: 200, headers });
-    await hits(1);
-    await request(on, suffixAlias, {
-      status: 304,
-      owner: "kit",
-      headers: { ...headers, "if-none-match": "*" },
-    });
-    await hits(2);
-    await request(on, "/api/public/events", { status: 200, owner: "kit", headers });
-    await hits(3);
-    for (const target of [off, on]) {
-      const result = await request(target, nested, {
-        status: 429,
-        owner: target === on ? "kit" : null,
+    for (const [conditionalPath, limitedPath] of [
+      [path, path],
+      [suffixAlias, nested],
+    ]) {
+      const headers = { ...fixtureClient(), accept: "application/json" };
+      const bucket = buckets.at(-1);
+      await request(off, "/events.md", { status: 200, headers });
+      await hits(bucket, 1);
+      await request(on, conditionalPath, {
+        status: 304,
+        owner: "kit",
         headers: { ...headers, "if-none-match": "*" },
       });
-      assert.match(result.headers.get("retry-after"), /^[1-9]\d*$/);
-      assert.equal(result.headers.get("cache-control"), "no-store, private");
-      assert.equal(result.headers.get("etag"), null);
+      await hits(bucket, 2);
+      await request(on, "/api/public/events", { status: 200, owner: "kit", headers });
+      await hits(bucket, 3);
+      for (const target of [off, on]) {
+        const result = await request(target, limitedPath, {
+          status: 429,
+          owner: target === on ? "kit" : null,
+          headers: { ...headers, "if-none-match": "*" },
+        });
+        assert.match(result.headers.get("retry-after"), /^[1-9]\d*$/);
+        assert.equal(result.headers.get("cache-control"), "no-store, private");
+        assert.equal(result.headers.get("etag"), null);
+      }
+      await hits(bucket, 3);
     }
-    await hits(3);
     console.log(
       "PASS installed Worker legacy event Markdown suffix, redirects and neighboring routes",
     );
