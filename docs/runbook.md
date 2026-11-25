@@ -1026,8 +1026,8 @@ green is not promotion evidence.
 
 #### Archived staging soak receipts
 
-The staging-soak job archives a `staging-soak/2` receipt per attempt. Keep v1
-and supersession records as history. Promotion takes a live sample.
+The staging-soak job verifies live evidence and archives `staging-soak/2` per attempt.
+The `staging-soak/1` example below applies to historical records only.
 
 Use [`ci/staging-soak-receipt.mjs`](../ci/staging-soak-receipt.mjs) with the
 verified deploy SHA, Worker UUID and `/version` timestamp. Supply the retained
