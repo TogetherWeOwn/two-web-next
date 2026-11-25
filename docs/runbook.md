@@ -834,12 +834,20 @@ Keep required resources/bindings in place; never delete a queue to roll back.
 [.github/workflows/rollback-production.yml](../.github/workflows/rollback-production.yml)
 is the one-click production rollback: Actions → `rollback-production` → Run
 workflow, branch `main`, `environment` `production` (the default),
-`version_id` set to the recorded known-good Worker Version ID. It reuses the
-same request gate (`workflow_dispatch` on `main`, `PRODUCTION_DEPLOY_ENABLED`
-exactly `true`) and the same `production` Environment gate as a deploy
-(`node ci/production-deploy-gate.mjs --rollback`). Both preflight and the
-mutation job receive the repository variable `PRODUCTION_AUTO_APPROVE`:
-exactly `true` selects automated approval, requiring the main-only Environment
+`version_id` set to the recorded known-good Worker Version ID, and
+`expected_current_version_id` set to the currently serving Worker Version ID.
+Supply distinct lowercase UUIDs and set `ref` to the full lowercase 40-hex
+SHA whose rollback scripts should run. Pick a protected `main` ancestor with
+successful push CI on that exact SHA. The dispatch can run from protected
+`main` while unrelated CI for its tip is pending or red. The dispatcher
+verifies ancestry and CI before checking out the selected scripts and repeats
+the checks inside the protected job. The current-version guard skips the
+mutation if the target already serves and refuses if a third version serves.
+
+The workflow requires `PRODUCTION_DEPLOY_ENABLED` exactly `true` and uses the
+same `production` Environment gate as a deploy. Both preflight and the
+mutation job receive the repository variable `PRODUCTION_AUTO_APPROVE`.
+Setting it to `true` selects automated approval, requiring the main-only Environment
 branch policy and green exact-SHA CI of the checked-out rollback scripts.
 A rollback serves a version production already served, so it never needs
 staging evidence for the checked-out commit and never waits on
@@ -849,8 +857,8 @@ reviewer-less Environment is refused. Exact-SHA CI remains required in either
 mode. The workflow uses the same production-only Cloudflare credentials as a
 deploy, then runs `wrangler rollback <version_id> --name two-web-next-production`
 followed by the same `/up` smoke. The same workflow takes `environment`
-`staging` (Worker `two-web-next`, staging credentials, the `deploy-staging`
-lock); `ci/rollback-target.mjs` is the one map from environment to Worker and
+`staging` (manual dispatch uses its own SHA, Worker `two-web-next`, staging
+credentials, the `deploy-staging` lock); `ci/rollback-target.mjs` maps environments to Worker and
 origin. This approval-mode selection applies only to the Worker
 rollback; it does not change database migration or backup policy. The
 `version_id` input must be a lowercase Worker Version UUID and travels
@@ -908,7 +916,8 @@ mode it waits for a reviewer like any other production mutation; in
 auto-approve mode it runs on its own. If `auto-rollback` itself fails (or
 waits on an approval nobody gives), the failure mode is a live promoted
 version, never a silent rollback: restore manually with this workflow using
-the version ID in the failed step's logs.
+the recorded restoration target, the promoted version UUID if it still serves,
+and an exact green `main` scripts SHA.
 
 The watch measures its retained 30 minutes with a monotonic clock, not UTC;
 UTC still identifies the analytics query window. Readiness and rate-check
