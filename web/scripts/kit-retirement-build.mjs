@@ -6,12 +6,14 @@ import { concretePath, multiSegmentPath } from "../../ci/parity/vectors.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const fallbackTarget = "web/src/routes/[...path]/+server.ts";
-const fallbackSources = ["web/src/lib/server/hono.ts", fallbackTarget];
+const fallbackBridge = "web/src/lib/server/hono.ts";
+const serverHook = "web/src/hooks.server.ts";
 const legacySeams = new Set([
   "src/index.tsx",
   "src/route-ownership.ts",
   "src/worker.ts",
-  ...fallbackSources,
+  fallbackBridge,
+  fallbackTarget,
 ]);
 const readFixture = (name) =>
   JSON.parse(readFileSync(new URL(`../../test/fixtures/${name}.json`, import.meta.url), "utf8"));
@@ -39,6 +41,14 @@ export function requireKitRetirementReport(output, mode) {
       ),
     "incomplete Kit retirement report",
   );
+  const chunkDependencies = report.honoRemoval.chunks.flatMap(({ dependencies }) =>
+    dependencies.map(({ dependency }) => dependency),
+  );
+  assert.deepEqual(
+    new Set(chunkDependencies),
+    new Set(report.honoDependencies),
+    "missing chunk evidence",
+  );
   return report;
 }
 
@@ -64,46 +74,40 @@ function addToSet(map, key, value) {
 }
 
 function removalUnits(rows) {
-  const bySource = new Map();
   const units = new Map();
   for (const row of rows) {
-    if (
-      row.kind === "middleware" ||
-      typeof row.target !== "string" ||
-      !routeTarget.test(row.target)
-    ) {
-      continue;
-    }
     const { target, family = null, slice = null, owner = null } = row;
+    if (row.kind === "middleware" || typeof target !== "string") continue;
+    if (!routeTarget.test(target)) continue;
     if (!units.has(target)) units.set(target, { target, registrations: [] });
     units.get(target).registrations.push({ route: routeKey(row), family, slice, owner });
-    bySource.set(target, target);
-    if (target.endsWith("/+page.svelte")) {
-      bySource.set(target.replace(/\.svelte$/, ".server.ts"), target);
-    }
   }
-  units.set(fallbackTarget, { target: fallbackTarget, slice: "API-10", registrations: [] });
-  for (const source of fallbackSources) bySource.set(source, fallbackTarget);
-  return { bySource, units };
+  for (const target of [fallbackTarget, serverHook]) {
+    units.set(target, { target, slice: "API-10", registrations: [] });
+  }
+  return units;
 }
 
-function entrypointOwners(id, importers, bySource) {
+function entrypointOwners(id, importers, unitsByTarget) {
   const units = new Set();
   const unownedImporters = new Set();
   const pending = new Set([id]);
   // Visiting each module once also handles cycles between shared helpers.
   for (const current of pending) {
     const source = kitSource(current);
-    const unit = bySource.get(source);
-    if (unit) {
-      units.add(unit);
+    const target = source.replace(/\/\+page\.server\.ts$/, "/+page.svelte");
+    if (target !== serverHook && unitsByTarget.has(target)) {
+      units.add(target);
       continue;
     }
-    const parents = [...(importers.get(current) ?? [])];
-    if (!parents.length || parents.some((parent) => !kitSource(parent))) {
-      unownedImporters.add(source);
+    const parents = importers.get(current);
+    if (!parents?.size) unownedImporters.add(source);
+    for (const parent of parents ?? []) {
+      const parentSource = kitSource(parent);
+      if (!parentSource) unownedImporters.add(source);
+      else if (source === fallbackBridge && parentSource === serverHook) units.add(serverHook);
+      else pending.add(parent);
     }
-    for (const parent of parents) if (kitSource(parent)) pending.add(parent);
   }
   if (!units.size && !unownedImporters.size) unownedImporters.add(kitSource(id));
   return { units, unownedImporters };
@@ -126,7 +130,7 @@ function traceKitEntrypoints(origins, importers) {
 }
 
 function describeEntrypoints(ids, importers, rows) {
-  const { bySource, units } = removalUnits(rows);
+  const units = removalUnits(rows);
   const entrypoints = [];
   const usedUnits = new Set();
   const byPath = Map.groupBy(ids, kitSource);
@@ -134,7 +138,7 @@ function describeEntrypoints(ids, importers, rows) {
     const targets = new Set();
     const unowned = new Set();
     for (const id of byPath.get(source)) {
-      const owners = entrypointOwners(id, importers, bySource);
+      const owners = entrypointOwners(id, importers, units);
       for (const target of owners.units) targets.add(target);
       for (const importer of owners.unownedImporters) unowned.add(importer);
     }

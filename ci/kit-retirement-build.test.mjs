@@ -90,15 +90,13 @@ test("joins shared and lazy SSR imports to exact route and fallback removal unit
   const page = "web/src/routes/profile/+page.svelte";
   const pageLoad = "web/src/routes/profile/+page.server.ts";
   const helper = "web/src/lib/server/shared.ts";
+  const hook = "web/src/hooks.server.ts";
   const bridge = "web/src/lib/server/hono.ts";
   const fallback = "web/src/routes/[...path]/+server.ts";
   const legacyApp = source("src/index.tsx");
   const packageModule = source("node_modules/hono/dist/context.js");
   const graph = new Map([
-    [
-      source("web/src/hooks.server.ts"),
-      { dynamicallyImportedIds: [source(ops), source(fallback)] },
-    ],
+    [source(hook), { importedIds: [source(bridge)], dynamicallyImportedIds: [source(ops)] }],
     [source(ops), { importedIds: [source(helper)] }],
     [source(pageLoad), { importedIds: [source(helper)] }],
     [source(helper), { importedIds: [packageModule] }],
@@ -108,15 +106,18 @@ test("joins shared and lazy SSR imports to exact route and fallback removal unit
   ]);
   const bundle = {
     ...ssr({
-      modules: [source("web/src/hooks.server.ts"), source(pageLoad)],
+      modules: [source(hook), source(pageLoad)],
       imports: ["shared.js"],
-      dynamicImports: ["up.js", "fallback.js"],
+      dynamicImports: ["up.js"],
     }),
     "up.js": chunk("up.js", [source(ops)], { imports: ["shared.js"] }),
-    "fallback.js": chunk("fallback.js", [source(fallback), source(bridge)], {
-      imports: ["shared.js"],
-    }),
-    "shared.js": chunk("shared.js", [source(helper), legacyApp, packageModule]),
+    "shared.js": chunk("shared.js", [
+      source(helper),
+      source(fallback),
+      source(bridge),
+      legacyApp,
+      packageModule,
+    ]),
   };
   const rows = [
     { ...registration("GET", "/up", "/up/+server.ts"), family: "ops", slice: "API-3" },
@@ -124,28 +125,23 @@ test("joins shared and lazy SSR imports to exact route and fallback removal unit
     { ...registration("GET", "/profile", "/profile/+page.svelte"), owner: "Page owner" },
   ];
   const { honoRemoval } = inspectSsrBundle(bundle, (id) => graph.get(id), rows);
-  assert.deepEqual(
-    honoRemoval.chunks.map(({ file }) => file),
-    ["fallback.js", "shared.js"],
-  );
+  assert.equal(honoRemoval.chunks[0].file, "shared.js");
   assert.deepEqual(honoRemoval.chunks[0].dependencies, [
+    finding("hono/dist/context.js", [bridge, helper]),
+    finding("src/index.tsx", [bridge]),
     finding(bridge, [bridge]),
     finding(fallback, [fallback]),
   ]);
-  assert.deepEqual(honoRemoval.chunks[1].dependencies, [
-    finding("hono/dist/context.js", [bridge, helper]),
-    finding("src/index.tsx", [bridge]),
-  ]);
   assert.deepEqual(honoRemoval.entrypoints, [
-    { source: bridge, targets: [fallback], unownedImporters: [] },
+    { source: bridge, targets: [hook, fallback], unownedImporters: [] },
     { source: helper, targets: [page, ops], unownedImporters: [] },
     { source: fallback, targets: [fallback], unownedImporters: [] },
   ]);
   assert.deepEqual(honoRemoval.lazyChunks, [
-    { file: "fallback.js", importers: ["index.js"], dependencyFiles: ["fallback.js", "shared.js"] },
     { file: "up.js", importers: ["index.js"], dependencyFiles: ["shared.js"] },
   ]);
-  const [fallbackUnit, pageUnit, opsUnit] = honoRemoval.units;
+  const [hookUnit, fallbackUnit, pageUnit, opsUnit] = honoRemoval.units;
+  assert.deepEqual(hookUnit, { target: hook, slice: "API-10", registrations: [] });
   assert.deepEqual(fallbackUnit, { target: fallback, slice: "API-10", registrations: [] });
   assert.deepEqual(pageUnit.registrations, [
     { route: "GET /profile", family: null, slice: null, owner: "Page owner" },
@@ -302,8 +298,8 @@ test("groups every blocker by its legacy family and exact method", (t) => {
 
 test("report reader requires grouped findings and removal evidence", () => {
   const report = { mode: "report", checked: 1, ready: true, honoDependencies: [], unowned: [] };
-  const line = (unownedByFamily, honoRemoval = emptyRemoval) =>
-    `Kit retirement report ${JSON.stringify({ ...report, unownedByFamily, honoRemoval })}`;
+  const line = (unownedByFamily, honoRemoval = emptyRemoval, honoDependencies = []) =>
+    `Kit retirement report ${JSON.stringify({ ...report, unownedByFamily, honoRemoval, honoDependencies })}`;
   assert.deepEqual(requireKitRetirementReport(line({}), "report"), {
     ...report,
     unownedByFamily: {},
@@ -318,6 +314,10 @@ test("report reader requires grouped findings and removal evidence", () => {
   assert.throws(
     () => requireKitRetirementReport(line({}, {}), "report"),
     /incomplete Kit retirement report/,
+  );
+  assert.throws(
+    () => requireKitRetirementReport(line({}, emptyRemoval, ["hono"]), "report"),
+    /missing chunk evidence/,
   );
 });
 

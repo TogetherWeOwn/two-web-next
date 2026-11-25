@@ -424,9 +424,9 @@ without a family, including page cutover rows, appear under `unresolved`.
 `honoRemoval.chunks` connects each SSR dependency to the first Kit sources on
 its emitted import paths. `entrypoints` links those sources to `units` with exact
 targets, registrations and recorded families, slices or owners. Page targets
-include their `+page.server.ts` companions. The Hono bridge and catch-all map to
-API-10. `lazyChunks` names dynamic targets, their importers and any Hono-bearing
-chunks reached through static imports, including the target itself.
+include their `+page.server.ts` companions. API-10 includes the catch-all and
+the server hook's import of the Hono bridge. `lazyChunks` names dynamic targets,
+their importers and Hono-bearing chunks reached through static imports.
 
 `unownedImporters` names Kit sources without a mapped target. Chunk findings flag
 paths without a Kit entrypoint as `unowned`. Both can appear alongside known
