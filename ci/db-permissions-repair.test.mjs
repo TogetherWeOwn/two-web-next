@@ -160,10 +160,10 @@ test("database repair recovery pins an unchanged dispatcher and a main ancestor"
     return [result.status, git("rev-parse", "HEAD")];
   };
   const diagnostic = fileURLToPath(new URL("./diagnose-db-repair-revision.mjs", import.meta.url));
-  const diagnose = (dispatch, pin = approved) =>
-    spawnSync(process.execPath, [diagnostic, pin, dispatch], { cwd, encoding: "utf8" });
-  const compare = (dispatch, pin) => {
-    const result = diagnose(dispatch, pin);
+  const diagnose = (...shas) =>
+    spawnSync(process.execPath, [diagnostic, ...shas], { cwd, encoding: "utf8" });
+  const compare = (dispatch, pin = approved) => {
+    const result = diagnose(pin, dispatch);
     assert.equal(result.status, 0, result.stderr);
     return JSON.parse(result.stdout);
   };
@@ -193,14 +193,25 @@ test("database repair recovery pins an unchanged dispatcher and a main ancestor"
     dispatch: tip,
     forward: "Dispatch SHA differs from approval pin",
     undo: "Revision check matches",
+    unavailableDispatchPaths: [],
     changedRecoveryPaths: [],
     changedPaths: [unrelatedDoc],
   });
   for (const operation of ["forward", "undo"]) {
     assert.deepEqual(select(repair, operation, approved, approved, ""), [1, approved]);
   }
-  assert.equal(diagnose(tip, unrelated).status, 1);
-  assert.equal(diagnose(tip, "f".repeat(40)).status, 1);
+  for (const shas of [
+    [unrelated, tip],
+    ["f".repeat(40), tip],
+    [approved],
+    [approved.slice(0, 7), tip],
+    [approved, `${tip}f`],
+    [`g${approved.slice(1)}`, tip],
+  ]) {
+    const result = diagnose(...shas);
+    assert.equal(result.status, 1);
+    assert.equal(result.stdout, "");
+  }
   for (const path of releaseInputs) {
     git("checkout", "--detach", approved);
     write(path, "Changed source fixture\n");
@@ -246,6 +257,20 @@ test("database repair recovery pins an unchanged dispatcher and a main ancestor"
   assert.deepEqual(select(executor, "revoke", changedSelector, approved), [1, changedSelector]);
   assert.deepEqual(select(repair, "undo", changedSelector, approved), [1, changedSelector]);
   assert.deepEqual(compare(changedSelector).changedRecoveryPaths, [selector]);
+
+  git("checkout", "--detach", tip);
+  git("rm", selector);
+  git("commit", "-qm", "removed selector");
+  const removedSelector = git("rev-parse", "HEAD");
+  assert.deepEqual(select(repair, "undo", removedSelector, approved), [1, removedSelector]);
+  const removed = compare(removedSelector);
+  assert.equal(removed.undo, "Workflow or selector unavailable at dispatch");
+  assert.deepEqual(removed.unavailableDispatchPaths, [selector]);
+  assert.deepEqual(removed.changedRecoveryPaths, [selector]);
+  const stillMissing = compare(removedSelector, removedSelector);
+  assert.equal(stillMissing.forward, "Workflow or selector unavailable at dispatch");
+  assert.equal(stillMissing.undo, removed.undo);
+  assert.deepEqual(stillMissing.changedRecoveryPaths, []);
 });
 
 test("repair refuses missing plan provenance and stale live identity before a write", async () => {

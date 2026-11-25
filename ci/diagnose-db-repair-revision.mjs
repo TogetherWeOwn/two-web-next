@@ -1,7 +1,9 @@
 import { execFileSync } from "node:child_process";
 
-const workflow = ".github/workflows/db-permissions-repair.yml";
-const selector = ".github/scripts/select-db-repair-revision.sh";
+const recoveryPaths = [
+  ".github/workflows/db-permissions-repair.yml",
+  ".github/scripts/select-db-repair-revision.sh",
+];
 const git = (...args) =>
   execFileSync("git", ["--no-replace-objects", ...args], {
     encoding: "utf8",
@@ -15,7 +17,19 @@ function report(approved, dispatch) {
     }
   }
   git("merge-base", "--is-ancestor", approved, dispatch);
-  for (const path of [workflow, selector]) git("cat-file", "-e", `${dispatch}:${path}`);
+  const dispatchEntries = git(
+    "ls-tree",
+    "--full-tree",
+    "--format=%(objectmode)%x09%(path)",
+    "-z",
+    dispatch,
+    "--",
+    ...recoveryPaths,
+  ).split("\0");
+  const unavailableDispatchPaths = recoveryPaths.filter(
+    (path) =>
+      !dispatchEntries.includes(`100644\t${path}`) && !dispatchEntries.includes(`100755\t${path}`),
+  );
   const changedPaths = git(
     "diff",
     "--name-only",
@@ -31,14 +45,20 @@ function report(approved, dispatch) {
     .split("\0")
     .slice(0, -1)
     .sort();
-  const changedRecoveryPaths = changedPaths.filter(
-    (path) => path === workflow || path === selector,
-  );
+  const changedRecoveryPaths = changedPaths.filter((path) => recoveryPaths.includes(path));
+  const unavailable = unavailableDispatchPaths.length
+    ? "Workflow or selector unavailable at dispatch"
+    : null;
   return {
     approved,
     dispatch,
-    forward: approved === dispatch ? "SHA matches" : "Dispatch SHA differs from approval pin",
-    undo: changedRecoveryPaths.length ? "Workflow or selector changed" : "Revision check matches",
+    forward:
+      unavailable ??
+      (approved === dispatch ? "SHA matches" : "Dispatch SHA differs from approval pin"),
+    undo:
+      unavailable ??
+      (changedRecoveryPaths.length ? "Workflow or selector changed" : "Revision check matches"),
+    unavailableDispatchPaths,
     changedRecoveryPaths,
     changedPaths,
   };

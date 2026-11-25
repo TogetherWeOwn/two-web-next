@@ -737,8 +737,8 @@ node ci/diagnose-db-repair-revision.mjs "$approved_sha" "$(git rev-parse origin/
 
 The command checks ancestry and lists changed source paths. A forward refusal
 with only unrelated paths means the exact dispatch SHA differs from the
-approval pin. A change to the repair workflow or shared selector also blocks
-the approved-ancestor undo. Even when the undo revision check matches, retain
+approval pin. A changed or missing repair workflow or shared selector also
+blocks the approved-ancestor undo. Even when the undo revision check matches, retain
 the approved inverse, authority, live identity and writer drain checks.
 
 Use the report to find migration, permissions or evidence-producer changes.
