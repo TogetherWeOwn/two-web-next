@@ -4,8 +4,10 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { generateSignedCookie } from "hono/cookie";
+import { parse } from "parse5";
 import postgres from "postgres";
 import { newEventKey } from "../../src/admin/validation-event-keys.ts";
+import { attr, elements, submittedFields } from "../../test/helpers/kit-edit-controls.ts";
 import { EMBER_CUTOVER_VARS } from "../kit-cutover-evidence.mjs";
 import { STAGING_ORIGIN } from "../operator-constants.mjs";
 import { FIXTURE_SECRETS, SESSION_COOKIE } from "../parity/fixture.mjs";
@@ -17,11 +19,15 @@ const html = { accept: "text/html" };
 
 export async function prepareAdminFixture(worker, entry) {
   const bot = "https://fixture-operator-bot.invalid";
+  const recurringProbe = fileURLToPath(
+    new URL("./kit-admin-recurring-create-worker.mjs", import.meta.url),
+  );
   await writeFile(
     entry,
     `
 import worker from ${JSON.stringify(worker)};
 import { env } from "cloudflare:workers";
+import { withRecurringCreateProbe } from ${JSON.stringify(recurringProbe)};
 const transport = globalThis.fetch;
 globalThis.fetch = async (input, init) => {
   if (input !== ${JSON.stringify(`${bot}/ops/config`)}) return transport(input, init);
@@ -32,7 +38,7 @@ globalThis.fetch = async (input, init) => {
   return Response.json({ epoch: 42, overrides: { label: "Fixture operator value" },
     baseline: {}, enforcement: "fixture" });
 };
-export default worker;
+export default withRecurringCreateProbe(worker);
 `,
   );
   return {
@@ -995,12 +1001,133 @@ async function assertAdminPublish({ kit, off, hono, sql, moderatorId, member }) 
   console.log("PASS installed Worker admin publish admission, transitions, audit, and write-back");
 }
 
+function eventEditFields(html, path) {
+  const forms = elements(parse(html)).filter(
+    (el) => el.tagName === "form" && attr(el, "data-event-editor") !== undefined,
+  );
+  assert.equal(forms.length, 1, "one event editor form");
+  assert.equal(attr(forms[0], "method"), "post");
+  assert.equal(attr(forms[0], "action"), path);
+  return submittedFields(forms[0]);
+}
+
+async function assertEventEditFallback({
+  kit,
+  off,
+  sql,
+  eventPath,
+  editHtml,
+  moderatorId,
+  moderatorCookie,
+  member,
+}) {
+  const key = eventPath.split("/").at(-1);
+  const fields = eventEditFields(editHtml, eventPath);
+  const baseline = fields.saved_baseline;
+  assert.match(baseline ?? "", /^[0-9a-f]{64}$/, "the Kit editor renders a saved baseline");
+  const moderator = { ...html, cookie: moderatorCookie };
+  const title = "Fixture admin draft edited on Kit";
+  const body = new URLSearchParams({ ...fields, title });
+  const post = { method: "POST", body };
+
+  async function snapshot() {
+    const series = await sql`
+      select id, event_key, title, description, status, starts_at, ends_at, timezone, updated_at,
+        recurrence_frequency, recurrence_count, recurrence_ends_on, recurrence_index, parent_event_id
+      from events
+      where event_key = ${key} or parent_event_id = (select id from events where event_key = ${key})
+      order by recurrence_index
+    `;
+    const event = series.find((row) => row.event_key === key);
+    assert.ok(event, "the synthetic event exists");
+    const occurrences = series.filter((row) => row !== event);
+    const activity = await sql`
+      select id, description, causer_id, properties from activity_log
+      where subject_type = 'Event' and subject_id in ${sql(series.map((row) => row.event_key))}
+      order by id
+    `;
+    return { event, occurrences, activity: [...activity] };
+  }
+
+  const before = await snapshot();
+  assert.equal(fields.title, before.event.title, "the Kit editor renders the original title");
+  assert.equal(before.event.recurrence_frequency, "weekly");
+  assert.equal(before.event.recurrence_count, 2);
+  assert.equal(before.event.recurrence_ends_on?.toISOString().slice(0, 10), "2099-10-08");
+  assert.equal(before.event.recurrence_index, 1);
+  assert.deepEqual(
+    before.occurrences.map(({ recurrence_index, parent_event_id }) => [
+      recurrence_index,
+      parent_event_id,
+    ]),
+    [[2, before.event.id]],
+    "one future occurrence belongs to the event",
+  );
+  await visit(kit, eventPath, 403, { ...post, headers: { ...html, cookie: member } });
+  assert.deepEqual(await snapshot(), before, "a member cannot edit the event or append audit");
+
+  const saved = await visit(kit, eventPath, 303, { ...post, headers: moderator });
+  assert.equal(saved.headers.get("location"), `${eventPath}?saved=1`);
+  const committed = await snapshot();
+  const { updated_at: updatedAt, ...event } = committed.event;
+  const { updated_at: previousUpdate, ...previousEvent } = before.event;
+  assert.ok(updatedAt > previousUpdate, "the save advances the event version");
+  assert.deepEqual(
+    event,
+    { ...previousEvent, title },
+    "the edit preserves schedule and recurrence",
+  );
+  assert.deepEqual(committed.occurrences, before.occurrences, "the edit preserves the occurrence");
+  assert.equal(committed.activity.length, before.activity.length + 1, "one audit row for the edit");
+  assert.deepEqual(committed.activity.slice(0, -1), before.activity);
+  const receipt = committed.activity.at(-1);
+  assert.equal(receipt.causer_id, moderatorId);
+  assert.equal(receipt.description, `updated event ${title}`);
+  assert.deepEqual(receipt.properties.title, { before: before.event.title, after: title });
+
+  const fallback = await visit(off, eventPath, 200, { owned: false, headers: moderator });
+  const current = eventEditFields(fallback.text, eventPath);
+  assert.equal(current.title, title, "Hono renders the committed title in the edit control");
+  assert.match(current.saved_baseline ?? "", /^[0-9a-f]{64}$/);
+  assert.notEqual(current.saved_baseline, baseline, "Hono renders a fresh baseline after the edit");
+
+  const unsavedTitle = "Keep this unsaved event title";
+  const unsavedDescription = "Keep these unsaved event notes";
+  const stale = await visit(off, eventPath, 409, {
+    method: "POST",
+    body: new URLSearchParams({
+      ...fields,
+      title: unsavedTitle,
+      description: unsavedDescription,
+      saved_baseline: baseline,
+    }),
+    owned: false,
+    headers: { ...moderator, cookie: renewedModerator(fallback.headers) },
+  });
+  assert.equal(stale.headers.get("location"), null);
+  assert.match(stale.text, /data-testid="stale-save"/);
+  assert.match(stale.text, /data-event-draft=""/);
+  const retained = eventEditFields(stale.text, eventPath);
+  assert.equal(retained.title, unsavedTitle);
+  assert.equal(retained.description, unsavedDescription);
+  assert.equal(retained.saved_baseline, baseline);
+  assert.deepEqual(await snapshot(), committed, "the stale save leaves the event and audit intact");
+}
+
 export async function assertKitAdminServing({ kit, nativeCreate, off, hono, databaseUrl }) {
   const actor = 900000000000000000n + BigInt(`0x${randomBytes(7).toString("hex")}`);
   const moderatorId = String(actor);
   const memberId = String(actor + 1n);
   const sql = postgres(databaseUrl, { max: 1 });
   try {
+    const { assertRecurringCreateParity } = await import("./kit-admin-recurring-create.mjs");
+    await assertRecurringCreateParity({
+      kit,
+      sql,
+      visit,
+      session,
+      actors: { kit: String(actor + 2n), hono: String(actor + 3n) },
+    });
     let moderator = await session(sql, moderatorId, true);
     const member = await session(sql, memberId, false);
     const operatorAuth = { authorization: `Bearer ${FIXTURE_SECRETS.OPS_CONTROL_TOKEN}` };
@@ -1102,9 +1229,13 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
       ...form,
       body: new URLSearchParams({
         title: "Fixture admin draft",
+        description: "Fixture draft notes\nSecond line & example",
         starts_at: "2099-10-01T12:00",
         ends_at: "2099-10-01T13:00",
         timezone: "UTC",
+        recurrence_frequency: "weekly",
+        recurrence_count: "2",
+        recurrence_ends_on: "2099-10-08",
       }),
     });
     const eventPath = draft.headers.get("location")?.split("?")[0];
@@ -1156,11 +1287,12 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
       await sql`select count(*)::int from events where created_by = ${moderatorId}`;
     const [{ count: writes }] =
       await sql`select count(*)::int from activity_log where causer_id = ${moderatorId}`;
-    assert.equal(events, 2, "event create and duplicate each persist once");
-    assert.equal(writes, 6, "six accepted actions each audit once; refusals do not write");
+    assert.equal(events, 3, "the series has two occurrences and duplicate adds one draft");
+    assert.equal(writes, 7, "accepted mutations audit each affected row once");
 
     // A seeded key makes the parameter route observable next to the static
     // form and exact alias. Both installed modes keep the other forms in Kit.
+    let kitEdit;
     for (const target of [kit, nativeCreate, hono]) {
       const owned = target !== hono;
       const cookie = target === kit ? moderator : await session(sql, moderatorId, true);
@@ -1217,12 +1349,17 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
         headers: { cookie: renewed },
       });
       assert.equal(legacyEdit.headers.get("location"), eventPath);
+      const latest = renewedModerator(legacyEdit.headers);
       await visit(target, legacyCreate, 413, {
         ...form,
         owned,
         body: "x".repeat(65537),
-        headers: { ...form.headers, cookie: renewedModerator(legacyEdit.headers) },
+        headers: { ...form.headers, cookie: latest },
       });
+      if (target === kit) {
+        kitEdit = existing.text;
+        moderator = latest;
+      }
     }
     console.log("PASS installed Worker admin event route precedence and moderator admission");
 
@@ -1245,18 +1382,41 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
       assert.equal(parameter.headers.get("location"), "/auth/discord");
     }
     console.log("PASS installed Worker legacy event-create redirect with Kit ownership off and on");
+    // Draft edits have no Discord mirror; the queue stub serves publish requests only.
+    assert.ok(kitEdit, "the installed Kit editor was reached");
+    await assertEventEditFallback({
+      kit,
+      off,
+      sql,
+      eventPath,
+      editHtml: kitEdit,
+      moderatorId,
+      moderatorCookie: moderator,
+      member,
+    });
 
     await assertAdminPublish({ kit, off, hono, sql, moderatorId, member });
   } finally {
     try {
       // Audit rows are append-only and are isolated by the synthetic actor.
       // The hosted job discards the disposable database at teardown.
-      await sql`delete from featured_contents where created_by = ${moderatorId}`;
-      await sql`delete from events where created_by = ${moderatorId}`;
-      await sql`delete from web_sessions where user_id in (${moderatorId}, ${memberId})`;
+      await sql.begin(async (tx) => {
+        await tx`delete from featured_contents where created_by = ${moderatorId}`;
+        await tx`delete from events where created_by = ${moderatorId}`;
+        await tx`delete from web_session_grace where user_id in (${moderatorId}, ${memberId})`;
+        await tx`delete from web_sessions where user_id in (${moderatorId}, ${memberId})`;
+        const [remaining] = await tx`select
+          exists(select 1 from events where created_by = ${moderatorId}) as events,
+          exists(select 1 from web_sessions where user_id in (${moderatorId}, ${memberId})) as sessions,
+          exists(select 1 from web_session_grace where user_id in (${moderatorId}, ${memberId})) as grace`;
+        assert.deepEqual(remaining, { events: false, sessions: false, grace: false });
+      });
     } finally {
       await sql.end({ timeout: 1 });
     }
   }
+  console.log(
+    "PASS installed event edit and Hono stale retry preserve one audit row; fixtures cleaned up",
+  );
   console.log("PASS Kit admin ownership, isolated bearers, and native form parity");
 }

@@ -435,10 +435,13 @@ export async function assertStaticFeedParity({
       ["OPTIONS", publicPath, 404],
       ["POST", publicPath, 403, "https://example.invalid"],
       ["GET", `${publicPath}/__data.json`, 404],
-      ["GET", "/events/outer/inner.ics", 404],
+      ["GET", "/events/outer/inner.ics/", 404],
+      ["HEAD", "/events/outer/inner%0A.ics", 404],
+      ["GET", "/events/outer/inner.ics/__data.json", 404],
+      ["POST", "/events/outer/inner.ics", 404],
+      ["GET", "/events%2Fouter%2Finner.ics", 404],
       ["GET", "/events/.ics", 401],
       ["GET", "/events/line%0Abreak.ics", 401],
-      ["GET", "/events/malformed%FF.ics", 404],
       ["GET", `/events/${eventKeys[0]}`, 401],
       ["GET", `/api/public/events/${eventKeys[0]}.ics`, 422],
       ["GET", "/version", 200],
@@ -545,8 +548,6 @@ export async function assertStaticFeedParity({
     }
 
     await compareFallback(feedOn, "GET", "/events%2Erss", 200);
-    await compareFallback(feedOn, "GET", `/events/${eventKeys[0]}%2Eics`, 200);
-    await compareFallback(feedOn, "GET", `/%65vents/${eventKeys[0]}.ics`, 200);
 
     const detailBaseline = new Map();
     for (const [index, target] of modes.entries()) {
@@ -604,6 +605,56 @@ export async function assertStaticFeedParity({
       });
       assert.equal(redirect.headers.get("location"), `${publicPath}?game=one%20two`);
       assert.equal(redirect.headers.get("set-cookie"), null);
+
+      const legacyAlias = `/events/${eventKeys[0]}%2Eics`;
+      const legacyRedirect = `/%65vents/${eventKeys[0].toLowerCase()}.ics?game=one%20two&ref=%2f`;
+      const legacyMisses = [
+        "/events/outer/inner.ics?ref=%2f",
+        "/events//.ics",
+        "/events/outer%2Finner%2Eics",
+        "/events/outer/inner%2fleaf.ics",
+        "/events/malformed%FF.ics",
+      ];
+      let legacyHits = await throttleHits(bucket);
+      for (const method of ["GET", "HEAD"]) {
+        const alias = await run(`legacy alias ${method}`, legacyAlias, { method, status: 200 });
+        assert.equal(alias.body, method === "HEAD" ? "" : get.body);
+        for (const name of [...wireHeaders, "etag"]) {
+          assert.equal(alias.headers.get(name), get.headers.get(name), name);
+        }
+        await run(`legacy alias conditional ${method}`, legacyAlias, {
+          method,
+          status: 304,
+          headers: { "if-none-match": publicTag },
+        });
+        const redirectAlias = await run(`legacy redirect ${method}`, legacyRedirect, {
+          method,
+          status: 301,
+        });
+        assert.equal(redirectAlias.headers.get("location"), `${publicPath}?game=one%20two&ref=%2f`);
+        assert.equal(redirectAlias.headers.get("set-cookie"), null);
+        for (const path of legacyMisses) {
+          const missing = await run(`legacy ${method} ${path}`, path, {
+            method,
+            status: 404,
+            headers: { "if-none-match": "*" },
+          });
+          assert.equal(missing.headers.get("x-robots-tag"), "noindex, nofollow");
+          assert.equal(missing.headers.get("content-type"), "text/html; charset=UTF-8");
+          assert.equal(missing.headers.get("cache-control"), "no-store, private");
+          for (const name of ["location", "content-disposition", "etag", "set-cookie"]) {
+            assert.equal(missing.headers.get(name), null, name);
+          }
+        }
+        // One read each for the alias, conditional, redirect and refusals.
+        legacyHits += 3 + legacyMisses.length;
+        assert.equal(
+          await throttleHits(bucket),
+          legacyHits,
+          `${target.name}: legacy ${method} requests charge the shared bucket`,
+        );
+      }
+
       const cancelled = await run("cancelled GET", eventCalendar(eventKeys[1]), { status: 200 });
       assert.match(cancelled.body, /STATUS:CANCELLED\r\n/);
 
@@ -673,6 +724,9 @@ export async function assertStaticFeedParity({
     }
     console.log(
       "PASS built Worker per-event ICS absent/off/on: path and method ownership, one budget charge, public, draft renewal and refusal parity",
+    );
+    console.log(
+      "PASS built Worker legacy ICS suffix absent/off/on: raw and encoded refusals, alias validators and canonical query redirects",
     );
 
     let directLimit;
