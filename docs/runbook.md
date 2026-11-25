@@ -726,6 +726,28 @@ when its workflow and revision selector match the dispatch revision.
 Before rolling out changes to either file, close any open recovery window.
 Start new repairs from an approved revision that includes the selector.
 
+When `main` advances after qualification, fetch the current protected tip.
+From a local checkout, set `approved_sha` to the reviewed commit's public SHA
+and compare it with the proposed dispatch SHA:
+
+```sh
+git fetch origin
+node ci/diagnose-db-repair-revision.mjs "$approved_sha" "$(git rev-parse origin/main)"
+```
+
+The command checks ancestry and lists changed source paths. A forward refusal
+with only unrelated paths means the exact dispatch SHA differs from the
+approval pin. A change to the repair workflow or shared selector also blocks
+the approved-ancestor undo. Even when the undo revision check matches, retain
+the approved inverse, authority, live identity and writer drain checks.
+
+Use the report to find migration, permissions or evidence-producer changes.
+A successful comparison only confirms that the command could compare the two
+commits. Exact CI, staging and isolation evidence, release approval and fresh
+live checks remain required under the production release gate. Treat missing
+or mismatched evidence as a stop. Qualify and obtain approval for a new exact
+forward candidate if the dispatch SHA changed.
+
 ### Migration rollback and recovery
 
 **Rollback:** a Worker rollback does not undo schema/data. SQL failure rolls back

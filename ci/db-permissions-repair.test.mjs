@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
+import { PLANETSCALE_PRODUCTION_BRANCH_ID, PLANETSCALE_PRODUCTION_HOST } from "./db-migrate.mjs";
+import { runRepair } from "./db-permissions-repair.mjs";
+
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const workflow = parse(read("../.github/workflows/db-permissions-repair.yml"));
 const shell = (script, env, prefix = "") =>
@@ -57,6 +62,7 @@ test("repair dispatch isolates the credential and pins protected main and the sa
   for (const override of [
     { CHECKED_ATTEMPT: "1" },
     { APPROVED_SHA: "not-a-sha" },
+    { APPROVED_SHA: "" },
     { PLAN_SHA256: "" },
   ]) {
     assert.equal(shell(gate.run, { ...pins, ...override }).status, 1);
@@ -100,6 +106,11 @@ test("database repair recovery pins an unchanged dispatcher and a main ancestor"
   const isolation = ".github/workflows/db-serving-ledger-isolation.yml";
   const selector = ".github/scripts/select-db-repair-revision.sh";
   const isolationSelector = ".github/scripts/select-db-serving-isolation-revision.sh";
+  const releaseInputs = [
+    "drizzle/1034_event-echoes.sql",
+    "ci/db-repair-executor.mjs",
+    ".github/workflows/deploy.yml",
+  ];
   git("init", "-q");
   git("config", "user.name", "Fixture");
   git("config", "user.email", "fixture@example.invalid");
@@ -110,10 +121,14 @@ test("database repair recovery pins an unchanged dispatcher and a main ancestor"
   git("commit", "-qm", "repair recovery available");
   const beforeIsolation = git("rev-parse", "HEAD");
   for (const path of [isolation, isolationSelector]) write(path, read(`../${path}`));
+  for (const path of releaseInputs) write(path, "Reviewed source fixture\n");
   git("add", ".");
-  git("commit", "-qm", "approved source");
+  git("commit", "-qm", "candidate with exact release approval");
   const approved = git("rev-parse", "HEAD");
-  git("commit", "-qm", "main advanced", "--allow-empty");
+  const unrelatedDoc = "docs/contributing-example.md";
+  write(unrelatedDoc, "# Unrelated prose\n");
+  git("add", ".");
+  git("commit", "-qm", "main advanced with unrelated prose");
   const tip = git("rev-parse", "HEAD");
   git("checkout", "--detach", approved);
   git("commit", "-qm", "unmerged source", "--allow-empty");
@@ -144,6 +159,19 @@ test("database repair recovery pins an unchanged dispatcher and a main ancestor"
     });
     return [result.status, git("rev-parse", "HEAD")];
   };
+  const diagnostic = fileURLToPath(new URL("./diagnose-db-repair-revision.mjs", import.meta.url));
+  const diagnose = (dispatch, pin = approved) =>
+    spawnSync(process.execPath, [diagnostic, pin, dispatch], { cwd, encoding: "utf8" });
+  const compare = (dispatch, pin) => {
+    const result = diagnose(dispatch, pin);
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout);
+  };
+
+  // Give the fixture a valid source and exact pins. CI, staging, isolation and
+  // independent release approval are operator evidence outside this workflow.
+  assert.deepEqual(select(repair, "forward", approved, approved), [0, approved]);
+  assert.equal(compare(approved).forward, "SHA matches");
   assert.deepEqual(select(repair, "forward", tip, tip), [0, tip]);
   assert.deepEqual(select(executor, "provision", tip, tip), [0, tip]);
   assert.deepEqual(select(isolation, "forward", tip, tip), [0, tip]);
@@ -160,6 +188,33 @@ test("database repair recovery pins an unchanged dispatcher and a main ancestor"
     assert.deepEqual(select(path, operation, tip, beforeRollout), [1, tip]);
   }
   assert.deepEqual(select(repair, "forward", tip, approved), [1, tip]);
+  assert.deepEqual(compare(tip), {
+    approved,
+    dispatch: tip,
+    forward: "Dispatch SHA differs from approval pin",
+    undo: "Revision check matches",
+    changedRecoveryPaths: [],
+    changedPaths: [unrelatedDoc],
+  });
+  for (const operation of ["forward", "undo"]) {
+    assert.deepEqual(select(repair, operation, approved, approved, ""), [1, approved]);
+  }
+  assert.equal(diagnose(tip, unrelated).status, 1);
+  assert.equal(diagnose(tip, "f".repeat(40)).status, 1);
+  for (const path of releaseInputs) {
+    git("checkout", "--detach", approved);
+    write(path, "Changed source fixture\n");
+    git("add", ".");
+    git("commit", "-qm", `changed ${path}`);
+    const changed = git("rev-parse", "HEAD");
+    assert.deepEqual(select(repair, "forward", changed, approved), [1, changed]);
+    assert.deepEqual(select(repair, "undo", changed, approved), [0, approved]);
+    const comparison = compare(changed);
+    assert.equal(comparison.forward, "Dispatch SHA differs from approval pin");
+    assert.equal(comparison.undo, "Revision check matches");
+    assert.deepEqual(comparison.changedRecoveryPaths, []);
+    assert.deepEqual(comparison.changedPaths, [path]);
+  }
   assert.deepEqual(select(executor, "provision", tip, approved), [1, tip]);
   assert.deepEqual(select(isolation, "forward", tip, approved), [1, tip]);
   assert.deepEqual(select(repair, "undo", tip, beforeIsolation), [0, beforeIsolation]);
@@ -182,10 +237,65 @@ test("database repair recovery pins an unchanged dispatcher and a main ancestor"
   git("commit", "-qam", "changed dispatcher");
   const changed = git("rev-parse", "HEAD");
   assert.deepEqual(select(repair, "undo", changed, approved), [1, changed]);
+  assert.equal(compare(changed).undo, "Workflow or selector changed");
+  assert.deepEqual(compare(changed).changedRecoveryPaths, [repair]);
+  git("checkout", "--detach", tip);
   write(selector, `${read(`../${selector}`)}\n# changed selector\n`);
   git("commit", "-qam", "changed selector");
   const changedSelector = git("rev-parse", "HEAD");
   assert.deepEqual(select(executor, "revoke", changedSelector, approved), [1, changedSelector]);
+  assert.deepEqual(select(repair, "undo", changedSelector, approved), [1, changedSelector]);
+  assert.deepEqual(compare(changedSelector).changedRecoveryPaths, [selector]);
+});
+
+test("repair refuses missing plan provenance and stale live identity before a write", async () => {
+  const hash = (value) => createHash("sha256").update(value).digest("hex");
+  const inventory = JSON.parse(read("db-permissions-repair-inventory.json"));
+  const plan = JSON.stringify({
+    before: "a".repeat(64),
+    after: "b".repeat(64),
+    identity: hash("postgres\0approved_executor"),
+    owners: inventory.map(() => "approved_executor"),
+  });
+  const env = {
+    PRODUCTION_DB_REPAIR_PLAN: plan,
+    PRODUCTION_DB_REPAIR_PLAN_SHA256: hash(plan),
+    PRODUCTION_DB_REPAIR_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:synthetic@${PLANETSCALE_PRODUCTION_HOST}/postgres?sslmode=verify-full`,
+  };
+  const staleIdentity = {
+    database: "postgres",
+    authenticated: "stale_executor",
+    effective: "stale_executor",
+  };
+
+  for (const operation of ["forward", "undo"]) {
+    await assert.rejects(
+      runRepair(operation, { ...env, PRODUCTION_DB_REPAIR_PLAN_SHA256: "" }, () =>
+        assert.fail("Unexpected connection without pinned plan bytes"),
+      ),
+      /raw && raw.length/,
+    );
+
+    const statements = [];
+    let closed = false;
+    await assert.rejects(
+      runRepair(operation, env, () => ({
+        begin: async (_, run) =>
+          run(([sql]) => {
+            statements.push(sql);
+            return sql.startsWith("select pg_catalog.current_database()") ? [staleIdentity] : [];
+          }),
+        end: async () => {
+          closed = true;
+        },
+      })),
+      /database or role identity did not match/,
+    );
+    assert.equal(statements.length, 5);
+    assert.ok(statements.slice(0, 4).every((sql) => sql.startsWith("set local ")));
+    assert.match(statements.at(-1), /^select pg_catalog\.current_database\(\)/);
+    assert.equal(closed, true);
+  }
 });
 
 test("executor dispatch scopes its credential and suppresses subprocess output", () => {
