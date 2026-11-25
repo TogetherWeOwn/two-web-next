@@ -993,10 +993,10 @@ Before the deploy job, `deploy-production` runs two more gates
 (`ci/production-deploy-gate.mjs`):
 
 - `staging-soak` requires one 100% Cloudflare allocation from before executed
-  E2E through its post-E2E 30-minute soak. Regression reads that run's ledger.
-  Restoring the same UUID starts a new allocation that needs fresh E2E and
-  soak. Exact main SHA manual E2E can qualify explicit SHA selection under
-  the release gates. Re-run all jobs after failure to collect a fresh sample.
+  E2E through its 30-minute soak and counts analytics from E2E start.
+  Regression uses that run's ledger. The rollback drill restores the UUID
+  under a new allocation, so run fresh E2E and soak. Exact main SHA manual E2E
+  can qualify explicit selection. Re-run all jobs after failure to resample.
 - `production-regression` (production Environment as the reviewer
   checkpoint, analytics via the repo-level read-only token) downloads the
   `staging-passive-ledger-<run>` artifact that `e2e-staging` recorded for the

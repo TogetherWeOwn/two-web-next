@@ -107,6 +107,20 @@ export function trustedReads({ fetchImpl }, { deployments, run, skipped = false 
         },
       });
     }
-    return fetchImpl(input, init);
+    const response = await fetchImpl(input, init);
+    if (
+      url.hostname === "api.cloudflare.com" &&
+      url.pathname.endsWith("/graphql") &&
+      run === preRollback
+    ) {
+      const e2eTraffic = Date.parse("2026-01-01T10:05:00Z");
+      const { since, until } = JSON.parse(init.body).variables;
+      if (e2eTraffic < Date.parse(since) || e2eTraffic > Date.parse(until)) {
+        return Response.json({
+          data: { viewer: { accounts: [{ workersInvocationsAdaptive: [] }] } },
+        });
+      }
+    }
+    return response;
   };
 }

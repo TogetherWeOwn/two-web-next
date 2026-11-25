@@ -236,7 +236,6 @@ test("a restored Worker needs continuous soak and fresh E2E for its new allocati
   assert.equal(receipt.allocationId, restored.id);
   assert.equal(receipt.workerVersion, workerVersion);
   assert.equal(receipt.e2e.runId, fresh.id);
-  assert.equal(receipt.sample.requests, 0);
-  assert.equal(receipt.sample.errors, 0);
-  assert.equal(ready.queries[0].variables.since, "2026-01-01T10:50:00.000Z");
+  assert.deepEqual([receipt.sample.requests, receipt.sample.errors], [0, 0]);
+  assert.equal(ready.queries[0].variables.since, fresh.run_started_at);
 });

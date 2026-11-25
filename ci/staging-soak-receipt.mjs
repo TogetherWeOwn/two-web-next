@@ -181,7 +181,7 @@ async function versionTaggedCounts(base, sampledAt, { accountId, token, fetchImp
       accountId,
       scriptName: "two-web-next",
       versionId,
-      sinceIso: base.e2eCompletedAt,
+      sinceIso: base.e2e?.startedAt ?? base.e2eCompletedAt,
       untilIso: observedAt,
     });
     const response = await fetchImpl(GRAPHQL_URL, {
@@ -205,9 +205,8 @@ async function versionTaggedCounts(base, sampledAt, { accountId, token, fetchImp
   return { observedAt, workerVersion: versionId, ...counts };
 }
 
-// Cloudflare creates a new immutable allocation on every traffic change,
-// including restoring a previously uploaded Worker. The latest allocation
-// covers the whole interval if it predates E2E and is still latest at sampling.
+// Every traffic change gets a new allocation, even when restoring a Worker.
+// The same latest allocation must span E2E and sampling.
 export async function captureAllocationSoak(
   { sha, e2e },
   { accountId, token, fetchImpl = fetch, now = Date.now },
