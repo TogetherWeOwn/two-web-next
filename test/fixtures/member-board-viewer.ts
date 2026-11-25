@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
+import { projectPublicEcho } from "../../src/events/echo-public";
 import { MemberLeaderboardPage } from "../../src/leaderboards/pages";
+import type { FrozenSeasonStandings } from "../../web/src/lib/season-standings";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const webRequire = createRequire(new URL("../../web/package.json", import.meta.url));
@@ -13,6 +15,37 @@ export type Twin = "hono" | "kit" | "season";
 export type Scope = "overall" | "relative";
 export const VIEWER = "Fixture viewer";
 const viewerId = "100000000000000202";
+
+const { label: echoLabel } = projectPublicEcho({
+  eventId: 1,
+  eventKey: "fixture-echo-event",
+  headline: null,
+  attendedCount: 42,
+  peakConcurrent: 12,
+  rooms: [],
+  windowEndsAt: new Date("2000-02-15T21:00:00Z"),
+  thresholdMinutes: 10,
+});
+
+export function frozenSeasonFixture(
+  state: "ranked" | "opted-out" | "zero" | "unavailable",
+): FrozenSeasonStandings {
+  const rows = [
+    { username: "Fixture leader", rank: 1, count: 8, isViewer: false },
+    { username: "Fixture neighbor", rank: 2, count: 1, isViewer: false },
+  ];
+  if (state === "ranked") rows[1] = { username: VIEWER, rank: 2, count: 1, isViewer: true };
+  return {
+    season: "2000-02",
+    viewerUsername: VIEWER,
+    appUrl: "https://example.test",
+    echo: { label: echoLabel },
+    result:
+      state === "unavailable"
+        ? { status: "unavailable" }
+        : { status: "ready", viewer: state, rows: state === "zero" ? [] : rows },
+  };
+}
 
 type Data = Record<string, unknown>;
 type RenderKit = (data: Data) => string;
@@ -281,5 +314,14 @@ export function memberBoardDocument(twin: Twin, scope: Scope, overrides: Data = 
           `src="data:image/svg+xml;base64,${readFileSync(join(root, "public/logo.svg")).toString("base64")}"`,
         )
       : inert(body);
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${inert(head)}<style>${styles}</style></head><body${bodyAttrs}>${content}</body></html>`;
+  // The detached frozen captures block requests. Embed the served font files
+  // in the existing declarations so the browser measures the pinned faces.
+  const fixtureStyles =
+    twin === "season" && "echo" in overrides
+      ? styles.replaceAll(/url\(\/fonts\/([a-z0-9-]+\.woff2)\)/g, (_, filename: string) => {
+          const font = readFileSync(join(root, "public/fonts", filename)).toString("base64");
+          return `url(data:font/woff2;base64,${font})`;
+        })
+      : styles;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${inert(head)}<style>${fixtureStyles}</style></head><body${bodyAttrs}>${content}</body></html>`;
 }

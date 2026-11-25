@@ -18,6 +18,7 @@ import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
 import { QA_IDENTITIES } from "../../src/qa";
 import { BODY_LIMIT_BYTES } from "../../src/http/body-limit";
 import {
+  frozenSeasonFixture,
   memberBoardDocument,
   prepareMemberBoardFixtures,
   prepareSeasonBoardFixtures,
@@ -3885,6 +3886,63 @@ test("isolated Kit season board shows the named viewer at both widths", async ({
         await page.screenshot({ path, animations: "disabled", caret: "hide" });
         await test.info().attach(capture, { path, contentType: "image/png" });
       }
+    }
+  }
+});
+
+test("isolated Kit frozen season standings fit both widths in each state", async ({ page }) => {
+  await prepareSeasonBoardFixtures();
+  await page.route("**/*", (route) => route.abort("blockedbyclient"));
+  for (const { name, size } of PARITY_VIEWPORTS) {
+    await page.setViewportSize(size);
+    for (const state of ["ranked", "opted-out", "zero", "unavailable"] as const) {
+      await page.setContent(memberBoardDocument("season", "overall", frozenSeasonFixture(state)));
+      const fonts = await page.evaluate(() =>
+        Promise.all(
+          ["Mona Sans", "Fragment Mono"].map(async (family) => {
+            const faces = await document.fonts.load(`16px "${family}"`, "Recorded events");
+            return faces.some((face) => face.status === "loaded");
+          }),
+        ),
+      );
+      expect(fonts, "the fixture loaded both pinned fonts").toEqual([true, true]);
+      await expect(
+        page.getByRole("heading", { name: "Season attendance standings" }),
+      ).toBeVisible();
+      await expect(page.getByRole("form", { name: "Filter the leaderboard" })).toHaveCount(0);
+      const table = page.getByRole("table", { name: "Recorded events, season 2000-02" });
+      if (state === "ranked" || state === "opted-out") {
+        const countHeader = table.getByRole("columnheader", { name: "Recorded events" });
+        await expect(countHeader).toBeVisible();
+        await expect(countHeader).toHaveCSS("font-family", /^"?Mona Sans"?[,]/);
+        expect(
+          await countHeader.evaluate((cell) => {
+            const word = document.createRange();
+            word.setStart(cell.firstChild!, 0);
+            word.setEnd(cell.firstChild!, "Recorded".length);
+            const lines = word.getClientRects();
+            const bounds = cell.getBoundingClientRect();
+            return (
+              lines.length === 1 && lines[0]!.left >= bounds.left && lines[0]!.right <= bounds.right
+            );
+          }),
+          `the count heading keeps “Recorded” intact on ${name}`,
+        ).toBe(true);
+        await expect(table.getByRole("rowheader", { name: `${VIEWER} (you)` })).toHaveCount(
+          state === "ranked" ? 1 : 0,
+        );
+      } else {
+        await expect(table).toHaveCount(0);
+      }
+      if (state !== "ranked") await expect(page.getByRole("status")).toBeVisible();
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth),
+        `frozen ${state} page fits ${name}`,
+      ).toBeLessThanOrEqual(size.width);
+      const capture = `kit-review-frozen-season-${state}-${name}`;
+      const path = test.info().outputPath(`${capture}.png`);
+      await page.screenshot({ path, animations: "disabled", caret: "hide", fullPage: true });
+      await test.info().attach(capture, { path, contentType: "image/png" });
     }
   }
 });

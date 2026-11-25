@@ -14,7 +14,11 @@ import { URL, fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parseActivityParam } from "../src/leaderboards/members";
-import { prepareSeasonBoardFixtures, renderMemberBoard } from "./fixtures/member-board-viewer";
+import {
+  frozenSeasonFixture,
+  prepareSeasonBoardFixtures,
+  renderMemberBoard,
+} from "./fixtures/member-board-viewer";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
@@ -123,6 +127,55 @@ describe("Isolated Kit season board render", () => {
       expect(parseActivityParam(game.get("activity"))).toEqual({ ok: true, game: activity });
     }
     expect(html).toContain(`name="activity" type="text" value="${activityInput}"`);
+  });
+
+  it("labels synthetic ranks as frozen attendance and omits sign-up controls", () => {
+    const html = renderMemberBoard("season", "overall", true, false, frozenSeasonFixture("ranked"));
+    expect(html).toContain("Members ranked by events with a frozen attendance record.");
+    expect(html).toContain("met the event’s voice attendance threshold");
+    expect(html).toContain("<caption>Recorded events, season 2000-02</caption>");
+    expect(html).toContain('<th scope="col">Recorded events</th>');
+    expect(html).toContain("8 recorded events");
+    expect(html).toContain("1 recorded event<");
+    expect(html).toContain('<td>2</td><th scope="row">Fixture viewer (you)</th><td>1</td>');
+    expect(html).not.toMatch(/Going counts|sign-ups|Played|Filter the leaderboard|Board scope/);
+    expect(html).not.toMatch(/42 recorded events|12 recorded events|fixture-echo-event/);
+  });
+
+  it.each([
+    ["opted-out", "You are opted out of leaderboards."],
+    ["zero", "You have 0 recorded events this season."],
+  ] as const)("withholds stale ranking positions for a %s viewer", (state, message) => {
+    const fixture = frozenSeasonFixture(state);
+    const html = renderMemberBoard("season", "overall", true, false, {
+      ...fixture,
+      result: {
+        status: "ready",
+        viewer: state,
+        rows: [
+          { username: "Private fixture marker", rank: 1, count: 9, isViewer: true },
+          { username: "Fixture neighbor", rank: 2, count: 8, isViewer: false },
+        ],
+      },
+    } satisfies typeof fixture);
+    expect(html).toContain(message);
+    expect(html).not.toMatch(
+      /Private fixture marker|Fixture neighbor|<table|temporarily unavailable/,
+    );
+  });
+
+  it.each([
+    ["opted-out", "You are opted out of leaderboards.", true],
+    ["zero", "You have 0 recorded events this season.", false],
+    ["unavailable", "Attendance standings are temporarily unavailable.", false],
+  ] as const)("renders a distinct %s frozen result", (state, message, hasRows) => {
+    const html = renderMemberBoard("season", "overall", true, false, frozenSeasonFixture(state));
+    expect([...html.matchAll(/role="status">([^<]+)<\/p>/g)].map((match) => match[1])).toEqual([
+      message,
+    ]);
+    expect(html.includes("<table")).toBe(hasRows);
+    expect(html).not.toContain("Fixture viewer (you)");
+    expect(html).not.toContain("Answer going");
   });
 });
 
