@@ -365,32 +365,13 @@ export const stagingQualitySteps = [
   "Web standards (security headers, HTML basics, internal links)",
 ];
 
-function matchesStagingE2e(run, sha, allowManual) {
-  return (
-    (run.event === "workflow_run" && run.display_title === e2eTitle(sha)) ||
-    (allowManual &&
-      run.event === "workflow_dispatch" &&
-      run.head_sha === sha &&
-      run.display_title === `e2e-staging ${sha}`)
-  );
-}
-
-function explicitStagingQualification(env, sha) {
-  return (
-    env.GITHUB_EVENT_NAME === "workflow_dispatch" &&
-    (env.INPUT_SHA ?? "").replace(/\s+/g, "").toLowerCase() === sha
-  );
-}
-
-function exactStagingE2eRun(run, repository) {
-  return (
-    Number.isSafeInteger(run.id) &&
-    run.id > 0 &&
-    run.head_branch === "main" &&
-    run.path === ".github/workflows/e2e-staging.yml" &&
-    run.head_repository?.full_name === repository
-  );
-}
+const manualQualification = (run, sha) =>
+  run.event === "workflow_dispatch" &&
+  run.head_sha === sha &&
+  run.display_title === `e2e-staging ${sha}`;
+const explicitSelection = (env, sha) =>
+  env.GITHUB_EVENT_NAME === "workflow_dispatch" &&
+  (env.INPUT_SHA ?? "").replace(/\s+/g, "").toLowerCase() === sha;
 
 // A green quality job with skipped or failed web standards has not executed the gate.
 function requireExecutedStagingQuality(jobs, runId) {
@@ -445,6 +426,7 @@ export async function requireStagingEvidence(
     workflows = stagingEvidenceWorkflows,
     pages = 3,
     nowMs = Date.now(),
+    allocationSoak = false,
     allowManual = false,
   } = {},
 ) {
@@ -473,7 +455,10 @@ export async function requireStagingEvidence(
       const history = await stagingRunsSinceCommit({ get, sha });
       runs.push(
         ...history.filter(
-          (run) => run.display_title === titles[file] || matchesStagingE2e(run, sha, allowManual),
+          (run) =>
+            (run.display_title === titles[file] &&
+              (!allocationSoak || run.event === "workflow_run")) ||
+            (allowManual && manualQualification(run, sha)),
         ),
       );
     } else {
@@ -488,6 +473,7 @@ export async function requireStagingEvidence(
       throw new Error(`Missing or incomplete exact-SHA ${file} evidence`);
     }
     if (
+      (allocationSoak && new Set(runs.map((run) => run.id)).size !== runs.length) ||
       !runs.every(
         (run) =>
           Number.isSafeInteger(run.id) &&
@@ -510,11 +496,46 @@ export async function requireStagingEvidence(
           `e2e-staging.yml run ${latest.id} has not soaked ${PROMOTION_SOAK_MS / 60_000} minutes since it passed`,
         );
       }
-      const { jobs = [] } = await get(`/actions/runs/${latest.id}/jobs?per_page=100`);
+      const attempt = allocationSoak ? "/attempts/1" : "";
+      const { jobs = [] } = await get(`/actions/runs/${latest.id}${attempt}/jobs?per_page=100`);
       if (jobs.find((job) => job.name === "staging-journeys")?.conclusion !== "success") {
         throw new Error(`e2e-staging.yml run ${latest.id} did not pass staging-journeys`);
       }
       requireExecutedStagingQuality(jobs, latest.id);
+      if (allocationSoak) {
+        for (const [name, step] of [
+          ["staging-journeys", "Staging critical journeys"],
+          ["staging-passive", "Passive set against staging (ledgers only)"],
+          [stagingQualityJob, stagingQualitySteps[0]],
+        ]) {
+          const [job, duplicate] = jobs.filter((entry) => entry.name === name);
+          if (
+            !job ||
+            duplicate ||
+            job.run_id !== latest.id ||
+            job.run_attempt !== 1 ||
+            job.head_sha !== latest.head_sha ||
+            job.status !== "completed" ||
+            job.conclusion !== "success" ||
+            !job.steps?.some(
+              (entry) =>
+                entry.name === step &&
+                entry.status === "completed" &&
+                entry.conclusion === "success",
+            ) ||
+            !(
+              Date.parse(latest.run_started_at) <= Date.parse(job.started_at) &&
+              Date.parse(job.started_at) < Date.parse(job.completed_at) &&
+              Date.parse(job.completed_at) <= completedAt
+            )
+          ) {
+            throw new Error(`Missing executed ${name} evidence for staging soak`);
+          }
+        }
+        return [
+          { runId: latest.id, startedAt: latest.run_started_at, completedAt: latest.updated_at },
+        ];
+      }
     }
     evidence.push({ workflow: file, runId: latest.id });
   }
@@ -742,7 +763,11 @@ export async function scriptErrorSample(
   return sumScriptErrors(await response.json());
 }
 
-// Inventory of uploaded versions that carry the candidate tag, oldest first.
+// The candidate's staging Worker versions: staging deploys tag each version
+// with the deployed commit (deploy.yml `wrangler deploy --tag <sha>`). Read
+// from the Workers versions API so the job needs no wrangler install. A
+// deploy retry tags twice, and every tagged version served the candidate, so
+// all matches count, oldest first; no tagged version fails closed.
 export async function stagingCandidateVersions(
   { accountId, token, sha },
   { fetchImpl = fetch, pages = 5 } = {},
@@ -780,109 +805,61 @@ export async function stagingCandidateVersions(
   return versions;
 }
 
-// The newest upload carrying the candidate's tag.
+// The newest version carrying the candidate's tag: the one staging serves.
 export async function stagingCandidateVersion(args, opts) {
   const versions = await stagingCandidateVersions(args, opts);
   return versions[versions.length - 1];
 }
 
-async function stagingE2eForSoak({ repository, sha, token, allowManual, fetchImpl }) {
-  if (!/^[\w.-]+\/[\w.-]+$/.test(repository ?? "") || !/^[a-f0-9]{40}$/.test(sha ?? "") || !token) {
-    throw new Error("Missing staging E2E lookup inputs");
-  }
-  async function get(path) {
-    try {
-      const response = await fetchImpl(`https://api.github.com/repos/${repository}${path}`, {
-        headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
-        redirect: "error",
-        signal: AbortSignal.timeout(10_000),
-      });
-      if (!response.ok) throw new Error("Request failed");
-      return await response.json();
-    } catch {
-      throw new Error("Cannot read staging E2E provenance");
-    }
-  }
-  const history = await stagingRunsSinceCommit({ get, sha });
-  const named = history.filter((run) => matchesStagingE2e(run, sha, true));
-  if (
-    new Set(named.map((run) => run.id)).size !== named.length ||
-    !named.every((run) => exactStagingE2eRun(run, repository))
-  ) {
-    throw new Error("Staging E2E evidence revision/branch/workflow mismatch");
-  }
-  refuseRedOrRerunStaging(named, sha);
-  named.sort((a, b) => b.id - a.id);
-  const latest = named.find((run) => matchesStagingE2e(run, sha, allowManual));
-  if (latest?.status !== "completed" || latest.conclusion !== "success") {
-    throw new Error("Missing successful staging E2E run for soak");
-  }
-  const { jobs, total_count: count } = await get(
-    `/actions/runs/${latest.id}/attempts/1/jobs?per_page=100`,
+// Staging soak sample for the candidate: its staging version's invocations
+// and errors from deploy until now (at most the last 24 hours).
+export async function stagingSoakSample(env, { fetchImpl = fetch, nowMs = Date.now() } = {}) {
+  const versions = await stagingCandidateVersions(
+    { accountId: env.CLOUDFLARE_ACCOUNT_ID, token: env.CLOUDFLARE_API_TOKEN, sha: env.DEPLOY_SHA },
+    { fetchImpl },
   );
-  if (
-    !Array.isArray(jobs) ||
-    jobs.length !== count ||
-    !jobs.every(
-      (job) =>
-        job?.run_id === latest.id && job.run_attempt === 1 && job.head_sha === latest.head_sha,
-    )
-  ) {
-    throw new Error("Missing or ambiguous staging E2E jobs");
+  const createdOn = versions[0].createdOn;
+  const sinceMs = Math.max(Date.parse(createdOn), nowMs - PRODUCTION_BASELINE_MS);
+  const sinceIso = new Date(Math.min(sinceMs, nowMs)).toISOString();
+  const untilIso = new Date(nowMs).toISOString();
+  let requests = 0;
+  let errors = 0;
+  for (const { versionId } of versions) {
+    const sample = await scriptErrorSample(
+      {
+        accountId: env.CLOUDFLARE_ACCOUNT_ID,
+        scriptName: "two-web-next",
+        versionId,
+        sinceIso,
+        untilIso,
+        token: env.CLOUDFLARE_API_TOKEN,
+      },
+      { fetchImpl },
+    );
+    requests += sample.requests;
+    errors += sample.errors;
   }
-  for (const [name, steps] of [
-    [
-      "staging-journeys",
-      ["Staging critical journeys", "Journey ledger (pass/skip/fail accounting)"],
-    ],
-    [
-      "staging-passive",
-      ["Passive set against staging (ledgers only)", "Staging passive ledger artifact"],
-    ],
-    [stagingQualityJob, stagingQualitySteps],
-  ]) {
-    const matches = jobs.filter((job) => job.name === name);
-    const [job] = matches;
-    if (
-      matches.length !== 1 ||
-      job.status !== "completed" ||
-      job.conclusion !== "success" ||
-      !Array.isArray(job.steps) ||
-      !steps.every((step) => {
-        const [executed, duplicate] = job.steps.filter((entry) => entry?.name === step);
-        return !duplicate && executed?.status === "completed" && executed.conclusion === "success";
-      }) ||
-      !(
-        Date.parse(latest.run_started_at) <= Date.parse(job.started_at) &&
-        Date.parse(job.started_at) < Date.parse(job.completed_at) &&
-        Date.parse(job.completed_at) <= Date.parse(latest.updated_at)
-      )
-    ) {
-      throw new Error(`Staging E2E run did not execute ${name} within its recorded window`);
-    }
-  }
-  return {
-    runId: latest.id,
-    attempt: latest.run_attempt,
-    conclusion: latest.conclusion,
-    startedAt: latest.run_started_at,
-    completedAt: latest.updated_at,
-  };
+  return { versionIds: versions.map((version) => version.versionId), createdOn, requests, errors };
 }
 
-export async function stagingSoakSample(env, { fetchImpl = fetch, now = Date.now } = {}) {
-  const sha = env.DEPLOY_SHA;
-  const e2e = await stagingE2eForSoak({
-    repository: env.GITHUB_REPOSITORY,
-    sha,
-    token: env.GITHUB_TOKEN,
-    allowManual: explicitStagingQualification(env, sha),
-    fetchImpl,
-  });
-  const { captureStagingSoakReceipt, validateStagingSoakReceipt } = await import(
-    "./staging-soak-receipt.mjs"
+export async function verifyAllocationSoak(env, { fetchImpl = fetch, now = Date.now } = {}) {
+  const { GITHUB_REPOSITORY: repository, DEPLOY_SHA: sha, GITHUB_TOKEN: token } = env;
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repository ?? "") || !/^[0-9a-f]{40}$/.test(sha ?? "") || !token) {
+    throw new Error("Missing staging E2E lookup inputs");
+  }
+  const [e2e] = await requireStagingEvidence(
+    { repository, sha },
+    {
+      token,
+      fetchImpl,
+      nowMs: now(),
+      workflows: ["e2e-staging.yml"],
+      allocationSoak: true,
+      allowManual: explicitSelection(env, sha),
+    },
   );
-  const proof = await captureStagingSoakReceipt(
+  const { captureAllocationSoak } = await import("./staging-soak-receipt.mjs");
+  return captureAllocationSoak(
     { sha, e2e },
     {
       accountId: env.CLOUDFLARE_ACCOUNT_ID,
@@ -891,8 +868,6 @@ export async function stagingSoakSample(env, { fetchImpl = fetch, now = Date.now
       now,
     },
   );
-  validateStagingSoakReceipt(proof.evidence, proof.receipt, { nowMs: now() });
-  return proof;
 }
 
 // The candidate's staging passive ledgers: the artifact of the newest
@@ -921,27 +896,28 @@ export async function fetchPassiveLedgers(
   }
   const runs = [];
   if (expectedRunId !== undefined) {
-    if (!Number.isSafeInteger(expectedRunId) || expectedRunId <= 0) {
-      throw new Error("Missing staging soak E2E run for passive ledgers");
-    }
-    const pinned = await get(`/actions/runs/${expectedRunId}`);
+    if (!Number.isSafeInteger(expectedRunId) || expectedRunId <= 0)
+      throw new Error("Missing soak E2E run pin");
+    const run = await get(`/actions/runs/${expectedRunId}`);
     if (
-      pinned?.id !== expectedRunId ||
-      !matchesStagingE2e(pinned, sha, true) ||
-      pinned.run_attempt !== 1 ||
-      pinned.conclusion !== "success"
+      run.id !== expectedRunId ||
+      run.run_attempt !== 1 ||
+      run.conclusion !== "success" ||
+      !(
+        manualQualification(run, sha) ||
+        (run.event === "workflow_run" && run.display_title === e2eTitle(sha))
+      )
     ) {
-      throw new Error("Passive ledger run does not match staging soak E2E");
+      throw new Error("Passive ledger run does not match the soak E2E run");
     }
-    runs.push(pinned);
-  } else {
-    for (let page = 1; page <= 3; page += 1) {
-      const query = new URLSearchParams({ branch: "main", per_page: "100", page: String(page) });
-      const batch =
-        (await get(`/actions/workflows/e2e-staging.yml/runs?${query}`)).workflow_runs ?? [];
-      runs.push(...batch.filter((run) => run.display_title === e2eTitle(sha)));
-      if (batch.length < 100) break;
-    }
+    runs.push(run);
+  }
+  for (let page = 1; expectedRunId === undefined && page <= 3; page += 1) {
+    const query = new URLSearchParams({ branch: "main", per_page: "100", page: String(page) });
+    const batch =
+      (await get(`/actions/workflows/e2e-staging.yml/runs?${query}`)).workflow_runs ?? [];
+    runs.push(...batch.filter((run) => run.display_title === e2eTitle(sha)));
+    if (batch.length < 100) break;
   }
   if (!runs.length) throw new Error(`No e2e-staging run for ${sha}`);
   const latest = runs.reduce((a, b) => (b.id > a.id ? b : a));
@@ -963,8 +939,10 @@ export async function fetchPassiveLedgers(
     throw new Error(`Latest e2e-staging run ${latest.id} is not completed`);
   }
   const { artifacts = [] } = await get(`/actions/runs/${latest.id}/artifacts?name=${name}`);
-  const [artifact, duplicate] = artifacts.filter((entry) => entry?.name === name);
-  if (!artifact || duplicate || artifact.expired !== false || !Number.isSafeInteger(artifact.id)) {
+  const [artifact, duplicate] = artifacts.filter(
+    (entry) => entry?.name === name && entry.expired === false,
+  );
+  if (!artifact || duplicate || !Number.isSafeInteger(artifact.id)) {
     throw new Error(
       `e2e-staging run ${latest.id} has no ${name} artifact; the candidate's staging passive set was not recorded`,
     );
@@ -1263,11 +1241,7 @@ export async function checkProductionGate(env, fetchEnvironment = fetch, options
   }
   const staging = await requireStagingEvidence(
     { repository: env.GITHUB_REPOSITORY, sha: ci.sha },
-    {
-      token: env.GITHUB_TOKEN,
-      fetchImpl: fetchCi,
-      allowManual: explicitStagingQualification(env, ci.sha),
-    },
+    { token: env.GITHUB_TOKEN, fetchImpl: fetchCi, allowManual: explicitSelection(env, ci.sha) },
   );
   return { ...ci, autoApprove: true, staging };
 }
@@ -1317,7 +1291,7 @@ export async function checkRollbackGate(env, fetchImpl = fetch, options = {}) {
 // gate. A bare invocation (or a non-flag positional, as before) runs the
 // full gate.
 export const PRODUCTION_DEPLOY_GATE_USAGE =
-  "Usage: node ci/production-deploy-gate.mjs [--credentials | --version-id | --rollback | --staging-soak <receipt> | --fetch-passive-ledgers <dir> | --regression | --already-live | --check-ancestry | --check-migrations | --kit-candidate | --help]\nWith no flag, runs the full production gate.";
+  "Usage: node ci/production-deploy-gate.mjs [--credentials | --version-id | --rollback | --staging-soak | --fetch-passive-ledgers <dir> | --regression | --already-live | --check-ancestry | --check-migrations | --kit-candidate | --help]\nWith no flag, runs the full production gate.";
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
@@ -1337,18 +1311,20 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         `${process.env.ROLLBACK_ENVIRONMENT} rollback request and exact-SHA CI checks passed: scripts ${evidence.sha}, full CI run ${evidence.runId}, attempt ${evidence.runAttempt}`,
       );
     } else if (process.argv[2] === "--staging-soak") {
-      const path = process.argv[3];
-      if (!path) throw new Error("--staging-soak needs a receipt path");
-      const proof = await stagingSoakSample(process.env);
-      const { allocationId, workerVersion, e2eRunId, sample } = proof.receipt;
-      writeFileSync(path, `${JSON.stringify(proof, null, 2)}\n`, { flag: "wx" });
+      const receipt = await verifyAllocationSoak(process.env);
+      const { sample, workerVersion: serving } = receipt;
+      writeFileSync(
+        join(process.env.RUNNER_TEMP, "staging-soak.json"),
+        `${JSON.stringify(receipt)}\n`,
+        { flag: "wx" },
+      );
       console.log(
-        `Staging allocation ${allocationId} Worker ${workerVersion}, E2E run ${e2eRunId}: ${sample.errors} errors over ${sample.requests} requests`,
+        `Staging allocation ${receipt.allocationId}, Worker ${serving}, E2E run ${receipt.e2e.runId}: ${sample.errors} errors over ${sample.requests} requests`,
       );
       if (process.env.GITHUB_OUTPUT) {
         appendFileSync(
           process.env.GITHUB_OUTPUT,
-          `requests=${sample.requests}\nerrors=${sample.errors}\ne2e_run_id=${e2eRunId}\n`,
+          `requests=${sample.requests}\nerrors=${sample.errors}\ne2e_run_id=${receipt.e2e.runId}\nsoak_attempt=${process.env.GITHUB_RUN_ATTEMPT}\n`,
         );
       }
     } else if (process.argv[2] === "--fetch-passive-ledgers") {

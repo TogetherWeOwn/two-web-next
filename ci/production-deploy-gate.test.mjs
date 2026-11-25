@@ -812,10 +812,7 @@ test("production workflow uses hosted runners and production-only secrets", () =
   assert.match(soak, /\n {4}environment: staging\n/, "staging-soak binds the staging Environment");
   assert.ok(!soak.includes("wrangler "), "staging-soak never runs wrangler");
   assert.ok(!/secrets\.PRODUCTION_/.test(soak), "staging-soak never sees production secrets");
-  assert.match(
-    soak,
-    /run: node ci\/production-deploy-gate\.mjs --staging-soak "\$RUNNER_TEMP\/staging-soak\.json"\n/,
-  );
+  assert.match(soak, /run: node ci\/production-deploy-gate\.mjs --staging-soak\n/);
   // Credentials check, required-secrets preflight, rollback-target check,
   // production Tail deploy, version upload, promotion and the auto-rollback
   // explicit secret map: all production-only. The regression check keeps

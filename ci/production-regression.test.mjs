@@ -5,17 +5,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
-  afterSoak,
-  e2eCompletedAt,
-  executedJobs,
-  original,
-  soakApi,
-  soakEnv,
-  soakFloor,
-  soakVersion,
-  successfulE2e,
-} from "../test/fixtures/staging-soak-http.mjs";
-import {
   PASSIVE_LEDGER_MAX_BYTES,
   SOAK_ERROR_RATE_FLOOR,
   SOAK_ERROR_RATE_MARGIN,
@@ -409,6 +398,9 @@ function githubArtifacts({ runs, artifacts, commit = SHA, seen = {} }) {
     if (parsed.pathname.endsWith("/actions/workflows/e2e-staging.yml/runs")) {
       return { ok: true, json: async () => ({ workflow_runs: runs }) };
     }
+    if (/\/actions\/runs\/\d+$/.test(parsed.pathname)) {
+      return Response.json(runs.find((run) => parsed.pathname.endsWith(`/${run.id}`)) ?? {});
+    }
     if (/\/actions\/runs\/\d+\/artifacts$/.test(parsed.pathname)) {
       seen.artifactsRun = parsed.pathname.match(/runs\/(\d+)\//)[1];
       return { ok: true, json: async () => ({ artifacts }) };
@@ -427,7 +419,13 @@ function githubArtifacts({ runs, artifacts, commit = SHA, seen = {} }) {
 function fetchLedgers(options, unzipSeen = {}) {
   const dir = mkdtempSync(join(tmpdir(), "passive-"));
   return fetchPassiveLedgers(
-    { repository: "fixture/repo", sha: SHA, token: "fixture-only", dir },
+    {
+      repository: "fixture/repo",
+      sha: SHA,
+      token: "fixture-only",
+      dir,
+      expectedRunId: options.expectedRunId,
+    },
     {
       fetchImpl: githubArtifacts(options),
       // The fake archive carries the commit plus the producer's observations.
@@ -452,6 +450,21 @@ const e2eRun = (id, overrides = {}) => ({
   path: ".github/workflows/e2e-staging.yml",
   head_repository: { full_name: "fixture/repo" },
   ...overrides,
+});
+
+test("passive ledgers use the soak E2E run even when a newer run exists", async () => {
+  const run = e2eRun(9, { event: "workflow_run", run_attempt: 1, conclusion: "success" });
+  const seen = {};
+  assert.deepEqual(
+    await fetchLedgers({
+      runs: [run, e2eRun(10)],
+      seen,
+      expectedRunId: 9,
+      artifacts: [{ id: 77, name: "staging-passive-ledger-9", expired: false }],
+    }),
+    { runId: 9, artifactId: 77 },
+  );
+  assert.equal(seen.artifactsRun, "9");
 });
 
 test("passive ledgers come from the newest e2e-staging run for the candidate, without the token on the blob", async () => {
@@ -609,6 +622,12 @@ test("deploy-production runs the regression check before the deploy job", () => 
     workflow.slice(workflow.indexOf(`\n  ${name}:\n`), workflow.indexOf(`\n  ${next}:\n`));
   const regression = job("regression", "deploy-production");
   assert.match(regression, /needs: \[preflight, staging-soak\]/);
+  assert.match(job("preflight", "staging-soak"), /INPUT_SHA: \$\{\{ inputs\.sha \}\}/);
+  assert.match(
+    regression,
+    /STAGING_E2E_RUN_ID: \$\{\{ needs\.staging-soak\.outputs\.e2e_run_id \}\}/,
+  );
+  assert.match(regression, /soak_attempt: \$\{\{ needs\.staging-soak\.outputs\.attempt \}\}/);
   assert.match(regression, /environment:\n {6}name: production\n/);
   // Least privilege: analytics reads use the repo-level read-only token, so
   // the regression check never holds the production deployment token. The
@@ -625,10 +644,6 @@ test("deploy-production runs the regression check before the deploy job", () => 
   assert.match(
     regression,
     /run: node gate-tip\/ci\/production-deploy-gate\.mjs --fetch-passive-ledgers/,
-  );
-  assert.match(
-    regression,
-    /STAGING_E2E_RUN_ID: \$\{\{ needs\.staging-soak\.outputs\.e2e_run_id \}\}/,
   );
   assert.match(
     regression,
@@ -657,32 +672,38 @@ test("deploy-production runs the regression check before the deploy job", () => 
   assert.match(regression, /ref: \$\{\{ needs\.preflight\.outputs\.sha \}\}/);
   assert.match(regression, /ref: \$\{\{ github\.sha \}\}\n {10}path: gate-tip\n/);
   const deploy = job("deploy-production", "post-deploy-watch");
+  assert.match(deploy, /SOAK_ATTEMPT: \$\{\{ needs\.regression\.outputs\.soak_attempt \}\}/);
+  assert.match(deploy, /if \[ "\$SOAK_ATTEMPT" != "\$GITHUB_RUN_ATTEMPT" \]/);
   assert.match(deploy, /\n {4}needs: \[preflight, regression\]\n/);
 });
 
-test("staging soak samples only the exact allocation after the executed staging E2E run", async () => {
-  const { fetchImpl, queries } = soakApi();
-  const proof = await stagingSoakSample(soakEnv, { fetchImpl, now: afterSoak });
-  assert.equal(proof.receipt.allocationId, original.id);
-  assert.equal(proof.receipt.e2eRunId, successfulE2e.id);
-  assert.deepEqual(proof.receipt.sample, {
-    observedAt: soakFloor,
-    workerVersion: soakVersion,
-    requests: 500,
-    errors: 2,
-  });
-  assert.deepEqual(
-    queries.map((query) => query.variables),
-    [
+test("staging soak sample spans the candidate version's life, at most 24 hours", async () => {
+  const { stagingSoakSample } = await import("./production-deploy-gate.mjs");
+  for (const [createdOn, since] of [
+    ["2026-11-01T10:00:00Z", "2026-11-01T10:00:00.000Z"],
+    ["2026-10-20T10:00:00Z", "2026-10-31T12:00:00.000Z"],
+  ]) {
+    const seen = [];
+    const versions = versionsApi([[version(VERSION, SHA, createdOn)]]);
+    const sums = analytics(500, 2, seen);
+    const sample = await stagingSoakSample(
+      { CLOUDFLARE_ACCOUNT_ID: ACCOUNT, CLOUDFLARE_API_TOKEN: "fixture-only", DEPLOY_SHA: SHA },
       {
-        accountTag: soakEnv.CLOUDFLARE_ACCOUNT_ID,
-        scriptName: "two-web-next",
-        versionId: soakVersion,
-        since: e2eCompletedAt,
-        until: soakFloor,
+        fetchImpl: (url, init) =>
+          url.includes("/graphql") ? sums(url, init) : versions(url, init),
+        nowMs: Date.parse("2026-11-01T12:00:00Z"),
       },
-    ],
-  );
+    );
+    assert.deepEqual(sample, { versionIds: [VERSION], createdOn, requests: 500, errors: 2 });
+    assert.deepEqual(seen, [
+      {
+        scriptName: "two-web-next",
+        datetime_geq: since,
+        datetime_leq: "2026-11-01T12:00:00.000Z",
+        scriptVersion: VERSION,
+      },
+    ]);
+  }
 });
 
 function stagingRunsApi(runs, { status = 200 } = {}) {
@@ -859,40 +880,31 @@ test("a passive ledger zip exactly at the size limit is accepted", async () => {
   assert.deepEqual(result, { runId: 9, artifactId: 77 });
 });
 
-test("staging soak rejects stale or unexecuted E2E and pins manual qualification to explicit selection", async () => {
-  const restored = soakApi({ allocationStart: "2026-01-01T10:03:00Z" });
-  await assert.rejects(
-    stagingSoakSample(soakEnv, { ...restored, now: afterSoak }),
-    /fresh E2E is required/,
+test("staging soak sample sums every tagged version over one window", async () => {
+  const older = "00000000-0000-4000-8000-000000000000";
+  const seen = [];
+  const versions = versionsApi([
+    [version(VERSION, SHA, "2026-11-01T11:00:00Z"), version(older, SHA, "2026-11-01T10:00:00Z")],
+  ]);
+  const sums = analytics(500, 2, seen);
+  const sample = await stagingSoakSample(
+    { CLOUDFLARE_ACCOUNT_ID: ACCOUNT, CLOUDFLARE_API_TOKEN: "fixture-only", DEPLOY_SHA: SHA },
+    {
+      fetchImpl: (url, init) => (url.includes("/graphql") ? sums(url, init) : versions(url, init)),
+      nowMs: Date.parse("2026-11-01T12:00:00Z"),
+    },
   );
-  assert.deepEqual(restored.queries, []);
-
-  const jobs = executedJobs(successfulE2e);
-  jobs[0].steps[0].conclusion = "skipped";
-  const skipped = soakApi({ jobs });
-  await assert.rejects(
-    stagingSoakSample(soakEnv, { ...skipped, now: afterSoak }),
-    /did not execute staging-journeys/,
+  // Each invocation belongs to exactly one version, so one window per version
+  // never double-counts: 500 requests and 2 errors on each of the two.
+  assert.deepEqual(sample, {
+    versionIds: [older, VERSION],
+    createdOn: "2026-11-01T10:00:00Z",
+    requests: 1000,
+    errors: 4,
+  });
+  assert.deepEqual(
+    seen.map((filter) => filter.scriptVersion),
+    [older, VERSION],
   );
-  assert.deepEqual(skipped.queries, []);
-
-  const fresh = {
-    ...successfulE2e,
-    id: 10,
-    event: "workflow_dispatch",
-    display_title: `e2e-staging ${SHA}`,
-    run_started_at: "2026-01-01T10:04:00Z",
-  };
-  const manual = soakApi({ runs: [fresh, successfulE2e], allocationStart: "2026-01-01T10:03:00Z" });
-  const explicit = { ...soakEnv, GITHUB_EVENT_NAME: "workflow_dispatch", INPUT_SHA: SHA };
-  const proof = await stagingSoakSample(explicit, { ...manual, now: afterSoak });
-  assert.equal(proof.receipt.e2eRunId, fresh.id);
-  assert.equal(manual.queries[0].variables.versionId, soakVersion);
-  assert.equal(manual.queries[0].variables.since, e2eCompletedAt);
-  const manualOnly = soakApi({ runs: [fresh] });
-  await assert.rejects(
-    stagingSoakSample(soakEnv, { ...manualOnly, now: afterSoak }),
-    /Missing successful staging E2E/,
-  );
-  assert.deepEqual(manualOnly.queries, []);
+  assert.equal(seen[0].datetime_geq, "2026-11-01T10:00:00.000Z");
 });

@@ -3,14 +3,13 @@ import {
   buildErrorRateQuery,
   parseErrorRateResponse,
 } from "../.github/actions/gradual-promote/gradual-promote.mjs";
+import { readRevision } from "../bin/revision-check.mjs";
 import { assertExpectedVersionId } from "../bin/smoke.mjs";
+import { STAGING_ORIGIN } from "./operator-constants.mjs";
 import { PROMOTION_SOAK_MS } from "./resolve-promotion-sha.mjs";
-import {
-  observeStagingAllocation,
-  orderedDeploymentTime,
-  requireStagingAllocationPair,
-} from "./staging-allocation.mjs";
-import { validateStagingIdentityPair } from "./staging-provenance.mjs";
+import { liveVersion } from "./rollback-target.mjs";
+import { orderedDeploymentTime } from "./staging-forward.mjs";
+import { observeStaging, validateStagingIdentityPair } from "./staging-provenance.mjs";
 
 const GRAPHQL_URL = "https://api.cloudflare.com/client/v4/graphql";
 const SHA = /^[0-9a-f]{40}$/;
@@ -91,7 +90,8 @@ function sampleReceipt(base, sample, nowMs) {
   const { workerVersion, requests, errors } = sample;
   if (
     workerVersion !== base.workerVersion ||
-    !positiveInteger(requests) ||
+    !Number.isSafeInteger(requests) ||
+    requests < (base.schema === "staging-soak/1" ? 1 : 0) ||
     !Number.isSafeInteger(errors) ||
     errors < 0 ||
     errors > requests
@@ -105,8 +105,9 @@ function sampleReceipt(base, sample, nowMs) {
   };
 }
 
-// Historical format only. A valid record here does not qualify promotion.
-export function validateArchivedStagingSoakReceipt(evidence, receipt, { nowMs = Date.now() } = {}) {
+// Validate archived v1 records only. Promotion requires a live v2 sample.
+// Known supersession takes precedence even if the earlier sample is retained.
+export function validateStagingSoakReceipt(evidence, receipt, { nowMs = Date.now() } = {}) {
   const base = receiptBase(evidence, nowMs);
   const expected =
     evidence.replacement === undefined
@@ -116,99 +117,71 @@ export function validateArchivedStagingSoakReceipt(evidence, receipt, { nowMs = 
   return expected;
 }
 
-function allocationSoakWindow({ sha, e2e }, nowMs) {
-  if (
-    !exactSha(sha) ||
-    !Number.isFinite(nowMs) ||
-    !positiveInteger(e2e?.runId) ||
-    e2e.attempt !== 1 ||
-    e2e.conclusion !== "success"
-  ) {
-    throw new Error("Missing successful first-attempt staging E2E evidence");
-  }
-  const startedAt = timestamp(e2e.startedAt);
-  const completedAt = timestamp(e2e.completedAt);
-  if (startedAt >= completedAt || completedAt > nowMs) {
-    throw new Error("Inconsistent staging E2E chronology");
-  }
-  const floor = completedAt + PROMOTION_SOAK_MS;
-  if (nowMs < floor) throw new Error("Staging soak floor has not elapsed");
-  return {
-    e2eStartedAt: new Date(startedAt).toISOString(),
-    e2eCompletedAt: new Date(completedAt).toISOString(),
-    floorAt: new Date(floor).toISOString(),
-  };
-}
-
-function requireAllocationBeforeE2e(allocation, { e2eStartedAt }) {
-  // GitHub timestamps have second precision. At equality the evidence cannot
-  // order the allocation and the start of qualification.
-  if (allocation.allocationStartedAt >= orderedDeploymentTime(e2eStartedAt)) {
-    throw new Error("Staging allocation started after or at E2E start; fresh E2E is required");
+async function observeServing(base, fetchImpl, now) {
+  try {
+    const identity = await observeStaging({ expected: base.sha, fetchImpl, now });
+    const revision = await readRevision(STAGING_ORIGIN, {
+      fetchImpl: async (url, init) => {
+        const response = await fetchImpl(url, init);
+        const cacheControl = response.headers.get("cache-control")?.toLowerCase().split(",");
+        if (
+          response.status !== 200 ||
+          response.headers.get("x-two-origin") !== "two-web-next" ||
+          !cacheControl?.some((directive) => directive.trim() === "no-store")
+        ) {
+          throw new Error("Staging readiness response refused");
+        }
+        return response;
+      },
+    });
+    if (
+      identity.deployedAt !== base.deployedAt ||
+      revision?.commit !== base.sha ||
+      revision?.version_id !== base.workerVersion
+    ) {
+      throw new Error("Staging serving identity does not match the deployment");
+    }
+  } catch {
+    throw new Error("Staging serving identity or readiness could not be verified");
   }
 }
 
-function buildAllocationReceipt({ sha, e2e, before, after }, sample, nowMs) {
-  const window = allocationSoakWindow({ sha, e2e }, nowMs);
-  requireStagingAllocationPair(sha, before, after);
-  requireAllocationBeforeE2e(before, window);
-  if (
-    timestamp(before.observedAt) < timestamp(window.floorAt) ||
-    sample?.observedAt !== before.observedAt ||
-    timestamp(after.observedAt) > nowMs
-  ) {
-    throw new Error("Staging allocation observations do not bracket the soak sample");
-  }
-  return sampleReceipt(
-    {
-      schema: "staging-soak/2",
-      sha,
-      workerVersion: before.workerVersion,
-      deployedAt: before.deployedAt,
-      allocationId: before.allocationId,
-      allocationStartedAt: before.allocationStartedAt,
-      e2eRunId: e2e.runId,
-      e2eAttempt: e2e.attempt,
-      ...window,
-    },
-    sample,
-    nowMs,
-  );
-}
-
-export function validateStagingSoakReceipt(evidence, receipt, { nowMs = Date.now() } = {}) {
-  if (receipt?.schema !== "staging-soak/2") {
-    throw new Error("Staging soak receipt has no allocation proof");
-  }
-  const expected = buildAllocationReceipt(evidence, receipt.sample, nowMs);
-  if (!isDeepStrictEqual(receipt, expected)) throw new Error("Staging soak receipt mismatch");
-  return expected;
-}
-
-// The producer and verifier share the allocation receipt contract. Both
-// observations read the active provider allocation and ordinary staging origin.
+// Single attempt on ordinary staging routing. The caller supplies the transport
+// and retains the returned record. This helper has no file or workflow writes.
 export async function captureStagingSoakReceipt(
-  { sha, e2e },
+  evidence,
   { accountId, token, fetchImpl, now = Date.now } = {},
 ) {
-  const window = allocationSoakWindow({ sha, e2e }, now());
+  const startedAt = now();
+  const base = receiptBase(evidence, startedAt);
+  if (evidence.replacement !== undefined) {
+    return supersessionReceipt(base, evidence.replacement, startedAt);
+  }
+  if (startedAt < timestamp(base.floorAt)) throw new Error("Staging soak floor has not elapsed");
   if (typeof fetchImpl !== "function" || typeof token !== "string" || !token) {
     throw new Error("Staging soak sampling requires a transport and analytics credential");
   }
-  const options = { accountId, token, fetchImpl, now };
-  const before = await observeStagingAllocation(sha, options);
-  requireAllocationBeforeE2e(before, window);
-  const { workerVersion, observedAt } = before;
-  if (timestamp(observedAt) < timestamp(window.floorAt)) {
-    throw new Error("Staging soak floor has not elapsed at observation");
+
+  await observeServing(base, fetchImpl, startedAt);
+  const sampledAt = now();
+  if (!Number.isFinite(sampledAt) || sampledAt < startedAt) {
+    throw new Error("Invalid staging soak sample clock");
   }
+  const counts = await versionTaggedCounts(base, sampledAt, { accountId, token, fetchImpl });
+  await observeServing(base, fetchImpl, sampledAt);
+  return sampleReceipt(base, counts, now());
+}
+
+async function versionTaggedCounts(base, sampledAt, { accountId, token, fetchImpl }) {
+  const versionId = base.workerVersion;
+  const observedAt = new Date(sampledAt).toISOString();
   let counts;
   try {
     const query = buildErrorRateQuery({
       accountId,
       scriptName: "two-web-next",
-      versionId: workerVersion,
-      sinceIso: window.e2eCompletedAt,
+      versionId,
+      sinceIso: base.e2eCompletedAt,
       untilIso: observedAt,
     });
     const response = await fetchImpl(GRAPHQL_URL, {
@@ -224,13 +197,95 @@ export async function captureStagingSoakReceipt(
     if (errors !== null && errors !== undefined && !Array.isArray(errors)) {
       throw new Error("Malformed Cloudflare analytics response");
     }
-    counts = parseErrorRateResponse(payload, workerVersion);
+    counts = parseErrorRateResponse(payload, versionId);
   } catch {
     // Origin bodies and transport exceptions may contain sensitive detail.
     throw new Error("Version-tagged staging analytics could not be verified");
   }
-  const after = await observeStagingAllocation(sha, options);
-  const evidence = { sha, e2e, before, after };
-  const receipt = buildAllocationReceipt(evidence, { observedAt, workerVersion, ...counts }, now());
-  return { evidence, receipt };
+  return { observedAt, workerVersion: versionId, ...counts };
+}
+
+// Cloudflare creates a new immutable allocation on every traffic change,
+// including restoring a previously uploaded Worker. The latest allocation
+// covers the whole interval if it predates E2E and is still latest at sampling.
+export async function captureAllocationSoak(
+  { sha, e2e },
+  { accountId, token, fetchImpl = fetch, now = Date.now },
+) {
+  const start = timestamp(e2e.startedAt);
+  const end = timestamp(e2e.completedAt);
+  const floor = end + PROMOTION_SOAK_MS;
+  if (!exactSha(sha) || !positiveInteger(e2e.runId) || start >= end) {
+    throw new Error("Invalid executed staging E2E evidence");
+  }
+  if (now() < floor) throw new Error("Staging soak floor has not elapsed");
+  if (typeof accountId !== "string" || !/^[0-9a-f]{32}$/.test(accountId) || !token) {
+    throw new Error("Missing staging provider read inputs");
+  }
+  async function provider(path) {
+    try {
+      const response = await fetchImpl(
+        `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/two-web-next/${path}`,
+        {
+          headers: { authorization: `Bearer ${token}`, "cache-control": "no-cache" },
+          redirect: "error",
+          signal: AbortSignal.timeout(10_000),
+        },
+      );
+      if (!response.ok) throw new Error("Request refused");
+      const body = await response.json();
+      if (body.success !== true || !body.result) throw new Error("Missing provider result");
+      return body.result;
+    } catch {
+      throw new Error("Cannot read staging provider evidence");
+    }
+  }
+  async function active() {
+    const { deployments } = await provider("deployments");
+    const rows = deployments
+      .map((row) => ({ ...row, created_on: orderedDeploymentTime(row.created_on) }))
+      .sort((a, b) => b.created_on.localeCompare(a.created_on));
+    if (
+      new Set(rows.map((row) => row.id)).size !== rows.length ||
+      new Set(rows.map((row) => row.created_on)).size !== rows.length
+    ) {
+      throw new Error("Ambiguous staging allocations");
+    }
+    const workerVersion = assertExpectedVersionId(liveVersion(rows));
+    return {
+      allocationId: assertExpectedVersionId(rows[0].id),
+      allocationStartedAt: rows[0].created_on,
+      workerVersion,
+    };
+  }
+  const allocation = await active();
+  if (allocation.allocationStartedAt >= orderedDeploymentTime(e2e.startedAt)) {
+    throw new Error("Staging allocation did not precede E2E; fresh E2E is required");
+  }
+  const version = await provider(`versions/${allocation.workerVersion}`);
+  const upload = orderedDeploymentTime(version.metadata?.created_on);
+  if (
+    version.id !== allocation.workerVersion ||
+    version.annotations?.["workers/tag"] !== sha ||
+    upload > allocation.allocationStartedAt
+  ) {
+    throw new Error("Staging provider version does not match the allocation and candidate");
+  }
+  const base = {
+    schema: "staging-soak/2",
+    sha,
+    ...allocation,
+    e2e,
+    deployedAt: new Date(upload).toISOString(),
+    e2eCompletedAt: new Date(end).toISOString(),
+    floorAt: new Date(floor).toISOString(),
+  };
+  await observeServing(base, fetchImpl, now());
+  const observed = now();
+  if (observed < floor) throw new Error("Staging soak floor has not elapsed");
+  const counts = await versionTaggedCounts(base, observed, { accountId, token, fetchImpl });
+  await observeServing(base, fetchImpl, now());
+  if (!isDeepStrictEqual(allocation, await active()))
+    throw new Error("Staging allocation changed during sampling");
+  return sampleReceipt(base, counts, now());
 }
