@@ -77,11 +77,7 @@ export async function assertEventCreateFormParity({ hono, off, on, databaseUrl }
       const text = await response.text();
       assert.equal(response.status, status, context);
       assert.equal(response.headers.get("x-two-renderer"), worker === on ? "kit" : null, context);
-      assert.equal(
-        response.headers.get("content-type"),
-        "application/json; charset=UTF-8",
-        context,
-      );
+      assert.equal(response.headers.get("content-type"), "application/json", context);
       assert.equal(response.headers.get("location"), null, context);
       assert.equal(response.headers.get("set-cookie"), null, context);
       assert.equal(response.headers.get("x-content-type-options"), "nosniff", context);
