@@ -62,16 +62,17 @@ Record the successful isolated job and cleanup, the proof's ledger states and
 version UUIDs, and the packet and proof from the same run attempt. Those
 artifacts are retained for 30 days. The production `cutover_pin` has the form
 `run_id:run_attempt:manifest_sha256`, using the manifest digest from the proof.
-To retry, select **Re-run all jobs** so isolated staging uses that attempt's
-packet.
+To retry, select **Re-run all jobs** on the original dispatch. GitHub keeps
+the original SHA and ref, and isolated staging uses the new attempt's packet.
 
 Pair the isolated packet evidence with the
 [shared staging deploy, smoke, E2E and soak](../CONTRIBUTING.md#merge-and-production-staging-evidence)
 by matching the packet manifest's `sourceSha` to the deployed `sha` in the
 scoped staging E2E receipts. The Actions run header can show a different SHA
 because it records the workflow trigger. If `main` has advanced, reuse an
-already valid matching packet for the candidate. If none exists, qualify a
-successor through the same process.
+already valid matching packet or retry an existing dispatch for that SHA and
+profile. If neither yields a valid packet, qualify a successor through the
+same process.
 
 Match the `sha` and `deployedAt` in the staging E2E before and after receipts
 to the commit tag and upload time of the Cloudflare Worker version identified
