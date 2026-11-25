@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AnnouncementSettlement } from "../src/jobs/announcement-settlement";
 import { LEDGER_DB_LOCK_TIMEOUT_MS, LEDGER_DB_TIMEOUT_MS } from "../src/jobs/constants";
 import { consume } from "../src/jobs/consumer";
 import { pgReconciliationStore } from "../src/jobs/reconciliation";
@@ -9,12 +10,18 @@ import { pgQueueDepth, pgQueueLedger } from "../src/jobs/postgres";
 import {
   BotTerminalError,
   type BotClient,
+  type BotFailure,
   type EventStore,
+  type QueueMessage,
   type UniqueLock,
 } from "../src/jobs/types";
 import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
 
 type Sql = Parameters<typeof pgQueueLedger>[0];
+
+function delivery(body: QueueMessage | AnnouncementSettlement, timestamp: Date, attempts = 1) {
+  return { body, timestamp, attempts, ack: vi.fn(), retry: vi.fn() };
+}
 
 // Assert the SQL boundary, rather than using a Map fake that already dedupes.
 function recordingSql(insertError?: Error) {
@@ -252,27 +259,24 @@ describe.skipIf(!process.env.DATABASE_URL).each([
     const timestamp = new Date();
     try {
       let original;
-      for (let delivery = 0; delivery < 2; delivery++) {
-        const message = {
-          body: {
+      for (let index = 0; index < 2; index++) {
+        const message = delivery(
+          {
             kind: "announcement",
             idempotencyKey,
             jobId: id,
             action: { channelKey: "fixture", body: "synthetic" },
           },
           timestamp,
-          attempts: 1,
-          ack: vi.fn(),
-          retry: vi.fn(),
-        };
+        );
         await consume({ messages: [message] }, deps);
-        const responseLost = mode === "lost" && delivery === 0;
+        const responseLost = mode === "lost" && index === 0;
         expect(message.ack).toHaveBeenCalledTimes(responseLost ? 0 : 1);
         expect(message.retry).toHaveBeenCalledTimes(responseLost ? 1 : 0);
         const rows = await failures();
         expect(rows).toHaveLength(1);
         expect(rows[0]).toMatchObject({ job_id: id, kind: "announcement", key: null });
-        if (delivery === 0) original = rows;
+        if (index === 0) original = rows;
         else expect(rows).toEqual(original);
         expect(await pgQueueDepth(sql)).toEqual({ ...emptyLiveDepth, failed: 1 });
       }
@@ -344,6 +348,98 @@ describe.skipIf(!process.env.DATABASE_URL).each([
       await sql`select attempts, last_code, last_status from bot_reconciliation_intents
       where idempotency_key = ${idempotencyKey}`,
     ).toEqual([{ attempts: 1, last_code: null, last_status: null }]);
+  });
+
+  it("drains a held settlement after claim-aware rollback without sending again", async () => {
+    const original = {
+      kind: "announcement",
+      jobId: randomUUID(),
+      idempotencyKey: randomUUID(),
+      action: { channelKey: "fixture", body: "synthetic" },
+    } satisfies QueueMessage;
+    const { jobId, idempotencyKey } = original;
+    const timestamp = new Date();
+    const ledger = pgQueueLedger(sql);
+    await ledger.enqueued({ jobId, kind: "announcement", key: null, availableAt: timestamp });
+    const postAnnouncement = vi.fn(
+      async (): Promise<BotFailure> => ({
+        ok: false,
+        code: "needs_reconciliation",
+        status: 409,
+        retryable: true,
+        retryAfterSeconds: null,
+        requestId: null,
+        message: "synthetic",
+      }),
+    );
+    const announcementClaims = pgReconciliationStore(sql);
+    vi.spyOn(announcementClaims, "recordAnnouncement").mockRejectedValueOnce(
+      new Error("synthetic settlement outage"),
+    );
+    const ordinaryConsumer = {
+      bot: { postAnnouncement } as unknown as BotClient,
+      events: {} as EventStore,
+      lock: {} as UniqueLock,
+      ledger,
+      announcementClaims,
+    };
+    const recoveryQueue: ReturnType<typeof delivery>[] = [];
+    const recoveryConsumer = {
+      ...ordinaryConsumer,
+      enqueueAnnouncementSettlement: async (body: AnnouncementSettlement) => {
+        recoveryQueue.push(delivery(body, new Date()));
+      },
+    };
+
+    const first = delivery(original, timestamp);
+    await consume({ messages: [first] }, recoveryConsumer);
+    expect(first.ack).not.toHaveBeenCalled();
+    expect(first.retry).toHaveBeenCalledOnce();
+    expect(recoveryQueue).toHaveLength(1);
+    const [pending] = recoveryQueue;
+    if (pending?.body.kind !== "announcement-settlement")
+      throw new Error("Expected a pending announcement settlement");
+    expect(pending.body).toStrictEqual({
+      kind: "announcement-settlement",
+      jobId,
+      idempotencyKey,
+      sendAttempts: 1,
+      lastCode: "needs_reconciliation",
+      lastStatus: 409,
+    });
+
+    // In this fixture the ordinary queue has no settlement capability. Hold
+    // the trusted recovery queue while the rollback consumer serves ordinary jobs.
+    const untrusted = delivery({ ...pending.body, lastStatus: 403 }, pending.timestamp);
+    const readEvidence = () => sql`select attempts, last_code, last_status
+      from bot_reconciliation_intents where idempotency_key = ${idempotencyKey}`;
+    await consume({ messages: [untrusted] }, ordinaryConsumer);
+    expect(untrusted.ack).toHaveBeenCalledOnce();
+    expect(untrusted.retry).not.toHaveBeenCalled();
+    expect(await readEvidence()).toEqual([]);
+    expect(await failures()).toEqual([]);
+
+    await sql`update announcement_send_claims set claim_until = clock_timestamp()
+      where idempotency_key = ${idempotencyKey}`;
+    const rolledBack = delivery(original, timestamp, 2);
+    await consume({ messages: [rolledBack] }, ordinaryConsumer);
+    expect(rolledBack.ack).toHaveBeenCalledOnce();
+    expect(rolledBack.retry).not.toHaveBeenCalled();
+    expect(await readEvidence()).toEqual([{ attempts: 1, last_code: null, last_status: null }]);
+    const originalFailure = await failures();
+    expect(originalFailure).toMatchObject([{ job_id: jobId, kind: "announcement" }]);
+    expect(pending.ack).not.toHaveBeenCalled();
+    expect(pending.retry).not.toHaveBeenCalled();
+
+    await consume({ messages: recoveryQueue.splice(0) }, recoveryConsumer);
+    expect(pending.ack).toHaveBeenCalledOnce();
+    expect(pending.retry).not.toHaveBeenCalled();
+    expect(await readEvidence()).toEqual([
+      { attempts: 1, last_code: "needs_reconciliation", last_status: 409 },
+    ]);
+    expect(await failures()).toEqual(originalFailure);
+    expect(await pgQueueDepth(sql)).toEqual({ ...emptyLiveDepth, failed: 1 });
+    expect(postAnnouncement).toHaveBeenCalledExactlyOnceWith(original.action, idempotencyKey);
   });
 
   it("upgrades historical duplicates, preserving the first row and same-key dispatches", async () => {
