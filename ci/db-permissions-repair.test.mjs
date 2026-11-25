@@ -435,9 +435,14 @@ test("executor rolls back a grant or revoke when the post-write membership query
             if (sql.startsWith("select pg_try_advisory_xact_lock(")) return [{ acquired: true }];
             assert.deepEqual(values, [executor]);
             if (sql === write) {
-              lifecycle.push("write");
-              pending = wanted;
-              return [];
+              // postgres.js executes the write when its query is awaited.
+              return {
+                then(resolve) {
+                  lifecycle.push("write");
+                  pending = wanted;
+                  resolve([]);
+                },
+              };
             }
             assert.match(sql, /^select p\.oid::text as provisioner,/);
             membershipReads.push(pending);
