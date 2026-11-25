@@ -986,6 +986,42 @@ Both modes require the staged candidate and its 30-minute soak. Reviewer-mode
 preflight can pass without staging evidence. Regression still requires the
 candidate's ledgers before deploy.
 
+For a release owner's shared-staging evidence, use
+[`ci/staging-soak-receipt.mjs`](../ci/staging-soak-receipt.mjs) from an operator
+script. Build the input from the verified staging deploy and successful
+first-attempt staging E2E, after confirming that journeys and quality executed
+and passed. Use the deployed SHA from the deploy evidence. The Actions run
+head can be a different SHA.
+
+```js
+const evidence = {
+  sha,
+  deployment: { sha, deployedAt, workerVersion, runId: deployRunId, attempt: deployAttempt },
+  e2e: { runId: e2eRunId, attempt: 1, conclusion: "success", completedAt, before, after },
+};
+const receipt = await captureStagingSoakReceipt(evidence, { accountId, token, fetchImpl: fetch });
+validateStagingSoakReceipt(evidence, receipt);
+await writeFile(receiptPath, JSON.stringify(receipt, null, 2) + "\n", { flag: "wx" });
+```
+
+Import both receipt functions from the helper and `writeFile` from
+`node:fs/promises`. Use the deploy's verified Worker UUID and `/version`
+timestamp, and the E2E journey's retained `/version` identity pair for
+`before` and `after`. Use an existing authorized analytics credential. The
+helper makes one version-tagged query from E2E completion through
+`sample.observedAt`, at or after the existing 30-minute floor. It checks ordinary
+staging `/version` and `/up` on both sides of the query. `sampled` records the
+observed counts and point-in-time readiness. Apply the existing release gates
+separately. Missing counts or any identity mismatch leave the soak unverified.
+
+If the deployment was replaced, add
+`evidence.replacement = { sha, workerVersion, observedAt }` with the verified
+replacement identity and capture to a new path. The helper returns
+`superseded` without sampling. Keep any earlier receipt unchanged as
+historical evidence, including receipts predating this helper. Validate
+current evidence with the replacement supplied whenever supersession is
+known. Keep isolated Ember evidence on its original SHA.
+
 Both modes refuse a candidate with red staging evidence: any failed or
 timed-out `e2e-staging` run that names it, or any run past its first attempt.
 GitHub's run list shows only a run's latest attempt, so a re-run that turned
