@@ -970,9 +970,16 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
     assert.match(repeated.headers.get("location") ?? "", /^\/admin\/events\/[0-9A-Z]{26}$/);
     assert.notEqual(repeated.headers.get("location"), eventPath);
 
+    const featuredTitle = "Fixture admin feature";
+    const featuredBody = new URLSearchParams({ title: featuredTitle });
+    await visit(kit, "/admin/featured", 403, {
+      ...form,
+      headers: { ...form.headers, cookie: member },
+      body: featuredBody,
+    });
     const saved = await visit(kit, "/admin/featured", 303, {
       ...form,
-      body: new URLSearchParams({ title: "Fixture admin feature" }),
+      body: featuredBody,
     });
     const featuredPath = saved.headers.get("location");
     assert.match(featuredPath ?? "", /^\/admin\/featured\/\d+$/);
@@ -981,6 +988,53 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
     form.headers.cookie = moderator;
     const baseline = edit.text.match(/name="saved_baseline" value="([0-9a-f]{64})"/)?.[1];
     assert.ok(baseline, "Kit renders the saved version in the native form");
+    for (const target of [kit, off]) {
+      for (const path of ["/admin/featured", featuredPath]) {
+        const body = new URLSearchParams({ body: "Keep this featured draft" });
+        if (path === featuredPath) body.set("saved_baseline", baseline);
+        const rejected = await visit(target, path, 422, { ...form, body, owned: target === kit });
+        assert.match(rejected.headers.get("content-type") ?? "", /^text\/html\b/);
+        assert.equal(rejected.headers.get("location"), null);
+        assert.match(rejected.text, /<div\b[^>]*role="alert"[^>]*data-testid="form-errors"/);
+        assert.match(rejected.text, /<a href="#f-title">Headline: Give it a headline\.<\/a>/);
+        assert.match(rejected.text, /<p\b[^>]*id="f-title-error"[^>]*>Give it a headline\.<\/p>/);
+        const titleInput = rejected.text.match(/<input\b[^>]*name="title"[^>]*>/)?.[0] ?? "";
+        assert.match(titleInput, /\baria-invalid="true"/);
+        assert.match(titleInput, /\baria-describedby="f-title-error"/);
+        assert.match(
+          rejected.text,
+          /<textarea\b[^>]*name="body"[^>]*>\s*Keep this featured draft\s*<\/textarea>/,
+        );
+        if (path === featuredPath) {
+          assert.ok(rejected.text.includes(`name="saved_baseline" value="${baseline}"`));
+        }
+      }
+    }
+    const featuredRows = await sql`
+      select title from featured_contents where created_by = ${moderatorId}
+    `;
+    assert.deepEqual(
+      [...featuredRows],
+      [{ title: featuredTitle }],
+      "invalid forms leave one original row",
+    );
+    const featuredAudit = await sql`
+      select subject_id::text as id, description from activity_log
+      where causer_id = ${moderatorId} and subject_type = 'FeaturedContent'
+    `;
+    assert.deepEqual(
+      [...featuredAudit],
+      [
+        {
+          id: featuredPath.split("/").at(-1),
+          description: `created featured content ${featuredTitle}`,
+        },
+      ],
+      "only the accepted creation adds a featured audit row",
+    );
+    console.log(
+      "PASS installed featured create and edit retain invalid drafts through Kit and Hono",
+    );
     await visit(hono, featuredPath, 303, {
       ...form,
       owned: false,
