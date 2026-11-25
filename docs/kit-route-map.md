@@ -310,6 +310,83 @@ with the bindings unset, `false` and `true`. Keep the bindings unset in deployed
 configuration until separately qualified through the
 [production release gate](../CONTRIBUTING.md#production-release-gate).
 
+### Inbound machine endpoints (API-9)
+
+At `14bbbbf0a`, both machine routes are Hono-owned in source. The landed
+[`apiFamilies` selector](../src/route-ownership.ts) is the integration point for
+two independent follow-ons:
+
+| Follow-on | Exact method and pathname | Kit ownership setting |
+| --- | --- | --- |
+| [MCP transport](https://github.com/TogetherWeOwn/two-web-next/pull/2783) | `POST /mcp`, `OPTIONS /mcp` | Proposed `KIT_ROUTE_MCP` |
+| Agent event ingress | `POST /api/agent-events` | Separate ingress ownership binding |
+
+Keep both settings off by default. Only the literal string `true` on the
+family's binding can admit its listed pairs. The original pathname must match
+the mounted `+server` route ID. Other methods, including GET and HEAD, encoded
+aliases, trailing slashes, Kit data requests and conflicting claims fall
+through to Hono. Clearing one binding restores Hono for that family. The
+ingress ownership switch is independent of the existing `AGENT_EVENTS_ENABLED`
+service gate. `reads: "public"` lets the shared route handler own admission
+without running the Kit browser-session bridge.
+
+- Reuse the Hono route admission and handlers under both owners. Preserve the
+  trusted host check, exact POST origin exemptions and MCP's own Origin
+  policy. MCP is stateless and session-free. Its OPTIONS preflight spends no
+  read budget and opens no database. Ingress uses its scoped machine bearer,
+  grant checks, rate limits and idempotency independently of browser cookies.
+  See the [MCP registration](../src/mcp/routes.ts) and [ingress contract](agent-events.md).
+- Preserve the shared 32 KiB POST cap for both advertised and actual streamed
+  bytes before parsing, budget charges or side effects. Keep 413 on overflow
+  and 400 on a failed upload read. MCP spends the shared public-read budget
+  once before JSON parsing and batch rejection. Ingress bounds the upload
+  before its own admission. Preserve statuses, media types, cache policy,
+  `Retry-After` and correlation IDs, including MCP's JSON-RPC and SSE responses
+  and ingress's JSON refusal envelope. See the [shared bounds](../src/http/body-limit.ts)
+  and [machine error contracts](machine-errors.md).
+- Correlate diagnostics by registered route, method, status, validated or minted
+  request ID and sanitized error class. Preserve the ingress shield's bounded
+  counters and keep ordinary client refusals out of paging. Exclude bearer
+  values, cookies, URLs and query strings, payloads, raw errors and member
+  data from logs and evidence. See the [request logger](../src/request-log.ts)
+  and [alert formatter](../src/alerts.ts).
+- Pass the incoming `request.signal` to downstream operations that support
+  cancellation. Give held work a deadline and release readers, timers and
+  listeners on completion or abort. Use `waitUntil` for bounded cleanup such as
+  closing an ingress-owned SQL client. The injected fixture client has its own
+  lifecycle. A stream reader cancel and an incoming HTTP disconnect require
+  separate evidence. The tracked Worker configs use **2026-09-29** with no
+  `enable_request_signal` opt-in. Cloudflare enables it by default from
+  **2026-11-17** unless `disable_request_signal` is set. The direct loopback
+  fixture explicitly opts in at the earlier date. Verify the exact candidate's
+  effective flags and disconnect behavior before any family flip. See
+  [ADR 0002](adr/0002-api-migration-amendment.md#technical-decisions).
+
+The [Hono fetch baseline](https://github.com/TogetherWeOwn/two-web-next/pull/2645)
+covers MCP handshake, input and result bounds, and ingress create/update,
+refusal and replay. The installed Kit Worker fixtures exercise Hono-owned
+machine routes at this baseline. The [streaming fixture](../ci/fixtures/kit-machine-parity.mjs)
+checks synthetic ingress JSON, one complete MCP SSE frame through EOF, and
+reader cancellation. The [disconnect fixture](../ci/fixtures/kit-machine-disconnect.mjs)
+resets a real loopback socket during a held read and observes incoming abort,
+read settlement and `waitUntil` cleanup.
+
+Each follow-on must extend installed-Worker evidence on its exact head. Check
+unset, off and on settings, Hono fallback for unlisted pairs, unchanged
+admission and error branches, MCP stream and disconnect cleanup, and ingress
+refusal and replay across ownership changes. Use synthetic credentials and
+rows, intercept outbound fetch and queue calls, and assert zero real sends.
+Keep transport and ingress fixture results independently attributable.
+
+Before shared-dispatch integration or a production family flip, refresh and
+revalidate the post-Ember inventory, route map and pure-Hono golden evidence.
+Before an ingress flip, inventory the effective database bindings and prove
+the dedicated `AGENT_DB` connection path or its nullish fallback as specified
+in ADR 0002. Production family admission follows M0, including the Kit Worker's
+48-hour acceptance, and requires release-log confirmation of the cited live
+page sources, exact-candidate parity and Actions evidence, applicable Security
+then QA reviews, and the [production release gate](../CONTRIBUTING.md#production-release-gate).
+
 ## Offline retirement guard
 
 The Kit archive parity job sets `KIT_RETIREMENT_GUARD=report` and requires the
