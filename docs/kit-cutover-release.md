@@ -154,7 +154,8 @@ while keeping Ember's public pages on Kit.
 
 Before constructing the Ember workflow inputs, compare the selected candidate
 and serving Hono undo recorded in the reviewed release evidence. Add this
-section once to the evidence packet, keeping the field names and order.
+section once to the evidence packet as a Markdown heading and text block,
+keeping the field names and order. Enclose any archived examples in a fence.
 Use the approved Ember qualification SHA and pin for the candidate fields.
 Use the protected Hono dispatch's SHA and pin for the next two fields. Copy
 the UUID from the recorded 100% serving readback into `hono_serving_version`.

@@ -14,10 +14,28 @@ const fields = [
 ];
 const maxPacketBytes = 512 * 1024;
 
+function sectionStart(lines) {
+  let start = -1;
+  let openFence;
+  for (const [index, line] of lines.entries()) {
+    const [, marker, info] = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line) ?? [];
+    if (openFence) {
+      if (marker?.startsWith(openFence) && /^[\t ]*$/.test(info)) openFence = undefined;
+      continue;
+    }
+    if (marker && (marker[0] === "~" || !info.includes("`"))) openFence = marker;
+    if (line === section) {
+      assert.equal(start, -1);
+      start = index;
+    }
+  }
+  assert.ok(start >= 0);
+  return start;
+}
+
 function readback(packet) {
   const lines = packet.split(/\r?\n/);
-  const start = lines.indexOf(section);
-  assert.ok(start >= 0 && start === lines.lastIndexOf(section));
+  const start = sectionStart(lines);
   assert.equal(lines[start + 1], "");
   assert.equal(lines[start + 2], "```text");
   const first = start + 3;
@@ -72,14 +90,12 @@ async function main() {
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 
-if (import.meta.main) {
-  try {
-    await main();
-  } catch {
-    // Validator and parser errors can contain packet values.
-    process.stderr.write(
-      "Ember release readback failed. Check the evidence section, candidate pin and Hono undo binding.\n",
-    );
-    process.exitCode = 1;
-  }
+try {
+  await main();
+} catch {
+  // Validator and parser errors can contain packet values.
+  process.stderr.write(
+    "Ember release readback failed. Check the evidence section, candidate pin and Hono undo binding.\n",
+  );
+  process.exitCode = 1;
 }

@@ -66,6 +66,16 @@ function offlineReadback(input) {
   return spawnSync(process.execPath, [cli], { input, encoding: "utf8", env: {}, timeout: 5_000 });
 }
 
+function assertReadbackRejected(input) {
+  const result = offlineReadback(input);
+  assert.equal(result.status, 1, result.error?.message);
+  assert.equal(result.stdout, "");
+  assert.equal(
+    result.stderr,
+    "Ember release readback failed. Check the evidence section, candidate pin and Hono undo binding.\n",
+  );
+}
+
 test("offline Ember readback emits only the candidate and bound production undo identifiers", () => {
   const result = offlineReadback(evidencePacket(readbackFields).replaceAll("\n", "\r\n"));
   assert.equal(result.status, 0, result.error?.message || result.stderr);
@@ -102,15 +112,34 @@ test("offline Ember readback refuses mismatched, absent and ambiguous evidence w
     packet.replace(readbackSection, "## Historical candidate"),
     `${packet}\n${packet}`,
   ];
-  for (const input of rejected) {
-    const result = offlineReadback(input);
-    assert.equal(result.status, 1, result.error?.message);
-    assert.equal(result.stdout, "");
-    assert.equal(
-      result.stderr,
-      "Ember release readback failed. Check the evidence section, candidate pin and Hono undo binding.\n",
-    );
+  for (const input of rejected) assertReadbackRejected(input);
+});
+
+test("offline Ember readback ignores archived readbacks in Markdown fences", () => {
+  const previous = evidencePacket({
+    ...readbackFields,
+    candidate_pin: `20:1:${digest}`,
+    hono_pin: `20:1:${digest}`,
+  });
+  const current = evidencePacket(readbackFields);
+  for (const fence of ["````", "~~~"]) {
+    const archive = `${fence}markdown\n${fence}example\n${previous}\n${fence}\n`;
+    assertReadbackRejected(archive);
+    const result = offlineReadback(`${archive}\n${current}`);
+    assert.equal(result.status, 0, result.error?.message || result.stderr);
+    assert.equal(JSON.parse(result.stdout).qualificationPin, qualificationPin);
   }
+});
+
+test("offline Ember readback enforces the byte limit and UTF-8 decoding", () => {
+  const packet = Buffer.from(`${evidencePacket(readbackFields)}\n`);
+  const atLimit = Buffer.concat([packet, Buffer.alloc(512 * 1024 - packet.length, 32)]);
+  const result = offlineReadback(atLimit);
+  assert.equal(result.status, 0, result.error?.message || result.stderr);
+  assert.equal(JSON.parse(result.stdout).qualificationPin, qualificationPin);
+  assertReadbackRejected(Buffer.concat([atLimit, Buffer.from(" ")]));
+  assertReadbackRejected(Buffer.concat([packet, Buffer.from([0xff])]));
+  assertReadbackRejected("");
 });
 
 test("cutover requires explicit protected selection and the paired Hono UUID", () => {
