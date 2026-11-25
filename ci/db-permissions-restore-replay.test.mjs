@@ -146,6 +146,20 @@ const inspect = (connect) =>
     return observeRepair(tx);
   });
 
+const readRelationGrants = (connect, names) =>
+  readAs(connect, executor, "postgres", async (tx) => {
+    // GRANT can materialize a NULL relation ACL as explicit owner defaults.
+    // Compare both representations as the same grants.
+    const rows = await tx`select n.nspname || '.' || c.relname as name,
+      array(select item::text from unnest(coalesce(c.relacl, acldefault(
+        case when c.relkind = 'S' then 's'::"char" else 'r'::"char" end,
+        c.relowner
+      ))) as items(item) order by item::text) as grants
+      from pg_class c join pg_namespace n on n.oid = c.relnamespace
+      where (n.nspname || '.' || c.relname) = any(${names}::text[]) order by name`;
+    return [...rows];
+  });
+
 function namedRepairScope({ state }) {
   const {
     inventory,
@@ -369,6 +383,9 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
 
   const { state: baseline } = await inspect(fresh);
   assert.equal(baseline.migrator_ready, true);
+  const originalObjects = Object.keys(baseline.inventory);
+  const originalGrants = await readRelationGrants(fresh, originalObjects);
+  assert.equal(originalGrants.length, originalObjects.length);
   const roles = () => withClient(restore.admin(), roleCatalog);
   const baselineRoles = await roles();
   const readiness = await probe(base, false);
@@ -396,14 +413,15 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
   assert.deepEqual(await roles(), baselineRoles);
   const { state: afterUndo } = await inspect(fresh);
   assert.deepEqual(
-    Object.fromEntries(
-      Object.keys(baseline.inventory).map((name) => [name, afterUndo.inventory[name]]),
-    ),
+    Object.fromEntries(originalObjects.map((name) => [name, afterUndo.inventory[name]])),
     baseline.inventory,
   );
+  assert.deepEqual(await readRelationGrants(fresh, originalObjects), originalGrants);
   assert.deepEqual(
-    afterUndo.object_acl.filter(({ name }) => Object.hasOwn(baseline.inventory, name)),
-    baseline.object_acl,
+    afterUndo.object_acl.filter(
+      ({ name, column_number }) => column_number > 0 && Object.hasOwn(baseline.inventory, name),
+    ),
+    baseline.object_acl.filter(({ column_number }) => column_number > 0),
   );
   for (const key of ["defaults", "schema_db_acl", "drizzle_access", "migrator_ready"]) {
     assert.deepEqual(afterUndo[key], baseline[key], key);
