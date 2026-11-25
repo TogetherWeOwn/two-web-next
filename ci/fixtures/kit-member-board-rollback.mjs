@@ -4,6 +4,7 @@ import { join } from "node:path";
 import postgres from "postgres";
 import { EMBER_CUTOVER_VARS } from "../kit-cutover-evidence.mjs";
 import { fixtureSession } from "../kit-live-socket.mjs";
+import { SESSION_COOKIE } from "../parity/fixture.mjs";
 import {
   parseRenderedPage,
   renderedAttribute,
@@ -57,7 +58,8 @@ export default {
     APP_URL: appUrl,
     DISCORD_GUILD_ID: "",
   });
-  const { ref, cookie } = await fixtureSession(secret);
+  const { ref, cookie: initialCookie } = await fixtureSession(secret);
+  let cookie = initialCookie;
   const sql = postgres(databaseUrl, { max: 1 });
   const ids = [eligible.id, optedOut.id];
   let eventId;
@@ -65,8 +67,6 @@ export default {
     eventId = await sql.begin(async (tx) => {
       const [existing] = await tx`
         select exists (
-          select 1 from member_data_access_logs where viewer_discord_id = ${eligible.id}
-          union all
           select 1 from board_view_logs
           where normalized_board_key = 'members' and scope = 'overall' and season = ${season}
         ) as occupied`;
@@ -128,6 +128,14 @@ export default {
         ),
       );
       assert.deepEqual(rows, [["1", eligible.name, "1"]], `${phase}: only the eligible RSVP ranks`);
+
+      const session = board.headers
+        .getSetCookie()
+        .find((value) => value.startsWith(`${SESSION_COOKIE}=`));
+      assert.ok(session, `${phase}: Hono renews the live bearer`);
+      const renewed = session.split(";", 1)[0];
+      assert.ok(renewed !== cookie, `${phase}: Hono rotated the session bearer`);
+      cookie = renewed;
       console.log(
         `PASS installed ${phase}: member board ranks only the eligible synthetic profile`,
       );
@@ -138,7 +146,8 @@ export default {
         await sql.begin(async (tx) => {
           await tx`delete from web_session_grace where status_hash = ${ref}`;
           await tx`delete from web_sessions where status_hash = ${ref}`;
-          await tx`delete from member_data_access_logs where viewer_discord_id = ${eligible.id}`;
+          // The only expected row is the viewer, who is excluded from audit subjects.
+          // The disposable database teardown removes any append-only audit from a failed read.
           await tx`delete from board_view_logs
             where normalized_board_key = 'members' and scope = 'overall' and season = ${season}`;
           await tx`delete from events where id = ${eventId}`; // Cascades to both going RSVPs.
