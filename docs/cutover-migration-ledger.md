@@ -123,7 +123,9 @@ version, approvals and watch results.
    while direct ledger access still works. Qualify the compatible Hono build
    and its exact fallback, then use the [protected Worker release](kit-cutover-release.md#protected-release-and-recovery)
    for `cutover_mode: hono` with the approved `sha` and `cutover_pin` and both
-   undo inputs empty. Confirm the approved Hono UUID, source and
+   undo inputs empty. When preparing Hono as Ember's rollback, use the
+   Ember-profile packet's `sha` and `cutover_pin` for this Hono dispatch.
+   Confirm the approved Hono UUID, source and
    manifest at 100% traffic. Verify a fresh, healthy `/up` response reports
    the exact canonical `1033` timestamp set through the projection. Even a
    healthy response with stale or missing timestamps blocks the revoke.
@@ -172,10 +174,13 @@ version, approvals and watch results.
 5. **Hand off explicitly to the Ember release.** After the repair, isolation
    and migration watches pass, pass along the observed `1037` ledger and `1038`
    deferral, healthy `/up`, effective access results, database recovery receipts,
-   and the serving Hono commit, UUID and manifest binding. The Ember release
-   verifies that its exact qualification packet binds the live Hono rollback
-   UUID, gets its own release approval, and uses `cutover_mode: ember` with the
-   approved `sha`, `cutover_pin` and Hono `cutover_undo_version`. Leave
+   and the serving Hono commit, UUID and manifest binding. For a bridge prepared
+   with an all-off packet, prepare the paired Hono version from the Ember
+   packet in the Ember release before switching. Verify the live Hono rollback
+   UUID matches the Ember packet's source and manifest digest. Under separate
+   Ember release approval, dispatch `cutover_mode: ember` with the same `sha`
+   and `cutover_pin` used to prepare that Hono and its UUID as
+   `cutover_undo_version`. Leave
    `cutover_undo_digest` empty and `migrations_applied` off for Ember. Follow the
    [Kit cutover and recovery runbook](kit-cutover-release.md#protected-release-and-recovery).
 
