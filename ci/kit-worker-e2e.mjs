@@ -212,6 +212,13 @@ async function startWorker(name, main, assetsDirectory, sessionSecret, vars, liv
   return worker;
 }
 
+async function stopWorker(worker) {
+  if (!worker.stopped) worker.child.kill("SIGTERM");
+  await Promise.race([worker.closed, delay(5_000, undefined, { ref: false })]);
+  if (!worker.stopped) worker.child.kill("SIGKILL");
+  await Promise.race([worker.closed, delay(5_000, undefined, { ref: false })]);
+}
+
 // Buffer Worker output and print it only on failure: --log-level error keeps
 // success quiet while a red check still shows the cause.
 let failed = false;
@@ -869,22 +876,33 @@ export default {
       hono: honoWithSession,
       databaseUrl,
     });
-    await assertKitQueuePreviewServing({
-      worker,
-      honoWorker: join(repo, "src/worker.ts"),
-      scratch,
-      databaseUrl,
-      start: async (name, entry) => {
-        const instance = await startWorker(
-          `queue-preview-${name}`,
-          entry,
-          name === "hono" ? join(repo, "public") : assets,
-          secret,
-        );
-        await listen(instance.child, instance.origin, () => instance.log);
-        return instance;
-      },
-    });
+    const previewWorkers = [];
+    try {
+      await assertKitQueuePreviewServing({
+        worker,
+        honoWorker: join(repo, "src/worker.ts"),
+        scratch,
+        databaseUrl,
+        start: async (name, entry) => {
+          const instance = await startWorker(
+            `queue-preview-${name}`,
+            entry,
+            name === "hono" ? join(repo, "public") : assets,
+            secret,
+          );
+          previewWorkers.push(instance);
+          await listen(instance.child, instance.origin, () => instance.log);
+          return instance;
+        },
+      });
+    } finally {
+      await Promise.all(previewWorkers.map(stopWorker));
+    }
+    assert.ok(
+      previewWorkers.every(({ stopped }) => stopped),
+      "queue preview Workers did not stop",
+    );
+    console.log("PASS queue preview Workers stopped and synthetic fixture cleanup completed");
 
     async function observeDataRedirect(worker, path) {
       const response = await fetch(`${worker.origin}${path}`, { redirect: "manual" });
@@ -1284,14 +1302,7 @@ export default machineParityWorker(inner, ${JSON.stringify(probePath)}, ${name =
   failed = true;
   throw error;
 } finally {
-  await Promise.all(
-    workers.map(async (worker) => {
-      if (!worker.stopped) worker.child.kill("SIGTERM");
-      await Promise.race([worker.closed, delay(5_000, undefined, { ref: false })]);
-      if (!worker.stopped) worker.child.kill("SIGKILL");
-      await Promise.race([worker.closed, delay(5_000, undefined, { ref: false })]);
-    }),
-  );
+  await Promise.all(workers.map(stopWorker));
   // Print after the children close so their output has flushed.
   if (failed) {
     for (const { name, log } of workers)
