@@ -1,3 +1,5 @@
+import "./fixtures/staging-reservation-store.mjs";
+
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
