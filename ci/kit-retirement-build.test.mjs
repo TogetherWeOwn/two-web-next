@@ -175,6 +175,22 @@ test("groups every blocker by its legacy family and exact method", (t) => {
   });
 });
 
+test("report reader requires a grouped findings object", () => {
+  const report = { mode: "report", checked: 1, ready: true, honoDependencies: [], unowned: [] };
+  const line = (unownedByFamily) =>
+    `Kit retirement report ${JSON.stringify({ ...report, unownedByFamily })}`;
+  assert.deepEqual(requireKitRetirementReport(line({}), "report"), {
+    ...report,
+    unownedByFamily: {},
+  });
+  for (const value of [undefined, null, "unresolved", []]) {
+    assert.throws(
+      () => requireKitRetirementReport(line(value), "report"),
+      /incomplete Kit retirement report/,
+    );
+  }
+});
+
 test("explicit strict mode blocks adapter output and report mode lets it proceed", (t) => {
   let adapted = 0;
   const cloudflare = {
