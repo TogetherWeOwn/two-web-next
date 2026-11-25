@@ -289,7 +289,8 @@ export async function assertKitQueuePreviewServing({
     const receipts =
       () => sql`select log_name, description, subject_type, subject_id, causer_type, causer_id, event, properties
       from activity_log where description = 'queue.failed.preview'
-        or causer_id in (${operatorId}, ${otherModerator}, ${member}) order by id`;
+        or causer_id in (${operatorId}, ${otherModerator}, ${member})
+        or (subject_type = 'queue_failed_jobs' and subject_id = ${failureId}) order by id`;
 
     await compareRefusal("disabled", 404, { actor: operatorId }, "preview_disabled");
     await compareRefusal("on", 403, { actor: operatorId, origin: "" }, "cross_origin");
