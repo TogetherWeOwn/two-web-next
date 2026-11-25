@@ -358,6 +358,9 @@ merge SHA. Use commit-scoped ignore fingerprints to limit an exception to one
 occurrence. A fingerprint scoped to the original commit does not also exempt
 the merge occurrence.
 
+Title and body edits leave the active `pr-gates` run in place. The latest edit
+can replace a waiting run, so it still runs both required jobs in sequence.
+
 On a pull request the job applies the base branch's
 `.gitleaks.toml` and `.gitleaksignore` and ignores inline `gitleaks:allow`
 comments, so a PR cannot allowlist its own leak. If a change legitimately needs a

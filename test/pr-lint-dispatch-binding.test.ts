@@ -261,6 +261,28 @@ describe("PR lint dispatch binding (hermetic workflow/API fixtures)", () => {
     ).toEqual([["api", "repos/TogetherWeOwn/two-web-next/pulls/28"]]);
   });
 
+  it.each([
+    ["invalid queued title", "fix(ci): use the latest title", 0],
+    ["fix(ci): valid queued title", "invalid latest title", 1],
+  ])(
+    "lints the latest same-head edit when the event carried %s",
+    (queuedTitle, liveTitle, status) => {
+      const fixture = pullRequest();
+      fixture.checkoutSha = headSha;
+      fixture.checkedSha = headSha;
+      Object.assign(fixture.event, {
+        action: "edited",
+        changes: { title: { from: "earlier title" } },
+      });
+      fixture.event.pull_request!.title = queuedTitle;
+      fixture.live.title = liveTitle;
+
+      const result = runWorkflow(fixture);
+      expect(result.status, result.stdout + result.stderr).toBe(status);
+      expect(JSON.parse(result.output).title).toBe(liveTitle);
+    },
+  );
+
   describe.each(["workflow_dispatch", "pull_request"])("queue-visible waivers (%s)", (event) => {
     const fixtureForEvent = () => (event === "workflow_dispatch" ? dispatch() : pullRequest(true));
 

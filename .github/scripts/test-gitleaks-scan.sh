@@ -26,14 +26,21 @@ token="ghp_$(printf 'two-bot-next gitleaks self-test fixture' | sha256sum | cut 
 failures=0
 cases=0
 
-# new_repo NAME: repo with one base commit, remote-tracking main pointing at it.
+# Apply identical commit settings when each isolated fixture repo is created.
+template="${work}/git-template"
+mkdir "${template}"
+cat > "${template}/config" <<'CONFIG'
+[user]
+  email = selftest@example.invalid
+  name = selftest
+[commit]
+  gpgsign = false
+CONFIG
+
+# new_repo NAME: create a fresh repository for a fixture.
 new_repo() {
   repo="${work}/$1"
-  mkdir -p "${repo}"
-  git -C "${repo}" init -q -b main
-  git -C "${repo}" config user.email selftest@example.invalid
-  git -C "${repo}" config user.name selftest
-  git -C "${repo}" config commit.gpgsign false
+  git init -q -b main --template="${template}" "${repo}"
   printf '# base\n' > "${repo}/README.md"
 }
 

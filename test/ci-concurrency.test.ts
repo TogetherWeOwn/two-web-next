@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 
 // TOG-11811: runners are the throughput ceiling, so a superseded PR push must
 // cancel its own runs. Deploy, rollback and release runs must never be cancelled midway.
@@ -11,12 +12,16 @@ const workflows = readdirSync(dir)
   .filter((name) => name.endsWith(".yml"))
   .map((name) => ({ name, text: readFileSync(join(dir, name), "utf8") }));
 const triggers = (text: string) => text.split(/\non:\n/)[1]?.split(/\n\S/)[0] ?? "";
+const prGatesCancel =
+  "${{ github.event_name == 'pull_request' && !(github.event.action == 'edited' && !github.event.changes.base && (github.event.changes.title || github.event.changes.body)) }}";
 // ci.yml exempts main from cancellation and gives each push its own slot.
 // A cancelled main run cannot trigger the staging deploy.
-const cancels = (text: string) =>
-  /\nconcurrency:\n  group: [^\n]+\n  cancel-in-progress: (true|\$\{\{ github\.ref != 'refs\/heads\/main' && github\.event_name != 'merge_group' \}\}|\$\{\{ github\.event_name == 'pull_request' \}\})\n/.test(
-    text,
-  );
+const cancels = ({ name, text }: (typeof workflows)[number]) =>
+  name === "pr-gates.yml"
+    ? text.includes(`\n  cancel-in-progress: ${prGatesCancel}\n`)
+    : /\nconcurrency:\n  group: [^\n]+\n  cancel-in-progress: (true|\$\{\{ github\.ref != 'refs\/heads\/main' && github\.event_name != 'merge_group' \}\}|\$\{\{ github\.event_name == 'pull_request' \}\})\n/.test(
+        text,
+      );
 // A bare `cancel-in-progress: true` on a workflow that also runs on push to main
 // is only safe when its group is per SHA (main pushes then never share a group).
 const pushesMain = (text: string) => /(^|\n)  push:\n    branches: \[main\]/.test(triggers(text));
@@ -31,7 +36,7 @@ describe("workflow concurrency", () => {
   it("cancels superseded runs of every pull_request workflow", () => {
     const pr = workflows.filter(({ text }) => /(^|\n)  pull_request:/.test(triggers(text)));
     expect(pr.length).toBeGreaterThan(2);
-    expect(pr.filter(({ text }) => !cancels(text)).map(({ name }) => name)).toEqual([]);
+    expect(pr.filter((workflow) => !cancels(workflow)).map(({ name }) => name)).toEqual([]);
   });
 
   it("cancels only on pull_request events when a workflow has other triggers", () => {
@@ -146,6 +151,106 @@ const conditionHolds = (condition: string, runCancelled: boolean) => {
 type Results = { scope: string; downstream: string };
 const ciText = readFileSync(join(dir, "ci.yml"), "utf8");
 const e2eText = readFileSync(join(dir, "e2e.yml"), "utf8");
+const prGates = parse(readFileSync(join(dir, "pr-gates.yml"), "utf8"));
+
+// Model the Actions predicate pinned by the matrix below. GitHub's default
+// single queue replaces the waiting run even when the active run is kept.
+function cancelsActivePrGate(event: string, action: string, changes: object) {
+  const metadataOnly =
+    action === "edited" && !("base" in changes) && ("title" in changes || "body" in changes);
+  return event === "pull_request" && !metadataOnly;
+}
+
+describe("PR gate event matrix", () => {
+  it("keeps both Actions checks and their event-specific revisions in one sequential run", () => {
+    expect(prGates.name).toBe("pr-gates");
+    expect(Object.keys(prGates.jobs)).toEqual(["pr-lint", "gitleaks"]);
+    expect(prGates.on.pull_request).toEqual({
+      types: ["opened", "edited", "synchronize", "reopened", "ready_for_review"],
+    });
+    expect(prGates.on.push).toEqual({ branches: ["main"] });
+    expect(prGates.on.merge_group).toEqual({ types: ["checks_requested"] });
+    expect(prGates.concurrency).toEqual({
+      group:
+        "${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number || github.sha }}",
+      "cancel-in-progress": prGatesCancel,
+    });
+
+    const lint = prGates.jobs["pr-lint"];
+    expect(lint.name).toBe("pr-lint");
+    expect(lint.if).toBeUndefined();
+    expect(lint.env.PR_LINT_CHECKOUT_SHA).toBe(
+      "${{ github.event.pull_request.head.sha || github.sha }}",
+    );
+    expect(lint.steps[0].with.ref).toBe("${{ env.PR_LINT_CHECKOUT_SHA }}");
+
+    const scan = prGates.jobs.gitleaks;
+    expect(scan.name).toBe("gitleaks");
+    expect(scan.needs).toBe("pr-lint");
+    expect(scan.if).toBe("${{ !cancelled() }}");
+    expect(scan.steps[0].with).toEqual({ "fetch-depth": 0, "persist-credentials": false });
+    expect(scan.steps.at(-1)).toEqual({
+      name: "Scan the full history",
+      env: {
+        GITLEAKS_BIN: "${{ runner.temp }}/gitleaks",
+        EVENT_NAME: "${{ github.event_name }}",
+        BASE_REF: "${{ github.base_ref || github.event.merge_group.base_ref }}",
+      },
+      run: "bash .github/scripts/gitleaks-scan.sh",
+    });
+  });
+
+  it.each([
+    ["title edit", "pull_request", "edited", { title: { from: "prior title" } }, false],
+    ["body edit", "pull_request", "edited", { body: { from: null } }, false],
+    ["retarget", "pull_request", "edited", { base: { ref: { from: "old-base" } } }, true],
+    ["retarget with body edit", "pull_request", "edited", { base: {}, body: {} }, true],
+    ["unclassified edit", "pull_request", "edited", {}, true],
+    ["changed head", "pull_request", "synchronize", {}, true],
+    ["ready for review", "pull_request", "ready_for_review", {}, true],
+    ["main push", "push", "", {}, false],
+    ["queue commit", "merge_group", "checks_requested", {}, false],
+    ["manual dispatch", "workflow_dispatch", "", {}, false],
+  ] as const)(
+    "%s selects cancellation without changing required scan eligibility",
+    (_name, event, action, changes, cancelActive) => {
+      expect(cancelsActivePrGate(event, action, changes)).toBe(cancelActive);
+      expect(conditionHolds(prGates.jobs.gitleaks.if, false)).toBe(true);
+    },
+  );
+
+  it.each(["in_progress", "failure"])(
+    "retains a %s scan verdict until another real same-head scan",
+    (scanState) => {
+      // Model the run group while edits arrive. A queued synchronize may be the
+      // only run for this revision, so its replacement must still scan it.
+      const scanCondition = prGates.jobs.gitleaks.if;
+      const cancelledVerdict = conditionHolds(scanCondition, true) ? "skipped" : "cancelled";
+      const active = { revision: "merge-sha", scan: scanState };
+      let pending = { revision: active.revision, event: "synchronize", scan: "queued" };
+      const superseded = [];
+      for (const event of ["first edit", "last edit"]) {
+        if (cancelsActivePrGate("pull_request", "edited", { body: { from: "previous body" } })) {
+          active.scan = cancelledVerdict;
+        }
+        superseded.push({ ...pending, scan: cancelledVerdict });
+        pending = { revision: active.revision, event, scan: "queued" };
+      }
+
+      expect(active.scan).toBe(scanState);
+      expect(superseded.map(({ event, scan }) => [event, scan])).toEqual([
+        ["synchronize", "cancelled"],
+        ["first edit", "cancelled"],
+      ]);
+      expect(pending).toEqual({ revision: active.revision, event: "last edit", scan: "queued" });
+      expect([active, pending, ...superseded].some(({ scan }) => PASSING.includes(scan))).toBe(
+        false,
+      );
+      expect(conditionHolds(scanCondition, false)).toBe(true);
+    },
+  );
+});
+
 const gates = [
   {
     gate: "check",
@@ -207,7 +312,9 @@ describe("merge queue validation", () => {
       expect(cancel).toBe(
         name === "ci.yml"
           ? "${{ github.ref != 'refs/heads/main' && github.event_name != 'merge_group' }}"
-          : "${{ github.event_name == 'pull_request' }}",
+          : name === "pr-gates.yml"
+            ? prGatesCancel
+            : "${{ github.event_name == 'pull_request' }}",
       );
     },
   );
