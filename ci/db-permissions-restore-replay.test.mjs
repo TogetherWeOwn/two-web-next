@@ -50,6 +50,7 @@ import {
   setPassword,
   webRoles,
 } from "./fixtures/db-restore-replay/seed.mjs";
+import { servingIsolationFixture } from "./fixtures/db-restore-replay/serving-isolation-connector.mjs";
 import { assertServingPostcheckRollback } from "./fixtures/db-restore-replay/serving-postcheck-case.mjs";
 import { assertServingLedgerRelationLock } from "./fixtures/db-restore-replay/serving-relation-lock-case.mjs";
 import {
@@ -295,29 +296,6 @@ const expansion = [
 ];
 const expandedEnd = expansion.at(-1);
 
-// Both serving logins deliberately have the same ACLs in the same database.
-function principalFixture(owners, ledger, executor) {
-  const tx = async ([query]) => {
-    if (query.startsWith("set local ")) return [];
-    if (query.includes("pg_catalog.current_database()")) {
-      return [{ database: "postgres", authenticated: executor, effective: executor }];
-    }
-    if (query.includes("select hash, created_at from drizzle.")) return ledger;
-    if (query.startsWith("with objects as")) return owners;
-    if (query.includes("from pg_auth_members m")) {
-      return ["pg_read_all_data", "pg_write_all_data"].map((role) => ({
-        role,
-        grantor: executor,
-        admin: false,
-        inherit: true,
-        set: false,
-      }));
-    }
-    throw new Error("Unexpected serving isolation fixture query");
-  };
-  return { tx, begin: async (_, work) => work(tx), end: async () => {} };
-}
-
 test("recovered serving isolation proof is bound to its serving principal", async () => {
   const otherLogin = "fixture_other_serving";
   const version = "97ff7cb6-896b-4a53-9130-ee4f3f31d278";
@@ -334,7 +312,8 @@ test("recovered serving isolation proof is bound to its serving principal", asyn
   })
     .slice(0, prefixLength)
     .map(({ hash, folderMillis }) => ({ hash, created_at: folderMillis }));
-  const fixture = principalFixture(owners, ledger, migrator);
+  const catalog = { owners, ledger, executor: migrator };
+  const fixture = servingIsolationFixture(catalog);
   const capture = (login) =>
     planServingIsolation(fixture.tx, identity(migrator), version, artifact, login);
   const original = await capture(app);
@@ -351,22 +330,9 @@ test("recovered serving isolation proof is bound to its serving principal", asyn
       PRODUCTION_DB_ISOLATION_DATABASE_URL: planUrl,
     };
   };
-  const dataModule = (source) => `data:text/javascript,${encodeURIComponent(source)}`;
-  const driver = dataModule(
-    `export default () => (${principalFixture.toString()})(${JSON.stringify(owners)}, ${JSON.stringify(ledger)}, ${JSON.stringify(migrator)});`,
+  const preload = fileURLToPath(
+    new URL("./fixtures/db-restore-replay/serving-isolation-preload.mjs", import.meta.url),
   );
-  const preload = dataModule(`
-import { registerHooks } from "node:module";
-globalThis.fetch = () => { throw new Error("Traffic must stay offline"); };
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (specifier === "postgres") {
-      return { url: ${JSON.stringify(driver)}, shortCircuit: true };
-    }
-    return nextResolve(specifier, context);
-  }
-});
-`);
   const cli = (plan, expectedStatus) => {
     const result = spawnSync(
       process.execPath,
@@ -377,7 +343,14 @@ registerHooks({
         "readback",
         originalEnd,
       ],
-      { env: environment(plan), encoding: "utf8", timeout: 10_000 },
+      {
+        env: {
+          ...environment(plan),
+          FIXTURE_SERVING_ISOLATION_CATALOG: JSON.stringify(catalog),
+        },
+        encoding: "utf8",
+        timeout: 10_000,
+      },
     );
     assert.ifError(result.error);
     assert.equal(result.status, expectedStatus);
