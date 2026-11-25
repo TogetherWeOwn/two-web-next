@@ -166,6 +166,7 @@ export async function assertStaticFeedParity({
       KIT_ROUTE_FEEDS: "false",
       KIT_ROUTE_SEO: "true",
       KIT_ROUTE_SECURITY_TXT: "false",
+      KIT_ROUTE_EVENT_JSON: "true",
       KIT_ROUTE_EVENT_WRITES: "true",
     }),
     startKit("kit-feed-on", {
@@ -374,6 +375,7 @@ export async function assertStaticFeedParity({
     let expectedHits = await writeHits();
     for (const [method, path, status, hits] of [
       ["POST", "/events", 401, 1],
+      ["GET", eventPath, 401, 0],
       ["PATCH", eventPath, 401, 1],
       ["POST", `${eventPath}/publish`, 401, 1],
       ["PUT", `${eventPath}/rsvp`, 401, 0],
