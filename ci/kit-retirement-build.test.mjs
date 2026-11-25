@@ -7,6 +7,7 @@ import {
   kitRetirementBuild,
   requireKitRetirementReport,
 } from "../web/scripts/kit-retirement-build.mjs";
+import { EVENT_KEY } from "./parity/vectors.mjs";
 
 const source = (path) => fileURLToPath(new URL(`../${path}`, import.meta.url));
 const ssr = ({
@@ -126,6 +127,54 @@ test("the single-segment feed and a named matcher cannot prove broader legacy ow
   assert.match(unowned[1].reason, /unsupported ownership target/);
 });
 
+test("groups every blocker by its legacy family and exact method", (t) => {
+  const eventWrite = (method, path, kind) => ({
+    ...registration(method, path, "/events/[key]/rsvp/+server.ts", kind),
+    family: "event-writes",
+  });
+  const rows = [
+    eventWrite("POST", "/events/:key/rsvp"),
+    eventWrite("POST", "/e/:key/rsvp"),
+    eventWrite("ALL", "/events/:key/rsvp", "method-fallback"),
+    eventWrite("OPTIONS", "/events/:key/rsvp", "method-fallback"),
+    {
+      ...registration("GET", "/events/:file{.+\\.ics}", "/events/[key].ics/+server.ts"),
+      family: "feeds",
+    },
+    { ...registration("GET", "/old", "/old/+page.svelte"), family: null },
+    { ...registration("GET", "/older", "/older/+page.svelte"), target: null },
+    { method: "ALL", path: "/*", kind: "middleware" },
+  ];
+  const routes = [mounted("/events/[key]/rsvp", /^\/events\/[^/]+\/rsvp$/, ["POST"])];
+  const log = t.mock.method(console, "log", () => {});
+  const adapter = { name: "fixture", adapt: () => {} };
+  const guard = kitRetirementBuild(adapter, "report", () => ({ rows, inventory: rows }));
+  guard.plugin.generateBundle({}, ssr());
+  guard.adapter.adapt({ routes });
+
+  const report = requireKitRetirementReport(log.mock.calls[0].arguments[0], "report");
+  assert.equal(report.checked, 7);
+  assert.equal(report.ready, false);
+  assert.deepEqual(
+    report.unowned.map(({ route, path }) => [route, path]),
+    [
+      ["POST /e/:key/rsvp", `/e/${EVENT_KEY}/rsvp`],
+      ["ALL /events/:key/rsvp", `/events/${EVENT_KEY}/rsvp`],
+      ["OPTIONS /events/:key/rsvp", `/events/${EVENT_KEY}/rsvp`],
+      ["GET /events/:file{.+\\.ics}", `/events/${EVENT_KEY}.ics`],
+      ["GET /events/:file{.+\\.ics}", "/events/a/b.ics"],
+      ["GET /old", "/old"],
+      ["GET /older", undefined],
+    ],
+  );
+  const [alias, fallback, options, feed, multiSegmentFeed, unclassified, missing] = report.unowned;
+  assert.deepEqual(report.unownedByFamily, {
+    "event-writes": { POST: [alias], ALL: [fallback], OPTIONS: [options] },
+    feeds: { GET: [feed, multiSegmentFeed] },
+    unresolved: { GET: [unclassified, missing] },
+  });
+});
+
 test("explicit strict mode blocks adapter output and report mode lets it proceed", (t) => {
   let adapted = 0;
   const cloudflare = {
@@ -173,11 +222,14 @@ test("explicit strict mode blocks adapter output and report mode lets it proceed
   assert.throws(() => requireKitRetirementReport(lines[2], "report"), /wrong.*mode/);
   assert.deepEqual(dependencyOnly.honoDependencies, ["hono"]);
   assert.deepEqual(dependencyOnly.unowned, []);
+  assert.deepEqual(dependencyOnly.unownedByFamily, {});
   assert.deepEqual(routeOnly.honoDependencies, []);
+  assert.deepEqual(routeOnly.unownedByFamily, { unresolved: { GET: routeOnly.unowned } });
   assert.deepEqual(
     routeOnly.unowned.map(({ route }) => route),
     ["GET /"],
   );
   assert.equal(clean.ready, true);
+  assert.deepEqual(clean.unownedByFamily, {});
   assert.equal(reportOnly.ready, false);
 });
