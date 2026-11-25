@@ -19,6 +19,7 @@ import {
   prepareAdminFixture,
 } from "./fixtures/kit-admin-serving.mjs";
 import { assertEventReadsParity } from "./fixtures/kit-event-reads-parity.mjs";
+import { assertResponseContracts } from "./fixtures/kit-response-contracts.mjs";
 import { assertStaticFeedParity } from "./fixtures/kit-static-feed-parity.mjs";
 import { expectedMarkerFor, kitHomeHeadingText } from "./kit-parity-gates.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
@@ -1034,7 +1035,8 @@ export default {
     return instance;
   }
 
-  const [eventJsonOn, publicApiOn, feedOn, combinedOn] = await Promise.all([
+  const [eventWritesOn, eventJsonOn, publicApiOn, feedOn, combinedOn] = await Promise.all([
+    startKit("kit-event-writes-on", { KIT_ROUTE_EVENT_WRITES: "true" }),
     startKit("kit-event-json-on", {
       APP_URL: honoWithSession.origin,
       KIT_ROUTE_FEEDS: "false",
@@ -1060,6 +1062,7 @@ export default {
       KIT_ROUTE_EVENT_JSON: "true",
     }),
   ]);
+  await assertResponseContracts({ hono: honoWithSession, off: kitWithSession, on: eventWritesOn });
   await assertEventReadsParity({
     hono: honoWithSession,
     unset: kitWithSession,
