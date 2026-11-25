@@ -94,12 +94,16 @@ test("refuses early and mismatched deploy or E2E evidence before any reads", asy
     { after: undefined },
     { after: { ...identity, sha: otherSha } },
     { after: { ...identity, deployedAt: completedAt } },
-    { completedAt: "2026-02-30T10:09:00Z" },
   ]) {
     await assert.rejects(
       captureStagingSoakReceipt({ ...evidence, e2e: { ...evidence.e2e, ...invalid } }, options),
     );
   }
+  const invalidDate = { ...evidence.e2e, completedAt: "2026-02-30T10:09:00Z" };
+  await assert.rejects(
+    captureStagingSoakReceipt({ ...evidence, e2e: invalidDate }, options),
+    /Invalid staging soak timestamp/,
+  );
   assert.deepEqual(calls, []);
 });
 
