@@ -20,6 +20,8 @@ expect_refusal() {
 
 expect_refusal 'requires the hosted XFS fixture' env -u XFS_FIXTURE_ROOT
 expect_refusal 'root is not on XFS' env XFS_FIXTURE_ROOT="${XFS_FIXTURE_NON_XFS:?}"
-WRANGLER_SEND_METRICS=false CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV=false \
-  CLOUDFLARE_INCLUDE_PROCESS_ENV=false node --import tsx ci/fixtures/kit-cancelled-event-rollback.mjs
+if [[ "${1:-}" != --moderator-rsvp-only ]]; then
+  WRANGLER_SEND_METRICS=false CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV=false \
+    CLOUDFLARE_INCLUDE_PROCESS_ENV=false node --import tsx ci/fixtures/kit-cancelled-event-rollback.mjs
+fi
 node ci/kit-worker-e2e.mjs --installed-output "$@"
