@@ -631,8 +631,11 @@ test("staging reservation workflow admits qualifying E2E and gates queued mutati
   assert.match(drill.concurrency.group, /&& 'deploy-staging'/);
   assert.ok(drill.jobs.plan.steps.some((step) => step.id === "versions"));
   assert.equal(drill.jobs.rollback.needs, "plan");
+  // Require the default success() gate for rollback. Restore can follow a
+  // failed rollback, but still requires successful admission in plan.
+  assert.equal(drill.jobs.rollback.if, undefined);
   assert.deepEqual(drill.jobs.restore.needs, ["plan", "rollback"]);
-  assert.match(drill.jobs.restore.if, /needs\.plan\.result == 'success'/);
+  assert.equal(drill.jobs.restore.if, "${{ !cancelled() && needs.plan.result == 'success' }}");
   for (const leg of [drill.jobs.rollback, drill.jobs.restore]) {
     assert.match(leg.uses, /\/rollback-production\.yml@[a-f0-9]{40}$/);
     assert.equal(leg.with.environment, "staging");
