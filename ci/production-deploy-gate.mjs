@@ -1207,6 +1207,34 @@ function currentCheckoutSha() {
   }).trim();
 }
 
+// One Environment and its protection rules fit comfortably within 64 KiB.
+const MAX_PRODUCTION_ENVIRONMENT_BYTES = 64 * 1024;
+
+async function readProductionEnvironment(response) {
+  let reader;
+  try {
+    reader = response.body.getReader();
+    const bytes = new Uint8Array(MAX_PRODUCTION_ENVIRONMENT_BYTES);
+    let length = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return JSON.parse(new TextDecoder().decode(bytes.subarray(0, length)));
+      if (value.byteLength > bytes.length - length) break;
+      bytes.set(value, length);
+      length += value.byteLength;
+    }
+  } catch {
+    throw new Error("Cannot verify production Environment protection (unreadable JSON response)");
+  } finally {
+    if (reader) {
+      // Cancellation must not delay refusal or expose a transport error.
+      void reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+    }
+  }
+  throw new Error("Cannot verify production Environment protection (response exceeds 64 KiB)");
+}
+
 export async function checkProductionGate(env, fetchEnvironment = fetch, options = {}) {
   // checkoutSha stays lazy so disabled/unprotected requests refuse before any
   // subprocess or CI lookup. Tests pass it explicitly; the CLI resolves it.
@@ -1241,7 +1269,7 @@ export async function checkProductionGate(env, fetchEnvironment = fetch, options
     throw new Error(`Cannot verify production Environment protection (HTTP ${response.status})`);
   }
   const autoApprove = autoApproveEnabled(env);
-  assertProductionProtection(await response.json(), { autoApprove });
+  assertProductionProtection(await readProductionEnvironment(response), { autoApprove });
   if (rollback && options.beforeScriptsCheckout) {
     const sha = env.DEPLOY_SHA;
     // The same compare proof binds two exact SHAs. Clear explicit promotion
