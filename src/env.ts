@@ -122,6 +122,8 @@ export type Env = AgentEventsEnv & {
   KIT_ROUTE_STATIC_TEXT?: string;
   KIT_ROUTE_EVENT_JSON?: string;
   KIT_ROUTE_PUBLIC_API?: string;
+  // Public MCP POST and OPTIONS. Only the literal string "true" opts in.
+  KIT_ROUTE_MCP?: string;
   // RSVP and moderator event mutations. Only the literal string "true" opts in.
   KIT_ROUTE_EVENT_WRITES?: string;
   // Default off. Public event Markdown collection and detail GET/HEAD.

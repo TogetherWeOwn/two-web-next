@@ -51,6 +51,7 @@ async function checkDisconnect(origin) {
     });
     response.resume();
     assert.equal(response.statusCode, 200);
+    assert.equal(response.headers["x-two-renderer"], "kit");
     assert.match(response.headers["content-type"] ?? "", /^text\/event-stream(?:;|$)/);
     assert.deepEqual(await observe(origin, "read-held", start), ["read-held"]);
     assert.ifError(clientError);

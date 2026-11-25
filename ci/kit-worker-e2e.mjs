@@ -1103,11 +1103,14 @@ export default machineParityWorker(inner, ${JSON.stringify(probePath)}, ${name =
       assert.equal(response.status, 200, `${name}: machine parity probes passed`);
       assert.deepEqual(await response.json(), {
         agentCreate: 201,
+        mcpAdmission: "verified",
         mcpComplete: "eof",
         mcpReaderCancel: "cancelled",
         eventMarkdownErrors: [500, 503],
       });
-      console.log(`PASS ${name} agent JSON, MCP SSE and event Markdown error envelopes`);
+      console.log(
+        `PASS ${name} agent JSON, MCP ownership, admission and SSE, and event Markdown error envelopes`,
+      );
     }
     const { verifyKitMachineDisconnect } = await import("./fixtures/kit-machine-disconnect.mjs");
     await verifyKitMachineDisconnect(worker, scratch);

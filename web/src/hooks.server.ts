@@ -32,6 +32,7 @@ import { dispatchPastArchiveRequest } from "../../src/kit-past-events";
 import { KIT_PROFILE_WRITE_ROUTES } from "../../src/profiles/kit-write-route";
 import { authOriginRefusal, kitAuthRoutes } from "#lib/server/auth.ts";
 import { kitOpsFamily } from "#lib/server/ops.ts";
+import { kitMcpFamily } from "#lib/server/mcp.ts";
 import { honoFetch, honoRecoveryFetch } from "#lib/server/hono.ts";
 import { resolveProfileWrite } from "#lib/server/profile-write.ts";
 
@@ -85,6 +86,7 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
       { flag: env.KIT_ROUTE_STATIC_TEXT, routes: KIT_STATIC_TEXT_ROUTES },
       { flag: env.KIT_ROUTE_EVENT_JSON, routes: [KIT_EVENT_JSON_ROUTE] },
       { flag: env.KIT_ROUTE_PUBLIC_API, routes: KIT_PUBLIC_API_ROUTES },
+      kitMcpFamily(),
       { flag: env.KIT_ROUTE_EVENT_MARKDOWN, routes: KIT_EVENT_MARKDOWN_ROUTES },
       { flag: env.KIT_ROUTE_SEO, routes: KIT_SEO_ROUTES },
       { flag: env.KIT_ROUTE_SECURITY_TXT, routes: [KIT_SECURITY_TXT_ROUTE] },

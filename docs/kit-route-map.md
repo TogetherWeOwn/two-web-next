@@ -312,13 +312,13 @@ configuration until separately qualified through the
 
 ### Inbound machine endpoints (API-9)
 
-At `14bbbbf0a`, both machine routes are Hono-owned in source. The landed
-[`apiFamilies` selector](../src/route-ownership.ts) is the integration point for
-two independent follow-ons:
+Hono serves both machine routes by default. The
+[`apiFamilies` selector](../src/route-ownership.ts) admits ownership separately
+for each family:
 
 | Follow-on | Exact method and pathname | Kit ownership setting |
 | --- | --- | --- |
-| [MCP transport](https://github.com/TogetherWeOwn/two-web-next/pull/2783) | `POST /mcp`, `OPTIONS /mcp` | Proposed `KIT_ROUTE_MCP` |
+| [MCP transport](https://github.com/TogetherWeOwn/two-web-next/pull/2783) | `POST /mcp`, `OPTIONS /mcp` | `KIT_ROUTE_MCP` |
 | Agent event ingress | `POST /api/agent-events` | Separate ingress ownership binding |
 
 Keep both settings off by default. Only the literal string `true` on the
@@ -374,19 +374,24 @@ checks synthetic ingress JSON, one complete MCP SSE frame through EOF, and
 reader cancellation. The [disconnect fixture](../ci/fixtures/kit-machine-disconnect.mjs)
 resets a real loopback socket during a held read. The fixture wrapper listens
 to `request.signal` directly and observes incoming abort, fake-read settlement
-and the wrapper's `waitUntil` cleanup.
+and the wrapper's `waitUntil` cleanup. The MCP follow-on runs these fixtures
+with Kit selected and with Hono fallback, checking renderer ownership, session
+independence, refusals, the shared read bucket and SSE completion and
+cancellation. The TCP reset covers both ownership modes with request signals
+enabled on the direct loopback listener.
 
 Each follow-on must extend installed-Worker evidence on its exact head. Check
 unset, off and on settings, Hono fallback for unlisted pairs, unchanged
 admission and error branches, MCP stream and disconnect cleanup, and ingress
-refusal and replay across ownership changes. Prove downstream abort through
-the MCP handler by having a held operation observe the signal it receives from
-the handler. Use synthetic credentials and rows, intercept outbound fetch and
-queue calls, and assert zero real sends.
+refusal and replay across ownership changes. Use synthetic credentials and
+rows, intercept outbound fetch and queue calls, and assert zero real sends.
 Keep transport and ingress fixture results independently attributable.
 
-Before shared-dispatch integration or a production family flip, refresh and
-revalidate the post-Ember inventory, route map and pure-Hono golden evidence.
+Before integrating either family in the live shared dispatcher or flipping a
+production binding, refresh and revalidate the post-Ember inventory, route map
+and pure-Hono golden evidence. Before enabling MCP in production, prove
+downstream abort by having a held operation observe the signal it receives
+through the handler.
 Before an ingress flip, inventory the effective database bindings and prove
 the dedicated `AGENT_DB` connection path or its nullish fallback as specified
 in ADR 0002. Production family admission follows M0, including the Kit Worker's
