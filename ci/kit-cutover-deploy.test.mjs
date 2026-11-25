@@ -138,7 +138,10 @@ test("only undo preparation may admit confirmed deferred migrations", () => {
 
 test("ordinary promotion requires the full ledger for an Ember undo version", async (t) => {
   const version = { annotations: { "workers/message": `two-web-cutover-kit:${digest}` } };
-  await assert.rejects(verifyOrdinaryLedger(version, async () => []), /full ledger/);
+  await assert.rejects(
+    verifyOrdinaryLedger(version, async () => []),
+    /full ledger/,
+  );
 
   const { entries } = JSON.parse(
     readFileSync(new URL("../drizzle/meta/_journal.json", import.meta.url), "utf8"),
