@@ -17,6 +17,12 @@ import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { jsx } from "hono/jsx";
 import { serializeSigned } from "hono/utils/cookie";
+import {
+  parseRenderedPage,
+  renderedAttribute,
+  renderedElements,
+  renderedText,
+} from "../ci/rendered-page.mjs";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import app from "./app";
 import type { Db } from "../src/db/index";
@@ -1721,8 +1727,10 @@ describe("event-detail gone presentation", () => {
     expect(html).toContain('data-testid="event-jsonld"');
     expect(html).not.toContain('data-testid="event-attendees"');
     expect(html).not.toContain('data-testid="join-result"');
-    const nextDateLink = html.match(/<a\b([^>]*)>See the next date<\/a>/);
-    expect(nextDateLink?.[1]).toContain(`href="/e/${upcoming.eventKey}"`);
+    const nextDateLinks = [...renderedElements(parseRenderedPage(html), { tag: "a" })]
+      .filter((link) => renderedText(link).trim() === "See the next date")
+      .map((link) => renderedAttribute(link, "href"));
+    expect(nextDateLinks).toEqual([`/e/${upcoming.eventKey}`]);
   });
 
   it("maps the gone outcome onto the 410 branded error payload", async () => {
