@@ -173,12 +173,14 @@ type SessionRead = {
   renewal: { replacement: string; statusKey: string | null } | null;
 };
 
+export type SessionReadMode = boolean | { currentMemberId: string };
+
 /** Resolve a verified bearer and optionally rotate it. The caller owns cookie I/O. */
 export async function readSession(
   token: unknown,
   env: Env,
   storeFor: () => Promise<SessionStore>,
-  rotateToken: boolean,
+  mode: SessionReadMode,
 ): Promise<SessionRead | null> {
   if (!isValidSessionToken(token)) return null;
   // Anonymous public pages must not depend on session storage or its startup DDL.
@@ -186,14 +188,24 @@ export async function readSession(
   const tokenHash = await hashToken(token);
   const storedRow = await store.get(tokenHash);
   if (!storedRow) return null;
+  // A dedicated write principal must match before any Discord role lookup.
+  if (typeof mode === "object" && storedRow.userId !== mode.currentMemberId) return null;
   // Mid-session role recheck: bits older than the cadence re-derive from
   // Discord before they authorize (src/session-role-refresh.ts). A row that
   // stopped being live during the refresh reads as no session.
   const row = await refreshSessionRoles(store, tokenHash, storedRow, roleRecheckConfigFor(env));
   if (!row) return null;
+  // Recheck liveness after role refresh. Only the current bearer can submit
+  // the dedicated write, and an aborted action must not rotate that bearer.
+  if (typeof mode === "object") {
+    if (!row.member || row.userId !== mode.currentMemberId) return null;
+    const live = await store.getLive(tokenHash);
+    if (!live?.member || live.userId !== mode.currentMemberId) return null;
+    return { store, row, renewal: null };
+  }
   // Abortable calendar fragments validate expiry/revocation but must not delete
   // the browser's current token: an aborted response cannot deliver a replacement.
-  if (!rotateToken) return { store, row, renewal: null };
+  if (!mode) return { store, row, renewal: null };
 
   // Rotate atomically, keeping the immediate predecessor valid for 10s (bounded
   // by its own expiry) while the successor stays live. Rotation errors are

@@ -12,15 +12,18 @@ on:
         type: string
         default: ""
       cutover_mode:
-        description: "Explicit staged artifact selection. hono prepares undo, kit selects all-off, ember selects Ember documents"
+        description: "Explicit staged artifact selection. hono prepares undo, kit selects all-off, ember selects Ember documents, admin adds Kit admin"
         type: choice
-        options: [ordinary, hono, kit, ember]
+        options: [ordinary, hono, kit, ember, admin]
         default: ordinary
       cutover_pin:
         description: "Successful isolated staging run:attempt:manifest SHA-256 from its proof"
         type: string
       cutover_undo_version:
-        description: "For kit or ember, the exact compatible Hono UUID already serving production"
+        description: "Exact serving rollback UUID. Hono for kit or ember, Ember with admin off for admin"
+        type: string
+      cutover_undo_digest:
+        description: "For admin mode, the manifest SHA-256 of the separately approved Ember qualification packet"
         type: string
       migrations_applied:
         description: "Set to true only after db-migrate.yml (target production) applied the target's migrations out of band. Audited manual continuation past a ledger-unproven stop (ledger lacks target entries, ledger read failed, unusable target timestamp, or unknown live commit after 3 /up reads); automatic runs ignore it and halt on those stops unless the live ledger already proves every target web migration applied. The first promotion after the ledger signal ships needs one manual dispatch because the live Worker predates it"
@@ -70,6 +73,7 @@ jobs:
       CUTOVER_MODE: ${{ inputs.cutover_mode }}
       CUTOVER_PIN: ${{ inputs.cutover_pin }}
       CUTOVER_UNDO_VERSION: ${{ inputs.cutover_undo_version }}
+      CUTOVER_UNDO_DIGEST: ${{ inputs.cutover_undo_digest }}
       INPUT_SHA: ${{ inputs.sha }}
       PRODUCTION_AUTO_PROMOTE_DISABLED: ${{ vars.PRODUCTION_AUTO_PROMOTE_DISABLED }}
       MIGRATIONS_APPLIED: ${{ inputs.migrations_applied }}
@@ -360,6 +364,7 @@ jobs:
       CUTOVER_ATTEMPT: ${{ needs.preflight.outputs.cutover_attempt }}
       CUTOVER_PIN: ${{ inputs.cutover_pin }}
       CUTOVER_UNDO_VERSION: ${{ inputs.cutover_undo_version }}
+      CUTOVER_UNDO_DIGEST: ${{ inputs.cutover_undo_digest }}
       INPUT_SHA: ${{ inputs.sha }}
       DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
       PRODUCTION_AUTO_PROMOTE_DISABLED: ${{ vars.PRODUCTION_AUTO_PROMOTE_DISABLED }}
@@ -515,7 +520,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
       - name: Install the locked Kit Wrangler upload tool
-        if: env.CUTOVER_MODE == 'kit' || env.CUTOVER_MODE == 'ember'
+        if: env.CUTOVER_MODE == 'kit' || env.CUTOVER_MODE == 'ember' || env.CUTOVER_MODE == 'admin'
         run: npm ci --prefix web --include=dev --ignore-scripts --no-audit --no-fund
       - name: Deploy production alert Tail Worker first
         # The app's env.production.tail_consumers binding needs the consumer to exist first.
@@ -549,6 +554,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
           DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
           ROLLBACK_VERSION_ID: ${{ needs.preflight.outputs.rollback_version_id }}
+          ROLLBACK_COMMIT: ${{ needs.preflight.outputs.rollback_commit }}
           BUILD_SHA: ${{ needs.preflight.outputs.sha }}
           WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/worker-version-upload.jsonl
       - name: Capture pre-promote dead-letter baseline
@@ -579,7 +585,7 @@ jobs:
         env:
           SMOKE_FAILED_BASELINE: ${{ steps.dead-letter-baseline.outputs.failed }}
           SMOKE_ALLOW_MISSING_BASELINE: "1"
-          SMOKE_EXPECT_CUTOVER_RENDERER: ${{ env.CUTOVER_MODE == 'ember' && 'kit' || (env.CUTOVER_MODE != 'ordinary' && 'hono' || '') }}
+          SMOKE_EXPECT_CUTOVER_RENDERER: ${{ env.CUTOVER_MODE == 'admin' && 'admin' || env.CUTOVER_MODE == 'ember' && 'kit' || (env.CUTOVER_MODE != 'ordinary' && 'hono' || '') }}
         uses: TogetherWeOwn/.github/actions/gradual-promote@8059ac2b121b63443db656b1e10e927b8af8133c
         with:
           worker-name: two-web-next-production
@@ -633,7 +639,7 @@ jobs:
         env:
           SMOKE_FAILED_BASELINE: ${{ steps.dead-letter-baseline.outputs.failed }}
           SMOKE_ALLOW_MISSING_BASELINE: "1"
-          SMOKE_EXPECT_CUTOVER_RENDERER: ${{ env.CUTOVER_MODE == 'ember' && 'kit' || (env.CUTOVER_MODE != 'ordinary' && 'hono' || '') }}
+          SMOKE_EXPECT_CUTOVER_RENDERER: ${{ env.CUTOVER_MODE == 'admin' && 'admin' || env.CUTOVER_MODE == 'ember' && 'kit' || (env.CUTOVER_MODE != 'ordinary' && 'hono' || '') }}
           PROMOTED_VERSION_ID: ${{ steps.gradual.outputs.promoted-version-id }}
           PREV_VERSION: ${{ steps.gradual.outputs.rollback-version-id }}
           CUTOVER_UPLOADED_VERSION: ${{ steps.cutover-upload.outputs.version_id }}

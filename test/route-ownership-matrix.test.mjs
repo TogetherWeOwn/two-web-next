@@ -31,7 +31,7 @@ const registrationKeys = new Set(inventory.map(routeKey));
 const methods = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
 
 const families = [
-  ["ops", "API-3", 18],
+  ["ops", "API-3", 19],
   ["assets", null, 0],
   ["feeds", "API-4", 5],
   ["public-api", "API-4", 5],
@@ -79,7 +79,7 @@ describe("route ownership preparation matrix (not runtime dispatch)", () => {
   it("accounts for separately classified endpoints, method fallbacks, middleware and assets", () => {
     const names = new Set(families.map(([family]) => family));
     const tagged = rows.filter((row) => row.kind === "endpoint" && row.family !== null);
-    expect(tagged).toHaveLength(74);
+    expect(tagged).toHaveLength(75);
     for (const row of tagged) {
       expect(names.has(row.family), routeKey(row)).toBe(true);
       expect(methods).toContain(row.method);

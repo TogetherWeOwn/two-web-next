@@ -1131,6 +1131,8 @@ async function dispatchOwnedRequest(
       event.isDataRequest,
       deps.appUrl,
       admin.env.KIT_ROUTE_ADMIN,
+      deps.kitRouteEmberPages === "true" &&
+        (deps.appUrl === PRODUCTION_APP_URL || ISOLATED_CUTOVER_ORIGIN.test(deps.appUrl)),
     )
   ) {
     const response = await dispatchKitAdminRequest(event, deps, admin);
@@ -1632,7 +1634,8 @@ function familyRouteFor(
   for (const family of families) {
     if (family.flag !== "true") continue;
     for (const route of family.routes) {
-      if (route.method !== method) continue;
+      // A mounted dynamic resource may own its method refusals as well as its writes.
+      if (route.method !== method && !(route.dynamic && route.method === "*")) continue;
       if (route.dynamic) {
         if (
           id !== route.dynamic.id ||

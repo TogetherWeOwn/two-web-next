@@ -977,11 +977,14 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     });
   }
 
-  it("long Retry-After persists eligibility and request accounting across reconciliation and new carriers", async () => {
+  it.each([false, true])("keeps Retry-After across carriers (observe=%s)", async (observe) => {
     await seed();
     await enqueueEventSync(env, eventKey, "published");
     const original = sent[0]!.body;
     const bot = botDouble();
+    const dependencies = deps(bot);
+    if (observe) dependencies.events = pgEventStore(sql, { observeActiveClaims: true });
+    const { events } = dependencies;
     bot.upsertEvent.mockResolvedValue({
       ok: false,
       code: "rate_limited",
@@ -992,7 +995,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
       retryAfterSeconds: 3600,
     });
     const before = Date.now();
-    await consume({ messages: [delivery(original)] }, deps(bot));
+    await consume({ messages: [delivery(original)] }, dependencies);
     const pending = (await pgEventStore(sql).pendingSync(eventKey))!;
     expect(pending.requestAttempts).toBe(1);
     expect(pending.nextAttemptAt!.getTime()).toBeGreaterThanOrEqual(before + 3600_000);
@@ -1006,7 +1009,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
       });
     expect(sent).toHaveLength(1);
     const early = delivery(original, 2);
-    await consume({ messages: [early] }, deps(bot));
+    await consume({ messages: [early] }, dependencies);
     expect(early.retry.mock.calls[0]![0]!.delaySeconds).toBeGreaterThan(3500);
     expect(bot.upsertEvent).toHaveBeenCalledOnce();
     for (let requestAttempt = 2; requestAttempt <= 6; requestAttempt++) {
@@ -1019,15 +1022,38 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
       });
       const recovered = sent.at(-1)!.body;
       expect(recovered.idempotencyKey).toBe(original.idempotencyKey);
-      await consume({ messages: [delivery(recovered, 1)] }, deps(bot));
+      await consume({ messages: [delivery(recovered, 1)] }, dependencies);
       expect((await pgEventStore(sql).pendingSync(eventKey))!.requestAttempts).toBe(requestAttempt);
     }
     expect(bot.upsertEvent).toHaveBeenCalledTimes(6); // carrier attempts=1 never resets request budget
+    const lastClaim = (await events.pendingSync(eventKey))?.claimStartedAt;
+    if (observe) {
+      if (!lastClaim) throw new Error("Missing claim timestamp in the opted-in store");
+      const recent = delivery(original, 2);
+      await consume({ messages: [recent] }, { ...dependencies, now: () => lastClaim });
+      expect(recent.retry).toHaveBeenCalledOnce();
+      expect(recent.ack).not.toHaveBeenCalled();
+      expect(bot.upsertEvent).toHaveBeenCalledTimes(6);
+    } else {
+      expect(lastClaim).toBeUndefined();
+    }
     const last = delivery(original, 2);
-    await consume({ messages: [last] }, deps(bot));
+    await consume(
+      { messages: [last] },
+      {
+        ...dependencies,
+        now: lastClaim ? () => new Date(lastClaim.getTime() + 60_000) : undefined,
+      },
+    );
     expect(last.ack).toHaveBeenCalledOnce();
+    expect(last.retry).not.toHaveBeenCalled();
     expect(bot.upsertEvent).toHaveBeenCalledTimes(6);
-    expect((await pgEventStore(sql).pendingSync(eventKey))!.nextAttemptAt).toBeNull();
+    expect(await events.pendingSync(eventKey)).toMatchObject({
+      idempotencyKey: original.idempotencyKey,
+      state: "pending",
+      requestAttempts: 6,
+      nextAttemptAt: null,
+    });
   });
 
   for (const failedWrites of [0, 2]) {
@@ -1133,15 +1159,41 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     });
   }
 
+  it("keeps the stored claim timestamp when the default store claims a request", async () => {
+    await seed();
+    const events = pgEventStore(sql);
+    const start = new Date("2099-01-01T00:00:00Z");
+    const key = crypto.randomUUID();
+    const prepared = await events.prepareSync(eventKey, key, start);
+    if (!prepared || "waiting" in prepared) throw new Error("Missing fixture snapshot");
+    const readTimestamp = () =>
+      sql`select claim_started_at from event_sync_attempts where idempotency_key = ${key}`;
+    const before = await readTimestamp();
+    expect(before[0]?.claim_started_at).toBeInstanceOf(Date);
+    expect(before[0]?.claim_started_at).not.toEqual(start);
+    expect(await events.claimSync(prepared, start)).toMatchObject({
+      requestAttempts: 1,
+      nextAttemptAt: null,
+    });
+    expect(await readTimestamp()).toEqual(before);
+  });
+
   it("a claim abandoned before result settlement cannot regain eligibility after a lease", async () => {
     await seed();
     const start = new Date("2099-01-01T00:00:00Z");
-    const events = pgEventStore(sql);
+    const events = pgEventStore(sql, { observeActiveClaims: true });
     const key = crypto.randomUUID();
     const prepared = (await events.prepareSync(eventKey, key, start))!;
     if ("waiting" in prepared) throw new Error("unexpected pending conflict");
     const claimed = (await events.claimSync(prepared, start))!;
     expect(claimed.nextAttemptAt).toBeNull();
+    expect(claimed.claimStartedAt).toEqual(start);
+    expect(await events.prepareSync(eventKey, key, start)).toMatchObject({
+      idempotencyKey: key,
+      claimStartedAt: start,
+    });
+    expect((await events.pendingSync(eventKey))?.claimStartedAt).toEqual(start);
+    expect(await pgEventStore(sql).pendingSync(eventKey)).not.toHaveProperty("claimStartedAt");
     const bot = botDouble();
     expect(
       await handleSyncEvent({ eventKey, idempotencyKey: key }, 1, {

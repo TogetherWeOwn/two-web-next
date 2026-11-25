@@ -43,7 +43,7 @@ function renewedModerator(headers) {
   return cookie.split(";", 1)[0];
 }
 
-async function session(sql, userId, moderator) {
+async function session(sql, userId, moderator, secret = FIXTURE_SECRETS.SESSION_SECRET) {
   const token = `two_${randomBytes(32).toString("base64url")}`;
   const hash = createHash("sha256").update(token).digest("hex");
   await sql`
@@ -52,7 +52,7 @@ async function session(sql, userId, moderator) {
     values (${hash}, ${hash}, ${userId}, 'Fixture admin serving', true, ${moderator},
       now() + interval '1 hour', now())
   `;
-  const cookie = await generateSignedCookie(SESSION_COOKIE, token, FIXTURE_SECRETS.SESSION_SECRET, {
+  const cookie = await generateSignedCookie(SESSION_COOKIE, token, secret, {
     path: "/",
     secure: true,
   });
@@ -100,6 +100,82 @@ export async function assertKitAttendanceDisabled(off, databaseUrl) {
     }
   }
   console.log("PASS built Kit Worker keeps attendance disabled for a moderator by default");
+}
+
+export async function assertStagedAdminServing({ origin, owner, secrets, enabled }) {
+  const worker = { name: "isolated admin cutover", origin };
+  const actor = 900000000000000000n + BigInt(`0x${randomBytes(7).toString("hex")}`);
+  const moderator = await session(owner, String(actor), true, secrets.SESSION_SECRET);
+  const dashboard = await visit(worker, "/admin", 200, {
+    headers: { ...html, cookie: moderator },
+    owned: enabled,
+  });
+  assert.ok(/<h1\b[^>]*>Moderation<\/h1>/.test(dashboard.text), "moderator dashboard heading");
+  assert.ok(dashboard.text.includes('href="/admin/events"'), "moderator dashboard Events link");
+  if (!enabled) {
+    await visit(worker, editor, 302, { owned: false });
+    await visit(worker, operator, 404, { owned: false });
+    return;
+  }
+
+  const member = await session(owner, String(actor + 1n), false, secrets.SESSION_SECRET);
+  const bearer = { authorization: `Bearer ${secrets.OPS_CONTROL_TOKEN}` };
+  const reads = [
+    "/admin",
+    "/admin/activity-log",
+    "/admin/events",
+    editor,
+    "/admin/events/fixture-event",
+    "/admin/featured",
+    "/admin/featured/new",
+    "/admin/featured/1",
+    "/admin/join-attempts",
+    "/admin/join-attempts/1",
+  ];
+  for (const path of reads) {
+    const denied = await visit(worker, path, 302, { headers: bearer });
+    assert.equal(denied.headers.get("location"), "/auth/discord");
+  }
+  for (const path of ["/admin/events/create", "/admin/no-such-page"]) {
+    await visit(worker, path, 302, { owned: false, headers: bearer });
+  }
+  await visit(worker, editor, 403, { headers: { cookie: member } });
+  const edit = await visit(worker, editor, 200, {
+    headers: { ...html, cookie: renewedModerator(dashboard.headers) },
+  });
+  assert.match(edit.text, /<form[^>]+method="post"[^>]+action="\/admin\/events"/);
+  const renewed = renewedModerator(edit.headers);
+  await visit(worker, "/admin/events", 422, {
+    method: "POST",
+    body: new URLSearchParams(),
+    headers: { cookie: renewed, ...html },
+  });
+  const formDenied = await visit(worker, "/admin/events", 303, {
+    method: "POST",
+    body: new URLSearchParams(),
+    headers: bearer,
+  });
+  assert.equal(formDenied.headers.get("location"), "/auth/recover?next=%2Fadmin%2Fevents%2Fnew");
+
+  // The fixture has no bot endpoint. A valid bearer passes admission and
+  // reaches the unavailable record response without any outbound call.
+  for (const [method, status, headers] of [
+    ["GET", 401, { cookie: renewed }],
+    ["HEAD", 401, {}],
+    ["GET", 503, bearer],
+    ["HEAD", 503, bearer],
+    ["PUT", 405, bearer],
+  ]) {
+    const result = await visit(worker, operator, status, { method, headers });
+    assert.equal(result.headers.getSetCookie().length, 0);
+    assert.equal(result.headers.get("www-authenticate"), status === 401 ? "Bearer" : null);
+    if (status === 405) assert.equal(result.headers.get("allow"), "GET, HEAD");
+    else assert.equal(result.headers.get("referrer-policy"), "no-referrer");
+  }
+  const [{ events, featured }] = await owner`select
+    (select count(*)::int from events where created_by = ${String(actor)}) as events,
+    (select count(*)::int from featured_contents where created_by = ${String(actor)}) as featured`;
+  assert.equal(events + featured, 0, "denied or invalid forms did not create records");
 }
 
 export async function assertKitAdminServing({ kit, off, hono, databaseUrl }) {

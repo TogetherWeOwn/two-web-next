@@ -1,9 +1,12 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { signedAttendanceReader } from "../src/bot/attendance-read";
-import { projectPublicEcho } from "../src/events/echo-public";
+import { projectPublicEcho, type PublicEcho } from "../src/events/echo-public";
 import { buildFrozenEcho } from "../src/events/echoes";
+import { toPublicPastArchiveRow } from "../src/kit-past-events";
 import contract from "./fixtures/bot-site-contract-v2.json";
+import { createKitSsrRenderer } from "./helpers/kit-ssr-render";
+import { archiveRow } from "./helpers/past-archive-search-acceptance";
 
 const { request, results } = contract.verbs["event.attendance.read"];
 const event = { id: 7, eventKey: request.event_key, status: "past" };
@@ -15,7 +18,37 @@ const attendance = {
   ],
 };
 
+const row = archiveRow(event.id, {
+  eventKey: event.eventKey,
+  title: "Raid night",
+  goingCount: 7,
+});
+let archive: Awaited<ReturnType<typeof createKitSsrRenderer>>;
+beforeAll(async () => {
+  archive = await createKitSsrRenderer("web/src/routes/events/past/+page.svelte");
+});
+afterAll(() => archive?.cleanup());
 afterEach(() => vi.restoreAllMocks());
+
+function renderArchive(echo?: PublicEcho | null) {
+  const projected = toPublicPastArchiveRow(row, undefined, echo);
+  const html = archive.renderPage({
+    rows: [projected],
+    page: 1,
+    totalPages: 1,
+    hasMore: false,
+    appUrl: "https://archive.example.test",
+  });
+  return { projected, html };
+}
+
+function expectSignUpRecord(echo?: PublicEcho | null) {
+  const { projected, html } = renderArchive(echo);
+  expect(projected).not.toHaveProperty("echo");
+  expect(html).toContain('class="event-state">Sign-up record</span>');
+  expect(html).toContain('class="schedule-attendance">7 going</span>');
+  expect(html).not.toContain("attendance record");
+}
 
 async function projectObservation(response: Response) {
   const secret = randomBytes(32).toString("hex");
@@ -66,6 +99,30 @@ it("publishes only frozen attendance counts and room names from a finalized Bot 
     windowEndsAt: "2026-11-07T21:15:00.000Z",
     thresholdMinutes: 10,
   });
+  if (!publicEcho) throw new Error("Expected a public Echo for the finalized observation");
+  // Extra properties on a structural input must stay out of Kit load data
+  // as well as the HTML. Keep the deliberately wider value out of the fixture page.
+  const widerEcho = {
+    ...publicEcho,
+    headline: "Unrendered headline",
+    members: attendance.members,
+  };
+  const { projected, html } = renderArchive(widerEcho);
+  expect(projected.echo).toStrictEqual({
+    label: "attendance record",
+    attendedCount: 2,
+    peakConcurrent: 5,
+  });
+  expect(html).toContain('class="event-state">attendance record</span>');
+  expect(html).toContain('class="schedule-attendance">2 attended · peak 5 in voice</span>');
+  expect(html).not.toMatch(/Sign-up record|7 going|Unrendered headline|Raid 1/);
+  for (const member of attendance.members) {
+    expect(JSON.stringify(projected)).not.toContain(member.discord_id);
+    expect(html).not.toContain(member.discord_id);
+  }
+  expectSignUpRecord({ ...widerEcho, eventId: event.id + 1 });
+  expectSignUpRecord({ ...widerEcho, eventKey: "another-event" });
+  expectSignUpRecord();
 });
 
 it("publishes no Echo for a provisional observation even with populated member and room rows", async () => {
@@ -73,6 +130,7 @@ it("publishes no Echo for a provisional observation even with populated member a
   const { result, publicEcho } = await projectObservation(response);
   expect(result).toMatchObject({ ok: true, attendance: { final: false } });
   expect(publicEcho).toBeNull();
+  expectSignUpRecord(publicEcho);
 });
 
 it("publishes no Echo when the Bot suppresses the record", async () => {
@@ -84,4 +142,5 @@ it("publishes no Echo when the Bot suppresses the record", async () => {
   const { result, publicEcho } = await projectObservation(response);
   expect(result).toStrictEqual({ ok: false, code: "not_found" });
   expect(publicEcho).toBeNull();
+  expectSignUpRecord(publicEcho);
 });

@@ -210,6 +210,7 @@ describe("no API, feed, ops, alias or retired path is Kit-swallowed", () => {
     { method: "GET", path: "/sitemap_index.xml" },
     { method: "GET", path: "/robots.txt" },
     { method: "POST", path: "/__probe/alert" },
+    { method: "POST", path: "/__probe/voice-move" },
     { method: "GET", path: "/login" },
     { method: "GET", path: "/community" },
     { method: "GET", path: "/members" },

@@ -18,8 +18,13 @@ import type postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { reconcileEvents } from "../src/jobs/cron";
 import { toQueueMessage } from "../src/jobs/envelope";
+import { reconcileEventSync } from "../src/jobs/event-reconciliation";
 import { pgEventStore } from "../src/jobs/events";
-import { pgReconciliationStore, SYNC_RECONCILIATION_MARKER } from "../src/jobs/reconciliation";
+import {
+  pgReconciliationStore,
+  SYNC_RECONCILIATION_MARKER,
+  type ReconciliationIntent,
+} from "../src/jobs/reconciliation";
 import { reconcileFailedJob } from "../src/jobs/replay";
 import { handleSyncEvent } from "../src/jobs/sync-event";
 import type { BotClient, UniqueLock } from "../src/jobs/types";
@@ -281,6 +286,22 @@ describe.skipIf(!process.env.DATABASE_URL)(
         requestAttempts: 6,
         nextAttemptAt: null,
       });
+      const exhausted = await events.pendingSync(eventKey);
+      if (!exhausted) throw new Error("Missing exhausted claim");
+      const store = pgReconciliationStore(sql);
+      const record = async (intent: ReconciliationIntent) => {
+        await store.recordSync(intent);
+        return "recorded" as const;
+      };
+      expect(await reconcileEventSync({ ...exhausted, requestAttempts: 5 }, 6, record)).toEqual({
+        retryInSeconds: 3600,
+        alert: expect.stringContaining("unconfirmed"),
+      });
+      expect(await reconcileEventSync(exhausted, 6, record)).toHaveProperty("failed");
+      expect(
+        await sql`select idempotency_key, attempts, resolved_at
+          from bot_reconciliation_intents where subject = ${eventKey}`,
+      ).toEqual([{ idempotency_key: idempotencyKey, attempts: 6, resolved_at: null }]);
       expect(upsertEvent.mock.calls).toEqual(
         Array.from({ length: 6 }, () => [originalPayload, idempotencyKey]),
       );
@@ -315,7 +336,35 @@ describe.skipIf(!process.env.DATABASE_URL)(
         await expect(store.recordSync({ ...intent, idempotencyKey: otherKey })).rejects.toThrow(
           "Sync claim changed before reconciliation",
         );
-        await store.recordSync(intent);
+        const record = async (input: ReconciliationIntent) => {
+          await store.recordSync(input);
+          return "recorded" as const;
+        };
+        const persistenceUnavailable = async () => {
+          throw new Error("Synthetic worker interruption before intent commit");
+        };
+        expect(await reconcileEventSync(attempt, 1, persistenceUnavailable)).toEqual({
+          retryInSeconds: 10,
+        });
+        // The replacement worker starts with only the durable, closed claim.
+        const pending = await events.pendingSync(eventKey);
+        if (!pending) throw new Error("Unconfirmed write lost the original claim");
+        expect(pending).toMatchObject({
+          idempotencyKey,
+          state: "pending",
+          requestAttempts: 1,
+          nextAttemptAt: null,
+        });
+        expect(await events.prepareSync(eventKey, otherKey, NOW)).toBeNull();
+        expect(
+          await reconcileEventSync(pending, 2, record, {
+            code: intent.lastCode,
+            status: intent.lastStatus,
+          }),
+        ).toHaveProperty("failed");
+        // A crash after commit and before carrier retirement loses the response
+        // evidence, but a same-key repeat must keep the recorded diagnostics.
+        expect(await reconcileEventSync(pending, 3, record)).toHaveProperty("failed");
         await sql`update events set title = 'Newer revision' where id = ${id}`;
         const later = new Date(NOW.getTime() + 3600_000);
         await events.completeSync(attempt, "discord-late");

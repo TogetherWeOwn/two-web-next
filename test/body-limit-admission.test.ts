@@ -34,9 +34,9 @@ const sharedRoutes = [
 ];
 
 // Moderator event writes, admin event forms, admin lifecycle actions, and the
-// staging alert probe refuse oversized bodies before the shared throttle (and
-// before any session read): cap-first, not throttle-first. The probe's QA gate
-// still runs before its cap. Every other shared-throttle route keeps the
+// staging probes refuse oversized bodies before the shared throttle (and
+// before any session read): cap-first. Each probe's outer gate still runs
+// before its cap. Every other shared-throttle route keeps the
 // throttle-before-buffering order.
 const CAP_FIRST_ROUTES = new Set([
   "POST /events",
@@ -55,6 +55,7 @@ const CAP_FIRST_ROUTES = new Set([
   "POST /admin/events/:key/rsvp-reopen",
   "POST /admin/queue/failed/:id/redispatch",
   "POST /__probe/alert",
+  "POST /__probe/voice-move",
 ]);
 
 // Moderator featured writes refuse oversized bodies before the
@@ -90,7 +91,7 @@ function routeInfo(key: string) {
     .replace(":key", "test-event")
     .replace(":id", "1");
   const budget =
-    path.startsWith("/auth/qa/") || path === "/__probe/alert"
+    path.startsWith("/auth/qa/") || path === "/__probe/alert" || path === "/__probe/voice-move"
       ? AUTH_THROTTLE_PER_MINUTE
       : WRITE_THROTTLE_PER_MINUTE;
   return { method: method!, path, max: BODY_LIMIT_BYTES[kind], budget };
@@ -125,6 +126,7 @@ async function sessionEnv(sql: Sql) {
   const env = {
     APP_URL: STAGING_APP_URL,
     QA_AUTH_TOKEN: "test-only-qa-token-with-32-plus-chars",
+    STAGING_VOICE_MOVE_ENABLED: "true",
     SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
     SESSION_STORE: store,
     THROTTLE_STORE: async () => withThrottleTx(sql),

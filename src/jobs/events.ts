@@ -15,6 +15,7 @@ type AttemptRow = {
   state: SyncAttempt["state"];
   request_attempts: number;
   next_attempt_at: Date | null;
+  claim_started_at?: Date | null;
   terminal_reason?: string | null;
   discord_event_id?: string | null;
 } & (
@@ -22,7 +23,7 @@ type AttemptRow = {
   | { action: "event.cancel"; payload: { eventKey: string } }
 );
 
-function attemptFrom(row: AttemptRow): SyncAttempt {
+function attemptFrom(row: AttemptRow, observeActiveClaims: true | undefined): SyncAttempt {
   const base = {
     idempotencyKey: row.idempotency_key,
     eventKey: row.payload.eventKey,
@@ -31,6 +32,7 @@ function attemptFrom(row: AttemptRow): SyncAttempt {
     state: row.state,
     requestAttempts: row.request_attempts,
     nextAttemptAt: row.next_attempt_at,
+    ...(observeActiveClaims ? { claimStartedAt: row.claim_started_at ?? null } : {}),
     // Terminal-intent marker; absent on pre-migration rows (null then).
     terminalReason: row.terminal_reason ?? null,
     // Absent on pre-mirror rows (hermetic doubles leave it undefined, which
@@ -84,7 +86,12 @@ export function pgEventStore(
   {
     bypassReadCache = false,
     onSourceRead,
-  }: { bypassReadCache?: boolean; onSourceRead?: (report: SourceReadReport) => void } = {},
+    observeActiveClaims,
+  }: {
+    bypassReadCache?: boolean;
+    onSourceRead?: (report: SourceReadReport) => void;
+    observeActiveClaims?: true;
+  } = {},
 ): EventStore {
   // Operational previews cannot combine a fresh timestamp with cached source reads.
   // https://developers.cloudflare.com/hyperdrive/concepts/query-caching/
@@ -242,12 +249,13 @@ export function pgEventStore(
     return rows.map((row: { event_key: string }) => row.event_key);
   };
   return {
+    ...(observeActiveClaims ? { observeActiveClaims } : {}),
     async prepareSync(eventKey, idempotencyKey, mirroredAt) {
       return withSyncTimeout(async (sql) => {
         const [cached] =
           await sql`select a.*, e.discord_event_id from event_sync_attempts a join events e on e.id = a.event_id
         where a.idempotency_key = ${idempotencyKey}::uuid and e.event_key = ${eventKey}`;
-        if (cached) return attemptFrom(cached);
+        if (cached) return attemptFrom(cached, observeActiveClaims);
         // One atomic snapshot of status/payload/revision. A partial unique index
         // permits only one pending request per event, even beyond the lock TTL.
         // DO NOTHING conflicts retry; they must not acknowledge an unseen row
@@ -268,7 +276,7 @@ export function pgEventStore(
             select 1 from rsvps where rsvps.event_id = events.id and synced_to_discord_at is null
           ))))
         on conflict do nothing returning *, (select discord_event_id from events where id = event_id) as discord_event_id`;
-        if (created) return attemptFrom(created);
+        if (created) return attemptFrom(created, observeActiveClaims);
         // Clean rows need no further bot call even if redundant jobs were queued
         // while an older attempt was finishing. Dirty conflicts wait, never ACK.
         // A single-key eligibility check always answers an array, never a page.
@@ -321,10 +329,10 @@ export function pgEventStore(
       ) update event_sync_attempts a
         set state = case when candidate.obsolete then 'obsolete' else a.state end,
           request_attempts = a.request_attempts + case when candidate.obsolete then 0 else 1 end,
-          next_attempt_at = null
+          next_attempt_at = null${observeActiveClaims ? sql`, claim_started_at = ${now}` : sql``}
         from candidate where a.idempotency_key = candidate.idempotency_key
         returning a.*, candidate.discord_event_id`;
-        return row ? attemptFrom(row) : null;
+        return row ? attemptFrom(row, observeActiveClaims) : null;
       });
     },
     async deferSync(attempt, nextAttemptAt) {
@@ -418,7 +426,7 @@ export function pgEventStore(
           rowCount: row ? 1 : 0,
           readAt: markerOf(row as { preview_read_at?: unknown } | undefined),
         });
-        return row ? attemptFrom(row) : null;
+        return row ? attemptFrom(row, observeActiveClaims) : null;
       });
     },
     async closeFinished(now) {

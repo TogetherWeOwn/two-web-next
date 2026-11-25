@@ -159,13 +159,15 @@ export async function assertStaticFeedParity({
   databaseUrl,
 }) {
   await assertMountedEndpoints();
-  // Opposite flag values exercise both families independently on the same Workers.
+  // Exercise the rollout flags independently on the same installed Workers.
   const [seoOn, feedOn] = await Promise.all([
     startKit("kit-seo-on", {
       APP_URL: `${hono.origin}/`,
       KIT_ROUTE_FEEDS: "false",
       KIT_ROUTE_SEO: "true",
       KIT_ROUTE_SECURITY_TXT: "false",
+      KIT_ROUTE_EVENT_JSON: "true",
+      KIT_ROUTE_EVENT_WRITES: "true",
     }),
     startKit("kit-feed-on", {
       APP_URL: hono.origin,
@@ -175,7 +177,8 @@ export async function assertStaticFeedParity({
   ]);
   const modes = [hono, kit, seoOn, feedOn];
   const sql = postgres(databaseUrl, { max: 1 });
-  const buckets = [`events-read:${fixtureIp}`];
+  const writeBucket = `event-write:${fixtureIp}`;
+  const buckets = [`events-read:${fixtureIp}`, writeBucket];
   const sessionLineages = [];
   let seeded = false;
 
@@ -363,6 +366,61 @@ export async function assertStaticFeedParity({
   }
 
   try {
+    const eventPath = `/events/${eventKeys[0]}`;
+    const readIp = "192.0.2.111";
+    const readWriteBucket = `event-write:${readIp}`;
+    buckets.push(`events-read:${readIp}`, readWriteBucket);
+    const throttleHits = async (bucket) => {
+      const [{ count }] =
+        await sql`select count(*)::int from web_throttle_hits where bucket = ${bucket}`;
+      return count;
+    };
+    const headers = { "cf-connecting-ip": readIp, "x-forwarded-for": readIp };
+    for (const [target, renderer] of [
+      [kit, null],
+      [seoOn, "kit"],
+    ]) {
+      await request(target, eventPath, { status: 401, headers, renderer });
+      assert.equal(
+        await throttleHits(readWriteBucket),
+        0,
+        `${target.name}: GET leaves write quota intact`,
+      );
+    }
+
+    let expectedHits = await throttleHits(writeBucket);
+    for (const [method, path, status, hits] of [
+      ["POST", "/events", 401, 1],
+      ["PATCH", eventPath, 401, 1],
+      ["POST", `${eventPath}/publish`, 401, 1],
+      ["PUT", `${eventPath}/rsvp`, 401, 0],
+      ["DELETE", `${eventPath}/rsvp`, 401, 0],
+      ["OPTIONS", `${eventPath}/rsvp`, 405, 0],
+      ["POST", `/e/${eventKeys[0]}/rsvp`, 303, 0],
+    ]) {
+      await request(kit, path, { method, status, headers: { origin: kit.origin } });
+      expectedHits += hits;
+      assert.equal(
+        await throttleHits(writeBucket),
+        expectedHits,
+        `Hono ${method} ${path}: event-write hits`,
+      );
+      const result = await request(seoOn, path, {
+        method,
+        status,
+        headers: { origin: hono.origin },
+        renderer: "kit",
+      });
+      expectedHits += hits;
+      assert.equal(
+        await throttleHits(writeBucket),
+        expectedHits,
+        `Kit ${method} ${path}: event-write hits`,
+      );
+      if (method === "OPTIONS") assert.equal(result.headers.get("allow"), "PUT, DELETE");
+    }
+    console.log("PASS installed Kit event write mounts with the flag absent and enabled");
+
     await assertSecurityTxtParity();
     const publicPath = eventCalendar(eventKeys[0]);
     const draftPath = eventCalendar(eventKeys[2]);

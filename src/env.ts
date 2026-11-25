@@ -46,6 +46,10 @@ export type Env = AgentEventsEnv & {
   BOT_DATABASE_URL?: string;
   DISCORD_MODERATOR_ROLE_IDS?: string;
   QA_AUTH_TOKEN?: string;
+  // Runtime-only staging self-move fixture. All three are unset by default.
+  STAGING_VOICE_MOVE_ENABLED?: string;
+  STAGING_VOICE_MOVE_MEMBER_ID?: string;
+  STAGING_VOICE_MOVE_CHANNEL_IDS?: string;
   // Optional runtime-only bot control bearer for the read-only operator panel.
   // Unset/short values leave it dark; never provisioned by checked-in config.
   OPS_CONTROL_TOKEN?: string;
@@ -118,6 +122,8 @@ export type Env = AgentEventsEnv & {
   KIT_ROUTE_STATIC_TEXT?: string;
   KIT_ROUTE_EVENT_JSON?: string;
   KIT_ROUTE_PUBLIC_API?: string;
+  // RSVP and moderator event mutations. Only the literal string "true" opts in.
+  KIT_ROUTE_EVENT_WRITES?: string;
   // Robots and sitemap reads. Only the literal string "true" opts in.
   KIT_ROUTE_SEO?: string;
   // RFC 9116 disclosure file. Only the literal string "true" opts in.

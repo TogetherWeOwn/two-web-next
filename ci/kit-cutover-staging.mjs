@@ -14,7 +14,9 @@ import {
 } from "./kit-cutover-database.mjs";
 import { smoke } from "../bin/smoke.mjs";
 import { REQUIRED_PRODUCTION_SECRETS } from "./check-production-secrets.mjs";
+import { assertStagedAdminServing } from "./fixtures/kit-admin-serving.mjs";
 import {
+  ADMIN_STAGING_CHECKS,
   EMBER_CUTOVER_VARS,
   LEDGER_STATES,
   STAGING_WORKER,
@@ -33,6 +35,8 @@ import { sha256 } from "./worker-bundle-evidence.mjs";
 
 const cutoverProfile = process.env.CUTOVER_PROFILE || "all-off";
 const ember = cutoverProfile === "ember";
+const admin = cutoverProfile === "admin";
+const baseline = admin ? "ember" : "hono";
 
 function cloudflare() {
   const account = process.env.CLOUDFLARE_ACCOUNT_ID;
@@ -59,7 +63,7 @@ function cloudflare() {
   };
 }
 
-async function verifyServed(origin, prefixes, identity, version, state, ember) {
+async function verifyServed(origin, prefixes, identity, version, state, renderer) {
   for (let attempt = 0; attempt < 6; attempt++) {
     try {
       await readReady(origin, prefixes, { version, commit: identity.sourceSha, state });
@@ -73,7 +77,7 @@ async function verifyServed(origin, prefixes, identity, version, state, ember) {
   assert.ok(
     await smoke(origin, {
       expectedVersionId: version,
-      expectedCutoverRenderer: ember ? "kit" : "hono",
+      expectedCutoverRenderer: renderer,
       onRoute: () => {
         routes += 1;
       },
@@ -93,9 +97,13 @@ function verifyStagedBindings(version, id, config) {
   for (const name of ["DB", "BOT_DB", "SYNC_EVENT_QUEUE", "INTERNAL_ACTION_QUEUE"]) {
     assert.ok(!bindings.has(name), "isolated staging has an external binding");
   }
+  assert.ok(!bindings.has("BOT_ENDPOINT_URL"), "isolated staging has a bot endpoint");
   for (const name of ["DATABASE_URL", ...REQUIRED_PRODUCTION_SECRETS]) {
     assert.equal(bindings.get(name)?.type, "secret_text", "missing synthetic secret binding");
   }
+  const operator = bindings.get("OPS_CONTROL_TOKEN");
+  if (config.vars.KIT_ROUTE_ADMIN === "true") assert.equal(operator?.type, "secret_text");
+  else assert.equal(operator, undefined);
   assert.ok(bindings.has("CF_VERSION_METADATA"), "staged version metadata binding missing");
   for (const flag of [...KIT_ROUTE_FLAGS, ...Object.keys(EMBER_CUTOVER_VARS)]) {
     const expected = config.vars[flag];
@@ -114,7 +122,7 @@ function context() {
   );
   const runId = process.env.GITHUB_RUN_ID;
   const runAttempt = process.env.GITHUB_RUN_ATTEMPT;
-  assert.ok(cutoverProfile === "all-off" || ember, "invalid isolated cutover profile");
+  assert.ok(cutoverProfile === "all-off" || ember || admin, "invalid isolated cutover profile");
   const names = fixtureNames(runId, runAttempt);
   return {
     identity: {
@@ -155,31 +163,34 @@ async function cleanup({ claim, worker, names }, api, database) {
   await rm(claim);
 }
 
-async function deployPacket(dir, scratch, proof, origin, inputs, api, runtimeUrl) {
+async function deployPacket(dir, scratch, proof, origin, inputs, api, credentials) {
+  const { runtimeUrl, SESSION_SECRET, OPS_CONTROL_TOKEN } = credentials;
   const { worker, identity, configs } = proof;
   const tag = `${identity.sourceSha}-${identity.runId}-${identity.runAttempt}`;
   const secretsFile = join(scratch, "synthetic-bindings.json");
-  await writeFile(
-    secretsFile,
-    JSON.stringify({
-      DATABASE_URL: runtimeUrl.href,
-      SESSION_SECRET: randomUUID(),
-      DISCORD_CLIENT_SECRET: "synthetic",
-      DISCORD_BOT_TOKEN: "synthetic",
-    }),
-    { flag: "wx", mode: 0o600 },
-  );
+  const secretBindings = {
+    DATABASE_URL: runtimeUrl.href,
+    SESSION_SECRET,
+    DISCORD_CLIENT_SECRET: "synthetic",
+    DISCORD_BOT_TOKEN: "synthetic",
+  };
+  const writeSecrets = (path, values) =>
+    writeFile(path, JSON.stringify(values), { flag: "wx", mode: 0o600 });
+  await writeSecrets(secretsFile, secretBindings);
   delete process.env.KIT_CUTOVER_TEST_DATABASE_URL;
-  for (const profile of ["hono", "kit"]) {
-    const directory = join(dir, profile);
-    const config = stagingConfig(profile, inputs, worker, origin, ember && profile === "kit");
-    const configPath = join(directory, "wrangler.json");
+  for (const profile of [baseline, "kit"]) {
+    const artifact = profile === "ember" ? "kit" : profile;
+    const directory = join(dir, artifact);
+    const mode = profile === "kit" ? cutoverProfile : admin ? "ember" : "all-off";
+    const config = stagingConfig(artifact, inputs, worker, origin, mode);
+    const filename = profile === "ember" ? "wrangler.ember.json" : "wrangler.json";
+    const configPath = join(directory, filename);
     const configText = JSON.stringify(config);
     configs[profile] = sha256(configText);
     await writeFile(configPath, configText, { flag: "wx" });
     console.info(`Uploading isolated ${profile} version`);
-    if (profile === "hono") {
-      wrangler(profile, [
+    if (profile === baseline) {
+      wrangler(artifact, [
         "deploy",
         "--config",
         configPath,
@@ -190,12 +201,14 @@ async function deployPacket(dir, scratch, proof, origin, inputs, api, runtimeUrl
         "--secrets-file",
         secretsFile,
       ]);
-      proof.hono = liveVersion(
-        JSON.parse(wrangler("hono", ["deployments", "list", "--config", configPath, "--json"])),
+      proof[baseline] = liveVersion(
+        JSON.parse(wrangler(artifact, ["deployments", "list", "--config", configPath, "--json"])),
       );
     } else {
+      const kitSecrets = admin ? join(scratch, "admin-bindings.json") : secretsFile;
+      if (admin) await writeSecrets(kitSecrets, { ...secretBindings, OPS_CONTROL_TOKEN });
       proof.kit = uploadVersion(profile, directory, config, tag, {
-        secretsFile,
+        secretsFile: kitSecrets,
         output: join(scratch, "kit.jsonl"),
       });
     }
@@ -208,23 +221,27 @@ async function deployPacket(dir, scratch, proof, origin, inputs, api, runtimeUrl
   }
 }
 
-async function exercise(proof, prefixes, owner, names, origin, config) {
-  const { identity, hono, kit, checks } = proof;
-  const run = (...args) => wrangler("hono", [...args, "--config", config]);
+async function exercise(proof, prefixes, owner, names, origin, dir, secrets) {
+  const { identity, kit, checks } = proof;
+  const fallback = proof[baseline];
+  const config = join(dir, admin ? "kit/wrangler.ember.json" : "hono/wrangler.json");
+  const run = (...args) => wrangler(admin ? "kit" : "hono", [...args, "--config", config]);
   const deployments = () => JSON.parse(run("deployments", "list", "--json"));
   const capture = async (state, step, version) => {
     assert.equal(liveVersion(deployments()), version);
-    const emberKit = ember && step === "kit";
-    const routes = await verifyServed(origin, prefixes, identity, version, state, emberKit);
+    let renderer = admin || (ember && step === "kit") ? "kit" : "hono";
+    if (admin && step === "kit") renderer = "admin";
+    const routes = await verifyServed(origin, prefixes, identity, version, state, renderer);
     proof.routeCount ??= routes;
     assert.equal(routes, proof.routeCount, "staged smoke route coverage changed");
     checks.push({ state, step, version, status: 200, pending: 0, smoke: "passed" });
     console.info(`Isolated ${state} ${step}: ${version} passed ${routes} routes and readiness`);
+    if (admin) await assertStagedAdminServing({ origin, owner, secrets, enabled: step === "kit" });
   };
-  for (const state of LEDGER_STATES) {
-    if (state === "1037") await advanceFixture(owner, prefixes[state], names.login);
-    await capture(state, "hono", hono);
-    assert.equal(liveVersion(deployments()), hono);
+  for (const state of admin ? ["1037"] : LEDGER_STATES) {
+    if (!admin && state === "1037") await advanceFixture(owner, prefixes[state], names.login);
+    await capture(state, baseline, fallback);
+    assert.equal(liveVersion(deployments()), fallback);
     run("versions", "deploy", `${kit}@100%`, "--yes");
     try {
       await capture(state, "kit", kit);
@@ -234,11 +251,12 @@ async function exercise(proof, prefixes, owner, names, origin, config) {
         proof.kitReadinessSamples += 1;
       }
     } finally {
-      assert.equal(rollbackAction(deployments(), { expected: kit, target: hono }), "rollback");
-      run("rollback", hono, "--yes");
+      assert.equal(rollbackAction(deployments(), { expected: kit, target: fallback }), "rollback");
+      run("rollback", fallback, "--yes");
     }
-    await capture(state, "undo", hono);
+    await capture(state, "undo", fallback);
   }
+  if (admin) proof.adminChecks = ADMIN_STAGING_CHECKS;
 }
 
 async function qualify(dir, proofPath, ctx) {
@@ -260,7 +278,7 @@ async function qualify(dir, proofPath, ctx) {
     configs: {},
     checks: [],
     kitReadinessSamples: 0,
-    bindingCheck: ember ? "isolated-and-ember" : "isolated-and-all-off",
+    bindingCheck: `isolated-and-${cutoverProfile}`,
   };
   let owner;
   let phase = "synthetic database setup";
@@ -269,11 +287,16 @@ async function qualify(dir, proofPath, ctx) {
       writeFile(claim, worker, { flag: "wx", mode: 0o600 }),
     );
     owner = fixture.owner;
-    await advanceFixture(owner, prefixes["1033"], names.login);
+    await advanceFixture(owner, prefixes[admin ? "1037" : "1033"], names.login);
+    const secrets = {
+      runtimeUrl: fixture.runtimeUrl,
+      SESSION_SECRET: randomUUID(),
+      ...(admin ? { OPS_CONTROL_TOKEN: randomUUID() } : {}),
+    };
     phase = "same-script staged uploads";
-    await deployPacket(dir, scratch, proof, origin, inputs, api, fixture.runtimeUrl);
-    phase = "exact readiness, public smoke and guarded Hono undo";
-    await exercise(proof, prefixes, owner, names, origin, join(dir, "hono/wrangler.json"));
+    await deployPacket(dir, scratch, proof, origin, inputs, api, secrets);
+    phase = "exact readiness, route smoke and guarded undo";
+    await exercise(proof, prefixes, owner, names, origin, dir, secrets);
   } catch (error) {
     // Report only the operation and numeric provider code from Wrangler.
     const detail = error instanceof WranglerOperationError ? ` (${error.message})` : "";
@@ -282,10 +305,10 @@ async function qualify(dir, proofPath, ctx) {
     await owner?.end({ timeout: 0 });
     await rm(scratch, { recursive: true, force: true });
   }
-  verifyStagingProof(proof, { ...identity, mode: ember ? "ember" : "kit" });
+  verifyStagingProof(proof, { ...identity, mode: admin ? "admin" : ember ? "ember" : "kit" });
   await writeFile(proofPath, JSON.stringify(proof), { flag: "wx" });
   console.info(
-    `Isolated pin ${identity.runId}:${identity.runAttempt}:${identity.digest}, Hono ${proof.hono}, Kit ${proof.kit}`,
+    `Isolated ${cutoverProfile} pin ${identity.runId}:${identity.runAttempt}:${identity.digest}, baseline ${proof[baseline]}, candidate ${proof.kit}`,
   );
 }
 

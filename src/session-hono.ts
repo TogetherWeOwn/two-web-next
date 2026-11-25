@@ -4,15 +4,15 @@ import { enableAuthStatus } from "./auth-status";
 import type { Env, Session } from "./env";
 import { SESSION_COOKIE } from "./session-cookie";
 import { hashToken, SESSION_TTL_SECONDS } from "./sessions";
-import { readSession as readStoredSession, storeForEnv } from "./http/session";
+import { readSession, type SessionReadMode, storeForEnv } from "./http/session";
 
 /** Resolve a signed session and attach any renewal to the same response context. */
 export async function readContextSession(
   c: Context<{ Bindings: Env }>,
-  rotateToken = true,
+  mode: SessionReadMode = true,
 ): Promise<Session | null> {
   const signed = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-  const stored = await readStoredSession(signed, c.env, () => storeForEnv(c.env), rotateToken);
+  const stored = await readSession(signed, c.env, () => storeForEnv(c.env), mode);
   if (!stored) return null;
   const { store, row, renewal } = stored;
   const session = {
