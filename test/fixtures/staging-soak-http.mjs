@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { STAGING_ORIGIN } from "../../ci/operator-constants.mjs";
 import fixture from "./staging-soak-receipt.json" with { type: "json" };
 
@@ -138,10 +139,21 @@ export function installSoakCliReads({ finalReadUnavailable }) {
     {
       fetchImpl: async (input) => {
         const url = String(input);
-        reads.push(url);
-        if (url === `${STAGING_ORIGIN}/version`) return Response.json({ sha, deployedAt });
+        const trackedResponse = (body, init) => {
+          const response = Response.json(body, init);
+          const reader = url === `${STAGING_ORIGIN}/version` ? "text" : "json";
+          const readBody = response[reader].bind(response);
+          response[reader] = async () => {
+            await setImmediate();
+            const payload = await readBody();
+            reads.push(url);
+            return payload;
+          };
+          return response;
+        };
+        if (url === `${STAGING_ORIGIN}/version`) return trackedResponse({ sha, deployedAt });
         if (url === `${STAGING_ORIGIN}/up`) {
-          return Response.json(
+          return trackedResponse(
             { revision: { commit: sha, version_id: workerVersion } },
             {
               headers: { "x-two-origin": "two-web-next", "cache-control": "no-store" },
@@ -149,7 +161,7 @@ export function installSoakCliReads({ finalReadUnavailable }) {
           );
         }
         assert.equal(url, "https://api.cloudflare.com/client/v4/graphql");
-        return Response.json({
+        return trackedResponse({
           data: {
             viewer: {
               accounts: [
