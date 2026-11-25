@@ -237,6 +237,23 @@ Use all three feed paths to confirm that clearing the binding returns requests
 to Hono. Account for the existing 300-second cache lifetime. The collections
 are public-cacheable and single-event downloads are private-cacheable.
 
+### Operational endpoints
+
+`KIT_ROUTE_OPS=true` selects Kit for exact POST `/csp-reports` and
+`/__probe/alert`, and GET and HEAD `/up` and `/version`. Hono owns the
+routes by default and handles other methods, path aliases and Kit data URLs.
+The CSP sink keeps its exact origin exemption and returns 204 on oversize or
+timeout. The alert probe keeps the origin and staging QA gates, then the body
+cap and throttle. The existing queue and request alert run only after admission.
+The built and installed Worker fixture uses synthetic inputs, counts diagnostics
+and intercepts the queue and outbound network.
+
+The remaining API-3 endpoints are the vanity redirects `/community`,
+`/discord`, `/login`, the static text routes `/llms.txt`, `/about.md`,
+`/faq.md`, `/join.md`, `/privacy.md`, `/rules.md`, and the event Markdown
+routes `/events.md` and `/e/:file{.+\\.md}`. Event Markdown still needs shared
+read-budget and suffix precedence proof, including paths with multiple segments.
+
 ## Offline retirement guard
 
 The Kit archive parity job sets `KIT_RETIREMENT_GUARD=report` and requires the

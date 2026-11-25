@@ -9,6 +9,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { build } from "esbuild";
 import postgres from "postgres";
+import { rehearseServingIsolation } from "./fixtures/web-serving-isolation.mjs";
 import { assertServingLedgerIsolation } from "./migration-runtime-rights.mjs";
 import { buildCutoverApps, probeCutoverEventSync } from "./web-readiness-cutover.mjs";
 import { assertScopedAcl, grantScopedAcl, probeWorkloads } from "./web-readiness-scoped-acl.mjs";
@@ -203,14 +204,29 @@ export async function rehearseWebReadiness(owner, url) {
     await cutoverUp(old.history, ledger);
     await probeCutoverEventSync(cutover.pgEventStore, reader);
     await owner.unsafe(fixture("../docs/web-readiness-projection.sql"));
+    await owner`COMMENT ON VIEW web_readiness.migration_timestamps IS 'two-web readiness projection installation v1'`;
     await owner`GRANT USAGE ON SCHEMA public, web_readiness TO ${owner(login)}`;
     await owner`GRANT SELECT ON web_readiness.migration_timestamps TO ${owner(login)}`;
     await bridgeUp(old.history, 503, 4);
     await cutoverUp(old.history, projection);
 
+    const verifyExpandedIsolation = await rehearseServingIsolation({
+      owner,
+      reader,
+      login,
+      database: catalog.db,
+      ownerRole: catalog.role,
+      databasePath: url.pathname,
+      oldHistory: old.history,
+      newHistory: first.history,
+      cutoverUp,
+      probeEventSync: () => probeCutoverEventSync(cutover.pgEventStore, reader),
+    });
+
     await migrate(drizzle(owner), first);
     const expanded = await readLedger();
     assert.deepEqual(expanded, pairs(first.history));
+    await verifyExpandedIsolation();
     const [deferred] =
       await owner`SELECT to_regclass('public.announcement_send_claims') AS relation`;
     assert.equal(deferred.relation, null);
