@@ -1398,7 +1398,7 @@ function stubRepo({ target, previous, sql, up, drill, seen = {} }) {
     if (parsed.pathname.endsWith("/contents/drizzle/meta/_journal.json")) {
       const ref = parsed.searchParams.get("ref");
       const tags = ref === TARGET ? target : ref === PREVIOUS ? previous : assert.fail(ref);
-      return { ok: true, json: async () => ({ encoding: "base64", content: journal(tags) }) };
+      return Response.json({ encoding: "base64", content: journal(tags) });
     }
     const tag = parsed.pathname.match(/\/contents\/drizzle\/([^/]+)\.sql$/)?.[1];
     if (tag) {

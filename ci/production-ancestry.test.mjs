@@ -887,7 +887,7 @@ test("interleaving: a recovery to a descendant before rollback capture cannot re
           }
           assert.ok(parsed.pathname.endsWith("/contents/drizzle/meta/_journal.json"));
           assert.ok([MIDDLE, capturedCommit].includes(parsed.searchParams.get("ref")));
-          return okJson({
+          return Response.json({
             encoding: "base64",
             content: Buffer.from(
               JSON.stringify({ entries: [{ tag: "1000_a", when: 1000 }] }),

@@ -181,6 +181,9 @@ export function pendingMigrationTags(targetTags, liveTags) {
   return (Array.isArray(targetTags) ? targetTags : []).filter((tag) => !live.has(tag));
 }
 
+// Bound the Contents envelope, including base64 expansion and GitHub metadata.
+const MAX_JOURNAL_RESPONSE_BYTES = 256 * 1024;
+
 function decodeJournalEntries(content, encoding) {
   const text =
     encoding === "base64"
@@ -205,7 +208,27 @@ async function journalEntriesAt({ repository, ref, token, fetchImpl }) {
     },
   );
   if (!response.ok) throw new Error(`Migration journal lookup failed (HTTP ${response.status})`);
-  const body = await response.json();
+  if (!response.body) throw new Error("Migration journal lookup returned no body");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let received = 0;
+  let text = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.byteLength;
+      if (received > MAX_JOURNAL_RESPONSE_BYTES) {
+        // Cancellation is best effort and must not delay the size refusal.
+        void reader.cancel().catch(() => {});
+        throw new Error(`Migration journal response exceeds ${MAX_JOURNAL_RESPONSE_BYTES} bytes`);
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const body = JSON.parse(text + decoder.decode());
   return decodeJournalEntries(body.content, body.encoding);
 }
 
