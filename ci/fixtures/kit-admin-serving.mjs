@@ -1329,13 +1329,18 @@ async function assertEventCancellation({ kit, sql, moderator, member, moderatorI
 
       // Settle the trapped job locally so its lease cannot mask a replay dispatch.
       assert.ok(committed.lease?.owner_token, "the dispatch owns a sync lease");
+      assert.equal(
+        message.leaseToken,
+        committed.lease.owner_token,
+        "the message carries its lease",
+      );
       await sql.begin(async (tx) => {
         const removed = await tx`
           delete from queue_jobs where job_id = ${message.jobId} and key = ${queueKey(row)}
         `;
         const released = await tx`
           delete from job_unique_locks where key = ${queueKey(row)}
-          and owner_token = ${committed.lease.owner_token}
+          and owner_token = ${message.leaseToken}
         `;
         assert.equal(removed.count, 1, "the trapped job was settled");
         assert.equal(released.count, 1, "the trapped job's lease was released");
