@@ -972,11 +972,12 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
 
     const featuredTitle = "Fixture admin feature";
     const featuredBody = new URLSearchParams({ title: featuredTitle });
-    await visit(kit, "/admin/featured", 403, {
+    const memberDenied = await visit(kit, "/admin/featured", 403, {
       ...form,
       headers: { ...form.headers, cookie: member },
       body: featuredBody,
     });
+    assert.equal(memberDenied.headers.getSetCookie().length, 0);
     const saved = await visit(kit, "/admin/featured", 303, {
       ...form,
       body: featuredBody,
@@ -995,6 +996,7 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
         const rejected = await visit(target, path, 422, { ...form, body, owned: target === kit });
         assert.match(rejected.headers.get("content-type") ?? "", /^text\/html\b/);
         assert.equal(rejected.headers.get("location"), null);
+        assert.equal(rejected.headers.getSetCookie().length, 0);
         assert.match(rejected.text, /<div\b[^>]*role="alert"[^>]*data-testid="form-errors"/);
         assert.match(rejected.text, /<a href="#f-title">Headline: Give it a headline\.<\/a>/);
         assert.match(rejected.text, /<p\b[^>]*id="f-title-error"[^>]*>Give it a headline\.<\/p>/);
@@ -1011,21 +1013,23 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
       }
     }
     const featuredRows = await sql`
-      select title from featured_contents where created_by = ${moderatorId}
+      select created_by as actor, title from featured_contents
+      where created_by in (${moderatorId}, ${memberId})
     `;
     assert.deepEqual(
       [...featuredRows],
-      [{ title: featuredTitle }],
-      "invalid forms leave one original row",
+      [{ actor: moderatorId, title: featuredTitle }],
+      "only the accepted moderator creation persists",
     );
     const featuredAudit = await sql`
-      select subject_id::text as id, description from activity_log
-      where causer_id = ${moderatorId} and subject_type = 'FeaturedContent'
+      select causer_id as actor, subject_id::text as id, description from activity_log
+      where causer_id in (${moderatorId}, ${memberId}) and subject_type = 'FeaturedContent'
     `;
     assert.deepEqual(
       [...featuredAudit],
       [
         {
+          actor: moderatorId,
           id: featuredPath.split("/").at(-1),
           description: `created featured content ${featuredTitle}`,
         },
@@ -1178,7 +1182,7 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
       // Audit rows are append-only and are isolated by the synthetic actor.
       // The hosted job discards the disposable database at teardown.
       await sql.begin(async (tx) => {
-        await tx`delete from featured_contents where created_by = ${moderatorId}`;
+        await tx`delete from featured_contents where created_by in (${moderatorId}, ${memberId})`;
         await tx`delete from events where created_by = ${moderatorId}`;
         await tx`delete from web_session_grace where user_id in (${moderatorId}, ${memberId})`;
         await tx`delete from web_sessions where user_id in (${moderatorId}, ${memberId})`;
