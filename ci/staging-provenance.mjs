@@ -11,8 +11,8 @@ const DEPLOY_TITLE = /^deploy ([0-9a-f]{40})$/;
 export const STAGING_ORIGIN = "https://next.togetherweown.com";
 const MAX_IDENTITY_LENGTH = 2048;
 // Keep the decoded UTF-16 length policy. UTF-8 needs at most three bytes per
-// decoded code unit, plus an optional three-byte BOM stripped by the decoder.
-const MAX_IDENTITY_BYTES = 3 * MAX_IDENTITY_LENGTH + 3;
+// decoded code unit, plus the two leading BOMs Node's Response.text() can strip.
+const MAX_IDENTITY_BYTES = 3 * MAX_IDENTITY_LENGTH + 6;
 
 export function resolveStagingCandidate({ eventName, event, sha, ref, repository }) {
   if (eventName === "workflow_dispatch") {
@@ -103,12 +103,19 @@ async function readIdentityText(body) {
   const decoder = new TextDecoder();
   let bytes = 0;
   let text = "";
+  let atStart = true;
   try {
     for (;;) {
       const { done, value } = await reader.read();
       bytes += value?.byteLength ?? 0;
       if (bytes > MAX_IDENTITY_BYTES) break;
-      text += decoder.decode(value, { stream: !done });
+      let chunk = decoder.decode(value, { stream: !done });
+      if (atStart && chunk.length > 0) {
+        // TextDecoder already strips the first BOM. Node strips one more.
+        chunk = chunk.replace(/^\uFEFF/, "");
+        atStart = false;
+      }
+      text += chunk;
       if (text.length > MAX_IDENTITY_LENGTH) break;
       if (done) return text;
     }

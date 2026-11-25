@@ -266,29 +266,40 @@ test("qualification observes the fixed staging endpoint once without redirects o
 test("qualification bounds the staging identity stream and accepts matching evidence", async () => {
   const encoder = new TextEncoder();
   const candidate = { sha: A, deployedAt };
+  const observeBody = (body) => observe({}, { fetchImpl: async () => new Response(body) });
   const maxPadding = 2048 - JSON.stringify({ ...candidate, padding: "" }).length;
-  for (const padding of ["€", "€".repeat(maxPadding)]) {
-    const bytes = encoder.encode(JSON.stringify({ ...candidate, padding }));
+  for (const [prefix, padding] of [
+    ["", "€"],
+    ["\uFEFF\uFEFF", "€".repeat(maxPadding)],
+  ]) {
+    const bytes = encoder.encode(prefix + JSON.stringify({ ...candidate, padding }));
     const split = bytes.indexOf(0xe2) + 1;
     const body = new ReadableStream({
       start(controller) {
-        controller.enqueue(bytes.subarray(0, split));
+        controller.enqueue(bytes.subarray(0, 4));
+        controller.enqueue(bytes.subarray(4, split));
         controller.enqueue(bytes.subarray(split));
         controller.close();
       },
     });
-    assert.deepEqual(await observe({}, { fetchImpl: async () => new Response(body) }), candidate);
+    assert.deepEqual(await observeBody(body), candidate);
   }
 
-  for (const char of [" ", "€"]) {
-    const chunks = [encoder.encode(char.repeat(2048)), encoder.encode(JSON.stringify(candidate))];
+  await assert.rejects(observeBody(`\uFEFF\uFEFF\uFEFF${JSON.stringify(candidate)}`), {
+    message: "Staging identity is not JSON",
+  });
+
+  for (const chunks of [
+    [JSON.stringify({ ...candidate, padding: " ".repeat(maxPadding) }), " "],
+    ["€".repeat(2048), " ".repeat(7)],
+  ]) {
     let pulls = 0;
     let cancelled = false;
     const body = new ReadableStream(
       {
         pull(controller) {
           const chunk = chunks[pulls++];
-          if (chunk) controller.enqueue(chunk);
+          if (chunk) controller.enqueue(encoder.encode(chunk));
           else controller.close();
         },
         cancel() {
@@ -297,7 +308,7 @@ test("qualification bounds the staging identity stream and accepts matching evid
       },
       { highWaterMark: 0 },
     );
-    await assert.rejects(observe({}, { fetchImpl: async () => new Response(body) }), {
+    await assert.rejects(observeBody(body), {
       message: "Staging identity response too large",
     });
     assert.equal(cancelled, true);
