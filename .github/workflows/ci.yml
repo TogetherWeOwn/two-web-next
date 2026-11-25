@@ -1152,6 +1152,9 @@ jobs:
       - name: Rollback target and drill selftest (stubbed GitHub API and wrangler output, no network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/rollback-target.test.mjs ci/drill-scripts-ref.test.mjs
+      - name: Protected manual rollback proof (stubbed GitHub API and Wrangler, no deployments)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/manual-rollback.test.mjs
       - name: Post-deploy watch selftest (fake clock and probes, no network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/post-deploy-watch.test.mjs

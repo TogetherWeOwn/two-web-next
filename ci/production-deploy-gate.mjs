@@ -11,7 +11,7 @@ import {
   PROMOTION_SOAK_MS,
   stagingRunsSinceCommit,
 } from "./resolve-promotion-sha.mjs";
-import { requireSuccessfulCi } from "./staging-deploy-gate.mjs";
+import { requireSuccessfulCi, requireSuccessfulMainPushCi } from "./staging-deploy-gate.mjs";
 import { validateStagingIdentityPair } from "./staging-provenance.mjs";
 import { readWranglerConfig } from "./wrangler-config.mjs";
 
@@ -113,7 +113,7 @@ export function isAlreadyLive(deploySha, liveSha) {
 // an older green. Run from the workflow-head checkout before candidate code.
 // An explicit dispatch only selects the existing recovery route; it grants no
 // authorization and does not replace any of that route's other gates.
-export async function checkPromotionAncestry(env, { fetchImpl = fetch } = {}) {
+export async function checkPromotionAncestry(env, { fetchImpl = fetch, refusal } = {}) {
   const targetSha = env.DEPLOY_SHA;
   if (!/^[0-9a-f]{40}$/.test(targetSha)) {
     throw new Error("Promotion ancestry requires a full 40-hex DEPLOY_SHA");
@@ -166,7 +166,8 @@ export async function checkPromotionAncestry(env, { fetchImpl = fetch } = {}) {
     comparison.merge_base_commit?.sha !== liveSha
   ) {
     throw new Error(
-      `Default promotion refused: ${targetSha} is not a verified forward descendant of live ${liveSha} (behind, divergent or invalid ancestry evidence)`,
+      refusal ??
+        `Default promotion refused: ${targetSha} is not a verified forward descendant of live ${liveSha} (behind, divergent or invalid ancestry evidence)`,
     );
   }
   return "ahead";
@@ -365,6 +366,14 @@ export const stagingQualitySteps = [
   "Web standards (security headers, HTML basics, internal links)",
 ];
 
+const manualQualification = (run, sha) =>
+  run.event === "workflow_dispatch" &&
+  run.head_sha === sha &&
+  run.display_title === `e2e-staging ${sha}`;
+const explicitSelection = (env, sha) =>
+  env.GITHUB_EVENT_NAME === "workflow_dispatch" &&
+  (env.INPUT_SHA ?? "").replace(/\s+/g, "").toLowerCase() === sha;
+
 // A green quality job with skipped or failed web standards has not executed the gate.
 function requireExecutedStagingQuality(jobs, runId) {
   const quality = jobs.filter((job) => job.name === stagingQualityJob);
@@ -418,6 +427,8 @@ export async function requireStagingEvidence(
     workflows = stagingEvidenceWorkflows,
     pages = 3,
     nowMs = Date.now(),
+    allocationSoak = false,
+    allowManual = false,
   } = {},
 ) {
   async function get(path) {
@@ -443,7 +454,18 @@ export async function requireStagingEvidence(
       // Every e2e-staging run on the SHA, however old: fix forward refuses a
       // red run anywhere in its history (stagingRunsSinceCommit).
       const history = await stagingRunsSinceCommit({ get, sha });
-      runs.push(...history.filter((run) => run.display_title === titles[file]));
+      refuseRedOrRerunStaging(
+        history.filter((run) => manualQualification(run, sha)),
+        sha,
+      );
+      runs.push(
+        ...history.filter(
+          (run) =>
+            (run.display_title === titles[file] &&
+              (!allocationSoak || run.event === "workflow_run")) ||
+            (allowManual && manualQualification(run, sha)),
+        ),
+      );
     } else {
       for (let page = 1; page <= pages; page += 1) {
         const query = new URLSearchParams({ branch: "main", per_page: "100", page: String(page) });
@@ -456,6 +478,7 @@ export async function requireStagingEvidence(
       throw new Error(`Missing or incomplete exact-SHA ${file} evidence`);
     }
     if (
+      (allocationSoak && new Set(runs.map((run) => run.id)).size !== runs.length) ||
       !runs.every(
         (run) =>
           Number.isSafeInteger(run.id) &&
@@ -478,11 +501,46 @@ export async function requireStagingEvidence(
           `e2e-staging.yml run ${latest.id} has not soaked ${PROMOTION_SOAK_MS / 60_000} minutes since it passed`,
         );
       }
-      const { jobs = [] } = await get(`/actions/runs/${latest.id}/jobs?per_page=100`);
+      const attempt = allocationSoak ? "/attempts/1" : "";
+      const { jobs = [] } = await get(`/actions/runs/${latest.id}${attempt}/jobs?per_page=100`);
       if (jobs.find((job) => job.name === "staging-journeys")?.conclusion !== "success") {
         throw new Error(`e2e-staging.yml run ${latest.id} did not pass staging-journeys`);
       }
       requireExecutedStagingQuality(jobs, latest.id);
+      if (allocationSoak) {
+        for (const [name, step] of [
+          ["staging-journeys", "Staging critical journeys"],
+          ["staging-passive", "Passive set against staging (ledgers only)"],
+          [stagingQualityJob, stagingQualitySteps[0]],
+        ]) {
+          const [job, duplicate] = jobs.filter((entry) => entry.name === name);
+          if (
+            !job ||
+            duplicate ||
+            job.run_id !== latest.id ||
+            job.run_attempt !== 1 ||
+            job.head_sha !== latest.head_sha ||
+            job.status !== "completed" ||
+            job.conclusion !== "success" ||
+            !job.steps?.some(
+              (entry) =>
+                entry.name === step &&
+                entry.status === "completed" &&
+                entry.conclusion === "success",
+            ) ||
+            !(
+              Date.parse(latest.run_started_at) <= Date.parse(job.started_at) &&
+              Date.parse(job.started_at) < Date.parse(job.completed_at) &&
+              Date.parse(job.completed_at) <= completedAt
+            )
+          ) {
+            throw new Error(`Missing executed ${name} evidence for staging soak`);
+          }
+        }
+        return [
+          { runId: latest.id, startedAt: latest.run_started_at, completedAt: latest.updated_at },
+        ];
+      }
     }
     evidence.push({ workflow: file, runId: latest.id });
   }
@@ -789,10 +847,38 @@ export async function stagingSoakSample(env, { fetchImpl = fetch, nowMs = Date.n
   return { versionIds: versions.map((version) => version.versionId), createdOn, requests, errors };
 }
 
+export async function verifyAllocationSoak(env, { fetchImpl = fetch, now = Date.now } = {}) {
+  const { GITHUB_REPOSITORY: repository, DEPLOY_SHA: sha, GITHUB_TOKEN: token } = env;
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repository ?? "") || !/^[0-9a-f]{40}$/.test(sha ?? "") || !token) {
+    throw new Error("Missing staging E2E lookup inputs");
+  }
+  const [e2e] = await requireStagingEvidence(
+    { repository, sha },
+    {
+      token,
+      fetchImpl,
+      nowMs: now(),
+      workflows: ["e2e-staging.yml"],
+      allocationSoak: true,
+      allowManual: explicitSelection(env, sha),
+    },
+  );
+  const { captureAllocationSoak } = await import("./staging-soak-receipt.mjs");
+  return captureAllocationSoak(
+    { sha, e2e },
+    {
+      accountId: env.CLOUDFLARE_ACCOUNT_ID,
+      token: env.CLOUDFLARE_API_TOKEN,
+      fetchImpl,
+      now,
+    },
+  );
+}
+
 // The candidate's staging passive ledgers: the artifact of the newest
 // e2e-staging run titled for the candidate, which must name the candidate.
 export async function fetchPassiveLedgers(
-  { repository, sha, token, dir },
+  { repository, sha, token, dir, expectedRunId },
   {
     fetchImpl = fetch,
     unzip = (zip, out) => execFileSync("python3", ["-I", "-m", "zipfile", "-e", zip, out]),
@@ -814,7 +900,24 @@ export async function fetchPassiveLedgers(
     return response.json();
   }
   const runs = [];
-  for (let page = 1; page <= 3; page += 1) {
+  if (expectedRunId !== undefined) {
+    if (!Number.isSafeInteger(expectedRunId) || expectedRunId <= 0)
+      throw new Error("Missing soak E2E run pin");
+    const run = await get(`/actions/runs/${expectedRunId}`);
+    if (
+      run.id !== expectedRunId ||
+      run.run_attempt !== 1 ||
+      run.conclusion !== "success" ||
+      !(
+        manualQualification(run, sha) ||
+        (run.event === "workflow_run" && run.display_title === e2eTitle(sha))
+      )
+    ) {
+      throw new Error("Passive ledger run does not match the soak E2E run");
+    }
+    runs.push(run);
+  }
+  for (let page = 1; expectedRunId === undefined && page <= 3; page += 1) {
     const query = new URLSearchParams({ branch: "main", per_page: "100", page: String(page) });
     const batch =
       (await get(`/actions/workflows/e2e-staging.yml/runs?${query}`)).workflow_runs ?? [];
@@ -841,8 +944,10 @@ export async function fetchPassiveLedgers(
     throw new Error(`Latest e2e-staging run ${latest.id} is not completed`);
   }
   const { artifacts = [] } = await get(`/actions/runs/${latest.id}/artifacts?name=${name}`);
-  const artifact = artifacts.find((entry) => entry?.name === name && entry.expired === false);
-  if (!artifact || !Number.isSafeInteger(artifact.id)) {
+  const [artifact, duplicate] = artifacts.filter(
+    (entry) => entry?.name === name && entry.expired === false,
+  );
+  if (!artifact || duplicate || !Number.isSafeInteger(artifact.id)) {
     throw new Error(
       `e2e-staging run ${latest.id} has no ${name} artifact; the candidate's staging passive set was not recorded`,
     );
@@ -943,7 +1048,7 @@ export async function checkRegression(
   };
 }
 
-export function assertRollbackVersionId(versionId) {
+export function assertRollbackVersionId(versionId, field = "version_id") {
   // Worker Version IDs are lowercase UUIDs: the same format wrangler rollback
   // itself requires. Reject empty values, wrong shapes and shell metacharacters
   // before the id ever reaches a shell command or the Cloudflare API.
@@ -952,7 +1057,7 @@ export function assertRollbackVersionId(versionId) {
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(versionId)
   ) {
     throw new Error(
-      "Rollback version_id must be a Worker Version ID (lowercase UUID); list versions with `wrangler versions list`",
+      `Rollback ${field} must be a Worker Version ID (lowercase UUID); list versions with \`wrangler versions list\``,
     );
   }
 }
@@ -1099,6 +1204,7 @@ export async function checkProductionGate(env, fetchEnvironment = fetch, options
         Accept: "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
       },
+      redirect: "error",
       signal: AbortSignal.timeout(15_000),
     },
   );
@@ -1107,6 +1213,31 @@ export async function checkProductionGate(env, fetchEnvironment = fetch, options
   }
   const autoApprove = autoApproveEnabled(env);
   assertProductionProtection(await response.json(), { autoApprove });
+  if (rollback && options.beforeScriptsCheckout) {
+    const sha = env.DEPLOY_SHA;
+    // The same compare proof binds two exact SHAs. Clear explicit promotion
+    // input so rollback always verifies ancestry through this shared guard.
+    const requireAncestor = (base, head, refusal) =>
+      checkPromotionAncestry(
+        { ...env, INPUT_SHA: "", LIVE_SHA: base, DEPLOY_SHA: head },
+        { fetchImpl: fetchEnvironment, refusal },
+      );
+    await requireAncestor(
+      sha,
+      env.GITHUB_SHA,
+      "Rollback scripts ref is not an ancestor of the protected main dispatch",
+    );
+    // The first revision with the rollback target resolver and identity smoke.
+    await requireAncestor(
+      "77de045d40bcf597dce813ce62b8de69029b2412",
+      sha,
+      "Rollback scripts ref predates the supported rollback tooling (#1991)",
+    );
+    return requireSuccessfulMainPushCi(
+      { repository: env.GITHUB_REPOSITORY, sha },
+      { token: env.GITHUB_TOKEN, fetchImpl: fetchCi },
+    );
+  }
   // Exact-SHA green main CI, shared with the staging gate: a red or pending
   // ci.yml run on this SHA must never reach production.
   checkoutSha ??= currentCheckoutSha();
@@ -1141,9 +1272,33 @@ export async function checkProductionGate(env, fetchEnvironment = fetch, options
   }
   const staging = await requireStagingEvidence(
     { repository: env.GITHUB_REPOSITORY, sha: ci.sha },
-    { token: env.GITHUB_TOKEN, fetchImpl: fetchCi },
+    { token: env.GITHUB_TOKEN, fetchImpl: fetchCi, allowManual: explicitSelection(env, ci.sha) },
   );
   return { ...ci, autoApprove: true, staging };
+}
+
+// Direct production dispatch runs this from the protected dispatcher checkout
+// in both jobs, before the requested scripts are checked out or executed.
+async function resolveManualRollbackScripts(env, fetchImpl = fetch) {
+  if (
+    env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
+    env.GITHUB_REF !== "refs/heads/main" ||
+    env.GITHUB_REF_PROTECTED !== "true"
+  ) {
+    throw new Error("Manual production rollback requires workflow_dispatch on protected main");
+  }
+  if (!/^[0-9a-f]{40}$/.test(env.DEPLOY_SHA ?? "")) {
+    throw new Error("Manual production rollback ref must be a full lowercase 40-hex SHA");
+  }
+  if (currentCheckoutSha() !== env.GITHUB_SHA) {
+    throw new Error("Manual production rollback requires the exact dispatcher checkout");
+  }
+  assertRollbackVersionId(env.ROLLBACK_VERSION_ID);
+  assertRollbackVersionId(env.EXPECTED_CURRENT_VERSION_ID, "expected_current_version_id");
+  if (env.ROLLBACK_VERSION_ID === env.EXPECTED_CURRENT_VERSION_ID) {
+    throw new Error("Rollback version_id and expected_current_version_id must differ");
+  }
+  return checkProductionGate(env, fetchImpl, { rollback: true, beforeScriptsCheckout: true });
 }
 
 // Rollback gate for rollback-production.yml, per environment. Production
@@ -1191,9 +1346,9 @@ export async function checkRollbackGate(env, fetchImpl = fetch, options = {}) {
 // gate. A bare invocation (or a non-flag positional, as before) runs the
 // full gate.
 export const PRODUCTION_DEPLOY_GATE_USAGE =
-  "Usage: node ci/production-deploy-gate.mjs [--credentials | --version-id | --rollback | --staging-soak | --fetch-passive-ledgers <dir> | --regression | --already-live | --check-ancestry | --check-migrations | --kit-candidate | --help]\nWith no flag, runs the full production gate.";
+  "Usage: node ci/production-deploy-gate.mjs [--credentials | --version-id | --rollback | --manual-rollback | --staging-soak | --fetch-passive-ledgers <dir> | --regression | --already-live | --check-ancestry | --check-migrations | --kit-candidate | --help]\nWith no flag, runs the full production gate.";
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+async function runCli() {
   try {
     if (process.argv[2] === "--help") {
       // Safe discovery: usage to stdout, exit 0, zero side effects — no gate
@@ -1205,21 +1360,29 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     } else if (process.argv[2] === "--version-id") {
       assertRollbackVersionId(process.env.ROLLBACK_VERSION_ID);
       console.log("Rollback version_id is a valid Worker Version ID");
+    } else if (process.argv[2] === "--manual-rollback") {
+      const evidence = await resolveManualRollbackScripts(process.env);
+      appendFileSync(process.env.GITHUB_OUTPUT, `sha=${evidence.sha}\n`);
+      console.log(
+        `Manual production rollback scripts ${evidence.sha} passed ancestry and CI: run ${evidence.runId}, attempt ${evidence.runAttempt}`,
+      );
     } else if (process.argv[2] === "--rollback") {
       const evidence = await checkRollbackGate(process.env);
       console.log(
         `${process.env.ROLLBACK_ENVIRONMENT} rollback request and exact-SHA CI checks passed: scripts ${evidence.sha}, full CI run ${evidence.runId}, attempt ${evidence.runAttempt}`,
       );
     } else if (process.argv[2] === "--staging-soak") {
-      const sample = await stagingSoakSample(process.env);
-      const serving = sample.versionIds[sample.versionIds.length - 1];
+      const receipt = await verifyAllocationSoak(process.env);
+      const { sample, workerVersion: serving } = receipt;
+      const path = join(process.env.RUNNER_TEMP, "staging-soak.json");
+      writeFileSync(path, `${JSON.stringify(receipt)}\n`, { flag: "wx" });
       console.log(
-        `Staging candidate ${serving} (+${sample.versionIds.length - 1} earlier tagged) since ${sample.createdOn}: ${sample.errors} errors over ${sample.requests} requests`,
+        `Staging allocation ${receipt.allocationId}, Worker ${serving}, E2E run ${receipt.e2e.runId}: ${sample.errors} errors over ${sample.requests} requests`,
       );
       if (process.env.GITHUB_OUTPUT) {
         appendFileSync(
           process.env.GITHUB_OUTPUT,
-          `requests=${sample.requests}\nerrors=${sample.errors}\nversion_id=${serving}\n`,
+          `requests=${sample.requests}\nerrors=${sample.errors}\ne2e_run_id=${receipt.e2e.runId}\nsoak_attempt=${process.env.GITHUB_RUN_ATTEMPT}\n`,
         );
       }
     } else if (process.argv[2] === "--fetch-passive-ledgers") {
@@ -1230,6 +1393,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         sha: (process.env.DEPLOY_SHA ?? "").trim(),
         token: process.env.GITHUB_TOKEN,
         dir,
+        expectedRunId: Number(process.env.STAGING_E2E_RUN_ID),
       });
       console.log(
         `Fetched the candidate's staging passive ledgers from e2e-staging run ${result.runId} (artifact ${result.artifactId})`,
@@ -1418,3 +1582,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     process.exitCode = 1;
   }
 }
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) void runCli();

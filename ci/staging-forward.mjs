@@ -3,7 +3,7 @@ import { pathToFileURL } from "node:url";
 import { liveVersion, readLiveRevision, rollbackEnvironment } from "./rollback-target.mjs";
 import { isSha } from "./staging-provenance.mjs";
 
-function orderedDeploymentTime(value) {
+export function orderedDeploymentTime(value) {
   const parsed =
     typeof value === "string" &&
     /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/.exec(value);

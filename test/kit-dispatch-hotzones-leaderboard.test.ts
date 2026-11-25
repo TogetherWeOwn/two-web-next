@@ -11,6 +11,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { loadHotzonesIndexData } from "../src/kit-hotzones";
 import { emptyGrid } from "../src/hotzones/aggregates";
+import { KIT_HOTZONE_SIGNAL_ROUTE } from "../src/hotzones/kit-signal-route";
 import {
   decideRoute,
   dispatchHookRequest,
@@ -37,6 +38,31 @@ const depsFor = () => ({
   featuredImageHosts: "",
   honoFetch: vi.fn(async () => new Response("hono")),
   resolve: vi.fn(async () => new Response("kit")),
+});
+
+describe("generic hot-zone signal family", () => {
+  it.each([
+    ["/hotzones/bogus", "GET", 404, "Unknown hot zone signal"],
+    ["/hotzones/bogus?season=invalid", "GET", 400, "That season did not match"],
+    ["/hotzones/bogus", "HEAD", 404, ""],
+  ])("returns the shared refusal for %s %s before resolve", async (path, method, status, copy) => {
+    const event = { ...eventFor(path, method), route: { id: "/hotzones/[signal]" } };
+    const deps = {
+      ...depsFor(),
+      hotzones: vi.fn(async () => new Response("throttle")),
+      apiFamilies: [{ flag: "true", routes: [KIT_HOTZONE_SIGNAL_ROUTE] }],
+    };
+    const response = await dispatchHookRequest(event, deps);
+    expect(response.status).toBe(status);
+    expect(response.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+    expect(response.headers.get("cache-control")).toBe("no-store, private");
+    const body = await response.text();
+    if (copy) expect(body).toContain(copy);
+    else expect(body).toBe("");
+    expect(deps.resolve).not.toHaveBeenCalled();
+    expect(deps.hotzones).not.toHaveBeenCalled();
+    expect(deps.honoFetch).not.toHaveBeenCalled();
+  });
 });
 
 describe("hot-zone Kit ownership (shipped manifest)", () => {

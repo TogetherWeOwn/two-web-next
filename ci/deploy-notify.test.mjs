@@ -399,7 +399,7 @@ test("deploy and rollback workflows end with a non-blocking notify", () => {
   // Staging drills never notify.
   assert.match(
     read("../.github/workflows/rollback-production.yml"),
-    /inputs\.environment == 'production' \}\}/,
+    /if: \$\{\{ always\(\) && inputs\.environment == 'production' && github\.ref == 'refs\/heads\/main' && github\.ref_protected \}\}/,
   );
   // The rollback mutation is recorded separately from the post-rollback
   // smoke so a failed job cannot misreport a completed restoration.

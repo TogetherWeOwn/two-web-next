@@ -103,15 +103,13 @@ Consult `src/route-ownership.ts` for the current method-aware manifest and
 ownership entry. Shipped manifest entries marked enabled include GET `/events`,
 `/events/past`, `/about`, `/faq`, `/admin/join-attempts`,
 `/admin/join-attempts/:id`, `/hotzones`, concrete hotzone signal paths, and
-`/leaderboards/members`. The Hono `GET /hotzones/:signal` registration overlaps
-only the enabled concrete signal paths, not every possible parameter value.
+`/leaderboards/members`. With the generic Hotzones flag unset, the Hono
+`GET /hotzones/:signal` registration overlaps only the concrete signal paths.
 Other manifest page entries include disabled admin, profile and event-detail
 reads; these remain prospective overlaps, not enabled Kit ownership. Legacy
 admin redirect entries are explicitly Hono-owned in the current manifest, even
 where a future migration target is proposed. Exact static entries take
-precedence over parameter patterns, and HEAD follows GET. A generic hotzone
-parameter target must not be used as evidence that all signal values are
-currently Kit-owned; the manifest enables only its concrete signal entries.
+precedence over parameter patterns, and HEAD follows GET.
 
 In particular, `GET /events` is enabled in the shipped manifest while the
 separately registered `POST /events` has no matching POST ownership entry and
@@ -139,6 +137,23 @@ require a pathname predicate and an explicit literal-path release to take
 ownership of a reserved path. HEAD follows
 GET. Conflicting claims and overlaps with disabled page ownership entries
 fall back to Hono.
+
+### Generic Hotzones signal matcher
+
+`KIT_ROUTE_HOTZONE_SIGNAL=true` lets Kit own GET and HEAD for an unknown
+single segment on the mounted `/hotzones/[signal]` route. Kit uses the same
+HTML refusal as Hono, checking the season first (400) and then refusing the
+unknown signal (404). Neither refusal spends the public-read budget. The
+three recognized signals (`joins`, `voice`, `games`) use their exact selectors,
+including percent-encoded spellings that resolve to those same names.
+
+The mount and allowlist are case-sensitive. Case variants of a signal are
+unknown signals. A different mount case, trailing slash, empty or extra
+segment, malformed encoding, or another HTTP method keeps the Hono answer.
+The generic flag excludes Kit data requests and encoded data suffixes.
+Existing data requests for the index and exact signals follow their page
+selectors. The installed XFS Worker fixture compares direct Hono, the
+default Kit Worker, and the opt-in worker for these boundaries.
 
 ### Browser authentication endpoints
 
@@ -175,6 +190,11 @@ qualifies through the [production release gate](../CONTRIBUTING.md#production-re
 the operator overrides endpoint on canonical staging or HTTP loopback. The
 operator endpoint uses its bearer independently of the moderator cookie. The
 existing Hono guard serves legacy redirects and other unowned admin paths.
+The exact `GET /admin/events/create` endpoint also has a disabled manifest
+entry. When enabled within the admin dispatcher, it requires a moderator and
+returns `301 Location: /admin/events/new` with no query. HEAD uses the same
+redirect without rotating the session. The disabled entry still takes
+precedence over the parameterized edit form.
 
 ### Security disclosure endpoint
 
@@ -446,16 +466,32 @@ and 11 method fallbacks. Six middleware registrations, matcher behavior, assets,
 content negotiation and error handling need separate built-Worker parity evidence.
 
 The [installed Worker admin fixture](../ci/fixtures/kit-admin-serving.mjs) compares
-direct Hono and the installed Kit Worker with admin ownership enabled on loopback.
-It checks that `/admin/events/new` selects the create form, a seeded `/admin/events/:key`
-selects the edit form for a moderator and refuses a non-moderator, and the exact
-`/admin/events/create` alias still selects the Hono redirect with its query dropped.
+direct Hono with the installed Kit Worker on loopback. It checks the static
+create form and seeded edit form alongside the exact `/admin/events/create`
+redirect in both ownership modes. The loopback-only override exercises the
+native 301, query dropping, moderator admission and session renewal. The fixture
+also checks the legacy edit redirect, the existing POST controller, and the
+trailing-slash, data suffix, percent-encoded, malformed and case-variant paths.
+
+For `POST /admin/events/:key/publish`, the fixture also compares direct Hono,
+installed Kit ownership and installed Hono fallback. It checks no-JS success
+and refusals with synthetic drafts, and verifies that the committed event and
+its audit row are visible before the stubbed write-back queue receives the job.
+
 For API-5, it compares the disabled queue preview guard with the earlier
-source-evidence handler. The two distinct JSON refusals confirm which branch
-answered before the moderator gate. Native queue preview, source evidence and
-the legacy create redirect remain blocked on Kit ownership. The fixture covers
-their Hono fallback responses and leaves enabled queue admission and audit,
-the remaining middleware registrations, and named matcher targets open.
+source-evidence handler on Hono fallback. The two distinct JSON refusals
+confirm which branch answered before the moderator gate. Enabled queue preview
+admission and audit, the remaining middleware registrations, and named matcher
+targets remain open.
+
+The separate [installed source-evidence fixture](../ci/fixtures/kit-source-evidence.mjs)
+adds the native comparison for `/admin/queue/source-evidence/:id`, with direct
+Hono as the reference in both ownership modes.
+`KIT_ROUTE_ADMIN_SOURCE_EVIDENCE=true` selects Kit for the literal path with
+one unencoded incident segment. GET and HEAD keep the verifier's separate
+staging origin, bearer, incident and expiry checks ahead of any moderator or
+preview admission. POST, PUT, PATCH, DELETE and OPTIONS keep their existing
+origin and body checks and method refusal. Encoded paths use Hono.
 
 Retirement follows the [all-off cutover and Hono undo](kit-cutover-release.md),
 M0 and production parity for every live page and API family. Record each

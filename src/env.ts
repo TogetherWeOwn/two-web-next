@@ -67,6 +67,8 @@ export type Env = AgentEventsEnv & {
   SOURCE_EVIDENCE_VERIFIER_INCIDENT_ID?: string;
   SOURCE_EVIDENCE_VERIFIER_ISSUED_AT?: string;
   SOURCE_EVIDENCE_VERIFIER_EXPIRES_AT?: string;
+  // Selects the exact Kit source-evidence endpoint independently of verifier admission.
+  KIT_ROUTE_ADMIN_SOURCE_EVIDENCE?: string;
   // The staging alert probe uses the same internal queue as JobsEnv, without a DB fixture.
   INTERNAL_ACTION_QUEUE?: Queue<QueueMessage>;
   // CSP violation sink (TOG-10107): fraction of valid reports (0.0–1.0)
@@ -102,6 +104,8 @@ export type Env = AgentEventsEnv & {
   KIT_PARITY_FIXTURE_ADMIN_DASHBOARD?: string;
   // Loopback Kit parity fixture only; serves the synthetic attendance record.
   KIT_PARITY_FIXTURE_ADMIN_ATTENDANCE?: string;
+  // Loopback installed Worker fixture only; enables the exact legacy redirect.
+  KIT_PARITY_FIXTURE_ADMIN_EVENT_CREATE_REDIRECT?: string;
   // Generated local capture build only; no deployed config defines the build gate.
   SSR_CAPTURE_FIXTURE?: string;
   // Archive and static are default-off Kit rollout controls for the canonical
@@ -124,6 +128,8 @@ export type Env = AgentEventsEnv & {
   KIT_ROUTE_STATIC_TEXT?: string;
   KIT_ROUTE_EVENT_JSON?: string;
   KIT_ROUTE_PUBLIC_API?: string;
+  // Default off. Generic Hotzones signal refusals only.
+  KIT_ROUTE_HOTZONE_SIGNAL?: string;
   // Public MCP POST and OPTIONS. Only the literal string "true" opts in.
   KIT_ROUTE_MCP?: string;
   // RSVP and moderator event mutations. Only the literal string "true" opts in.

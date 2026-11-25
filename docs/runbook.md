@@ -834,12 +834,24 @@ Keep required resources/bindings in place; never delete a queue to roll back.
 [.github/workflows/rollback-production.yml](../.github/workflows/rollback-production.yml)
 is the one-click production rollback: Actions → `rollback-production` → Run
 workflow, branch `main`, `environment` `production` (the default),
-`version_id` set to the recorded known-good Worker Version ID. It reuses the
-same request gate (`workflow_dispatch` on `main`, `PRODUCTION_DEPLOY_ENABLED`
-exactly `true`) and the same `production` Environment gate as a deploy
-(`node ci/production-deploy-gate.mjs --rollback`). Both preflight and the
-mutation job receive the repository variable `PRODUCTION_AUTO_APPROVE`:
-exactly `true` selects automated approval, requiring the main-only Environment
+`version_id` set to the recorded known-good Worker Version ID, and
+`expected_current_version_id` set to the currently serving Worker Version ID.
+Supply distinct lowercase UUIDs and set `ref` to the full lowercase 40-hex
+SHA whose rollback scripts should run. Pick a protected `main` ancestor at or
+after [the rollback drill rollout](https://github.com/TogetherWeOwn/two-web-next/pull/1991)
+with successful push CI on that exact SHA. The dispatch can run from protected
+`main` while unrelated CI for its tip is pending or red. The dispatcher
+verifies ancestry and CI before checking out the selected scripts and repeats
+the checks inside the protected job. The current-version guard skips the
+mutation if the target already serves 100% and refuses if a third version
+serves. If a gradual promotion stopped at partial traffic, use the promoted
+UUID as `expected_current_version_id`. The workflow restores the target only
+when those two recorded UUIDs account for the entire split.
+
+The workflow requires `PRODUCTION_DEPLOY_ENABLED` exactly `true` and uses the
+same `production` Environment gate as a deploy. Both preflight and the
+mutation job receive the repository variable `PRODUCTION_AUTO_APPROVE`.
+Setting it to `true` selects automated approval, requiring the main-only Environment
 branch policy and green exact-SHA CI of the checked-out rollback scripts.
 A rollback serves a version production already served, so it never needs
 staging evidence for the checked-out commit and never waits on
@@ -849,8 +861,8 @@ reviewer-less Environment is refused. Exact-SHA CI remains required in either
 mode. The workflow uses the same production-only Cloudflare credentials as a
 deploy, then runs `wrangler rollback <version_id> --name two-web-next-production`
 followed by the same `/up` smoke. The same workflow takes `environment`
-`staging` (Worker `two-web-next`, staging credentials, the `deploy-staging`
-lock); `ci/rollback-target.mjs` is the one map from environment to Worker and
+`staging` (manual dispatch uses its own SHA, Worker `two-web-next`, staging
+credentials, the `deploy-staging` lock); `ci/rollback-target.mjs` maps environments to Worker and
 origin. This approval-mode selection applies only to the Worker
 rollback; it does not change database migration or backup policy. The
 `version_id` input must be a lowercase Worker Version UUID and travels
@@ -907,8 +919,8 @@ call restores through the production Environment binding, so in reviewer
 mode it waits for a reviewer like any other production mutation; in
 auto-approve mode it runs on its own. If `auto-rollback` itself fails (or
 waits on an approval nobody gives), the failure mode is a live promoted
-version, never a silent rollback: restore manually with this workflow using
-the version ID in the failed step's logs.
+version, never a silent rollback: restore manually with the recorded target,
+the promoted version UUID, and an exact green `main` scripts SHA.
 
 The watch measures its retained 30 minutes with a monotonic clock, not UTC;
 UTC still identifies the analytics query window. Readiness and rate-check
@@ -992,13 +1004,10 @@ The rollback workflow remains a separate already-served-version route.
 Before the deploy job, `deploy-production` runs two more gates
 (`ci/production-deploy-gate.mjs`):
 
-- `staging-soak` (staging credentials, under the staging Environment —
-  branch policy only, no reviewers, so it still starts at once) finds the
-  candidate's staging Worker versions by commit tag — every tagged version
-  counts, since a deploy retry tags twice — and sums their Workers
-  invocation errors since the oldest deployed (at most 24 hours). The job
-  only reads (versions list, analytics query) and never mutates, but its
-  token is the staging deploy token, not a read-only credential.
+- `staging-soak` requires one 100% Cloudflare allocation through E2E and its
+  30-minute soak. Analytics starts at E2E start. Regression uses that run's
+  ledger. After the rollback drill, run fresh E2E and soak. Exact main SHA
+  manual E2E can qualify explicit selection. Re-run all jobs after failure.
 - `production-regression` (production Environment as the reviewer
   checkpoint, analytics via the repo-level read-only token) downloads the
   `staging-passive-ledger-<run>` artifact that `e2e-staging` recorded for the
@@ -1026,7 +1035,9 @@ forward: land a new commit and promote it once its own staging
 run passes on the first attempt. A re-run can still diagnose a flake, but its
 green is not promotion evidence.
 
-#### Manual staging soak receipt
+#### Archived staging soak receipts
+
+The job archives `staging-soak/2` per attempt. The example covers `staging-soak/1` only.
 
 Use [`ci/staging-soak-receipt.mjs`](../ci/staging-soak-receipt.mjs) with the
 verified deploy SHA, Worker UUID and `/version` timestamp. Supply the retained
@@ -1043,9 +1054,8 @@ await writeFile(receiptPath, JSON.stringify(receipt, null, 2) + "\n", { flag: "w
 
 Use an existing analytics credential and `writeFile` from `node:fs/promises`.
 The helper checks serving identity around a tagged query from E2E completion
-to the sample, at least 30 minutes later. Analytics can lag, and identity reads
-describe the Worker serving at capture time. The automated regression gate
-computes its own counts across all candidate-tagged versions.
+to the sample, at least 30 minutes later. These historical identity reads
+describe the Worker serving at capture time.
 
 For a verified replacement, supply `evidence.replacement = { sha, workerVersion,
 observedAt }` at capture and validation. Write `superseded` to a new path and
@@ -1080,8 +1090,8 @@ for approval already holds the `production-worker-mutation` lock, and a second
 job in the group cannot be approved until the first is approved or cancelled,
 so an unapproved promotion blocks the rollback indefinitely. Confirm the
 active run has stopped and check again for newly queued runs, then confirm the
-Worker version that is live and dispatch `rollback-production` with the
-recorded known-good version ID.
+Worker version that is live and follow the
+[production rollback instructions](#production-one-click-workflow).
 Serialization queues a promotion and a rollback behind each other but cancels
 neither and promises no FIFO order: after stopping a bad promotion, also
 cancel any queued `deploy-production` runs, or the queued promotion will run
@@ -1753,10 +1763,10 @@ under that declaration's terms; watch exit alone does not lift a freeze.
 
 **On a Sev-1** (pager storm, `/up` non-200 or `db:error`/pending nonzero,
 a red after-gate, or member-visible breakage): contain per the queue and
-outage sections above, then roll back with the one-click
-[rollback-production](../.github/workflows/rollback-production.yml)
-workflow to the version ID recorded before the release. A Worker rollback
-does not undo schema, data or Discord side effects. The 48h clock restarts
+outage sections above, then [dispatch production rollback](#production-one-click-workflow)
+with the recorded prior UUID, the expected live UUID, and a supported green
+scripts SHA. A Worker rollback does not undo schema, data or Discord side
+effects. The 48h clock restarts
 after the re-flip.
 
 ## Read `/up` without mistaking liveness for readiness

@@ -154,7 +154,18 @@ export async function prepareServingIsolation({
         },
       },
     );
-  return { capture, run, version, health, plan };
+  const assertDuplicateRefused = async (operation, { end, readiness } = {}) => {
+    const { before, after } = JSON.parse(plan);
+    const forward = operation === "forward";
+    await assert.rejects(run(operation, { end, readiness }), {
+      code: "ERR_ASSERTION",
+      operator: "strictEqual",
+      actual: forward ? after : before,
+      expected: forward ? before : after,
+    });
+    assert.equal(await run("readback", { end }), forward ? "after" : "before");
+  };
+  return { capture, run, version, health, plan, assertDuplicateRefused };
 }
 
 // The existing bridge rehearsal owns the databases, roles and Worker builds.

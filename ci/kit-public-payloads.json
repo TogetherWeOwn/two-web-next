@@ -270,6 +270,11 @@
       "reads": "empty create view (no store read on fresh GET)"
     },
     {
+      "route": "GET /admin/events/create",
+      "binding": "web/src/routes/admin/events/create/+server.ts",
+      "reads": "moderator session admitted by the hook before the fixed redirect (no event lookup)"
+    },
+    {
       "route": "GET /admin/events/:key",
       "binding": "web/src/routes/admin/events/[key]/+page.server.ts",
       "reads": "events/view + roster members (audited, failed audit refuses the render)"
@@ -375,6 +380,11 @@
       "route": "GET /admin/ops-overrides",
       "binding": "web/src/routes/admin/ops-overrides/+server.ts",
       "reason": "Private operator record behind independent control-bearer admission."
+    },
+    {
+      "route": "GET /admin/queue/source-evidence/:id",
+      "binding": "web/src/routes/admin/queue/source-evidence/[id]/+server.ts",
+      "reason": "Staging-only evidence JSON behind independent bearer, incident and time-window checks. The installed source-evidence fixture covers wire parity and the absence of a Kit data response."
     },
     {
       "route": "GET /e/:key",
