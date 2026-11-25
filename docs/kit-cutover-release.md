@@ -26,8 +26,13 @@ replacement build if the original candidate would undo a live fix.
 
 ## Match the staging evidence to the release
 
-Dispatch [XFS qualification](../.github/workflows/xfs-qualification.yml) from
-`main` with `qualify_cutover: true` and the intended `cutover_profile`.
+Select the intended release candidate SHA. While it is the tip of `main`,
+dispatch [XFS qualification](../.github/workflows/xfs-qualification.yml) from
+`main` with `qualify_cutover: true` and the intended `cutover_profile`. The
+protected workflow builds the `main` SHA resolved at dispatch. Start
+isolated qualification in parallel with ordinary shared staging qualification
+where possible.
+
 Parity runs with all Kit route families off and replays the packaged Kit
 facade, adapter and assets. The packet also includes a separately compiled pure
 Hono build. The manifest binds both file trees to the source SHA, configuration
@@ -62,11 +67,15 @@ packet.
 
 Pair the isolated packet evidence with the
 [shared staging deploy, smoke, E2E and soak](../CONTRIBUTING.md#merge-and-production-staging-evidence)
-for the same candidate SHA. Use the deployed revision recorded by the jobs
-when the Actions run header identifies the trigger context. Match the
-`sha` and `deployedAt` in the staging E2E before and after receipts to the
-commit tag and upload time of the Cloudflare Worker version identified by
-`/up`'s version UUID. This distinguishes separate uploads of the same SHA.
+by matching the packet manifest's `sourceSha` to the deployed `sha` in the
+scoped staging E2E receipts. The Actions run header can show a different SHA
+because it records the workflow trigger. If `main` has advanced, reuse an
+already valid matching packet for the candidate. If none exists, qualify a
+successor through the same process.
+
+Match the `sha` and `deployedAt` in the staging E2E before and after receipts
+to the commit tag and upload time of the Cloudflare Worker version identified
+by `/up`'s version UUID. This distinguishes separate uploads of the same SHA.
 Use Cloudflare deployment history for that UUID and the staging E2E completion
 time to verify the version served through the required soak. A replacement
 before the soak finishes leaves the prior candidate unqualified. The isolated
