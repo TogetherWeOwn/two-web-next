@@ -650,6 +650,14 @@ test("passive ledger selection requires valid GitHub listings", async (t) => {
       });
     });
   }
+  await t.test("a matching run with ID zero refuses before artifact lookup", async () => {
+    await checkListing({
+      pages: [{ workflow_runs: [e2eRun(0)] }],
+      runId: 0,
+      refusal: /invalid run id/,
+      requests: ["page 1"],
+    });
+  });
   for (const [label, artifacts, refusal] of [
     ["an empty array", { artifacts: [] }, /has no staging-passive-ledger-9 artifact/],
     ["a missing array", {}, /Malformed passive ledger artifact listing/],
@@ -662,6 +670,11 @@ test("passive ledger selection requires valid GitHub listings", async (t) => {
           { id: 78, name: "staging-passive-ledger-9" },
         ],
       },
+      /Malformed passive ledger artifact listing/,
+    ],
+    [
+      "an artifact with ID zero",
+      { artifacts: [{ id: 0, name: "staging-passive-ledger-9", expired: false }] },
       /Malformed passive ledger artifact listing/,
     ],
   ]) {
