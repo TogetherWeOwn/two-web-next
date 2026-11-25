@@ -5,10 +5,8 @@ export const BEACON_URL = "https://static.cloudflareinsights.com/beacon.min.js";
 const COLLECTOR_PATH = "/cdn-cgi/rum";
 
 function isBeaconScript(url) {
-  return (
-    url.origin === "https://static.cloudflareinsights.com" &&
-    /^\/beacon\.min\.js(?:\/[a-z0-9]+)?$/i.test(url.pathname)
-  );
+  const beaconPath = /^\/beacon\.min\.js(?:\/[a-z0-9]+)?$/i;
+  return url.origin === "https://static.cloudflareinsights.com" && beaconPath.test(url.pathname);
 }
 
 export function inspectAnalyticsHtml(html, documentUrl, prepareReplay = false) {
@@ -101,9 +99,8 @@ export async function observeAnalytics(
     page.on("pageerror", () => counts.errors++);
     await page.goto(url, { timeout: 10_000 });
     if (allowed) {
-      await page
-        .locator('html[data-fake-collector-answered="yes"]')
-        .waitFor({ state: "attached", timeout: 5_000 });
+      const receipt = page.locator('html[data-fake-collector-answered="yes"]');
+      await receipt.waitFor({ state: "attached", timeout: 5_000 });
     }
     if (target.pathname === "/privacy") {
       const headings = [

@@ -27,6 +27,6 @@ the replay headers, fake beacon and POST receipt after dropping the beacon integ
 | Eligible HTML, allowed | 1 | 1 | 1 | 1 |
 | `/privacy`, JavaScript on and off in every jurisdiction | 0 | 0 | 0 | 0 |
 
-Every case requires zero blocked requests, Zaraz markers and script errors. `/privacy` must
-display the policy headings with zero scripts. Provider evidence separately requires rule and
-jurisdiction readback, real delivery and execution, an isolated dataset receipt, and cleanup.
+Every case requires zero blocked requests, Zaraz markers and script errors. `/privacy` must display
+policy headings with zero scripts. Provider evidence needs rule, jurisdiction and Zaraz readbacks,
+actual delivery and execution, an isolated dataset receipt, and cleanup.
