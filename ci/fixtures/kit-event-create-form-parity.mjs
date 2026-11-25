@@ -32,12 +32,16 @@ export async function assertEventCreateFormParity({ hono, off, on, databaseUrl }
   const moderator = session(`${actorPrefix}0`, true);
   const member = session(`${actorPrefix}1`, false);
   const actors = [moderator.actor, member.actor];
-  const eventRows = () => sql`
-    select event_key, title, status, created_by, discord_event_id from events
-    where created_by in ${sql(actors)} order by event_key`;
-  const auditRows = () => sql`
-    select subject_id, subject_type, causer_id, description from activity_log
-    where causer_id in ${sql(actors)} order by subject_id`;
+  const eventRows = async () => [
+    ...(await sql`
+      select event_key, title, status, created_by, discord_event_id from events
+      where created_by in ${sql(actors)} order by event_key`),
+  ];
+  const auditRows = async () => [
+    ...(await sql`
+      select subject_id, subject_type, causer_id, description from activity_log
+      where causer_id in ${sql(actors)} order by subject_id`),
+  ];
 
   try {
     for (const who of [moderator, member]) {
