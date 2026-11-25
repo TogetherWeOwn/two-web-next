@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import { PLANETSCALE_PRODUCTION_BRANCH_ID, PLANETSCALE_PRODUCTION_HOST } from "./db-migrate.mjs";
 import { runRepair } from "./db-permissions-repair.mjs";
+import { runExecutorAuthority } from "./db-repair-executor.mjs";
 import { runServingIsolation } from "./db-serving-ledger-isolation.mjs";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
@@ -93,7 +94,7 @@ test("repair dispatch isolates the credential and pins protected main and the sa
   }
 });
 
-test("executor CLI distinguishes acknowledged membership from an unconfirmed transaction", (t) => {
+test("executor CLI distinguishes acknowledged membership from an unconfirmed transaction", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "executor-close-"));
   t.after(() => rmSync(dir, { recursive: true }));
   const migration = new URL("./db-migrate.mjs", import.meta.url);
@@ -167,6 +168,14 @@ test("executor CLI distinguishes acknowledged membership from an unconfirmed tra
   );
 
   const identity = createHash("sha256").update("postgres\0fixture").digest("hex");
+  const envForOperation = (operation) => {
+    const raw = JSON.stringify({ operation, identity, executor: "fixture_executor" });
+    return {
+      PRODUCTION_DB_EXECUTOR_PLAN: raw,
+      PRODUCTION_DB_EXECUTOR_PLAN_SHA256: createHash("sha256").update(raw).digest("hex"),
+      PRODUCTION_DB_EXECUTOR_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:fixture-password@${PLANETSCALE_PRODUCTION_HOST}:5432/postgres?sslmode=verify-full`,
+    };
+  };
   for (const [operation, failure, code] of [
     ["provision", "", 0],
     ["revoke", "", 0],
@@ -178,15 +187,12 @@ test("executor CLI distinguishes acknowledged membership from an unconfirmed tra
     ["provision", "commit and close", 1],
     ["provision", "rights", 1],
   ]) {
-    const raw = JSON.stringify({ operation, identity, executor: "fixture_executor" });
     const label = `${operation} with ${failure || "no failure"}`;
     const result = spawnSync(process.execPath, ["--import", preload, executor, operation], {
       env: {
         FIXTURE_FAILURE: failure,
         FIXTURE_OPERATION: operation,
-        PRODUCTION_DB_EXECUTOR_PLAN: raw,
-        PRODUCTION_DB_EXECUTOR_PLAN_SHA256: createHash("sha256").update(raw).digest("hex"),
-        PRODUCTION_DB_EXECUTOR_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:fixture-password@${PLANETSCALE_PRODUCTION_HOST}:5432/postgres?sslmode=verify-full`,
+        ...envForOperation(operation),
       },
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe", "pipe"],
@@ -212,6 +218,22 @@ test("executor CLI distinguishes acknowledged membership from an unconfirmed tra
     );
     assert.equal(result.status, code, label);
   }
+
+  const transactionError = new Error("synthetic transaction rejection");
+  let closeAttempts = 0;
+  await assert.rejects(
+    runExecutorAuthority("provision", envForOperation("provision"), () => ({
+      async begin() {
+        throw transactionError;
+      },
+      async end() {
+        closeAttempts += 1;
+        throw new Error("synthetic close rejection");
+      },
+    })),
+    (error) => error === transactionError,
+  );
+  assert.equal(closeAttempts, 1);
 });
 
 test("database repair recovery pins an unchanged dispatcher and a main ancestor", (t) => {
