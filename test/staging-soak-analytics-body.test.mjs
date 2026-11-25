@@ -27,6 +27,7 @@ const graph = {
 const encoder = new TextEncoder();
 const body = encoder.encode(JSON.stringify(graph));
 const padding = new Uint8Array(64 * 1024 - body.byteLength).fill(0x20);
+const utf8Bom = encoder.encode("\uFEFF");
 
 function capture(analyticsResponse) {
   const reads = [];
@@ -81,10 +82,11 @@ test("certifies staging analytics at exactly 64 KiB of streamed bytes", async ()
   const response = new Response(
     new ReadableStream({
       start(controller) {
-        const split = body.indexOf(0xc3) + 1;
-        controller.enqueue(body.subarray(0, split));
-        controller.enqueue(body.subarray(split));
-        controller.enqueue(padding);
+        // A decoder that flushes each chunk leaves an invalid prefix before the JSON.
+        controller.enqueue(utf8Bom.subarray(0, 1));
+        controller.enqueue(utf8Bom.subarray(1));
+        controller.enqueue(body);
+        controller.enqueue(padding.subarray(utf8Bom.byteLength));
         controller.close();
       },
     }),
@@ -124,6 +126,18 @@ test("cancels oversized staging analytics before certifying the receipt", async 
 
 test("refuses a normal analytics HTTP error before certifying the receipt", async () => {
   const { reads, result } = capture(Response.json(graph, { status: 503 }));
+  await assert.rejects(result, {
+    message: "Version-tagged staging analytics could not be verified",
+  });
+  assert.equal(reads.at(-1), graphUrl);
+});
+
+test.each([
+  ["missing", null],
+  ["empty", ""],
+  ["malformed", '{"synthetic-response-body":'],
+])("refuses a successful analytics response with a %s body", async (_kind, raw) => {
+  const { reads, result } = capture(new Response(raw));
   await assert.rejects(result, {
     message: "Version-tagged staging analytics could not be verified",
   });
