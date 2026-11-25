@@ -53,6 +53,7 @@ import { expiredWriteBanner } from "./write-recovery";
 import { freezeBanner } from "./freeze-banner";
 import { withStreamedBody } from "./html-stream";
 import { webmcpPilot } from "./webmcp-pilot";
+import { registerStagingVoiceMove } from "./probes/staging-voice-move";
 
 export { faqLastReviewed } from "./faq-last-reviewed";
 export { rulesLastUpdated } from "./rules-last-updated";
@@ -580,5 +581,6 @@ registerPublicApiRoutes(app);
 registerMcpRoutes(app);
 
 registerAlertProbe(app);
+registerStagingVoiceMove(app);
 
 export default app;

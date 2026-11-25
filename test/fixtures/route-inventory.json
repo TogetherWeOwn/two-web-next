@@ -426,6 +426,11 @@
   },
   {
     "method": "POST",
+    "path": "/__probe/voice-move",
+    "auth": "staging-member"
+  },
+  {
+    "method": "POST",
     "path": "/admin/events",
     "auth": "moderator"
   },

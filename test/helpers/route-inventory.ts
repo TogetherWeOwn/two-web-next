@@ -55,6 +55,7 @@ export function routeInventory(router: Router): RouteInventoryEntry[] {
     )
       auth = "moderator";
     else if (path === "/api/agent-events") auth = "machine-bearer";
+    else if (path === "/__probe/voice-move") auth = "staging-member";
     else if (path === "/auth/qa/:identity" || path === "/__probe/alert") auth = "staging-token";
     else if (path === "/auth/discord/callback" || path === "/join/callback") auth = "oauth-state";
     return { method, path, auth };

@@ -3,11 +3,10 @@
 // Parity §6 records the contract: `bin/internal-action-drill.mjs` drives the
 // real producer + consumer against staging (TOG-11706), and
 // `test/internal-action-drill.test.ts:156` pins the handler only accepts
-// role.assign/announcement.post. This suite pins the other half: no web route
-// (src/index.tsx, src/worker.ts, src/auth/*, src/static-leaves.tsx,
-// src/events/*, src/admin/*, plus the sibling web families) enqueues or calls
-// the internal-action path. A future route
-// that silently wires production dispatch fails here.
+// role.assign/announcement.post. This suite guards web entry points from that
+// dispatch path. The sole direct voice mutation admitted here is the signed
+// self-move from the dedicated staging probe. A route that silently wires
+// production dispatch fails here.
 //
 // Shape: a runtime inventory scan over the mounted Hono app (every
 // registration's path + handler source) plus a static scan of the web entry
@@ -26,6 +25,8 @@ import type { Env } from "../src/env";
 import { env as baseEnv } from "./helpers/member-data";
 
 const read = (path: string): string => readFileSync(path, "utf8");
+const VOICE_PROBE_FILE = "src/probes/staging-voice-move.ts";
+const VOICE_MOVE = "voice.move_member";
 
 // Web entry surface: the card's named files plus the sibling families a
 // future route could hide dispatch in. src/env.ts is deliberately excluded:
@@ -35,6 +36,7 @@ const WEB_ROOT_FILES = [
   "src/index.tsx",
   "src/worker.ts",
   "src/alert-probe.ts",
+  VOICE_PROBE_FILE,
   "src/static-leaves.tsx",
 ];
 const WEB_DIRS = [
@@ -98,6 +100,7 @@ const DISPATCH_TOKENS = [
   "role-assign",
   "announcement.post",
   "role.assign",
+  VOICE_MOVE,
   "/internal/actions",
   "postAnnouncement",
   "assignRole",
@@ -120,7 +123,6 @@ function scanFiles(files: string[], tokens: string[]): Hit[] {
       for (const token of tokens) {
         if (text.includes(token)) {
           hits.push({ file, lineNo: i + 1, line: text.trim(), token });
-          break;
         }
       }
     });
@@ -140,22 +142,27 @@ describe("CallInternalAction is never web-dispatched (TOG-12678)", () => {
     expect(hits).toEqual([]);
   });
 
-  it("no mounted handler closes over the dispatch path", () => {
+  it("only the staging probe references the direct voice action in a mounted handler", () => {
     const problems: string[] = [];
     for (const r of app.routes) {
       const source = Function.prototype.toString.call(r.handler);
       for (const token of DISPATCH_TOKENS) {
         if (source.includes(token)) {
+          if (token === VOICE_MOVE && r.method === "POST" && r.path === "/__probe/voice-move")
+            continue;
           problems.push(`${r.method} ${r.path} handler embeds ${token}`);
-          break;
         }
       }
     }
     expect(problems).toEqual([]);
   });
 
-  it("no web entry file references the dispatch path", () => {
-    expect(scanFiles(webFiles(), DISPATCH_TOKENS)).toEqual([]);
+  it("only the staging probe references the transport and the dedicated session-bound action", () => {
+    const hits = scanFiles(webFiles(), DISPATCH_TOKENS);
+    expect(hits.map(({ file, line }) => `${file}: ${line}`)).toEqual([
+      `${VOICE_PROBE_FILE}: import { send } from "../bot/client-transport";`,
+      `${VOICE_PROBE_FILE}: { action: "voice.move_member", discord_id: session.id, channel_id: body.channel_id },`,
+    ]);
   });
 
   it("INTERNAL_ACTION_QUEUE is sent only by the staging alert probe, as alert-probe only", () => {
