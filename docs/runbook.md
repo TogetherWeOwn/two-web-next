@@ -736,7 +736,10 @@ Use the approved executor login for every snapshot. Run `ci/db-permissions-repai
 - `PRODUCTION_DB_REPAIR_PLAN` holds the `before` and `after` digests, `identity` fingerprint and `owners` in inventory order.
 - `PRODUCTION_DB_REPAIR_PLAN_SHA256` pins the exact plan bytes.
 
-Run `readback` after an uncertain write. If it cannot classify the state, stop writes and compare a read-only catalog snapshot against both pins before approving recovery.
+If `forward` or `undo` reports `Database permissions operation did not confirm an outcome.`,
+run the approved `readback` before approving another write. The message can follow an
+acknowledged commit if connection cleanup fails. If `readback` cannot classify the state,
+stop writes and compare a read-only catalog snapshot against both pins before approving recovery.
 Keep the executor authority and pins through the 30-minute watch and recovery window, then verify their removal.
 Dispatch `forward` and `provision` at the approved protected `main` tip. If
 `main` advances during recovery, keep the same approval SHA for `undo`,
