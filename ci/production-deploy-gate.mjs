@@ -299,6 +299,38 @@ export function readLedgerState(body) {
   return ledger;
 }
 
+// The readiness document includes the timestamp set and metadata. Bound the
+// decoded HTTP stream in bytes before admitting it as migration evidence.
+const MAX_PRODUCTION_LEDGER_RESPONSE_BYTES = 16 * 1024;
+
+async function readProductionLedgerBody(response) {
+  if (!response.body) throw new Error("response has no body");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let bytes = 0;
+  let text = "";
+  let complete = false;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        complete = true;
+        return JSON.parse(text + decoder.decode());
+      }
+      bytes += value.byteLength;
+      if (bytes > MAX_PRODUCTION_LEDGER_RESPONSE_BYTES) break;
+      text += decoder.decode(value, { stream: true });
+    }
+  } catch {
+    throw new Error("response body is unreadable or invalid JSON");
+  } finally {
+    // Cancellation is best effort and must not delay a refusal.
+    if (!complete) void reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+  throw new Error(`response exceeds ${MAX_PRODUCTION_LEDGER_RESPONSE_BYTES} bytes`);
+}
+
 export async function readLiveProductionLedger({
   origin = PRODUCTION_ORIGIN,
   fetchImpl = fetch,
@@ -311,7 +343,7 @@ export async function readLiveProductionLedger({
       signal: AbortSignal.timeout(10_000),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    body = await response.json();
+    body = await readProductionLedgerBody(response);
   } catch (error) {
     throw new Error(
       `production ledger read failed (${error instanceof Error ? error.message : String(error)})`,

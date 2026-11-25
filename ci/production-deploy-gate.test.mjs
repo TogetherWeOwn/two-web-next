@@ -2313,26 +2313,23 @@ test("pending migrations stop the promotion with a migrator-blocked error (CLI)"
 function spawnGateCli(args, env, stub) {
   const dir = mkdtempSync(join(tmpdir(), "gate-cli-"));
   const output = join(dir, "output");
-  const result = spawnSync(
-    process.execPath,
-    ["--import", "./ci/test-fetch-stub.mjs", "ci/production-deploy-gate.mjs", ...args],
-    {
-      env: {
-        ...process.env,
-        GITHUB_OUTPUT: output,
-        FETCH_STUB_JSON: JSON.stringify(stub),
-        ...env,
-      },
-      encoding: "utf8",
-    },
-  );
-  let written = "";
   try {
-    written = readFileSync(output, "utf8");
-  } catch {
-    written = "";
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "./ci/test-fetch-stub.mjs", "ci/production-deploy-gate.mjs", ...args],
+      {
+        env: {
+          GITHUB_OUTPUT: output,
+          FETCH_STUB_JSON: JSON.stringify(stub),
+          ...env,
+        },
+        encoding: "utf8",
+      },
+    );
+    return { ...result, written: existsSync(output) ? readFileSync(output, "utf8") : "" };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
-  return { ...result, written };
 }
 
 const journalBody = (tags) => ({
@@ -2615,6 +2612,65 @@ test("check-migrations CLI halts closed with a ledger reason when the ledger is 
   assert.match(manual.stderr, /migrations_applied=true/);
 });
 
+test("check-migrations CLI requires a successful bounded response from the deferred ledger read", async (t) => {
+  const target = "a".repeat(40);
+  const live = "b".repeat(40);
+  const first = { tag: "1000_a", when: 1000 };
+  const latest = { tag: "1001_b", when: 1001 };
+  const dated = (entries) => ({
+    content: Buffer.from(JSON.stringify({ entries })).toString("base64"),
+    encoding: "base64",
+  });
+  const run = (readiness) =>
+    spawnGateCli(
+      ["--check-migrations"],
+      {
+        DEPLOY_SHA: target,
+        LIVE_SHA: live,
+        GITHUB_REPOSITORY: "fixture/repo",
+        GITHUB_EVENT_NAME: "schedule",
+        PRODUCTION_ORIGIN: "https://stub.invalid",
+      },
+      [
+        { match: `ref=${target}`, body: dated([first, latest]) },
+        { match: `ref=${live}`, body: dated([first]) },
+        { match: "https://stub.invalid/up", ...readiness },
+      ],
+    );
+  const ledger = JSON.stringify({
+    db: "ok",
+    pending_migrations: 0,
+    migration_ledger: [first.when, latest.when],
+  });
+  const padding = " ".repeat(16 * 1024 - Buffer.byteLength(ledger));
+
+  await t.test("admits the applied ledger at the byte limit", () => {
+    const admitted = run({ chunks: [ledger, padding] });
+    assert.equal(admitted.status, 0, admitted.stderr);
+    assert.equal(admitted.stderr, "");
+    assert.equal(
+      admitted.stdout,
+      `Production ledger holds all 2 target web migration(s) (applied set of 2); clearing automatic promotion for ${target} vs live ${live}\n`,
+    );
+  });
+
+  for (const [readiness, reason] of [
+    [{ status: 503, statusText: "untrusted status text", chunks: [ledger] }, "HTTP 503"],
+    [{ chunks: [ledger, padding, " "] }, "response exceeds 16384 bytes"],
+  ]) {
+    await t.test(`refuses ${reason} before a ledger verdict`, () => {
+      const refused = run(readiness);
+      assert.equal(refused.status, 1, reason);
+      assert.equal(refused.stdout, "");
+      assert.equal(refused.written, "");
+      assert.equal(
+        refused.stderr,
+        `::error::Target has 1 production migration(s) production lacks (1001_b); the production ledger read failed (production ledger read failed (${reason})), so this promotion stops here — automatic production migration is blocked until the least-privilege migrator lands\n`,
+      );
+    });
+  }
+});
+
 test("check-migrations CLI halts closed when the live Worker predates the ledger signal", () => {
   const target = "a".repeat(40);
   const live = "b".repeat(40);
@@ -2643,7 +2699,7 @@ test("check-migrations CLI halts closed when the live Worker predates the ledger
       { match: `ref=${live}`, body: dated([{ tag: "1000_a", when: 1000 }]) },
       {
         match: "/up",
-        body: { revision: { commit: live }, db: "ok", pending_migrations: 0 },
+        chunks: [JSON.stringify({ revision: { commit: live }, db: "ok", pending_migrations: 0 })],
       },
     ],
   );
