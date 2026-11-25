@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { isScalar, parseDocument } from "yaml";
 import {
   probeIsolationDispatch,
@@ -863,24 +864,40 @@ test("serving isolation is manual, protected and serialized with schema and Work
 });
 
 test("serving isolation distinguishes acknowledged mutations from failures when cleanup fails", async () => {
-  const { runServingIsolationCli } = await import("./db-serving-ledger-isolation-cli.mjs");
   const { prepareServingIsolationOutcome } = await import(
     "./fixtures/web-serving-isolation-outcome.mjs"
   );
   const { run, events, faults } = await prepareServingIsolationOutcome();
-  const cli = (operation) => run(operation, { execute: runServingIsolationCli });
+  const preload = new URL("./fixtures/web-serving-isolation-outcome-preload.mjs", import.meta.url);
+  const script = fileURLToPath(new URL("./db-serving-ledger-isolation-cli.mjs", import.meta.url));
+  const cli = (operation, { state = "before", close, statement, acknowledgement } = {}) => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", preload.href, script, operation, "1033_session-roles-checked-at"],
+      {
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          ISOLATION_FIXTURE_STATE: state,
+          ISOLATION_FIXTURE_CLOSE: close,
+          ISOLATION_FIXTURE_STATEMENT: statement,
+          ISOLATION_FIXTURE_ACKNOWLEDGEMENT: acknowledgement,
+        },
+      },
+    );
+    assert.ifError(result.error);
+    assert.deepEqual([result.signal, result.stdout, result.stderr], [null, "", ""]);
+    return result.status;
+  };
   const workflow = readFileSync(new URL("db-serving-ledger-isolation.yml", WORKFLOWS), "utf8");
   const execute = parseDocument(workflow).toJS().jobs.isolation.steps.at(-1);
   const readback = async (expected) => {
     delete faults.close;
     events.length = 0;
-    assert.equal(await cli("readback"), expected);
+    assert.equal(await run("readback"), expected);
     assert.deepEqual(events, ["read only", "callback completed", "acknowledged", "close"]);
   };
-  const closeError = new Error("synthetic close diagnostic with private input");
-  const statementError = new Error("synthetic statement failure");
-  faults.close = closeError;
-  await assert.rejects(run("forward"), (error) => {
+  const assertCommittedCloseError = (error) => {
     assert.equal(
       error.message,
       "Database serving ledger isolation connection cleanup failed after an acknowledged outcome.",
@@ -888,11 +905,10 @@ test("serving isolation distinguishes acknowledged mutations from failures when 
     assert.equal(error.outcome, "committed");
     assert.equal(error.cause, undefined);
     return true;
-  });
-  await readback(11);
-  assert.equal(await cli("undo"), 0);
+  };
+  const closeError = new Error("synthetic close diagnostic with private input");
+  const statementError = new Error("synthetic statement failure");
 
-  events.length = 0;
   faults.close = closeError;
   faults.statement = statementError;
   await assert.rejects(run("forward"), (err) => err === statementError);
@@ -902,7 +918,7 @@ test("serving isolation distinguishes acknowledged mutations from failures when 
     "revoke pg_write_all_data",
     "close",
   ]);
-  const failedStatus = await cli("forward");
+  const failedStatus = cli("forward", { close: "fail", statement: "fail" });
   assert.equal(failedStatus, 1);
   const unconfirmed = [
     1,
@@ -911,15 +927,16 @@ test("serving isolation distinguishes acknowledged mutations from failures when 
   ];
   assert.deepEqual(runIsolationDispatch(execute, "forward", failedStatus), unconfirmed);
   delete faults.statement;
-  await readback(10);
+  await readback("before");
 
-  for (const [operation, expectedReadback, direction] of [
-    ["forward", 11, ""],
-    ["undo", 10, " inverse"],
+  for (const [operation, state, expectedReadback, direction] of [
+    ["forward", "before", "after", ""],
+    ["undo", "after", "before", " inverse"],
   ]) {
     events.length = 0;
     faults.close = closeError;
-    const status = await cli(operation);
+    await assert.rejects(run(operation), assertCommittedCloseError);
+    const status = cli(operation, { state, close: "fail" });
     assert.equal(status, 12);
     assert.deepEqual(events, [
       "write transaction",
@@ -934,17 +951,24 @@ test("serving isolation distinguishes acknowledged mutations from failures when 
       "",
       `Database serving ledger isolation${direction} committed. Connection cleanup failed. Verify with readback.\n`,
     ]);
-    assert.equal(await cli("readback"), 1);
+    assert.equal(cli(operation, { state }), 0);
+    assert.equal(cli("readback", { state: expectedReadback, close: "fail" }), 1);
+    assert.equal(
+      cli("readback", { state: expectedReadback }),
+      expectedReadback === "before" ? 10 : 11,
+    );
     await readback(expectedReadback);
   }
 
-  faults.acknowledgement = new Error("synthetic missing commit acknowledgement");
+  const acknowledgementError = new Error("synthetic missing commit acknowledgement");
+  faults.acknowledgement = acknowledgementError;
   faults.close = closeError;
   events.length = 0;
-  assert.equal(await cli("forward"), 1);
+  await assert.rejects(run("forward"), (error) => error === acknowledgementError);
   assert.deepEqual(events.slice(-2), ["callback completed", "close"]);
+  assert.equal(cli("forward", { close: "fail", acknowledgement: "fail" }), 1);
   delete faults.acknowledgement;
-  await readback(11);
+  await readback("after");
   assert.deepEqual(runIsolationDispatch(execute, "readback", 12), unconfirmed);
 });
 

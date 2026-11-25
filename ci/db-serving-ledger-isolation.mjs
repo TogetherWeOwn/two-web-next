@@ -333,6 +333,7 @@ export async function runServingIsolation(operation, end, env, options = {}) {
     );
   } finally {
     try {
+      // Postgres resolves end() after either a graceful close or its bounded force-close.
       await client.end({ timeout: 5 });
     } catch {
       closeFailed = true;

@@ -32,14 +32,14 @@ const acl = Array.from(
   },
 );
 
-export async function prepareServingIsolationOutcome() {
+export async function prepareServingIsolationOutcome(initial = "before") {
   const migrationsFolder = fileURLToPath(new URL("../../drizzle", import.meta.url));
   const journal = readMigrationFiles({ migrationsFolder })
     .slice(0, 34)
     .map(({ hash, folderMillis }) => ({ hash, created_at: folderMillis }));
   const events = [];
   const faults = {};
-  let membership = originalMembership;
+  let membership = initial === "before" ? originalMembership : [];
 
   const { run } = await prepareServingIsolation({
     owner(strings) {
