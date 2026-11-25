@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, type SpawnSyncReturns, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,7 +17,7 @@ const CALLEES = {
   [RELEASE]: "name: fixture release\non: workflow_call\n",
 };
 
-function fixture({ onTestFinished }: TestContext) {
+function fixture({ onTestFinished }: TestContext, rollback = CALLEES[ROLLBACK]) {
   const root = mkdtempSync(join(tmpdir(), "release-workflow-pin-"));
   onTestFinished(() => rmSync(root, { recursive: true, force: true }));
   const git = (...args: string[]) =>
@@ -44,7 +44,8 @@ function fixture({ onTestFinished }: TestContext) {
   };
   git("init", "-q", "--object-format=sha1", "-b", "main");
   mkdirSync(join(root, ".github/workflows"), { recursive: true });
-  for (const [path, content] of Object.entries(CALLEES)) write(path, content);
+  write(ROLLBACK, rollback);
+  write(RELEASE, CALLEES[RELEASE]);
   const reviewed = commit("review workflows");
   write("unrelated.txt", "release tree can have unrelated changes\n");
   const pin = commit("release commit");
@@ -80,7 +81,7 @@ function fixture({ onTestFinished }: TestContext) {
   return { root, git, write, commit, pin, reviewed, evidence, verify };
 }
 
-function expectRefusal(result: ReturnType<ReturnType<typeof fixture>["verify"]>, reason: string) {
+function expectRefusal(result: SpawnSyncReturns<string>, reason: string) {
   expect(result.status).toBe(1);
   expect(result.stdout).toBe("");
   expect(result.stderr).toContain(reason);
@@ -138,6 +139,31 @@ it("refuses a symlink at a reviewed workflow path", (t) => {
     f.verify(undefined, f.pin, different),
     "reviewed revision lacks a readable regular workflow blob",
   );
+});
+
+it("accepts exactly 256 KiB of workflow bytes and refuses one byte more", (t) => {
+  const atLimit = `${CALLEES[ROLLBACK]}#`.padEnd(256 * 1024, "x");
+  const f = fixture(t, atLimit);
+  expect(f.verify().status).toBe(0);
+
+  f.write(ROLLBACK, `${atLimit}x`);
+  const oversized = f.commit("exceed workflow size limit");
+  expectRefusal(
+    f.verify(undefined, f.pin, oversized),
+    "reviewed revision lacks a readable regular workflow blob",
+  );
+});
+
+it("refuses matching empty workflow blobs", (t) => {
+  const f = fixture(t, "");
+  expectRefusal(f.verify(), "pinned revision lacks a readable regular workflow blob");
+});
+
+it("accepts exactly 1 MiB of release evidence and refuses one byte more", (t) => {
+  const f = fixture(t);
+  const atLimit = JSON.stringify(f.evidence).padEnd(1024 * 1024, " ");
+  expect(f.verify(atLimit).status).toBe(0);
+  expectRefusal(f.verify(`${atLimit} `), "release evidence exceeds 1 MiB");
 });
 
 it("refuses absent and incomplete release evidence", (t) => {
