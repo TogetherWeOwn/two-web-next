@@ -167,8 +167,21 @@ test("staging receipts distinguish matched identity from readiness", async () =>
     [503, blockedMigration, "unready (HTTP 503, pending migrations)", false],
     [200, healthy, "ready (HTTP 200)", true],
     [200, { ...healthy, status: "degraded" }, "ready (HTTP 200)", true],
+    [503, { ...blockedMigration, pending_migrations: null }, "unready (HTTP 503)", false],
     [503, { ...healthy, status: "degraded", config: "missing" }, "unready (HTTP 503)", false],
     [200, blockedMigration, "unproven (inconsistent or invalid HTTP 200 response)", false],
+    [
+      200,
+      { ...healthy, pending_migrations: "0" },
+      "unproven (inconsistent or invalid HTTP 200 response)",
+      false,
+    ],
+    [
+      503,
+      { ...blockedMigration, pending_migrations: "1" },
+      "unproven (inconsistent or invalid HTTP 503 response)",
+      false,
+    ],
     [
       503,
       { ...healthy, status: "degraded" },
