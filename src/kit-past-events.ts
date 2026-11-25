@@ -12,6 +12,7 @@ import {
   readAnonCache,
   writeAnonCache,
 } from "./events/anon-cache";
+import type { PublicEcho } from "./events/echo-public";
 import { normalizePastPage } from "./events/reads";
 import type { PublicEvent } from "./events/reads";
 import { resolveCalendarInput } from "./events/page-models.server";
@@ -273,10 +274,18 @@ export type PastArchiveEvent = Pick<
   | "goingOccupancy"
   | "capacity"
   | "discordEventId"
-> & { passage?: SearchSegment[]; titleSpans?: SearchSegment[] };
+> & {
+  passage?: SearchSegment[];
+  titleSpans?: SearchSegment[];
+  echo?: Pick<PublicEcho, "label" | "attendedCount" | "peakConcurrent">;
+};
 
 /** Project a past-archive row to its anonymous-safe slice. */
-export function toPublicPastArchiveRow(row: PublicEvent, q?: string): PastArchiveEvent {
+export function toPublicPastArchiveRow(
+  row: PublicEvent,
+  q?: string,
+  echo?: PublicEcho | null,
+): PastArchiveEvent {
   const projected: PastArchiveEvent = {
     eventKey: row.eventKey,
     title: row.title,
@@ -292,5 +301,14 @@ export function toPublicPastArchiveRow(row: PublicEvent, q?: string): PastArchiv
   };
   if (q && row.description) projected.passage = searchContext(row.description, q, true);
   if (q) projected.titleSpans = searchContext(row.title, q);
+  // The archive load has no Echo source. If given a public projection, attach
+  // only the fields the card renders and only to the matching archive event.
+  if (echo?.eventId === row.id && echo.eventKey === row.eventKey) {
+    projected.echo = {
+      label: echo.label,
+      attendedCount: echo.attendedCount,
+      peakConcurrent: echo.peakConcurrent,
+    };
+  }
   return projected;
 }
