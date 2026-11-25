@@ -789,6 +789,20 @@ test("trigger identity is pinned, main-only and never taken from PR or fork evid
   }
 });
 
+test("automatic staging refuses a different CI run ID on the final read", () => {
+  const ctx = context("workflow_run");
+  const evidence = fixture();
+  const accepted = executeStaging(ctx, evidence);
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.deepEqual(accepted.calls, mutationCalls);
+
+  evidence.current.id = run.id + 1;
+  const refused = executeStaging(ctx, evidence);
+  assert.equal(refused.status, 1, refused.stderr);
+  assert.deepEqual(refused.calls, []);
+  assert.match(refused.stderr, /^Staging gate refused: CI changed while checking evidence$/m);
+});
+
 test("a stale automatic run ID/attempt or missing token refuses before Cloudflare", async () => {
   for (const field of ["id", "run_attempt"]) {
     const ctx = context("workflow_run");
