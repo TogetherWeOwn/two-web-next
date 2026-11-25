@@ -7,7 +7,6 @@ import type { SourceReadReport, SourceReadStatement } from "../jobs/events";
 import { loadReplayCandidateWithSql, parseFailureId } from "../jobs/preview";
 import { STAGING_APP_URL } from "../qa";
 import { crossOriginRefusal } from "../same-origin";
-import type { QueuePreviewVars } from "./queue-preview";
 
 /**
  * Evidence-only source/cache verifier. Protected, default-off, staging-only.
@@ -184,18 +183,18 @@ function bearerToken(request: Request): string {
 export const SOURCE_EVIDENCE_REFUSED_METHODS = ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
 export const sourceEvidenceBodyLimit = requestBodyLimit("action");
 
-export function sourceEvidenceMethodRefused(c: Context<QueuePreviewVars>) {
+export function sourceEvidenceMethodRefused<E extends { Bindings: Env }>(c: Context<E>) {
   c.header("cache-control", "private, no-store");
   c.header("allow", "GET");
   return c.json({ error: "method_not_allowed" }, 405);
 }
 
-export function sourceEvidenceHandler(c: Context<QueuePreviewVars>) {
+export function sourceEvidenceHandler<E extends { Bindings: Env }>(c: Context<E>) {
   return sourceEvidenceResponse(c, () => c.req.param("id"));
 }
 
 function sourceEvidenceContext(request: Request, env: Env, requestId?: string) {
-  const c = new Context<QueuePreviewVars>(request, { env, path: new URL(request.url).pathname });
+  const c = new Context<{ Bindings: Env }>(request, { env, path: new URL(request.url).pathname });
   if (requestId) c.set("requestId", requestId);
   return c;
 }
@@ -219,8 +218,8 @@ export async function fetchSourceEvidence(
   return request.method === "HEAD" ? new Response(null, response) : response;
 }
 
-async function sourceEvidenceResponse(
-  c: Context<QueuePreviewVars>,
+async function sourceEvidenceResponse<E extends { Bindings: Env }>(
+  c: Context<E>,
   readId: () => string | undefined,
 ) {
   c.header("cache-control", "private, no-store");
