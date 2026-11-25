@@ -883,7 +883,7 @@ test("interleaving: a recovery to a descendant before rollback capture cannot re
         fetchImpl: async (url) => {
           const parsed = new URL(url);
           if (parsed.pathname === "/up") {
-            return okJson({ revision: { version_id: versionId, commit: capturedCommit } });
+            return Response.json({ revision: { version_id: versionId, commit: capturedCommit } });
           }
           assert.ok(parsed.pathname.endsWith("/contents/drizzle/meta/_journal.json"));
           assert.ok([MIDDLE, capturedCommit].includes(parsed.searchParams.get("ref")));

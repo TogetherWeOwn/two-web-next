@@ -29,6 +29,7 @@ import {
   destructiveStatements,
   liveVersion,
   previousVersion,
+  readLiveRevision,
   rollbackAction,
   rollbackCompatibility,
   rollbackEnvironment,
@@ -1491,6 +1492,57 @@ test("rollback /up preserves the exact healthy and deferred revision", async () 
     });
     assert.deepEqual(result, { versionId: V1, commit: PREVIOUS, added: [] });
   }
+});
+
+test("rollback /up refuses empty and malformed bodies without echoing input", async () => {
+  for (const [body, message] of [
+    [null, "Missing /up response body"],
+    ["", "Invalid /up JSON"],
+    ['{"revision": private-fixture-text}', "Invalid /up JSON"],
+  ]) {
+    await assert.rejects(
+      readLiveRevision({ origin: UP_ORIGIN, fetchImpl: async () => new Response(body) }),
+      { message },
+    );
+  }
+});
+
+test("rollback /up cancels a stalled stream when the request deadline expires", async (t) => {
+  const controller = new AbortController();
+  const timeout = new DOMException("Synthetic request deadline", "TimeoutError");
+  t.mock.method(AbortSignal, "timeout", (ms) => {
+    assert.equal(ms, 10_000);
+    return controller.signal;
+  });
+  let reads = 0;
+  let cancelled = false;
+  const body = new ReadableStream(
+    {
+      pull(stream) {
+        reads += 1;
+        if (reads === 1) stream.enqueue(Buffer.from(JSON.stringify(upOk)));
+        else controller.abort(timeout);
+      },
+      cancel() {
+        cancelled = true;
+        return Promise.reject(new Error("Synthetic disposal failure"));
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  await assert.rejects(
+    readLiveRevision({
+      origin: UP_ORIGIN,
+      fetchImpl: async (_url, { signal }) => {
+        assert.equal(signal, controller.signal);
+        return new Response(body);
+      },
+    }),
+    { name: "TimeoutError", message: timeout.message },
+  );
+  assert.equal(reads, 2);
+  assert.ok(cancelled);
+  assert.equal(body.locked, false);
 });
 
 test("rollback /up cancels oversized streams and refuses after the existing retries", async () => {
