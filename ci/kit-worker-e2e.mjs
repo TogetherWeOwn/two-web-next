@@ -4,10 +4,9 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 import { STAGING_STATIC_DOCUMENT_READY } from "../src/kit-staging-static.ts";
@@ -36,6 +35,7 @@ import {
   withPublicVoiceBrowserWorkers,
   withWorkerCleanup,
 } from "./fixtures/kit-worker-lifecycle.mjs";
+import { cleanUpWorkers, stopWorker } from "./kit-local-worker.mjs";
 import { startLoopbackWorker, tail } from "./kit-worker-loopback.mjs";
 import { expectedMarkerFor, kitHomeHeadingText } from "./kit-parity-gates.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
@@ -73,8 +73,8 @@ function requireDisposableDatabase(value) {
 }
 
 async function listen(child, origin, getLog) {
-  const { readiness } = workers.find((worker) => worker.child === child);
-  const failure = await readiness;
+  const { readiness, waitForReadiness } = workers.find((worker) => worker.child === child);
+  const failure = await (readiness ?? waitForReadiness());
   if (failure) throw failure.error;
   if (child.exitCode === null && child.signalCode === null) return;
   throw new Error(`Wrangler exited after readiness at ${origin}:\n${tail(getLog())}`);
@@ -101,13 +101,21 @@ const startup = new AbortController();
 // Start one loopback Worker. The generated Kit Worker and the direct Hono
 // Worker (src/worker.ts, the same app Kit's catch-all forwards to) share the
 // fixture database and vars within each pair.
-function startWorker(name, main, assetsDirectory, sessionSecret, vars, liveHub = false) {
+function startWorker(
+  name,
+  main,
+  assetsDirectory,
+  sessionSecret,
+  vars,
+  liveHub = false,
+  { suppressFailureLog = false, deferHttpReadiness = false } = {},
+) {
   const bound = startLoopbackWorker(
     name,
     (port, origin) =>
       launchWorker(name, main, assetsDirectory, sessionSecret, vars, liveHub, port, origin),
     workers,
-    { signal: startup.signal },
+    { signal: startup.signal, suppressFailureLog, deferHttpReadiness },
   ).finally(() => starting.delete(bound));
   starting.add(bound);
   return bound;
@@ -183,15 +191,6 @@ async function launchWorker(
       stdio: ["ignore", "pipe", "pipe", "ipc"],
     },
   );
-}
-
-async function stopWorker(worker) {
-  if (worker.stopped) return;
-  worker.child.kill("SIGTERM");
-  await Promise.race([worker.closed, delay(5_000, undefined, { ref: false })]);
-  if (worker.stopped) return;
-  worker.child.kill("SIGKILL");
-  await Promise.race([worker.closed, delay(5_000, undefined, { ref: false })]);
 }
 
 async function runAdminRsvpControls() {
@@ -1437,11 +1436,12 @@ export default machineParityWorker(inner, ${JSON.stringify(probePath)}, ${name =
           scratch,
           kit: { main: worker, assets },
           hono: { main: join(repo, "src/worker.ts"), assets: join(repo, "public") },
-          startWorker: async (name, main, assetsDirectory, vars) => {
-            const instance = await startWorker(name, main, assetsDirectory, undefined, vars);
-            await listen(instance.child, instance.origin, () => instance.log);
-            return instance;
-          },
+          startWorker: (name, main, assetsDirectory, vars) =>
+            startWorker(name, main, assetsDirectory, undefined, vars, false, {
+              suppressFailureLog: true,
+              deferHttpReadiness: true,
+            }),
+          waitForWorker: (instance) => listen(instance.child, instance.origin, () => ""),
         }),
       startKit: async (name, vars) => {
         const instance = await startWorker(name, worker, assets, secret, vars);
@@ -1463,16 +1463,6 @@ await withWorkerCleanup(runProof, async (failed) => {
   // A parallel startup may still be preparing or retrying after its sibling fails.
   startup.abort();
   await Promise.allSettled(starting);
-  await Promise.all(workers.map(stopWorker));
-  // Print after the children close so their output has flushed.
-  if (failed) {
-    for (const { name, log } of workers)
-      process.stderr.write(`${name} Worker output:\n${tail(log)}\n`);
-  }
-  assert.ok(
-    workers.every(({ stopped }) => stopped),
-    "loopback Workers did not stop",
-  );
-  await rm(scratch, { recursive: true, force: true });
+  await cleanUpWorkers(workers, scratch, failed);
   if (args.length) console.log("PASS loopback Workers and scratch cleaned up");
 });

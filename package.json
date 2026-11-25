@@ -44,7 +44,7 @@
     "migration:rights": "node ci/migration-runtime-rights.mjs",
     "migration:rights:selftest": "node --test ci/migration-runtime-rights.test.mjs",
     "migration:ownership:selftest": "node --test ci/migration-ownership.test.mjs",
-    "test:smoke": "node --test test/smoke.test.mjs test/json-smoke.test.mjs test/revision-check.test.mjs test/version-check.test.mjs test/smoke-ordinary-traffic-identity-acceptance.test.mjs test/smoke-public-api-acceptance.test.mjs test/promotion-smoke-identity-acceptance.test.mjs test/operator-constants-parity.mjs",
+    "test:smoke": "node --test test/smoke.test.mjs test/json-smoke.test.mjs test/revision-check.test.mjs test/version-check.test.mjs test/smoke-ordinary-traffic-identity-acceptance.test.mjs test/smoke-public-api-acceptance.test.mjs test/promotion-smoke-identity-acceptance.test.mjs test/operator-constants-parity.mjs ci/kit-event-detail-rollback.test.mjs",
     "gate:selftest": "node ci/require-performance.mjs --selftest",
     "config:check": "node ci/check-config-docs.mjs && node --test ci/check-config-docs-selftest.mjs",
     "docs:links": "node ci/check-doc-links.mjs --selftest && node --test ci/parity-citations-acceptance.test.mjs && node ci/check-doc-links.mjs",
