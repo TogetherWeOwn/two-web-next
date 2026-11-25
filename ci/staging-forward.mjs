@@ -1,7 +1,44 @@
+import { addAbortListener } from "node:events";
 import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { liveVersion, readLiveRevision, rollbackEnvironment } from "./rollback-target.mjs";
 import { isSha } from "./staging-provenance.mjs";
+
+// Cloudflare's deployments API allows up to 100 rows per page, each with a
+// message of up to 1,000 bytes. Allow for JSON escaping and version metadata.
+const DEPLOYMENT_RESPONSE_BYTES = 1024 * 1024;
+// GitHub compare returns one commit with per_page=1, but its first page can
+// include 300 changed files and patches. Leave room for 1 MiB of raw diff
+// (GitHub's documented PR diff size), JSON escaping, and commit/file metadata.
+const ANCESTRY_RESPONSE_BYTES = 8 * 1024 * 1024;
+
+async function readProviderJson(response, signal, maxBytes) {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("Missing provider response body");
+  const cancel = () => {
+    // Cancel closes pending reads immediately. The source's cleanup may stall.
+    void reader.cancel().catch(() => {});
+  };
+  const deadline = addAbortListener(signal, cancel);
+  try {
+    if (!response.ok) throw new Error("Request failed");
+    const bytes = new Uint8Array(maxBytes);
+    let length = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      signal.throwIfAborted();
+      if (done) return JSON.parse(new TextDecoder().decode(bytes.subarray(0, length)));
+      // Count decoded response bytes, including chunked or compressed replies.
+      if (value.byteLength > maxBytes - length) throw new Error("Provider response too large");
+      bytes.set(value, length);
+      length += value.byteLength;
+    }
+  } finally {
+    deadline[Symbol.dispose]();
+    cancel();
+    reader.releaseLock();
+  }
+}
 
 export function orderedDeploymentTime(value) {
   const parsed =
@@ -32,15 +69,15 @@ export async function requireForwardStaging(env, fetchImpl = fetch) {
   ) {
     throw new Error("Invalid staging rollout inputs");
   }
-  async function get(url, token, source) {
+  async function get(url, token, source, maxBytes) {
     try {
+      const signal = AbortSignal.timeout(10_000);
       const response = await fetchImpl(url, {
         headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
         redirect: "error",
-        signal: AbortSignal.timeout(10_000),
+        signal,
       });
-      if (!response.ok) throw new Error("Request failed");
-      return await response.json();
+      return await readProviderJson(response, signal, maxBytes);
     } catch {
       throw new Error(`Cannot read ${source} for staging rollout`);
     }
@@ -51,6 +88,7 @@ export async function requireForwardStaging(env, fetchImpl = fetch) {
     `https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/${worker}/deployments`,
     env.CLOUDFLARE_API_TOKEN,
     "Cloudflare deployment state",
+    DEPLOYMENT_RESPONSE_BYTES,
   );
   const deployments = deployment?.result?.deployments;
   if (deployment?.success !== true || !Array.isArray(deployments) || !deployments.length) {
@@ -76,6 +114,7 @@ export async function requireForwardStaging(env, fetchImpl = fetch) {
     `https://api.github.com/repos/${repository}/compare/${live}...${target}?per_page=1`,
     env.GITHUB_TOKEN,
     "GitHub commit ancestry",
+    ANCESTRY_RESPONSE_BYTES,
   );
   if (
     comparison?.status !== "ahead" ||
