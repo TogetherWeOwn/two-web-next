@@ -3,6 +3,7 @@ import { test } from "vitest";
 import { STAGING_ORIGIN } from "../ci/operator-constants.mjs";
 import { verifyAllocationSoak } from "../ci/production-deploy-gate.mjs";
 import {
+  failedManual,
   first,
   fresh,
   preRollback,
@@ -184,7 +185,7 @@ test("records explicit supersession before or after the floor and preserves earl
 });
 
 test("a restored Worker needs continuous soak and fresh E2E for its new allocation", async () => {
-  let deployments = [first];
+  let deployments = () => [first];
   const sample = ({
     run = preRollback,
     nowMs = byFloor,
@@ -201,7 +202,7 @@ test("a restored Worker needs continuous soak and fresh E2E for its new allocati
       queries,
       result: verifyAllocationSoak(env, {
         now: options.now,
-        fetchImpl: trustedReads(options, { deployments: () => deployments, run, skipped }),
+        fetchImpl: trustedReads(options, { deployments, run, skipped }),
       }),
     };
   };
@@ -209,8 +210,13 @@ test("a restored Worker needs continuous soak and fresh E2E for its new allocati
   assert.equal(historical.allocationId, first.id);
   assert.deepEqual(historical.sample, expected.sample);
   const saved = JSON.stringify(historical);
-  // Same UUID and upload metadata, but an intervening rollback and new allocation.
-  deployments = [rollback, restored, first];
+  await assert.rejects(sample({ run: failedManual }).result, /failed or was re-run/);
+  let reads = 0;
+  deployments = () => (reads++ === 0 ? [first] : [rollback, restored, first]);
+  const during = sample();
+  await assert.rejects(during.result, /allocation changed during sampling/);
+  assert.equal(during.queries.length, 1);
+  deployments = () => [rollback, restored, first];
   const stale = sample({ nowMs: Date.parse("2026-01-01T10:44:00Z") });
   await assert.rejects(stale.result, /fresh E2E is required/);
   assert.deepEqual(stale.queries, []);

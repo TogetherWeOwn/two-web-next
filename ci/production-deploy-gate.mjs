@@ -453,6 +453,10 @@ export async function requireStagingEvidence(
       // Every e2e-staging run on the SHA, however old: fix forward refuses a
       // red run anywhere in its history (stagingRunsSinceCommit).
       const history = await stagingRunsSinceCommit({ get, sha });
+      refuseRedOrRerunStaging(
+        history.filter((run) => manualQualification(run, sha)),
+        sha,
+      );
       runs.push(
         ...history.filter(
           (run) =>

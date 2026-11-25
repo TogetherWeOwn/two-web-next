@@ -994,10 +994,9 @@ Before the deploy job, `deploy-production` runs two more gates
 
 - `staging-soak` requires one 100% Cloudflare allocation from before executed
   E2E through its post-E2E 30-minute soak. Regression reads that run's ledger.
-  A rollback and restore starts a new allocation even for the same UUID.
-  Run fresh E2E and wait for its soak floor. Manual E2E at the exact main SHA
-  can qualify an explicit SHA under the release gates. Re-run all jobs after
-  an attempt failure so GitHub collects a fresh soak sample.
+  Restoring the same UUID starts a new allocation that needs fresh E2E and
+  soak. Exact main SHA manual E2E can qualify explicit SHA selection under
+  the release gates. Re-run all jobs after failure to collect a fresh sample.
 - `production-regression` (production Environment as the reviewer
   checkpoint, analytics via the repo-level read-only token) downloads the
   `staging-passive-ledger-<run>` artifact that `e2e-staging` recorded for the
@@ -1028,8 +1027,7 @@ green is not promotion evidence.
 #### Archived staging soak receipts
 
 The staging-soak job archives a `staging-soak/2` receipt per attempt. Keep v1
-receipts and supersession records as history. Use the original validator
-below for v1 records. Promotion requires a live allocation-bound sample.
+and supersession records as history. Promotion takes a live sample.
 
 Use [`ci/staging-soak-receipt.mjs`](../ci/staging-soak-receipt.mjs) with the
 verified deploy SHA, Worker UUID and `/version` timestamp. Supply the retained
