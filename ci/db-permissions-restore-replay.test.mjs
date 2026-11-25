@@ -383,6 +383,7 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
   });
   const { databaseReadiness } = await import(pathToFileURL(outfile).href);
   const isolationQueries = [];
+  const aclCommands = new Set();
   const {
     run: isolate,
     version,
@@ -393,17 +394,18 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
       login: app,
       database: "postgres",
       migrationRole: migrator,
-      connect() {
-        const client = connectMigrator();
-        isolationQueries.length = 0;
-        client.options.debug = (_id, statement, parameters) => {
+      connect: () => {
+        const client = fresh(migrator, "postgres", (_id, statement, parameters) => {
+          const command = /^(grant|revoke)\b/i.exec(statement.trimStart())?.[0];
+          if (command) aclCommands.add(command.toLowerCase());
           isolationQueries.push({
             statement,
             advisoryKey: statement.startsWith("select pg_try_advisory_xact_lock(")
               ? Number(parameters[0])
               : undefined,
           });
-        };
+        });
+        isolationQueries.length = 0;
         return client;
       },
       firstEnd: originalEnd,
@@ -462,6 +464,27 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
   const readiness = await probe(base, false);
   t.diagnostic("Web, Jobs and both Bot logins passed on the repaired 1033 baseline.");
   const forward = { readiness: { ...readiness, revision: { version_id: version } } };
+  await withClient(restore.admin(), async (sql) => {
+    await sql`create sequence public.fixture_unreviewed_serving_seq`;
+    try {
+      assert.equal(await isolate("readback"), "before");
+      const before = await inspect(fresh);
+      await assert.rejects(isolate("forward", forward), /Public serving inventory changed/);
+      assert.deepEqual([...aclCommands], [], "Inventory refusal issued a grant or revoke");
+      const after = await inspect(fresh);
+      assert.deepEqual(
+        after.state.ledger,
+        before.state.ledger,
+        "Inventory refusal changed the ledger",
+      );
+      assert.equal(after.digest, before.digest, "Inventory refusal changed the catalog");
+    } finally {
+      await sql`drop sequence public.fixture_unreviewed_serving_seq`;
+    }
+  });
+  t.diagnostic(
+    "Unexpected public sequence refused before any grant or revoke. Catalog and ledger matched.",
+  );
   await t.test("failed serving postcheck rolls back ACLs and allows a clean retry", () =>
     assertServingPostcheckRollback({
       admin: restore.admin,
@@ -475,7 +498,9 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
       }),
       probeBefore: () => probe(base, false),
       retryForward: async () => {
+        aclCommands.clear();
         assert.equal(await isolate("forward", forward), "committed");
+        assert.deepEqual(aclCommands, new Set(["grant", "revoke"]));
       },
     }),
   );
@@ -600,9 +625,9 @@ test("PostgreSQL 18 branch replay preserves repair and Bot scope with alternate 
     await withClient(connect(provisioner), async (sql) => {
       for (const role of webRoles) await setPassword(sql, role, webPasswords[role]);
     });
-    const fresh = (role, database) =>
+    const fresh = (role, database, debug) =>
       webPasswords[role]
-        ? restore.connect(role, webPasswords[role], database)
+        ? restore.connect(role, webPasswords[role], database, debug)
         : connect(role, database);
     for (const role of webRoles) {
       await withClient(connect(role), (sql) => denies(sql`select current_user`, "28P01"));
