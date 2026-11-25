@@ -33,6 +33,9 @@ import { withStreamedBody } from "./html-stream";
 import { applySingleValidator } from "./http/conditional";
 import { PRODUCTION_APEX } from "./http/robots";
 import { EVENTS_CALENDAR_ISLAND } from "./islands/contracts-calendar";
+import { KIT_HOTZONE_SIGNAL_ROUTE } from "./hotzones/kit-signal-route";
+import { refuseHotzone } from "./hotzones/refusal";
+import { parseSeasonParam } from "./hotzones/season";
 import { transformContentLeafChunk } from "./kit-content-chunk";
 import type { KitHomePanels } from "./kit-home-panels";
 import type { KitLocals } from "./kit-session";
@@ -256,9 +259,8 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     reads: { resource: "profile", action: "view", route: "profiles.show" },
   },
   // Hot-zone heatmaps: public aggregates with the same reads and cache policy
-  // as the Hono handlers (src/hotzones/routes.tsx). Concrete signal paths
-  // only, never a :param pattern: unknown segments must fall through to the
-  // Hono 404, and each path needs its own executed parity run.
+  // as the Hono handlers (src/hotzones/routes.tsx). Keep concrete signals
+  // separate from the default-off generic refusal family.
   { method: "GET", path: "/hotzones", enabled: true, reads: "public" },
   { method: "GET", path: "/hotzones/joins", enabled: true, reads: "public" },
   { method: "GET", path: "/hotzones/voice", enabled: true, reads: "public" },
@@ -1389,8 +1391,7 @@ async function dispatchKitRequest(
   // wrapper.
   const isPastArchivePage = event.route?.id === "/events/past";
   const isEventsListPage = event.route?.id === "/events";
-  // Hot-zone heatmaps: the index plus the per-signal route. Concrete manifest
-  // paths only (see ROUTE_MANIFEST): unknown segments never reach this branch.
+  // Hot-zone heatmaps: the index plus the three concrete signal paths.
   const isHotzonesPage =
     event.route?.id === "/hotzones" || event.route?.id === "/hotzones/[signal]";
   // The live detail is a member read, so it renders inside the boundary; the
@@ -1429,6 +1430,11 @@ async function dispatchKitRequest(
     response = await deps.pastArchive(event.request, () => deps.resolve(event), requestId);
   } else if (isEventsListPage && deps.eventsPage) {
     response = await deps.eventsPage(event.request, () => deps.resolve(event), requestId);
+  } else if (route === KIT_HOTZONE_SIGNAL_ROUTE) {
+    // Match Hono's season-first refusal before any read guard or page load.
+    const context = new Context<{ Bindings: Env }>(event.request);
+    const season = context.req.query("season") ?? null;
+    response = await refuseHotzone(context, parseSeasonParam(season) ? 404 : 400);
   } else if (isHotzonesPage && deps.hotzones) {
     response = await deps.hotzones(event.request, () => deps.resolve(event), requestId);
   } else if (isContentLeafPath(route.path)) {
