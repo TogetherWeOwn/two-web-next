@@ -9,9 +9,16 @@ import {
   validRecoveryZipPath,
 } from "./pure-hono-recovery-members.mjs";
 
-const WRANGLER = "4.156.1";
-const INTEGRITY =
-  "sha512-aZngeNRosSVly6wgxpaJAtFPtEoyM3hD8mLMMcHNXTnofMq4ZN+RMXOdHETyttNP+//+mfiD1hb5E8YFtiMMRQ==";
+const WRANGLER_INTEGRITIES = new Map([
+  [
+    "4.156.1",
+    "sha512-aZngeNRosSVly6wgxpaJAtFPtEoyM3hD8mLMMcHNXTnofMq4ZN+RMXOdHETyttNP+//+mfiD1hb5E8YFtiMMRQ==",
+  ],
+  [
+    "4.161.0",
+    "sha512-yOHZUYEq9AP7vutWmkCADzCKAH9ynfvZdoKJRIGTzkiailf9/L+jhT7WRb+9p6jRDtuBXVFtCzLo7kGAcGw+pA==",
+  ],
+]);
 const CONFIG = "wrangler.jsonc";
 const LOCK = "package-lock.json";
 const DIRECTORY = "public";
@@ -72,7 +79,7 @@ function listSource(repo, sourceSha) {
       if (!path.startsWith(`${DIRECTORY}/`) || !validRecoveryZipPath(archivePath))
         throw refusal("asset path");
       if (!recordRecoveryPath(aliases, archivePath)) throw refusal("aliased asset path");
-      const root = relative.split("/", 1)[0];
+      const root = relative.split("/", 1)[0].toLowerCase();
       if (
         root === ".assetsignore" ||
         relative.startsWith("_worker.js") ||
@@ -131,6 +138,7 @@ function sourceSelection(configBytes, lockBytes) {
     const stringsOrComments = /"(?:\\.|[^"\\])*"|\/\/[^\r\n]*|\/\*[\s\S]*?\*\//g;
     const stringsOrTrailingCommas = /"(?:\\.|[^"\\])*"|(?<=[\d"e\]}l]\s*),(?=\s*[}\]])/g;
     const json = readText(configBytes)
+      .replace(/^\uFEFF/, "")
       .replace(stringsOrComments, (token) => (token.startsWith('"') ? token : " "))
       .replace(stringsOrTrailingCommas, (token) => (token === "," ? "" : token));
     config = JSON.parse(json);
@@ -139,8 +147,8 @@ function sourceSelection(configBytes, lockBytes) {
     throw refusal("source selection parsing");
   }
   const pin = lock?.packages?.["node_modules/wrangler"];
-  if (pin?.version !== WRANGLER || pin.integrity !== INTEGRITY)
-    throw refusal("unsupported Wrangler pin");
+  const integrity = WRANGLER_INTEGRITIES.get(pin?.version);
+  if (!integrity || pin.integrity !== integrity) throw refusal("unsupported Wrangler pin");
   const production = config?.env?.production;
   const assets = config?.assets;
   if (
@@ -160,7 +168,10 @@ function sourceSelection(configBytes, lockBytes) {
     assets.run_worker_first !== true
   )
     throw refusal("unsupported Wrangler asset config");
-  return { directory: DIRECTORY, binding: "ASSETS", runWorkerFirst: true };
+  return {
+    version: pin.version,
+    selection: { directory: DIRECTORY, binding: "ASSETS", runWorkerFirst: true },
+  };
 }
 
 // Read only Git objects. The caller supplies the trusted repository and source SHA
@@ -175,7 +186,7 @@ export function inventoryPureHonoSourceAssets({ repo, sourceSha }) {
   const files = sourceBytes(repo, paths);
   const config = files.get(CONFIG);
   const lock = files.get(LOCK);
-  const selection = sourceSelection(config, lock);
+  const { version, selection } = sourceSelection(config, lock);
   const controls = {};
   const controlFiles = {};
   for (const name of CONTROL_PATHS) {
@@ -196,7 +207,7 @@ export function inventoryPureHonoSourceAssets({ repo, sourceSha }) {
     JSON.stringify({
       schema: "two.pure-hono-source-assets.v1",
       sourceSha,
-      wrangler: { version: WRANGLER, configSha256: sha256(config), lockSha256: sha256(lock) },
+      wrangler: { version, configSha256: sha256(config), lockSha256: sha256(lock) },
       selection,
       controlFiles,
       assetCount: count,

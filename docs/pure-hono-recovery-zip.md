@@ -21,13 +21,24 @@ The API does no file discovery or I/O. It does not prove the Worker is pure Hono
 
 ### Exact-source static asset inputs
 
-[`inventoryPureHonoSourceAssets({ repo, sourceSha })`](../ci/pure-hono-recovery-assets.mjs) reads raw Git objects in a trusted local repository at a full commit SHA. It returns sorted packager-ready `assets`, separate raw `controls` buffers or nulls, a compact JSON `receipt` buffer, and its `receiptSha256`. The receipt binds the commit, config and lock SHA-256, asset count and byte total, and byte counts and SHA-256 per selected asset and control. Checkout edits, untracked files and Git replacement refs cannot change its result.
+[`inventoryPureHonoSourceAssets({ repo, sourceSha })`](../ci/pure-hono-recovery-assets.mjs) reads raw Git objects in a trusted local repository at a full commit SHA. It returns sorted `assets` buffers, separate raw `controls` buffers or nulls, a compact JSON `receipt` buffer, and its `receiptSha256`. The receipt binds the commit, config and lock SHA-256, asset count and byte total, and byte counts and SHA-256 per selected asset and control. Checkout edits, untracked files and Git replacement refs cannot change its result.
 
-The supported upload profile uses the root `wrangler.jsonc`, `--env production`, inherited `./public`, `ASSETS` and worker-first dispatch with unset HTML, fallback and base-path fields, and the integrity-pinned [Wrangler 4.156.1](https://registry.npmjs.org/wrangler/-/wrangler-4.156.1.tgz). In that release, `normalizeAndValidateAssets` inherits the asset field as a whole, `buildAssetManifest` applies root-anchored exclusions, and `resolveAssetOptions` reads root `_headers` and `_redirects` separately for upload metadata. The receipt preserves exact UTF-8 control bytes, including a present empty file, apart from selected asset members. Matching names in subdirectories are ordinary assets. The input profile refuses root `.assetsignore`, root `_worker.js`-prefixed assets, legacy Sites, custom builds and environment asset overrides. The receipt's SHA-256 hashes identify recovery bytes. Wrangler's separate upload hash uses BLAKE3 over Base64 content and the file extension.
+To print the receipt, run this from the checkout containing the utility with the absolute repository path and full source commit SHA.
 
-The source reader applies the ZIP path profile, refuses aliases, links and non-regular entries, and caps selected files at 25 MiB each, 128 MiB combined and 4,094 members. Each control and the config can use up to 64 KiB, the lock up to 2 MiB and the receipt up to 1 MiB. Archive-wide limits still apply when the packager adds Worker and effective config bytes. Pass the selected buffers directly to the packager and preserve controls for the future effective-config producer.
+```sh
+node --input-type=module -e '
+import { inventoryPureHonoSourceAssets } from "./ci/pure-hono-recovery-assets.mjs";
+const [repo, sourceSha] = process.argv.slice(1);
+const { receipt } = inventoryPureHonoSourceAssets({ repo, sourceSha });
+process.stdout.write(receipt);
+' /absolute/path/to/repo "$source_sha"
+```
 
-Before using the receipt in an archive, bind it independently to the historical build and upload, including the actual asset directory after checkout and preparation, and confirm the absence of CLI or generated configuration overrides. The isolated restore drill still needs evidence for MIME types, HTML and fallback handling, redirects, response headers, caching and asset URL behavior. The receipt covers source inputs only. Remote asset byte equality and control effectiveness require separate evidence.
+The supported upload profile uses the root `wrangler.jsonc`, `--env production`, inherited `./public`, `ASSETS` and worker-first dispatch with unset HTML, fallback and base-path fields. The utility recognizes the exact lockfile integrity pins for [Wrangler 4.156.1](https://registry.npmjs.org/wrangler/-/wrangler-4.156.1.tgz) and [4.161.0](https://registry.npmjs.org/wrangler/-/wrangler-4.161.0.tgz). Both releases inherit the asset field as a whole, apply case-insensitive root exclusions, and read lowercase root `_headers` and `_redirects` separately for upload metadata. The receipt preserves exact UTF-8 control bytes, including a present empty file, apart from selected asset members. Matching names in subdirectories are ordinary assets. The input profile refuses root `.assetsignore`, root case variants of all three metadata names, root `_worker.js`-prefixed assets, legacy Sites, custom builds and environment asset overrides. A leading UTF-8 BOM is accepted in the config and retained in its digest. The receipt's SHA-256 hashes identify recovery bytes. Wrangler's separate upload hash uses BLAKE3 over Base64 content and the file extension.
+
+The source reader applies the ZIP path profile, refuses aliases, links and non-regular entries, and caps selected files at 25 MiB each, 128 MiB combined and 4,094 members. Each control and the config can use up to 64 KiB, the lock up to 2 MiB and the receipt up to 1 MiB.
+
+The receipt describes the tracked Git source. Checkout transforms, generated assets and CLI overrides can change the inputs Wrangler actually sees. The separate control buffers preserve source bytes for later inspection of header and redirect rules.
 
 ## Partial offline versioned config projection
 
