@@ -189,16 +189,27 @@ export async function publishPromotionPath(
   }
 }
 
-if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
-  const {
-    CLASSIFICATION,
-    GITHUB_EVENT_PATH,
-    GITHUB_OUTPUT,
-    GITHUB_REPOSITORY,
-    GITHUB_STEP_SUMMARY,
-    GH_TOKEN,
-  } = process.env;
+export async function runPromotionPathStep(
+  mode,
+  api,
+  { CLASSIFICATION, GITHUB_EVENT_PATH, GITHUB_OUTPUT, GITHUB_STEP_SUMMARY },
+) {
   const { number } = JSON.parse(readFileSync(GITHUB_EVENT_PATH, "utf8"));
+  if (mode === "classify") {
+    const { snapshot, value, error } = await classifyPromotionPath(api, number);
+    appendFileSync(GITHUB_OUTPUT, `classification=${JSON.stringify({ snapshot, value })}\n`);
+    if (error) throw error;
+  } else {
+    assert.equal(mode, "publish", "Expected classify or publish");
+    const classification = JSON.parse(CLASSIFICATION || "{}");
+    await publishPromotionPath(api, number, classification, (summary) =>
+      appendFileSync(GITHUB_STEP_SUMMARY, summary),
+    );
+  }
+}
+
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  const { GITHUB_REPOSITORY, GH_TOKEN } = process.env;
   const api = (method, path, body, budget) =>
     fetch(`https://api.github.com/repos/${GITHUB_REPOSITORY}${path}`, {
       method,
@@ -212,16 +223,5 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
       redirect: "error",
       signal: AbortSignal.any([AbortSignal.timeout(15_000), ...(budget ? [budget] : [])]),
     });
-  const mode = process.argv[2];
-  if (mode === "classify") {
-    const { snapshot, value, error } = await classifyPromotionPath(api, number);
-    appendFileSync(GITHUB_OUTPUT, `classification=${JSON.stringify({ snapshot, value })}\n`);
-    if (error) throw error;
-  } else {
-    assert.equal(mode, "publish", "Expected classify or publish");
-    const classification = JSON.parse(CLASSIFICATION || "{}");
-    await publishPromotionPath(api, number, classification, (summary) =>
-      appendFileSync(GITHUB_STEP_SUMMARY, summary),
-    );
-  }
+  await runPromotionPathStep(process.argv[2], api, process.env);
 }

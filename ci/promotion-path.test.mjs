@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { setImmediate } from "node:timers/promises";
-import { classifyPromotionPath, isPromotionPath, publishPromotionPath } from "./promotion-path.mjs";
+import {
+  classifyPromotionPath,
+  isPromotionPath,
+  publishPromotionPath,
+  runPromotionPathStep,
+} from "./promotion-path.mjs";
 
 const pull = "/pulls/42";
 const issueLabels = "/issues/42/labels";
@@ -72,7 +79,7 @@ function github(rows, options = {}) {
   const publish = (classification, signal) =>
     publishPromotionPath(api, 42, classification, (entry) => summary.push(entry), signal);
   const run = async () => publish(await classify(options.signal));
-  return { labels, pages, writes, summary, classify, publish, run };
+  return { api, labels, pages, writes, summary, classify, publish, run };
 }
 
 test("only promotion surfaces match, including directly called tooling", () => {
@@ -166,7 +173,7 @@ test("ref changes prevent publication, including same-SHA retarget and a race du
   assert.ok(moved.summary[0].includes("verdict **unknown**"));
 });
 
-test("a PR event burst cancels superseded reads and drains in-flight label writes", async () => {
+test("a PR event burst cancels superseded reads and drains in-flight label writes", async (t) => {
   const workflow = readFileSync(
     new URL("../.github/workflows/promotion-path.yml", import.meta.url),
     "utf8",
@@ -182,6 +189,10 @@ test("a PR event burst cancels superseded reads and drains in-flight label write
   const newestHead = "c".repeat(40);
   const newestBase = "d".repeat(40);
   const newest = { head: { sha: newestHead }, base: { sha: newestBase, ref: "stable" } };
+  const scratch = mkdtempSync(join(tmpdir(), "promotion-path-burst-"));
+  t.after(() => rmSync(scratch, { recursive: true, force: true }));
+  const event = join(scratch, "event.json");
+  writeFileSync(event, JSON.stringify({ number: 42 }));
 
   for (const point of ["read", "delete", "add"]) {
     const reading = new AbortController();
@@ -246,11 +257,31 @@ test("a PR event burst cancels superseded reads and drains in-flight label write
       assert.match(first.summary[0], /verdict \*\*unknown\*\*/);
       assert.deepEqual([...first.labels], ["unrelated"]);
     }
-    await pending.run();
+    // Run the same entry point as both workflow steps. Resolve the output name
+    // from the publisher's environment mapping so a wiring change is exercised.
+    const [, environmentName, outputName] =
+      workflow.match(/^          (\w+): \$\{\{ steps\.classify\.outputs\.(\w+) \}\}$/m) ?? [];
+    assert.ok(environmentName && outputName, "publisher reads the classifier step output");
+    const output = join(scratch, `${point}.output`);
+    const summary = join(scratch, `${point}.summary`);
+    await runPromotionPathStep("classify", pending.api, {
+      GITHUB_EVENT_PATH: event,
+      GITHUB_OUTPUT: output,
+    });
+    const value = readFileSync(output, "utf8")
+      .trimEnd()
+      .split("\n")
+      .find((line) => line.startsWith(`${outputName}=`))
+      ?.slice(outputName.length + 1);
+    await runPromotionPathStep("publish", pending.api, {
+      [environmentName]: value,
+      GITHUB_EVENT_PATH: event,
+      GITHUB_STEP_SUMMARY: summary,
+    });
     assert.deepEqual(edited.pages, []);
     assert.deepEqual([...pending.labels], ["unrelated", yes]);
     assert.ok(
-      pending.summary[0].includes(
+      readFileSync(summary, "utf8").includes(
         `head \`${newestHead}\` · base \`${newestBase}\` · verdict **yes**`,
       ),
     );
