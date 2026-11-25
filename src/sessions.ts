@@ -69,9 +69,11 @@ export type SessionStore = {
   ) => Promise<void>;
   get: (tokenHash: string) => Promise<DbSessionRow | null>;
   /** Read the exact live token row without writes or grace. remainingMs is measured
-   * on the store clock at read time, before transport; it is not an epoch deadline. */
+   * on the store clock at read time, before transport; it is not an epoch deadline.
+   * When required, check role freshness against the same clock in the same read. */
   getLive: (
     tokenHash: string,
+    options?: { requireFreshRoles: true },
   ) => Promise<{ userId: string; member: boolean; remainingMs: number } | null>;
   /** Mid-session role recheck (SESSION_ROLE_RECHECK_SECONDS): true when the
    * live row carries privilege (member or moderator) and its bits were last
@@ -265,16 +267,30 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
       const g = grace[0];
       return g ? toRow(g) : null;
     },
-    async getLive(tokenHash) {
-      const [row] = await sql<{ user_id: string; member: boolean; remaining_ms: number }[]>`
-        with db_clock as (select clock_timestamp() as observed_at)
-        select user_id, member,
-          floor(extract(epoch from (least(expires_at,
-            created_at + make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})) - observed_at))
-            * 1000)::double precision as remaining_ms
-        from web_sessions cross join db_clock
-        where token_hash = ${tokenHash} and revoked_at is null and expires_at > observed_at
-          and created_at > observed_at - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})`;
+    async getLive(tokenHash, options) {
+      type LiveRow = { user_id: string; member: boolean; remaining_ms: number };
+      // Only the proof depends on the role stamp column. Ordinary liveness
+      // reads retain compatibility with schemas from before the role recheck.
+      const [row] = options?.requireFreshRoles
+        ? await sql<LiveRow[]>`
+          with db_clock as (select clock_timestamp() as observed_at)
+          select user_id, member,
+            floor(extract(epoch from (least(expires_at,
+              created_at + make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})) - observed_at))
+              * 1000)::double precision as remaining_ms
+          from web_sessions cross join db_clock
+          where token_hash = ${tokenHash} and revoked_at is null and expires_at > observed_at
+            and created_at > observed_at - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})
+            and coalesce(roles_checked_at, created_at) > observed_at - make_interval(secs => ${SESSION_ROLE_RECHECK_SECONDS})`
+        : await sql<LiveRow[]>`
+          with db_clock as (select clock_timestamp() as observed_at)
+          select user_id, member,
+            floor(extract(epoch from (least(expires_at,
+              created_at + make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})) - observed_at))
+              * 1000)::double precision as remaining_ms
+          from web_sessions cross join db_clock
+          where token_hash = ${tokenHash} and revoked_at is null and expires_at > observed_at
+            and created_at > observed_at - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})`;
       return row
         ? { userId: row.user_id, member: row.member === true, remainingMs: row.remaining_ms }
         : null;
@@ -610,11 +626,17 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
         moderator: g.moderator,
       };
     },
-    async getLive(hash) {
+    async getLive(hash, options) {
       const r = rows.get(hash);
       if (!r) return null;
+      const observedAt = clock();
+      if (
+        options?.requireFreshRoles &&
+        r.rolesCheckedAt <= observedAt - SESSION_ROLE_RECHECK_SECONDS * 1000
+      )
+        return null;
       const remainingMs =
-        Math.min(r.expiresAt, r.createdAt + SESSION_ABSOLUTE_MAX_AGE_SECONDS * 1000) - clock();
+        Math.min(r.expiresAt, r.createdAt + SESSION_ABSOLUTE_MAX_AGE_SECONDS * 1000) - observedAt;
       return remainingMs > 0 ? { userId: r.userId, member: r.member, remainingMs } : null;
     },
     async roleRecheckDue(hash) {

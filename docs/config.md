@@ -162,6 +162,12 @@ normal cache policy.
 `POST /__probe/voice-move` requires a staging `Origin`, the dedicated Discord member's current session, and JSON with only `channel_id` (4 KiB cap).
 Set `BOT_ENDPOINT_URL` to `https://two-bot-next-staging.5150.workers.dev`. An outside-fixture source yields unconfirmed 502 without retry.
 
+`POST /__probe/voice-move/session` shares the staging flag, exact `Origin`, configured member and
+ordered channel pins, and 4 KiB body cap. Send JSON with `discord_id` and `channel_ids` as
+assertions. The probe requires the exact live bearer and a fresh membership check in the session
+store. On success it returns `matched`, `observed_at`, and the Worker `revision` from the same
+metadata as `/up`. The probe only reads the session store. The move route owns Bot transport.
+
 Live qualification needs the dedicated account, two fixture channels, verified occupancy and
 Connect permissions, and an exclusive staging window with the [Bot lease opt-in](https://github.com/TogetherWeOwn/two-bot-next/pull/2427).
 At teardown, clear the Web settings and verify Web refusal and Bot OFF after lease release.

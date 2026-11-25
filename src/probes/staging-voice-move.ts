@@ -1,4 +1,4 @@
-import type { Context, Hono } from "hono";
+import type { Context, Hono, MiddlewareHandler } from "hono";
 import { requestBodyLimit } from "../body-limit";
 import { send } from "../bot/client-transport";
 import type { Env } from "../env";
@@ -9,8 +9,10 @@ import { safeRequestId } from "../request-log";
 import { crossOriginRefusal } from "../same-origin";
 import { readContextSession } from "../session-hono";
 import { AUTH_THROTTLE_PER_MINUTE, throttle } from "../throttle";
+import { revisionReadiness } from "../up-revision";
 
 const STAGING_BOT_ORIGIN = "https://two-bot-next-staging.5150.workers.dev";
+const WORKER_VERSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 type Web = { Bindings: Env };
 type Receipt = Awaited<ReturnType<typeof send>>;
 const OUTCOMES: ReadonlySet<unknown> = new Set([
@@ -23,11 +25,41 @@ const OUTCOMES: ReadonlySet<unknown> = new Set([
   "bot_not_permitted",
 ]);
 
-function isMoveId(value: string | undefined): value is string {
+function isMoveId(value: unknown): value is string {
   return (
     typeof value === "string" && /^[1-9][0-9]{16,19}$/.test(value) && BigInt(value) < 2n ** 64n
   );
 }
+
+function stagingVoiceFixture(env: Env) {
+  const memberId = env.STAGING_VOICE_MOVE_MEMBER_ID;
+  const channelIds = env.STAGING_VOICE_MOVE_CHANNEL_IDS;
+  // Two snowflakes (up to 20 digits each) and one comma.
+  const channels = channelIds && channelIds.length <= 41 ? channelIds.split(",") : [];
+  const [first, second] = channels;
+  if (
+    !isMoveId(memberId) ||
+    isQaFixtureId(memberId) ||
+    channels.length !== 2 ||
+    !isMoveId(first) ||
+    !isMoveId(second) ||
+    first === second
+  )
+    return null;
+  return { memberId, first, second };
+}
+
+const stagingVoiceGate: MiddlewareHandler<Web> = async (c, next) => {
+  c.header("cache-control", "no-store, private");
+  if (
+    c.env.STAGING_VOICE_MOVE_ENABLED !== "true" ||
+    c.env.APP_URL !== STAGING_APP_URL ||
+    new URL(c.req.url).origin !== STAGING_APP_URL
+  )
+    return jsonRefusal(c, "not_found", 404);
+  if (c.req.header("origin") !== STAGING_APP_URL) return crossOriginRefusal(c);
+  await next();
+};
 
 const unconfirmed = (c: Context<Web>): Response => c.json({ error: "bot_unavailable" }, 502);
 
@@ -60,45 +92,66 @@ function moveResponse(c: Context<Web>, answer: Receipt, fixtureSource: string): 
   return c.json({ ok: false, request_id: requestId, error }, status);
 }
 
+async function matchStagingVoiceSession(c: Context<Web>): Promise<Response> {
+  const fixture = stagingVoiceFixture(c.env);
+  const { revision } = revisionReadiness(c.env.CF_VERSION_METADATA);
+  if (
+    !fixture ||
+    !c.env.SESSION_SECRET?.trim() ||
+    !revision?.commit ||
+    !WORKER_VERSION_ID.test(revision.version_id)
+  )
+    return jsonRefusal(c, "not_found", 404);
+
+  if (new URL(c.req.url).search) return jsonRefusal(c, "invalid", 400);
+  if (!isJsonMediaType(c.req.header("content-type")))
+    return jsonRefusal(c, "unsupported_media_type", 415);
+  const body = await c.req
+    .json<{ discord_id?: unknown; channel_ids?: unknown }>()
+    .catch(() => null);
+  if (
+    !body ||
+    Object.keys(body).length !== 2 ||
+    !isMoveId(body.discord_id) ||
+    !Array.isArray(body.channel_ids) ||
+    body.channel_ids.length !== 2 ||
+    !body.channel_ids.every(isMoveId)
+  )
+    return jsonRefusal(c, "invalid", 400);
+  const { memberId, first, second } = fixture;
+  if (
+    body.discord_id !== memberId ||
+    body.channel_ids[0] !== first ||
+    body.channel_ids[1] !== second
+  )
+    return jsonRefusal(c, "forbidden", 403);
+
+  const session = await readContextSession(c, {
+    currentMemberId: memberId,
+    requireFreshRoles: true,
+  });
+  if (!session) return jsonRefusal(c, "forbidden", 403);
+
+  return c.json({ matched: true, observed_at: new Date().toISOString(), revision });
+}
+
 export function registerStagingVoiceMove(app: Hono<Web>): void {
   app.post(
     "/__probe/voice-move",
-    async (c, next) => {
-      c.header("cache-control", "no-store, private");
-      if (
-        c.env.STAGING_VOICE_MOVE_ENABLED !== "true" ||
-        c.env.APP_URL !== STAGING_APP_URL ||
-        new URL(c.req.url).origin !== STAGING_APP_URL
-      )
-        return jsonRefusal(c, "not_found", 404);
-      if (c.req.header("origin") !== STAGING_APP_URL) return crossOriginRefusal(c);
-      await next();
-    },
+    stagingVoiceGate,
     requestBodyLimit("action"),
     throttle("staging-voice-move", AUTH_THROTTLE_PER_MINUTE),
     async (c) => {
-      const {
-        STAGING_VOICE_MOVE_MEMBER_ID: memberId,
-        BOT_ENDPOINT_URL: url,
-        BOT_SHARED_SECRET: secret,
-        BOT_KEY_ID: keyId,
-      } = c.env;
-      const channelIds = c.env.STAGING_VOICE_MOVE_CHANNEL_IDS;
-      // Two snowflakes (up to 20 digits each) and one comma.
-      const channels = channelIds && channelIds.length <= 41 ? channelIds.split(",") : [];
-      const [first, second] = channels;
+      const { BOT_ENDPOINT_URL: url, BOT_SHARED_SECRET: secret, BOT_KEY_ID: keyId } = c.env;
+      const fixture = stagingVoiceFixture(c.env);
       if (
-        !isMoveId(memberId) ||
-        isQaFixtureId(memberId) ||
-        channels.length !== 2 ||
-        !isMoveId(first) ||
-        !isMoveId(second) ||
-        first === second ||
+        !fixture ||
         (url !== STAGING_BOT_ORIGIN && url !== `${STAGING_BOT_ORIGIN}/`) ||
         !secret?.trim() ||
         !keyId?.trim()
       )
         return jsonRefusal(c, "not_found", 404);
+      const { memberId, first, second } = fixture;
 
       if (new URL(c.req.url).search) return jsonRefusal(c, "invalid", 400);
       if (!isJsonMediaType(c.req.header("content-type")))
@@ -124,5 +177,11 @@ export function registerStagingVoiceMove(app: Hono<Web>): void {
         return unconfirmed(c);
       }
     },
+  );
+  app.post(
+    "/__probe/voice-move/session",
+    stagingVoiceGate,
+    requestBodyLimit("action"),
+    matchStagingVoiceSession,
   );
 }

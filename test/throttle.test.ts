@@ -40,6 +40,8 @@ const EXEMPT: Record<string, string> = {
     "evidence-bearer refusal; action cap first (oversized 413 DB-free), then 405; no throttle, session, or source touch",
   "POST /mcp":
     "public MCP; in-handler shared 60/min public-read budget, same 429 envelope as the public API (B2)",
+  "POST /__probe/voice-move/session":
+    "read-only staging check; exact origin, action body cap and pinned assertions before any session lookup",
 };
 
 describe("every mutating route is throttled", () => {
