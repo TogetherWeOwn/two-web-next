@@ -243,6 +243,25 @@ test("cutover ledger admits exactly 1033 or 1037 and exact version readiness", (
   }
 });
 
+test("cutover readiness bounds deferred migrations on the canonical 1033 ledger", () => {
+  const prefixes = ledgerPrefixes(ledgerJournal);
+  const body = {
+    db: "ok",
+    pending_migrations: 5,
+    migration_ledger: prefixes["1033"],
+    revision: { version_id: kit, commit: sourceSha },
+  };
+  const expected = { version: kit, commit: sourceSha, state: "1033" };
+  const deferred = { ...expected, allowDeferred: true };
+
+  assert.equal(verifyReady(503, body, prefixes, deferred), "1033");
+  assert.throws(
+    () => verifyReady(503, { ...body, pending_migrations: 6 }, prefixes, deferred),
+    /unexpected deferred migration count/,
+  );
+  assert.throws(() => verifyReady(503, body, prefixes, expected), /readiness/);
+});
+
 test("isolated Workers API GET bounds and disposes provider responses", async (t) => {
   const account = "a".repeat(32);
   const token = "synthetic-token";
