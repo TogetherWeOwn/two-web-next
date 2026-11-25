@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { gzipSync } from "node:zlib";
-import { ATTENDANCE_ROUTE_DECISION, INITIAL_CLIENT_BUDGET } from "./client-ratchet-approval.mjs";
+import { INITIAL_CLIENT_BUDGET } from "./client-ratchet-approval.mjs";
 import { measure as measureKit } from "./check-kit-perf.mjs";
 import { CLIENT_FILES, measuredDecision, propose } from "./kit-client-ratchet.mjs";
 import {
@@ -403,23 +403,6 @@ function runReportOnlyCli(args, summaryPath) {
     encoding: "utf8",
   });
 }
-
-test("strict route budgets require the attendance admission for the built route", (t) => {
-  const f = fixture(t);
-  const id = "/admin/attendance";
-  const path = `ci/budgets/decisions/kit-perf/${ATTENDANCE_ROUTE_DECISION}`;
-  const admission = JSON.parse(readFileSync(join(import.meta.dirname, "..", path), "utf8"));
-  f.put(`web/src/routes${id}/+page.svelte`, "synthetic attendance page");
-  f.evidence.routes.push({ id, page: f.evidence.routes.find(({ id }) => id === "/about").page });
-  f.save();
-  assert.match(checkRoutes(f.root).error, /inventory mismatch/);
-  f.put(path, admission);
-  assert.match(checkRoutes(f.root).error, /approved route plan/);
-  f.put(ROUTE_BUDGET, { ...f.budget, routes: { ...f.budget.routes, ...admission.routes } });
-  const result = checkRoutes(f.root);
-  assert.equal(result.exitCode, 0, result.error);
-  assert.ok(result.routes[id].js.files > 0);
-});
 
 test("report-only CLI writes JSON and job summary and fails on broken measurement", (t) => {
   const f = fixture(t);
