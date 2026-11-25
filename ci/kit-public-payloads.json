@@ -240,6 +240,51 @@
   ],
   "outOfScope": [
     {
+      "route": "GET /llms.txt",
+      "binding": "web/src/routes/llms.txt/+server.ts",
+      "reason": "Static Markdown has no Kit data representation. The installed Worker fixture compares the public response across both owners."
+    },
+    {
+      "route": "GET /about.md",
+      "binding": "web/src/routes/about.md/+server.ts",
+      "reason": "Static Markdown has no Kit data representation. The installed Worker fixture compares the public response across both owners."
+    },
+    {
+      "route": "GET /faq.md",
+      "binding": "web/src/routes/faq.md/+server.ts",
+      "reason": "Static Markdown has no Kit data representation. The installed Worker fixture compares the public response across both owners."
+    },
+    {
+      "route": "GET /rules.md",
+      "binding": "web/src/routes/rules.md/+server.ts",
+      "reason": "Static Markdown has no Kit data representation. The installed Worker fixture compares the public response across both owners."
+    },
+    {
+      "route": "GET /privacy.md",
+      "binding": "web/src/routes/privacy.md/+server.ts",
+      "reason": "Static Markdown has no Kit data representation. The installed Worker fixture compares the public response across both owners."
+    },
+    {
+      "route": "GET /join.md",
+      "binding": "web/src/routes/join.md/+server.ts",
+      "reason": "Static Markdown has no Kit data representation. The installed Worker fixture compares the public response across both owners."
+    },
+    {
+      "route": "GET /community",
+      "binding": "web/src/routes/community/+server.ts",
+      "reason": "The vanity redirect has no Kit data representation. The installed Worker fixture compares the public response across both owners."
+    },
+    {
+      "route": "GET /discord",
+      "binding": "web/src/routes/discord/+server.ts",
+      "reason": "The vanity redirect has no Kit data representation. The installed Worker fixture compares the public response across both owners."
+    },
+    {
+      "route": "GET /login",
+      "binding": "web/src/routes/login/+server.ts",
+      "reason": "The vanity redirect has no Kit data representation. The installed Worker fixture compares the public response across both owners."
+    },
+    {
       "route": "GET /admin/ops-overrides",
       "binding": "web/src/routes/admin/ops-overrides/+server.ts",
       "reason": "Private operator record behind independent control-bearer admission."

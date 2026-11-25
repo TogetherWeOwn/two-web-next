@@ -398,6 +398,7 @@ exactly once.
 | `src/session-role-refresh.ts` | auth |
 | `src/sessions.ts` | auth |
 | `src/static-leaves.tsx` | entry |
+| `src/static-public.ts` | entry |
 | `src/throttle.ts` | http-guard |
 | `src/trust-hosts.ts` | http-guard |
 | `src/up-body.ts` | observability |
