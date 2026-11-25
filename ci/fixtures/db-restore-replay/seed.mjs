@@ -104,6 +104,7 @@ export async function seed(cluster, sourcePasswords, source) {
       insert into public.queue_jobs (id) values (1);
       alter table public.agent_event_grants add column updated_at timestamptz;
       grant select, insert, update, delete on public.events, public.rsvps, public.queue_jobs to two_web_app;
+      grant insert on public.discord_event_snapshots to two_web_app;
       grant select on public.events, public.rsvps to two_web_backup;
       grant usage, select on sequence public.events_id_seq to two_web_backup;
       grant select (id) on public.web_session_grace to two_web_backup;
