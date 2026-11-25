@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, URL } from "node:url";
 import { expect, it, type TestContext } from "vitest";
 
 const VERIFIER = fileURLToPath(new URL("../ci/verify-release-workflow-pin.mjs", import.meta.url));
@@ -121,7 +121,7 @@ it("refuses a moved tag even when it still peels to the proposed pin", (t) => {
   expectRefusal(f.verify(), "local release tag differs from captured tag ref");
 });
 
-it.for([ROLLBACK, RELEASE])("refuses a byte change in %s", (path, t) => {
+it.for([ROLLBACK, RELEASE] as const)("refuses a byte change in %s", (path, t) => {
   const f = fixture(t);
   f.write(path, CALLEES[path].replaceAll("\n", "\r\n"));
   const different = f.commit("change workflow line endings");
