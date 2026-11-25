@@ -142,20 +142,23 @@ describe("Isolated Kit season board render", () => {
     expect(html).not.toMatch(/42 recorded events|12 recorded events|fixture-echo-event/);
   });
 
-  it("withholds stale ranking positions for an opted-out viewer", () => {
-    const optedOut = frozenSeasonFixture("opted-out");
+  it.each([
+    ["opted-out", "You are opted out of leaderboards."],
+    ["zero", "You have 0 recorded events this season."],
+  ] as const)("withholds stale ranking positions for a %s viewer", (state, message) => {
+    const fixture = frozenSeasonFixture(state);
     const html = renderMemberBoard("season", "overall", true, false, {
-      ...optedOut,
+      ...fixture,
       result: {
         status: "ready",
-        viewer: "opted-out",
+        viewer: state,
         rows: [
           { username: "Private fixture marker", rank: 1, count: 9, isViewer: true },
           { username: "Fixture neighbor", rank: 2, count: 8, isViewer: false },
         ],
       },
-    } satisfies typeof optedOut);
-    expect(html).toContain("You are opted out of leaderboards.");
+    } satisfies typeof fixture);
+    expect(html).toContain(message);
     expect(html).not.toMatch(
       /Private fixture marker|Fixture neighbor|<table|temporarily unavailable/,
     );
