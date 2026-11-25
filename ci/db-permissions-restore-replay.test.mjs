@@ -386,6 +386,9 @@ registerHooks({
   };
   cli(original, 10);
   cli(recovered, 1);
+  const legacy = { ...original };
+  delete legacy.servingRole;
+  cli(legacy, 1);
 
   const connect = () => fixture;
   const fetchImpl = () => assert.fail("Traffic must stay offline");
