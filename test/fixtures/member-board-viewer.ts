@@ -314,5 +314,14 @@ export function memberBoardDocument(twin: Twin, scope: Scope, overrides: Data = 
           `src="data:image/svg+xml;base64,${readFileSync(join(root, "public/logo.svg")).toString("base64")}"`,
         )
       : inert(body);
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${inert(head)}<style>${styles}</style></head><body${bodyAttrs}>${content}</body></html>`;
+  // The detached frozen captures block requests. Embed the served font files
+  // in the existing declarations so the browser measures the pinned faces.
+  const fixtureStyles =
+    twin === "season" && "echo" in overrides
+      ? styles.replaceAll(/url\(\/fonts\/([a-z0-9-]+\.woff2)\)/g, (_, filename: string) => {
+          const font = readFileSync(join(root, "public/fonts", filename)).toString("base64");
+          return `url(data:font/woff2;base64,${font})`;
+        })
+      : styles;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${inert(head)}<style>${fixtureStyles}</style></head><body${bodyAttrs}>${content}</body></html>`;
 }

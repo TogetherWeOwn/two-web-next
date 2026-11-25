@@ -3897,6 +3897,15 @@ test("isolated Kit frozen season standings fit both widths in each state", async
     await page.setViewportSize(size);
     for (const state of ["ranked", "opted-out", "zero", "unavailable"] as const) {
       await page.setContent(memberBoardDocument("season", "overall", frozenSeasonFixture(state)));
+      const fonts = await page.evaluate(() =>
+        Promise.all(
+          ["Mona Sans", "Fragment Mono"].map(async (family) => {
+            const faces = await document.fonts.load(`16px "${family}"`, "Recorded events");
+            return faces.some((face) => face.status === "loaded");
+          }),
+        ),
+      );
+      expect(fonts, "the fixture loaded both pinned fonts").toEqual([true, true]);
       await expect(
         page.getByRole("heading", { name: "Season attendance standings" }),
       ).toBeVisible();
@@ -3905,6 +3914,7 @@ test("isolated Kit frozen season standings fit both widths in each state", async
       if (state === "ranked" || state === "opted-out") {
         const countHeader = table.getByRole("columnheader", { name: "Recorded events" });
         await expect(countHeader).toBeVisible();
+        await expect(countHeader).toHaveCSS("font-family", /^"?Mona Sans"?[,]/);
         expect(
           await countHeader.evaluate((cell) => {
             const word = document.createRange();
