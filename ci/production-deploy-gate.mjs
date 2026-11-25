@@ -109,6 +109,36 @@ export function isAlreadyLive(deploySha, liveSha) {
   );
 }
 
+// GitHub can include up to 300 file diffs on the first page even with one
+// commit requested. 16 MiB leaves room for those diffs and the commit metadata.
+const MAX_PROMOTION_COMPARE_BYTES = 16 * 1024 * 1024;
+
+async function readPromotionComparison(response) {
+  let reader;
+  try {
+    reader = response.body.getReader();
+    const bytes = new Uint8Array(MAX_PROMOTION_COMPARE_BYTES);
+    let length = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return JSON.parse(new TextDecoder().decode(bytes.subarray(0, length)));
+      if (value.byteLength > bytes.length - length) break;
+      bytes.set(value, length);
+      length += value.byteLength;
+    }
+  } catch {
+    throw new Error("Promotion ancestry lookup returned unreadable JSON");
+  } finally {
+    if (reader) {
+      // Count decoded body bytes independently of the advertised Content-Length.
+      // A slow cancellation must not delay a refusal.
+      void reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+    }
+  }
+  throw new Error("Promotion ancestry response exceeds 16 MiB");
+}
+
 // Default selection is monotonic even when staging eligibility falls back to
 // an older green. Run from the workflow-head checkout before candidate code.
 // An explicit dispatch only selects the existing recovery route; it grants no
@@ -138,7 +168,7 @@ export async function checkPromotionAncestry(env, { fetchImpl = fetch, refusal }
   }
   if (!env.GITHUB_TOKEN) throw new Error("Promotion ancestry requires GITHUB_TOKEN");
   const response = await fetchImpl(
-    `https://api.github.com/repos/${env.GITHUB_REPOSITORY}/compare/${liveSha}...${targetSha}`,
+    `https://api.github.com/repos/${env.GITHUB_REPOSITORY}/compare/${liveSha}...${targetSha}?per_page=1`,
     {
       headers: {
         Authorization: `Bearer ${env.GITHUB_TOKEN}`,
@@ -152,7 +182,7 @@ export async function checkPromotionAncestry(env, { fetchImpl = fetch, refusal }
   if (!response.ok) {
     throw new Error(`Promotion ancestry lookup failed (HTTP ${response.status})`);
   }
-  const comparison = await response.json();
+  const comparison = await readPromotionComparison(response);
   // Exact SHA refs bind the requested head. Require the base and merge-base
   // identities plus consistent counts, not a status string alone. Do not use
   // the commits array: GitHub can paginate/truncate it for large comparisons.
