@@ -1,9 +1,14 @@
 import { SYNC_EVENT, backoffFor } from "./constants";
 import { withInternalActionDeadline } from "./internal-action-deadline";
-import { botRefusalReason, sanitizeQueueScope, terminalFailureReason } from "./queue-error";
+import {
+  botRefusalReason,
+  queueExceptionClass,
+  sanitizeQueueScope,
+  terminalFailureReason,
+} from "./queue-error";
 import { admitRetryDelay, MAX_RETRY_DELAY_SECONDS } from "./retry-delay";
 import { BotTerminalError, BotTransportError, SyncRetryPersistenceError } from "./types";
-import type { BotClient, BotFailure, EventStore, UniqueLock } from "./types";
+import type { BotClient, BotFailure, EventStore, SyncAttempt, UniqueLock } from "./types";
 import { safeRequestId } from "../request-log";
 import {
   refusalRetryCode,
@@ -29,6 +34,7 @@ export type Outcome =
 export const uniqueKey = (eventKey: string) => `sync-event:${eventKey}`;
 
 const LOCK_TIMEOUT_MS = 2000;
+export const SYNC_CLAIM_ACTIVE_MS = 60_000;
 /**
  * Per-op bound for the producer's lock-acquire and queue-send.
  * Every neighboring op races a deadline; acquire and send were awaited bare,
@@ -220,6 +226,31 @@ export async function handleSyncEvent(
       ),
     };
   }
+  const activeOwner = (attempt: SyncAttempt) =>
+    attempt.state === "pending" &&
+    attempt.idempotencyKey === msg.idempotencyKey &&
+    !attempt.nextAttemptAt &&
+    !!attempt.claimStartedAt &&
+    now().getTime() - attempt.claimStartedAt.getTime() < SYNC_CLAIM_ACTIVE_MS;
+  const retryOwner = { retryInSeconds: SYNC_EVENT.uniqueForSeconds };
+  const recheckOwner = async (): Promise<Outcome> => {
+    // A failed read leaves ownership unknown. Keep the shared carrier and lease.
+    try {
+      const current = await deps.events.pendingSync(msg.eventKey);
+      return current && activeOwner(current) ? retryOwner : waiting();
+    } catch (error) {
+      console.warn("sync claim ownership read failed", { exception: queueExceptionClass(error) });
+      return retryOwner;
+    }
+  };
+  if (
+    deps.events.observeActiveClaims &&
+    (prepared.requestAttempts >= SYNC_EVENT.tries || attempts >= SYNC_EVENT.tries) &&
+    activeOwner(prepared)
+  ) {
+    // A duplicate must not retire the last carrier while its owner is settling.
+    return retryOwner;
+  }
   if (prepared.requestAttempts >= SYNC_EVENT.tries) {
     return { failed: "request retry budget exhausted; unresolved identity retained" };
   }
@@ -232,10 +263,18 @@ export async function handleSyncEvent(
   // ledger availability Date); remaining > 0 keeps the 1s floor, the cap sets
   // the 86400s ceiling. Both bounds are integers: remaining is ceiled above.
   if (remaining > 0) return waiting(Math.min(remaining, MAX_RETRY_DELAY_SECONDS));
+  // Protection redeliveries may observe or settle, but never start another request.
+  if (deps.events.observeActiveClaims && attempts > SYNC_EVENT.tries) return recheckOwner();
   // A durable closed claim fences concurrent carriers until its result commits.
   const claimedAt = now();
   const attempt = await deps.events.claimSync(prepared, claimedAt);
-  if (!attempt) return waiting();
+  if (!attempt) {
+    // Preparation can precede a concurrent winner's claim. Re-read its ownership
+    // before the last carrier retires, rather than relying on the stale snapshot.
+    return deps.events.observeActiveClaims && attempts >= SYNC_EVENT.tries
+      ? recheckOwner()
+      : waiting();
+  }
   // A never-attempted snapshot may have become obsolete since preparation.
   // Its atomic first claim retires it without remote I/O or revision acknowledgement.
   if (attempt.state !== "pending") return { done: true };

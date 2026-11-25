@@ -59,6 +59,7 @@ function memoryEvents(): EventStore {
         ...stored,
         requestAttempts: stored.requestAttempts + 1,
         nextAttemptAt: null,
+        claimStartedAt: now,
       };
       attempts.set(attempt.idempotencyKey, claimed);
       return claimed;
@@ -349,6 +350,123 @@ describe("queue carrier lease ownership", () => {
       }
     },
   );
+
+  it.each([
+    { delivery: 6, read: "found" },
+    { delivery: 7, read: "found" },
+    { delivery: 6, read: "failed" },
+    { delivery: 7, read: "failed" },
+  ])(
+    "rechecks ownership before retiring carrier delivery $delivery ($read read)",
+    async ({ delivery, read }) => {
+      const { lock } = memoryLock();
+      const depth = ledger();
+      const leaseToken = await lock.acquire(key, 300);
+      const body: SyncMessage = {
+        kind: "sync-event",
+        eventKey,
+        idempotencyKey: "shared",
+        leaseToken: leaseToken!,
+        jobId: "loser",
+      };
+      const prepared = (await events.prepareSync(
+        eventKey,
+        body.idempotencyKey,
+        new Date(),
+      )) as SyncAttempt;
+      for (let i = 0; i < 5; i++) {
+        const current = (await events.prepareSync(
+          eventKey,
+          body.idempotencyKey,
+          new Date(),
+        )) as SyncAttempt;
+        const claimed = await events.claimSync(current, new Date());
+        await events.deferSync(claimed!, new Date());
+      }
+      let releaseLoser!: () => void;
+      const loserGate = new Promise<void>((resolve) => {
+        releaseLoser = resolve;
+      });
+      let preparedLoser!: () => void;
+      const loserPrepared = new Promise<void>((resolve) => {
+        preparedLoser = resolve;
+      });
+      const observed = {
+        ...events,
+        observeActiveClaims: true as const,
+        pendingSync: vi.fn(async (key: string) => {
+          if (read === "failed") throw new Error("fixture ownership read unavailable");
+          return events.pendingSync(key);
+        }),
+        prepareSync: vi.fn(async () => {
+          preparedLoser();
+          await loserGate;
+          return { ...prepared, requestAttempts: 5 };
+        }),
+      };
+      const send = vi.fn(async () => success);
+      const claim = vi.spyOn(observed, "claimSync");
+      const loser = carrier(body, delivery);
+      const run = consume(
+        { messages: [loser] },
+        {
+          bot: { upsertEvent: send } as unknown as BotClient,
+          events: observed,
+          lock,
+          ledger: depth,
+        },
+      );
+      await loserPrepared;
+      const winner = await events.claimSync({ ...prepared, requestAttempts: 5 }, new Date());
+      expect(winner?.requestAttempts).toBe(6);
+      releaseLoser();
+      await run;
+      expect(loser.retry).toHaveBeenCalledWith({ delaySeconds: SYNC_EVENT.uniqueForSeconds });
+      expect(loser.ack).not.toHaveBeenCalled();
+      expect(depth.failed).not.toHaveBeenCalled();
+      expect(lock.release).not.toHaveBeenCalled();
+      expect(send).not.toHaveBeenCalled();
+      expect(observed.pendingSync).toHaveBeenCalledExactlyOnceWith(eventKey);
+      if (delivery === 7) expect(claim).not.toHaveBeenCalled();
+      else expect(claim).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("protection redelivery cannot claim after the owner commits a retry", async () => {
+    events.observeActiveClaims = true;
+    const { lock } = memoryLock();
+    const depth = ledger();
+    const firstLease = await lock.acquire(key, 300);
+    const owner: SyncMessage = {
+      kind: "sync-event",
+      eventKey,
+      idempotencyKey: "shared",
+      jobId: "owner",
+      leaseToken: firstLease!,
+    };
+    const prepared = (await events.prepareSync(
+      eventKey,
+      owner.idempotencyKey,
+      new Date(),
+    )) as SyncAttempt;
+    const active = await events.claimSync(prepared, new Date());
+    expect(active).not.toBeNull();
+    const claim = vi.spyOn(events, "claimSync");
+    const send = vi.fn(async () => success);
+    const bot = { upsertEvent: send } as unknown as BotClient;
+    const observer = carrier({ ...owner, jobId: "observer", leaseToken: crypto.randomUUID() }, 6);
+    await consume({ messages: [observer] }, { bot, events, lock, ledger: depth });
+    expect(observer.retry).toHaveBeenCalledWith({ delaySeconds: SYNC_EVENT.uniqueForSeconds });
+    expect(depth.failed).not.toHaveBeenCalled();
+    expect(lock.release).not.toHaveBeenCalled();
+    await events.deferSync(active!, new Date());
+    const redelivery = carrier(observer.body, 7);
+    await consume({ messages: [redelivery] }, { bot, events, lock, ledger: depth });
+    expect(claim).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+    expect(redelivery.ack).toHaveBeenCalledOnce();
+    expect(depth.failed).toHaveBeenCalledOnce();
+  });
 
   it("transport retry keeps the same ownership, job and idempotency identities past expiry", async () => {
     const { lock, rows } = memoryLock();

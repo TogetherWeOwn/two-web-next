@@ -66,6 +66,8 @@ export type SyncAttempt = {
   requestAttempts: number;
   /** Null while a claim's result is unsettled, or after retirement/exhaustion. */
   nextAttemptAt: Date | null;
+  /** Start of the latest claim, used only to protect an active owner. */
+  claimStartedAt?: Date | null;
   /**
    * Terminal-intent marker: the redacted definitive reason, recorded while
    * state stays pending so redelivery re-runs settlement without the bot
@@ -91,6 +93,8 @@ export type SyncAttempt = {
 export type StaleEventKeysPage = { keys: string[]; deferred: number };
 
 export interface EventStore {
+  /** Opt-in claim observation for fixtures. Queue wiring leaves this off. */
+  observeActiveClaims?: true;
   /** Snapshot at first attempt, not dispatch. Retries return the persisted request. */
   prepareSync(
     eventKey: string,
