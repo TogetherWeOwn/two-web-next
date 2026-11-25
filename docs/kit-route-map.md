@@ -270,6 +270,18 @@ cap and throttle. The existing queue and request alert run only after admission.
 The built and installed Worker fixture uses synthetic inputs, counts diagnostics
 and intercepts the queue and outbound network.
 
+### Agent event ingress
+
+`KIT_ROUTE_AGENT_EVENTS=true` selects Kit for exact POST `/api/agent-events`.
+Other methods, aliases and Kit data URLs fall through to Hono. Both owners
+share the ingress kill switch, byte cap, bearer grant admission, rate budgets,
+and idempotency store. The installed Worker fixture checks draft creation,
+replay across the flag change, refusals and zero outgoing dispatch.
+
+The binding is unset in deployed configurations. Clearing it restores Hono on
+the next request. Activation follows the
+[production release gate](../CONTRIBUTING.md#production-release-gate).
+
 ### Event Markdown endpoints
 
 `KIT_ROUTE_EVENT_MARKDOWN=true` selects GET and HEAD on `/events.md` and
