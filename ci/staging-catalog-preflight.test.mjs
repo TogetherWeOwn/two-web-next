@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { dirname, resolve } from "node:path";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
@@ -420,4 +422,70 @@ test("CLI genuine preflight failure exits 1, distinct from the usage code", () =
   assert.equal(child.status, 1, "a genuine preflight failure must exit 1, not the usage code 2");
   assert.match(child.stderr, /Missing PLANETSCALE_STAGING_DATABASE_URL/);
   assert.equal(child.stdout, "");
+});
+
+test("CLI rolls back and closes the connection after a catalog read fails", (t) => {
+  const scratch = mkdtempSync(join(tmpdir(), "catalog-preflight-failure-"));
+  t.after(() => rmSync(scratch, { recursive: true, force: true }));
+  const outfile = join(scratch, "preflight.json");
+  const summary = join(scratch, "summary.md");
+  const firstRead = JSON.stringify(QUERIES[0].sql);
+  const failedRead = JSON.stringify(QUERIES[1].sql);
+  const driver = `
+    export const calls = [];
+    export default function postgres() {
+      return {
+        async unsafe(sql) {
+          calls.push(sql);
+          if (sql === ${failedRead}) throw new Error("synthetic catalog read failure");
+          if (sql === ${firstRead}) return [{ object: "join_attempts", owner: "fixture_owner" }];
+          return [];
+        },
+        async end(options) {
+          // Record completion so a missing await fails the trace assertion.
+          await new Promise((resolve) => setImmediate(resolve));
+          calls.push(["end", options]);
+        },
+      };
+    }
+  `;
+  const driverUrl = `data:text/javascript,${encodeURIComponent(driver)}`;
+  const entry = new URL("./staging-catalog-preflight.mjs", import.meta.url);
+  const source = `
+    import assert from "node:assert/strict";
+    import { registerHooks } from "node:module";
+    import { Socket } from "node:net";
+    Socket.prototype.connect = () => { throw new Error("network forbidden in catalog fixture"); };
+    registerHooks({
+      resolve(specifier, context, nextResolve) {
+        if (specifier === "postgres") return { url: ${JSON.stringify(driverUrl)}, shortCircuit: true };
+        return nextResolve(specifier, context);
+      },
+    });
+    const { calls } = await import(${JSON.stringify(driverUrl)});
+    process.argv[1] = ${JSON.stringify(fileURLToPath(entry))};
+    await import(${JSON.stringify(entry.href)});
+    assert.deepEqual(calls, [
+      "BEGIN READ ONLY",
+      "SET LOCAL statement_timeout = '30s'",
+      "SET LOCAL lock_timeout = '10s'",
+      ${firstRead},
+      ${failedRead},
+      "ROLLBACK",
+      ["end", { timeout: 5 }],
+    ]);
+  `;
+  const child = spawnSync(process.execPath, ["--input-type=module", "-e", source], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    env: { [SECRET_NAME]: staging(), PREFLIGHT_OUTFILE: outfile, GITHUB_STEP_SUMMARY: summary },
+    timeout: 10_000,
+  });
+  assert.ifError(child.error);
+  assert.equal(child.status, 1);
+  assert.match(child.stderr, /^Preflight failed; database details withheld\.[^\n]*\n$/);
+  assert.doesNotMatch(child.stderr, /synthetic catalog read failure/);
+  assert.equal(child.stdout, "");
+  assert.equal(existsSync(outfile), false, "no partial JSON evidence");
+  assert.equal(existsSync(summary), false, "no partial step summary");
 });
