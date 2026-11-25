@@ -10,6 +10,7 @@ import { FIXTURE_SECRETS, SESSION_COOKIE } from "../parity/fixture.mjs";
 const editor = "/admin/events/new";
 const operator = "/admin/ops-overrides";
 const html = { accept: "text/html" };
+const unpublishFallback = "x-fixture-featured-unpublish-fallback";
 
 export async function prepareAdminFixture(worker, entry) {
   const bot = "https://fixture-operator-bot.invalid";
@@ -17,7 +18,7 @@ export async function prepareAdminFixture(worker, entry) {
     entry,
     `
 import worker from ${JSON.stringify(worker)};
-import { env } from "cloudflare:workers";
+import { env, withEnv } from "cloudflare:workers";
 const transport = globalThis.fetch;
 globalThis.fetch = async (input, init) => {
   if (input !== ${JSON.stringify(`${bot}/ops/config`)}) return transport(input, init);
@@ -28,7 +29,16 @@ globalThis.fetch = async (input, init) => {
   return Response.json({ epoch: 42, overrides: { label: "Fixture operator value" },
     baseline: {}, enforcement: "fixture" });
 };
-export default worker;
+export default {
+  ...worker,
+  fetch(request, bindings, context) {
+    if (request.headers.get(${JSON.stringify(unpublishFallback)}) !== "true") {
+      return worker.fetch(request, bindings, context);
+    }
+    const fallback = { ...bindings, KIT_PARITY_FIXTURE_ADMIN_FEATURED_UNPUBLISH: "false" };
+    return withEnv(fallback, () => worker.fetch(request, fallback, context));
+  },
+};
 `,
   );
   return {
@@ -531,17 +541,25 @@ export async function assertFeaturedUnpublishParity({ kit, off, hono, databaseUr
   try {
     const moderator = await session(sql, moderatorId, true);
     const member = await session(sql, memberId, false);
-    const [{ id: kitId }, { id: honoId }] = await sql`
+    const [{ id: kitId }, { id: fallbackId }, { id: honoId }] = await sql`
       insert into featured_contents (title, is_published, created_by, updated_at)
       values (${title}, true, ${moderatorId}, '2020-01-01'),
+             (${title}, true, ${moderatorId}, '2020-01-01'),
              (${title}, true, ${moderatorId}, '2020-01-01') returning id
     `;
+    const featureOff = {
+      ...kit,
+      name: "installed Kit with unpublish ownership off",
+      headers: { ...kit.headers, [unpublishFallback]: "true" },
+    };
     const listPath = "/admin/featured";
     const action = (id) => `${listPath}/${id}/unpublish`;
-    const list = await visit(kit, `${listPath}?q=${encodeURIComponent(title)}`, 200, {
+    // Keep the Admin pages on Kit while turning off only the unpublish POST.
+    const list = await visit(featureOff, `${listPath}?q=${encodeURIComponent(title)}`, 200, {
       headers: { ...html, cookie: moderator },
     });
     assert.ok(list.text.includes(`method="post" action="${action(kitId)}"`));
+    assert.ok(list.text.includes(`method="post" action="${action(fallbackId)}"`));
     const cookie = renewedModerator(list.headers);
     const form = {
       method: "POST",
@@ -562,6 +580,7 @@ export async function assertFeaturedUnpublishParity({ kit, off, hono, databaseUr
 
     for (const [target, id] of [
       [kit, kitId],
+      [featureOff, fallbackId],
       [hono, honoId],
     ]) {
       const owned = target === kit;
@@ -639,7 +658,7 @@ export async function assertFeaturedUnpublishParity({ kit, off, hono, databaseUr
     await sql`delete from featured_contents where id = ${honoId} and created_by = ${moderatorId}`;
     const missing = await snapshot(honoId);
     assert.equal(missing.row, undefined);
-    for (const target of [kit, off, hono]) {
+    for (const target of [kit, featureOff, off, hono]) {
       const refused = await visit(target, action(honoId), 404, { ...form, owned: target === kit });
       assert.match(refused.text, /Featured content not found/);
       assert.equal(refused.headers.get("location"), null);
