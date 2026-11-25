@@ -972,7 +972,7 @@ export default {
     return instance;
   }
 
-  const [eventJsonOn, publicApiOn, feedOn] = await Promise.all([
+  const [eventJsonOn, publicApiOn, feedOn, combinedOn] = await Promise.all([
     startKit("kit-event-json-on", {
       APP_URL: honoWithSession.origin,
       KIT_ROUTE_FEEDS: "false",
@@ -992,11 +992,17 @@ export default {
       KIT_ROUTE_PUBLIC_API: "false",
       KIT_ROUTE_SEO: "false",
     }),
+    startKit("kit-event-json-and-feeds-on", {
+      APP_URL: honoWithSession.origin,
+      KIT_ROUTE_FEEDS: "true",
+      KIT_ROUTE_EVENT_JSON: "true",
+    }),
   ]);
   await assertEventReadsParity({
     hono: honoWithSession,
     unset: kitWithSession,
     feedOn,
+    combinedOn,
     eventJsonOn,
     publicApiOn,
     databaseUrl,
