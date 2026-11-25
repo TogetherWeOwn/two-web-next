@@ -1,23 +1,20 @@
 import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { liveVersion, readLiveRevision, rollbackEnvironment } from "./rollback-target.mjs";
-
-const isSha = (value) =>
-  typeof value === "string" && value.length === 40 && /^[a-f0-9]{40}$/.test(value);
+import { isSha } from "./staging-provenance.mjs";
 
 function orderedDeploymentTime(value) {
   const parsed =
     typeof value === "string" &&
-    /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?Z$/.exec(value);
-  const second = parsed ? Date.parse(`${parsed[1]}Z`) : NaN;
-  if (
-    parsed?.[0] !== value ||
-    !Number.isFinite(second) ||
-    new Date(second).toISOString().slice(0, 19) !== parsed[1]
-  ) {
+    /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!parsed || parsed[0] !== value) throw new Error("Invalid staging deployment timestamp");
+  const [, time, fraction = "", offset] = parsed;
+  const wallClock = new Date(`${time}Z`).toJSON();
+  const utc = new Date(`${time}${offset}`).toJSON();
+  if (!utc || !wallClock?.startsWith(time)) {
     throw new Error("Invalid staging deployment timestamp");
   }
-  return `${parsed[1]}.${(parsed[2] ?? "").padEnd(9, "0")}Z`;
+  return `${utc.slice(0, 19)}.${fraction.padEnd(9, "0")}Z`;
 }
 
 // The caller holds the shared staging lane through the last mutation. Check

@@ -989,7 +989,7 @@ const forward = {
   merge_base_commit: { sha: otherSha },
 };
 const stagedDeployment = {
-  created_on: "2026-11-25T06:00:00Z",
+  created_on: "2026-11-25T07:00:00+01:00",
   versions: [{ version_id: activeVersion, percentage: 100 }],
 };
 function stagingReads({
@@ -1046,7 +1046,7 @@ test("staging refuses an older or divergent candidate and a lagging edge", async
 
 test("staging refuses a newer split deployment and ambiguous or malformed timestamps", async () => {
   const split = {
-    created_on: "2026-11-25T06:00:00.000001Z",
+    created_on: "2026-11-25T01:00:00.000001-05:00",
     versions: [{ version_id: activeVersion, percentage: 40 }],
   };
   for (const [entry, reason] of [

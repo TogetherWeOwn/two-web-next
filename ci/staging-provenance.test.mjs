@@ -389,6 +389,8 @@ test("scope never skips candidate helpers using a later revision's import invent
     );
     assert.ok(block, "execute the actual scope step, not a duplicate implementation");
     assert.match(block[1], /^          EVENT_NAME: \$\{\{ github\.event_name \}\}$/m);
+    const scopeOutput = "${{ steps.candidate.outputs.deploy_smoke_scoped }}";
+    assert.ok(block[1].includes(`DEPLOY_SMOKE_SCOPED: ${scopeOutput}`));
     const script = block[2].replace(/^          /gm, "");
     assert.doesNotMatch(script, /\$\{\{/);
     assert.match(script, /\[ "\$EVENT_NAME" = workflow_dispatch \]/);
@@ -443,7 +445,7 @@ test("scope never skips candidate helpers using a later revision's import invent
       .replace(/^          /gm, "");
     assert.match(
       deploy,
-      /- name: Record adjacent staging smoke skip\n +if: steps\.smoke-scope\.outputs\.skip_e2e == 'true'/,
+      /id: forward\n +run: node ci\/staging-forward\.mjs[\s\S]*LIVE_SHA: \$\{\{ steps\.forward\.outputs\.live_sha \}\}[\s\S]*- name: Record adjacent staging smoke skip\n +if: steps\.smoke-scope\.outputs\.skip_e2e == 'true'/,
     );
     assert.equal(evaluate(prose, deployed, "workflow_run", "false", smoke).skip_e2e, "false");
     assert.equal(evaluate(prose, workflowSha, "workflow_run", "true", smoke).skip_e2e, "true");
