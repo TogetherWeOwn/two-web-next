@@ -998,6 +998,12 @@ candidate selects the separate explicit redeploy/recovery route. Apply the
 independent exact-candidate approval, tier review, exact-SHA CI and incident and
 rollback requirements. `migrations_applied=true` does not bypass
 default ancestry admission, and neither does an empty-SHA manual dispatch.
+If the ordinary recovery route still cannot read the live commit after the
+migration gate's retries, including when `/up` keeps returning 503 with a
+revision, restore the successful `/up` response or use the audited
+`migrations_applied=true` confirmation after verifying through the production
+`db-migrate.yml` workflow that the target's migrations are applied. Without a
+trusted live SHA the gate cannot compare journals.
 The rollback workflow remains a separate already-served-version route.
 
 #### Regression check against production

@@ -2147,6 +2147,21 @@ test("live commit reports unknown for invalid revisions or a failed fetch", asyn
   );
 });
 
+test("live commit reports unknown for empty, malformed JSON and invalid UTF-8 bodies", async () => {
+  const sha = "c".repeat(40);
+  const truncated = `{"revision":{"commit":"${sha}"}`;
+  // Lossy decoding would preserve valid JSON and its otherwise usable revision.
+  const invalidUtf8 = Buffer.concat([
+    Buffer.from('{"note":"'),
+    Buffer.from([0xff]),
+    Buffer.from(`","revision":{"commit":"${sha}"}}`),
+  ]);
+  for (const body of ["", truncated, invalidUtf8]) {
+    const response = new Response(body, { headers: { "content-type": "application/json" } });
+    assert.equal(await readLiveProductionCommit({ fetchImpl: async () => response }), null);
+  }
+});
+
 test("live commit requires HTTP 200 JSON even when another response carries a valid revision", async () => {
   const body = { revision: { commit: "c".repeat(40) } };
   for (const response of [
@@ -2536,19 +2551,32 @@ test("check-migrations CLI refuses unknown-live manual promotion without audited
   assert.match(defaulted.stderr, /migrations_applied=true/);
 });
 
-test("check-migrations CLI continues unknown-live manual promotion only with audited confirmation", () => {
+test("check-migrations CLI requires audited confirmation for explicit recovery after sustained /up 503", () => {
   const target = "a".repeat(40);
+  const live = "b".repeat(40);
+  const env = {
+    DEPLOY_SHA: target,
+    LIVE_SHA: "",
+    GITHUB_REPOSITORY: "o/r",
+    GITHUB_TOKEN: "fixture-only",
+    GITHUB_EVENT_NAME: "workflow_dispatch",
+    PRODUCTION_ORIGIN: "http://stub.invalid",
+    MIGRATIONS_APPLIED: "false",
+  };
+  const stubs = [
+    { match: "/up", status: 503, body: { revision: { commit: live } } },
+    { match: `ref=${target}`, body: journalBody(["0000_a"]) },
+    { match: `ref=${live}`, body: journalBody(["0000_a"]) },
+  ];
+  const refused = spawnGateCli(["--check-migrations"], env, stubs);
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /unknown after 3 \/up reads/);
+  assert.match(refused.stderr, /migrations_applied=true/);
+
   const continued = spawnGateCli(
     ["--check-migrations"],
-    {
-      DEPLOY_SHA: target,
-      GITHUB_REPOSITORY: "o/r",
-      GITHUB_TOKEN: "t",
-      GITHUB_EVENT_NAME: "workflow_dispatch",
-      PRODUCTION_ORIGIN: "http://stub.invalid",
-      MIGRATIONS_APPLIED: "true",
-    },
-    [{ match: "/up", fail: true }],
+    { ...env, MIGRATIONS_APPLIED: "true" },
+    stubs,
   );
   assert.equal(continued.status, 0);
   // The continuation is auditable from the log alone: it is a manual
