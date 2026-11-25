@@ -9,11 +9,13 @@ let {
   showLifeline = true,
   attendeePage = 2,
   savedSeat = false,
+  echo,
 }: {
-  state: "upcoming" | "frozen" | "cancelled" | "ended" | "ended-recorded";
+  state: "upcoming" | "frozen" | "cancelled" | "ended";
   showLifeline?: boolean;
   attendeePage?: 1 | 2;
   savedSeat?: boolean;
+  echo?: LifelineFacts["echo"];
 } = $props();
 
 const eventKey = "fixture-raid";
@@ -32,9 +34,8 @@ const examples = {
   frozen: { now: time("20:12"), facts: { terminalSiteReminder, roomSnapshot } },
   cancelled: { now: time("20:12"), facts: { viewerRsvp, cancelled, roomSnapshot } },
   ended: { now: time("21:50"), facts: { terminalSiteReminder } },
-  "ended-recorded": { now: time("21:50"), facts: { terminalSiteReminder, echo: fact("21:41") } },
 } satisfies Record<typeof state, { now: number; facts: LifelineFacts }>;
-const ended = $derived(state === "ended" || state === "ended-recorded");
+const ended = $derived(state === "ended");
 
 const _model: KitEventDetailModel = $derived(
   withEventDetailHtml({
@@ -108,7 +109,12 @@ const _steps = $derived(
   showLifeline
     ? composeLifeline(
         { ...schedule, rsvpOpen: state === "upcoming" },
-        { opened: fact("18:00"), ...(savedSeat ? { viewerRsvp } : {}), ...examples[state].facts },
+        {
+          opened: fact("18:00"),
+          ...(savedSeat ? { viewerRsvp } : {}),
+          ...examples[state].facts,
+          echo,
+        },
         examples[state].now,
       )
     : undefined,

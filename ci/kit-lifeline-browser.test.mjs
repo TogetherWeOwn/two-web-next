@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { build } from "esbuild";
 import { chromium } from "playwright";
 import { compileKitFixture, listenOnLoopback } from "./kit-hydration-harness.mjs";
 
 const file = (path) => fileURLToPath(new URL(`../${path}`, import.meta.url));
-const path = "/e/fixture-raid";
+const eventKey = "fixture-raid";
+const path = `/e/${eventKey}`;
 const eventPath = `${path}?attendees=2`;
 const publicAssets = new Set([
   "/styles.css",
@@ -53,8 +56,66 @@ const examples = {
   frozen: `${opened}\n${reminder}\n19:45|Bot · Counting now|Bot counts who’s in\n${waitingRoom} Last synced 12 min ago\n21:25|Site · Next|Echo freezes`,
   cancelled: `${opened}\n${seat}\n20:00|Bot · Recorded|Event room seen\n20:01|Bot · Recorded|Event cancelled|The host cancelled because of severe weather.`,
   ended: `${ended}\n21:25|Site · Waiting|Echo freezes|Waiting on the site.`,
-  "ended-recorded": `${ended}\n21:41|Site · Recorded|Echo frozen`,
+  "ended-recorded": `${ended}\n21:41|Site · Recorded|Echo frozen|2 attended · peak 5 in voice`,
 };
+
+async function attendanceExamples() {
+  const { outputFiles } = await build({
+    stdin: {
+      contents: `
+        export { signedAttendanceReader } from './src/bot/attendance-read.ts';
+        export { readEventDetailEcho } from './src/events/event-detail-echo.ts';
+      `,
+      resolveDir: file("."),
+    },
+    bundle: true,
+    write: false,
+    platform: "node",
+    format: "esm",
+  });
+  const source = Buffer.from(outputFiles[0].text).toString("base64");
+  const { signedAttendanceReader, readEventDetailEcho } = await import(
+    `data:text/javascript;base64,${source}`
+  );
+  const contract = JSON.parse(
+    readFileSync(file("test/fixtures/bot-site-contract-v2.json"), "utf8"),
+  );
+  const { results } = contract.verbs["event.attendance.read"];
+  const event = { id: 7, eventKey, status: "past", endsAt: new Date("2026-11-21T21:00:00Z") };
+  const attendance = {
+    ...results.read,
+    event_key: eventKey,
+    window: { starts_at: "2026-11-21T19:45:00Z", ends_at: "2026-11-21T21:15:00Z" },
+  };
+  const config = {
+    baseUrl: "https://bot.example.test",
+    keyId: "lifeline-fixture",
+    secret: randomBytes(32).toString("hex"),
+  };
+  const read = (fixtureResponse) =>
+    readEventDetailEcho(
+      event,
+      signedAttendanceReader(config, async () => fixtureResponse),
+      Date.parse("2026-11-21T21:41:00Z"),
+    );
+  const suppressedMessage = "Private fixture response";
+  const [final, pending, suppressed] = await Promise.all([
+    read(Response.json({ ok: true, result: attendance })),
+    read(Response.json({ ok: true, result: { ...attendance, final: false } })),
+    read(
+      Response.json(
+        { ok: false, error: { code: results.not_found.outcome, message: suppressedMessage } },
+        { status: 404 },
+      ),
+    ),
+  ]);
+  const privateValues = [
+    suppressedMessage,
+    ...attendance.rooms.flatMap((room) => [room.channel_id, room.name_at_close]),
+    ...attendance.members.flatMap((member) => [member.discord_id, member.first_joined_at]),
+  ].filter((value) => typeof value === "string");
+  return { final, pending, suppressed, privateValues };
+}
 
 async function assertRows(section, expected, state, width) {
   const rows = await section.locator("ol > li").all();
@@ -90,6 +151,7 @@ test("EventDetail places the read-only Lifeline after the seat rail and preserve
   const css = await compile(readFileSync(file("web/src/app.css"), "utf8"), options);
   const fixture = file("test/fixtures/kit-lifeline.svelte");
   const { renderFixture, css: scoped } = await compileKitFixture({ fixture, ssrOnly: true });
+  const attendance = await attendanceExamples();
   const sharedHeader = readFileSync(file("web/src/lib/site-header.css"), "utf8");
   const styles = `${css.build(new Scanner({ sources: css.sources }).scan())}\n${sharedHeader}\n${scoped}`;
   const browser = await chromium.launch();
@@ -141,7 +203,10 @@ test("EventDetail places the read-only Lifeline after the seat rail and preserve
     assert.match(await signupRecord.innerText(), /No Echo for this one\./);
 
     for (const [state, expected] of Object.entries(examples)) {
-      await open(page, { state });
+      const response = await open(
+        page,
+        state === "ended-recorded" ? { state: "ended", echo: attendance.final } : { state },
+      );
       assert.equal(await section.count(), 1);
       await assertRows(section, expected, state, width);
       assert.doesNotMatch((await section.textContent()) ?? "", /Pull me in|no.show/i);
@@ -168,7 +233,22 @@ test("EventDetail places the read-only Lifeline after the seat rail and preserve
       if (state === "upcoming") assert.deepEqual(await existingControls(page), before);
       if (state === "ended" || state === "ended-recorded") {
         assert.doesNotMatch(await signupRecord.innerText(), /No Echo for this one\./);
+        assert.match(await signupRecord.innerText(), /8 listed sign-ups/);
+        const html = await response.text();
+        for (const value of attendance.privateValues) assert.ok(!html.includes(value));
       }
+      await capture(state);
+    }
+    for (const [state, echo] of [
+      ["provisional", attendance.pending],
+      ["privacy-suppressed", attendance.suppressed],
+    ]) {
+      assert.equal(echo, undefined, state);
+      const response = await open(page, { state: "ended", echo });
+      await assertRows(section, examples.ended, state, width);
+      const html = await response.text();
+      assert.doesNotMatch(html, /2 attended|peak 5 in voice/);
+      for (const value of attendance.privateValues) assert.ok(!html.includes(value));
       await capture(state);
     }
     assert.ok((await page.consoleMessages()).every((message) => message.type() !== "error"));
