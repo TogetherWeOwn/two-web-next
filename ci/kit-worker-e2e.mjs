@@ -211,6 +211,15 @@ async function startWorker(name, main, assetsDirectory, sessionSecret, vars, liv
   return worker;
 }
 
+async function stopWorker(worker) {
+  if (worker.stopped) return;
+  worker.child.kill("SIGTERM");
+  await Promise.race([worker.closed, delay(5_000, undefined, { ref: false })]);
+  if (worker.stopped) return;
+  worker.child.kill("SIGKILL");
+  await Promise.race([worker.closed, delay(5_000, undefined, { ref: false })]);
+}
+
 // Buffer Worker output and print it only on failure: --log-level error keeps
 // success quiet while a red check still shows the cause.
 let failed = false;
@@ -426,23 +435,34 @@ function fetch(request, env, context) {
       },
     });
     const { assertKitSourceEvidence } = await import("./fixtures/kit-source-evidence.mjs");
-    await assertKitSourceEvidence({
-      worker,
-      honoWorker: join(repo, "src/worker.ts"),
-      scratch,
-      databaseUrl,
-      start: async (name, entry, vars) => {
-        const instance = await startWorker(
-          `source-evidence-${name}`,
-          entry,
-          name === "hono" ? join(repo, "public") : assets,
-          FIXTURE_SECRETS.SESSION_SECRET,
-          vars,
-        );
-        await listen(instance.child, instance.origin, () => instance.log);
-        return instance;
-      },
-    });
+    const evidenceWorkers = [];
+    try {
+      await assertKitSourceEvidence({
+        worker,
+        honoWorker: join(repo, "src/worker.ts"),
+        scratch,
+        databaseUrl,
+        start: async (name, entry, vars) => {
+          const instance = await startWorker(
+            `source-evidence-${name}`,
+            entry,
+            name === "hono" ? join(repo, "public") : assets,
+            FIXTURE_SECRETS.SESSION_SECRET,
+            vars,
+          );
+          evidenceWorkers.push(instance);
+          await listen(instance.child, instance.origin, () => instance.log);
+          return instance;
+        },
+      });
+    } finally {
+      await Promise.all(evidenceWorkers.map(stopWorker));
+      assert.ok(
+        evidenceWorkers.every(({ stopped }) => stopped),
+        "source-evidence Workers did not stop",
+      );
+    }
+    console.log("PASS source-evidence loopback Workers stopped");
   }
 
   const manifest = await readFile(join(repo, "src/route-ownership.ts"), "utf8");
@@ -1285,14 +1305,7 @@ export default machineParityWorker(inner, ${JSON.stringify(probePath)}, ${name =
   failed = true;
   throw error;
 } finally {
-  await Promise.all(
-    workers.map(async (worker) => {
-      if (!worker.stopped) worker.child.kill("SIGTERM");
-      await Promise.race([worker.closed, delay(5_000, undefined, { ref: false })]);
-      if (!worker.stopped) worker.child.kill("SIGKILL");
-      await Promise.race([worker.closed, delay(5_000, undefined, { ref: false })]);
-    }),
-  );
+  await Promise.all(workers.map(stopWorker));
   // Print after the children close so their output has flushed.
   if (failed) {
     for (const { name, log } of workers)

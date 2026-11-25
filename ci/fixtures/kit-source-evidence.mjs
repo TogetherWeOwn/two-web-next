@@ -102,16 +102,15 @@ export async function assertKitSourceEvidence({ worker, honoWorker, scratch, dat
       SOURCE_EVIDENCE_VERIFIER_ISSUED_AT: String(issued),
       SOURCE_EVIDENCE_VERIFIER_EXPIRES_AT: String(expires),
     };
-    const targets = await Promise.all(
-      [
-        ["hono", honoWorker],
-        ["kit", worker],
-      ].map(async ([name, main]) => {
-        const entry = join(scratch, `source-evidence-${name}.mjs`);
-        await fixtureEntry(entry, main);
-        return start(name, entry, vars);
-      }),
-    );
+    const targets = [];
+    for (const [name, main] of [
+      ["hono", honoWorker],
+      ["kit", worker],
+    ]) {
+      const entry = join(scratch, `source-evidence-${name}.mjs`);
+      await fixtureEntry(entry, main);
+      targets.push(await start(name, entry, vars));
+    }
 
     async function read(
       target,
