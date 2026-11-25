@@ -396,6 +396,32 @@ test("strict route budgets admit both measured reconciliation fixture pages", (t
   assert.deepEqual(overBudget.breaches, ["/ js"]);
 });
 
+test("strict inventory admits the admin action page and zero-cost endpoints", (t) => {
+  const f = fixture(t);
+  const path = "ci/budgets/decisions/kit-perf/2026-11-25-strict-route-inventory.json";
+  const admission = JSON.parse(readFileSync(join(import.meta.dirname, "..", path), "utf8"));
+  const action = "/admin/[...action]";
+  const page = f.evidence.routes.find(({ id }) => id === "/about").page;
+  for (const id of Object.keys(admission.routes)) {
+    f.put(`web/src/routes${id}/${id === action ? "+page.server.ts" : "+server.ts"}`, "fixture");
+    f.evidence.routes.push({ id, page: id === action ? page : null });
+  }
+  f.save();
+  assert.equal(checkRoutes(f.root).exitCode, 2);
+  f.budget.routes["/"].js.maxFiles -= 1;
+  f.approveBudget();
+  f.put(path, admission);
+  f.put(ROUTE_BUDGET, { ...f.budget, routes: { ...f.budget.routes, ...admission.routes } });
+  const result = checkRoutes(f.root);
+  assert.equal(result.exitCode, 1, result.error);
+  assert.deepEqual(result.breaches, ["/ js"]);
+  assert.deepEqual(result.routes[action], result.routes["/about"]);
+  for (const id of Object.keys(admission.routes).filter((id) => id !== action)) {
+    assert.deepEqual(result.routes[id], result.routes["/api"]);
+    assert.deepEqual(admission.routes[id], f.budget.routes["/api"]);
+  }
+});
+
 function runReportOnlyCli(args, summaryPath) {
   return spawnSync(process.execPath, ["ci/check-kit-route-perf.mjs", "--report-only", ...args], {
     cwd: join(import.meta.dirname, ".."),

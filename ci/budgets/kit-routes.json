@@ -14,6 +14,10 @@
         "maxFiles": 2
       }
     },
+    "/.well-known/security.txt": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
     "/[...path]": {
       "js": {
         "maxRawBytes": 0,
@@ -25,6 +29,10 @@
         "maxGzipBytes": 0,
         "maxFiles": 0
       }
+    },
+    "/__probe/alert": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
     },
     "/about": {
       "js": {
@@ -38,6 +46,10 @@
         "maxFiles": 2
       }
     },
+    "/about.md": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
     "/admin": {
       "js": {
         "maxRawBytes": 145920,
@@ -49,6 +61,10 @@
         "maxGzipBytes": 1280,
         "maxFiles": 3
       }
+    },
+    "/admin/[...action]": {
+      "js": { "maxRawBytes": 152064, "maxGzipBytes": 59904, "maxFiles": 23 },
+      "css": { "maxRawBytes": 3584, "maxGzipBytes": 1280, "maxFiles": 2 }
     },
     "/admin/activity-log": {
       "js": {
@@ -170,6 +186,10 @@
         "maxFiles": 2
       }
     },
+    "/admin/ops-overrides": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
     "/admin/reconciliation": {
       "js": {
         "maxRawBytes": 153088,
@@ -194,6 +214,42 @@
         "maxFiles": 3
       }
     },
+    "/api/agent-events": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/api/public/community": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/api/public/events": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/api/public/events/[key]": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/api/public/join": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/auth/discord": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/auth/discord/callback": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/auth/discord/redirect": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/auth/qa/[identity]": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
     "/auth/recover": {
       "js": {
         "maxRawBytes": 137728,
@@ -205,6 +261,22 @@
         "maxGzipBytes": 1280,
         "maxFiles": 2
       }
+    },
+    "/auth/status": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/community": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/csp-reports": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/discord": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
     },
     "/e/[key]": {
       "js": {
@@ -218,6 +290,14 @@
         "maxFiles": 2
       }
     },
+    "/e/[key].md": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/e/[key]/rsvp": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
     "/events": {
       "js": {
         "maxRawBytes": 0,
@@ -229,6 +309,38 @@
         "maxGzipBytes": 0,
         "maxFiles": 0
       }
+    },
+    "/events.ics": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/events.json": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/events.md": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/events.rss": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/events/[key]": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/events/[key].ics": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/events/[key]/[action]": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/events/[key]/rsvp": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
     },
     "/events/past": {
       "js": {
@@ -253,6 +365,10 @@
         "maxGzipBytes": 1280,
         "maxFiles": 2
       }
+    },
+    "/faq.md": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
     },
     "/hotzones": {
       "js": {
@@ -290,6 +406,18 @@
         "maxFiles": 2
       }
     },
+    "/join.md": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/join/callback": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/join/discord": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
     "/leaderboards/members": {
       "js": {
         "maxRawBytes": 144384,
@@ -301,6 +429,26 @@
         "maxGzipBytes": 1280,
         "maxFiles": 2
       }
+    },
+    "/llms.txt": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/login": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/logout": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/logout/everywhere": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/mcp": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
     },
     "/members/[user]": {
       "js": {
@@ -314,6 +462,10 @@
         "maxFiles": 2
       }
     },
+    "/openapi.json": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
     "/privacy": {
       "js": {
         "maxRawBytes": 138752,
@@ -325,6 +477,10 @@
         "maxGzipBytes": 1280,
         "maxFiles": 2
       }
+    },
+    "/privacy.md": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
     },
     "/profile": {
       "js": {
@@ -338,6 +494,10 @@
         "maxFiles": 2
       }
     },
+    "/robots.txt": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
     "/rules": {
       "js": {
         "maxRawBytes": 140288,
@@ -349,6 +509,22 @@
         "maxGzipBytes": 1280,
         "maxFiles": 2
       }
+    },
+    "/rules.md": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/sitemap_index.xml": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/up": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/version": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
     }
   }
 }

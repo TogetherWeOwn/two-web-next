@@ -16,6 +16,7 @@ export const INITIAL_ROUTE_DECISION =
   "ci/budgets/decisions/kit-perf/2026-11-04-route-client-closure-and-ratchet.md";
 export const RECONCILIATION_ROUTE_DECISION = "2026-11-23-reconciliation-routes.json";
 export const ATTENDANCE_ROUTE_DECISION = "2026-11-24-attendance-route.json";
+export const STRICT_ROUTE_INVENTORY_DECISION = "2026-11-25-strict-route-inventory.json";
 const plan = (files) => ({
   client: {
     js: files[CLIENT_FILES[0]].client.js,
@@ -62,9 +63,11 @@ export function approvedClientPlan(root) {
     client: structuredClone(INITIAL_CLIENT_BUDGET),
     routeBudget: initialRouteBudget(root),
   };
-  const admissions = [RECONCILIATION_ROUTE_DECISION, ATTENDANCE_ROUTE_DECISION].filter((name) =>
-    decisions.includes(name),
-  );
+  const admissions = [
+    RECONCILIATION_ROUTE_DECISION,
+    ATTENDANCE_ROUTE_DECISION,
+    STRICT_ROUTE_INVENTORY_DECISION,
+  ].filter((name) => decisions.includes(name));
   while (pending.length || admissions.length) {
     const index = pending.findIndex((record) => isDeepStrictEqual(record.before, approved));
     if (index >= 0) {

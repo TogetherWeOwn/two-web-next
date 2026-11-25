@@ -25,6 +25,7 @@ import {
   INITIAL_CLIENT_BUDGET,
   INITIAL_ROUTE_DECISION,
   RECONCILIATION_ROUTE_DECISION,
+  STRICT_ROUTE_INVENTORY_DECISION,
 } from "./client-ratchet-approval.mjs";
 import {
   assertLowerOnly,
@@ -634,6 +635,7 @@ function beforeReconciliationAdmission(source) {
   return (
     !source.endsWith(`/${RECONCILIATION_ROUTE_DECISION}`) &&
     !source.endsWith(`/${ATTENDANCE_ROUTE_DECISION}`) &&
+    !source.endsWith(`/${STRICT_ROUTE_INVENTORY_DECISION}`) &&
     !/\/auto-client-ratchet-[a-f0-9]{12}\.md$/.test(source)
   );
 }
