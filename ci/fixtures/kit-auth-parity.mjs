@@ -110,6 +110,7 @@ export async function assertAuthParity(origin, secret, browser) {
     });
   const location = (response) => response.headers.get("location");
   const hits = (response, bucket) => Number(response.headers.get(`x-fixture-${bucket}-hits`));
+  const exchanges = (response) => Number(response.headers.get("x-fixture-exchanges"));
   const start = async (flag) => {
     const response = await request("/auth/discord?next=%2Fevents", { flag });
     owns(response, 302, flag === "true");
@@ -121,7 +122,11 @@ export async function assertAuthParity(origin, secret, browser) {
     assert.match(state, /^[0-9a-f-]{36}$/);
     const pair = cookie(response, stateName, 600);
     assert.ok((await verifySignedCookie(pair.slice(stateName.length + 1), secret)) === state);
-    return { state, cookies: `${pair}; ${cookie(response, nextName, 600)}` };
+    return {
+      state,
+      cookies: `${pair}; ${cookie(response, nextName, 600)}`,
+      exchanges: exchanges(response),
+    };
   };
 
   for (const flag of ["unset", "false", "TRUE", "true"]) {
@@ -172,6 +177,7 @@ export async function assertAuthParity(origin, secret, browser) {
   const success = await request(`${callback}?${query}`, { flag: "false", cookies: issued.cookies });
   owns(success, 302, false);
   assert.equal(location(success), "/events");
+  assert.equal(exchanges(success), issued.exchanges + 1);
   cookie(success, stateName, 0);
   const bearer = cookie(success, SESSION_COOKIE, 7200);
   const statusKey = cookie(success, statusName, 7200);
@@ -179,6 +185,7 @@ export async function assertAuthParity(origin, secret, browser) {
   owns(replay, 302, true);
   assert.equal(location(replay), "/?n=signin_failed");
   assert.equal(replay.headers.has("set-cookie"), false);
+  assert.equal(replay.headers.has("x-fixture-issued"), false);
   assert.equal(replay.headers.get("x-fixture-exchanges"), "1");
 
   const handoff = await start("unset");
@@ -234,10 +241,17 @@ export async function assertAuthParity(origin, secret, browser) {
     cookie(response, statusName, 0);
     cookie(response, expiredName, 0);
   };
-  const logout = await post("/logout", { cookies: first });
-  owns(logout, 303, true);
-  clear(logout);
-  await status(first, false, "false");
+  const logoutAcrossOwners = async (bearer, statusKey, logoutFlag, callbackFlag) => {
+    for (const pair of [bearer, statusKey]) await status(pair, true, logoutFlag);
+    const logout = await post("/logout", { flag: logoutFlag, cookies: `${bearer}; ${statusKey}` });
+    owns(logout, 303, logoutFlag === "true");
+    clear(logout);
+    // Resend the original cookies to the issuer. Deletion headers alone
+    // would not prove that the shared session was revoked.
+    for (const pair of [bearer, statusKey]) await status(pair, false, callbackFlag);
+  };
+  await logoutAcrossOwners(bearer, statusKey, "true", "false");
+  await status(first, true);
   await status(sibling, true);
   const outage = await post("/logout/everywhere", {
     cookies: sibling,
@@ -251,9 +265,37 @@ export async function assertAuthParity(origin, secret, browser) {
   owns(all, 303, true);
   clear(all);
   assert.equal(hits(all, "logout"), 3);
+  await status(first, false, "false");
   await status(sibling, false, "false");
-  await status(statusKey, false);
   await status(other, true);
+
+  // Complete the reverse flip with a real Kit-issued session and then use
+  // Hono to revoke it. Replay the original Hono state before signing out.
+  const reverse = await start("false");
+  const reverseQuery = new URLSearchParams({ state: reverse.state, code: "fixture-code" });
+  const kitSignIn = await request(`${callback}?${reverseQuery}`, { cookies: reverse.cookies });
+  owns(kitSignIn, 302, true);
+  assert.equal(location(kitSignIn), "/events");
+  cookie(kitSignIn, stateName, 0);
+  cookie(kitSignIn, nextName, 0);
+  assert.equal(exchanges(kitSignIn), reverse.exchanges + 1);
+  const honoReplay = await request(`${callback}?${reverseQuery}`, {
+    flag: "false",
+    cookies: reverse.cookies,
+  });
+  owns(honoReplay, 302, false);
+  assert.equal(location(honoReplay), "/?n=signin_failed");
+  assert.equal(honoReplay.headers.has("set-cookie"), false);
+  assert.equal(honoReplay.headers.has("x-fixture-issued"), false);
+  assert.equal(exchanges(honoReplay), exchanges(kitSignIn));
+  await logoutAcrossOwners(
+    cookie(kitSignIn, SESSION_COOKIE, 7200),
+    cookie(kitSignIn, statusName, 7200),
+    "false",
+    "true",
+  );
+  console.log("PASS signed session and one-shot OAuth continuity across both auth owner flips");
+
   if (browser) {
     await assertNoJavaScript(origin);
     console.log(
@@ -395,17 +437,14 @@ async function assertQaParity(request, post, hits) {
   const unknown = await post("/auth/qa/unknown", { headers: qaHeaders });
   owns(unknown, 404, true);
   const refusal = await unknown.text();
+  const production = { "x-fixture-auth-app": "production", origin: `https://${PRODUCTION_APEX}` };
   for (const [flag, headers, status, kit] of [
     ["true", { [QA_HEADER]: "wrong" }, 404, true],
     ["true", { [QA_HEADER]: "" }, 404, true],
     ["true", { "x-fixture-qa-config": "" }, 404, true],
     ["false", { [QA_HEADER]: "wrong" }, 404, false],
-    [
-      "true",
-      { "x-fixture-auth-app": "production", origin: `https://${PRODUCTION_APEX}` },
-      404,
-      false,
-    ],
+    ["true", production, 404, false],
+    ["false", production, 404, false],
     ["true", { "x-fixture-foreign-host": "1" }, 404, false],
     [
       "true",
