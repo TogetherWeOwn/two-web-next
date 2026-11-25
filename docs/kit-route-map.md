@@ -434,6 +434,18 @@ An ordinary build calls the stock adapter. The source baseline has 99 endpoints
 and 11 method fallbacks. Six middleware registrations, matcher behavior, assets,
 content negotiation and error handling need separate built-Worker parity evidence.
 
+The [installed Worker admin fixture](../ci/fixtures/kit-admin-serving.mjs) compares
+direct Hono and the installed Kit Worker with admin ownership enabled on loopback.
+It checks that `/admin/events/new` selects the create form, a seeded `/admin/events/:key`
+selects the edit form for a moderator and refuses a non-moderator, and the exact
+`/admin/events/create` alias still selects the Hono redirect with its query dropped.
+For API-5, it compares the disabled queue preview guard with the earlier
+source-evidence handler. The two distinct JSON refusals confirm which branch
+answered before the moderator gate. Native queue preview, source evidence and
+the legacy create redirect remain blocked on Kit ownership. The fixture covers
+their Hono fallback responses and leaves enabled queue admission and audit,
+the remaining middleware registrations, and named matcher targets open.
+
 Retirement follows the [all-off cutover and Hono undo](kit-cutover-release.md),
 M0 and production parity for every live page and API family. Record each
 registration's disposition and every cutover's post-release watch. Recheck the
