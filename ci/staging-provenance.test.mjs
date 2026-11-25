@@ -42,6 +42,77 @@ test("candidate A survives deploy metadata B and workflow main tip C", () => {
   assert.equal(candidate(), A);
 });
 
+test("staging mutation entry requires a verified caller and a successful reservation decision", async () => {
+  const { assertStagingMutationAllowed } = await import("./staging-mutation-admission.mjs");
+  const verifiedCaller = { operation: "mutation", verifiedOwnerId: 42 };
+  const activeLease = {
+    sha: A,
+    allocationId: "11111111-1111-4111-8111-111111111111",
+    ownerId: 42,
+    issuedAt: "2026-11-01T10:30:00.000Z",
+    expiresAt: "2026-11-01T11:30:00.000Z",
+  };
+  const instrument = (readLease, decide, caller = verifiedCaller) => {
+    const effects = [];
+    const enter = async () => {
+      await assertStagingMutationAllowed({
+        verifiedCaller: caller,
+        reservationStore: {
+          async readLease() {
+            effects.push("read");
+            return readLease();
+          },
+        },
+        now: () => now,
+        canAdmitStagingOperation(record, context) {
+          effects.push({ record, context });
+          return decide(record);
+        },
+      });
+      effects.push("proceed");
+    };
+    return { enter, effects };
+  };
+  const refusal = { message: "Staging mutation reservation check refused" };
+  const context = { ...verifiedCaller, nowMs: now };
+  const admittedOnlyWhenAbsent = (record) => record === null;
+
+  const present = instrument(() => activeLease, admittedOnlyWhenAbsent);
+  await assert.rejects(present.enter, refusal);
+  assert.deepEqual(present.effects, ["read", { record: activeLease, context }]);
+
+  const unreadable = instrument(() => {
+    throw new Error("Synthetic store failure");
+  }, admittedOnlyWhenAbsent);
+  await assert.rejects(unreadable.enter, refusal);
+  assert.deepEqual(unreadable.effects, ["read"]);
+
+  const incomplete = instrument(() => undefined, () => true);
+  await assert.rejects(incomplete.enter, refusal);
+  assert.deepEqual(incomplete.effects, ["read"]);
+
+  for (const caller of [
+    null,
+    {},
+    { operation: "mutation" },
+    { operation: "mutation", verifiedOwnerId: "42" },
+    { operation: "mutation", verifiedOwnerId: 0 },
+    { operation: "e2e", verifiedOwnerId: 42 },
+  ]) {
+    const unverified = instrument(() => null, admittedOnlyWhenAbsent, caller);
+    await assert.rejects(unverified.enter, refusal);
+    assert.deepEqual(unverified.effects, []);
+  }
+
+  const ambiguous = instrument(() => null, () => "allow");
+  await assert.rejects(ambiguous.enter, refusal);
+  assert.deepEqual(ambiguous.effects, ["read", { record: null, context }]);
+
+  const absent = instrument(() => null, admittedOnlyWhenAbsent);
+  await absent.enter();
+  assert.deepEqual(absent.effects, ["read", { record: null, context }, "proceed"]);
+});
+
 test("staging receipts follow the served candidate through an out-of-order main advance and refuse disagreement", async () => {
   const worker = "12345678-0123-4567-abcd-123456789abc";
   const env = {
