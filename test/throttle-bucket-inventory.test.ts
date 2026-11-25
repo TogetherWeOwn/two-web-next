@@ -317,6 +317,7 @@ describe("throttle bucket inventory", () => {
     const found = guardBuckets();
     expect([...found.keys()].sort()).toEqual([
       "admin-write",
+      "event-write",
       "events-read",
       "login-callback",
       "login-recover",
@@ -327,6 +328,7 @@ describe("throttle bucket inventory", () => {
     expect(found.get("login-callback")).toEqual(["src/auth/routes.ts"]);
     expect(found.get("login-recover")).toEqual(["src/write-recovery.tsx"]);
     expect(found.get("events-read")).toEqual(["src/events/routes-shared.ts"]);
+    expect(found.get("event-write")).toEqual(["src/events/kit-event-write-fetch.ts"]);
   });
 
   it("fails loudly on non-literal throttle registrations", () => {

@@ -230,6 +230,9 @@ const kitDependencies = {
   kitEventsJourneyFor,
   discordEventsSource,
   fetchKitFeed,
+  serveEventWrite: () => {
+    throw new Error("Public archive fixture may not dispatch a write");
+  },
 };
 type KitBinding = {
   request: (request: Request, env: Env, deps: typeof kitDependencies) => Promise<Response>;
@@ -265,6 +268,7 @@ export async function compileArchiveKit() {
     [join(root, "src/kit-session.ts"), ["kitEventsSessionFor", "kitEventsJourneyFor"]],
     [join(root, "src/events/discord-transients.ts"), ["discordEventsSource"]],
     [join(root, "src/events/kit-feed-fetch.ts"), ["fetchKitFeed"]],
+    [join(root, "web/src/lib/server/event-write.ts"), ["serveEventWrite"]],
   ]);
   const result = await build({
     metafile: true,

@@ -1607,7 +1607,8 @@ function familyRouteFor(
   for (const family of families) {
     if (family.flag !== "true") continue;
     for (const route of family.routes) {
-      if (route.method !== method) continue;
+      // A mounted dynamic resource may own its method refusals as well as its writes.
+      if (route.method !== method && !(route.dynamic && route.method === "*")) continue;
       if (route.dynamic) {
         if (
           id !== route.dynamic.id ||
