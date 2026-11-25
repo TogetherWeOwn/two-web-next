@@ -515,6 +515,16 @@ describe("CallInternalAction", () => {
       { retryInSeconds: 5 },
     );
     expect(postAnnouncement).toHaveBeenCalledExactlyOnceWith(ann.action, ann.idempotencyKey);
+    announcementClaims.claimAnnouncement.mockResolvedValueOnce({
+      kind: "waiting",
+      attempts: 1,
+      retryInSeconds: 87,
+    });
+    const early = msg(ann, 7, timestamp);
+    await consume({ messages: [early] }, deps);
+    expect(early.retried).toBe(87);
+    expect(early.acked).toBe(false);
+    expect(postAnnouncement).toHaveBeenCalledOnce();
   });
 
   it("discards invalid announcement keys and aliases before acquiring a claim", async () => {

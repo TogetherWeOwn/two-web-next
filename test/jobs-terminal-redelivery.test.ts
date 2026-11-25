@@ -232,12 +232,19 @@ describe.skipIf(!process.env.DATABASE_URL).each([
       throw new BotTerminalError("synthetic terminal failure");
     });
     const bot = { postAnnouncement } as unknown as BotClient;
+    const announcementClaims = pgReconciliationStore(sql);
+    const finish = announcementClaims.finishAnnouncement;
+    if (claimed)
+      vi.spyOn(announcementClaims, "finishAnnouncement").mockImplementationOnce(async (...args) => {
+        await finish(...args);
+        throw new Error("commit response lost");
+      });
     const deps = {
       bot,
       events: {} as EventStore,
       lock: {} as UniqueLock,
       ledger,
-      announcementClaims: claimed ? pgReconciliationStore(sql) : undefined,
+      announcementClaims: claimed ? announcementClaims : undefined,
     };
     const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -258,8 +265,9 @@ describe.skipIf(!process.env.DATABASE_URL).each([
           retry: vi.fn(),
         };
         await consume({ messages: [message] }, deps);
-        expect(message.ack).toHaveBeenCalledOnce();
-        expect(message.retry).not.toHaveBeenCalled();
+        const responseLost = claimed && delivery === 0;
+        expect(message.ack).toHaveBeenCalledTimes(responseLost ? 0 : 1);
+        expect(message.retry).toHaveBeenCalledTimes(responseLost ? 1 : 0);
         const rows = await failures();
         expect(rows).toHaveLength(1);
         expect(rows[0]).toMatchObject({ job_id: id, kind: "announcement", key: null });

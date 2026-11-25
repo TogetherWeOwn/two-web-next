@@ -56,8 +56,16 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
       "Invalid announcement claim settlement",
     );
     expect(await claim()).toMatchObject({ kind: "sending", attempts });
-    expect(await store.finishAnnouncement(key, attempts, "closed")).toBe(true);
+    const jobId = crypto.randomUUID();
+    await pgQueueLedger(sql).enqueued({
+      jobId,
+      kind: "announcement",
+      key: null,
+      availableAt: queuedAt,
+    });
+    expect(await store.finishAnnouncement(key, attempts, { done: true, jobId })).toBe(true);
     expect(await claim()).toMatchObject({ kind: "closed", attempts });
+    expect(await sql`select 1 from queue_jobs where job_id = ${jobId}`).toEqual([]);
     expect(await store.finishAnnouncement(key, attempts - 1, retry)).toBe(false);
   });
 
