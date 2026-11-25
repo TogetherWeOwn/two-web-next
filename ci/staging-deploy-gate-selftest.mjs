@@ -81,12 +81,18 @@ test("deploy receipt uses the admission outputs and completed Worker step", () =
   );
   assert.match(stepBlock("Deploy to Cloudflare Workers"), /^        id: web-deploy$/m);
   const receipt = stepBlock("Summarize staging deploy evidence");
+  assert.ok(
+    workflow.trimEnd().endsWith(receipt.trimEnd()),
+    "the receipt runs after all deploy steps",
+  );
   assert.match(
     receipt,
     /if: \$\{\{ !cancelled\(\) && steps\.web-deploy-ci\.outputs\.sha != '' && hashFiles\('ci\/staging-receipt\.mjs'\) != '' \}\}/,
   );
-  assert.match(receipt, /^        continue-on-error: true$/m);
-  assert.match(receipt, /^        run: node ci\/staging-receipt\.mjs deploy$/m);
+  assert.match(
+    receipt,
+    /run: \|\n +node ci\/staging-receipt\.mjs deploy \|\| printf .*::warning::/,
+  );
   for (const [key, source] of Object.entries({
     STAGING_JOB_STATUS: "job.status",
     STAGING_WEB_DEPLOY_OUTCOME: "steps.web-deploy.outcome",

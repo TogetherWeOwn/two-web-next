@@ -408,11 +408,11 @@ jobs:
       - name: Summarize staging deploy evidence
         # An older CI checkout may predate the receipt. Reporting is advisory.
         if: ${{ !cancelled() && steps.web-deploy-ci.outputs.sha != '' && hashFiles('ci/staging-receipt.mjs') != '' }}
-        continue-on-error: true
         env:
           STAGING_JOB_STATUS: ${{ job.status }}
           STAGING_WEB_DEPLOY_OUTCOME: ${{ steps.web-deploy.outcome }}
           STAGING_CANDIDATE: ${{ steps.web-deploy-ci.outputs.sha }}
           STAGING_CI_RUN_ID: ${{ steps.web-deploy-ci.outputs.run_id }}
           STAGING_CI_RUN_ATTEMPT: ${{ steps.web-deploy-ci.outputs.run_attempt }}
-        run: node ci/staging-receipt.mjs deploy
+        run: |
+          node ci/staging-receipt.mjs deploy || printf '%s\n' '::warning::Staging evidence summary unavailable'
