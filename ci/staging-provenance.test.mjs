@@ -341,6 +341,12 @@ test("a passing journey ledger cannot replace the after identity in staging evid
   const beforeIndex = names.indexOf("Staging identity before critical journeys");
   assert.ok(beforeIndex > 0);
   const [beforeStep, runnerStep, afterStep, ledgerStep] = steps.slice(beforeIndex);
+  for (const identityStep of [beforeStep, afterStep]) {
+    assert.match(
+      identityStep,
+      /\n {8}env:\n {10}CANDIDATE_SHA: \$\{\{ needs\.scope\.outputs\.sha \}\}\n/,
+    );
+  }
   assert.match(beforeStep, /\n {8}id: identity-before\n/);
   assert.match(
     beforeStep,
