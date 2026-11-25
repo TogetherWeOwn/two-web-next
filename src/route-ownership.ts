@@ -285,6 +285,8 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   },
 ];
 
+const ATTENDANCE_FIXTURE_PATH = "/admin/attendance";
+
 // Fixture-only manifest for executed parity journeys. The generated loopback
 // worker can enable specific routes for their Kit journeys and captures.
 // Flags are honoured only for an HTTP loopback APP_URL;
@@ -364,7 +366,7 @@ export function fixtureManifestFor(env: {
   if (wantAttendance) {
     routes.push({
       method: "GET",
-      path: "/admin/attendance",
+      path: ATTENDANCE_FIXTURE_PATH,
       enabled: true,
       reads: { resource: "event_attendance", action: "view", route: "admin.attendance.show" },
     });
@@ -1151,7 +1153,7 @@ async function dispatchOwnedRequest(
           deps.fixtureAdminAttendance &&
           event.request.method === "GET" &&
           !event.isDataRequest &&
-          new URL(event.request.url).pathname === "/admin/attendance",
+          new URL(event.request.url).pathname === ATTENDANCE_FIXTURE_PATH,
         // Use the original URL: Kit strips the data suffix from event.url.
         KIT_PARITY_FIXTURE_ADMIN_DASHBOARD:
           deps.fixtureAdminDashboard &&
