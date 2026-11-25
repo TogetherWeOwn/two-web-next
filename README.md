@@ -404,9 +404,11 @@ Do not use `npm run deploy` as a test or build command.
 
 ## Deploy
 
-Push to `main` runs `check`, then `deploy-staging` (GitHub Environment `staging`
-gate): `wrangler deploy` of the tail Worker (`tail/wrangler.jsonc`), the Kit
-staging Worker (`web/wrangler.staging.jsonc`) and the jobs Worker
+Distinct commits pushed to `main` get separate full CI runs. Successful CI can
+trigger `deploy-staging` (GitHub Environment `staging`) for that exact commit.
+Staging admits the serving commit or a verified descendant, then runs
+`wrangler deploy` of the tail Worker (`tail/wrangler.jsonc`), the Kit staging
+Worker (`web/wrangler.staging.jsonc`) and the jobs Worker
 (`wrangler.jobs.jsonc`) with the `staging` Environment secrets `CLOUDFLARE_API_TOKEN` /
 `CLOUDFLARE_ACCOUNT_ID`, followed by `node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical`.
 The staging smoke checks `/up`, the public pages and feeds, sitemap, robots,

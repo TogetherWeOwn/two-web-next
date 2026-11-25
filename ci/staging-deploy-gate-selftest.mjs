@@ -923,16 +923,12 @@ test("workflow wires the tested gate before both mutations and preserves staging
   assert.match(ci, /run: node --test ci\/staging-deploy-gate-selftest.mjs/);
 });
 
-test("main CI runs are never cancelled in progress and finish in push order", () => {
-  // A cancel request marks the run cancelled even when every job then succeeds,
-  // and the deploy trigger above rejects a cancelled conclusion. The group stays
-  // per ref so main runs are serialized: an older SHA cannot finish after, and
-  // deploy over, a newer one.
+test("different main push SHAs cannot replace each other in the single pending queue", () => {
   const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
   const block = ci.match(/^concurrency:\n  group: (.+)\n  cancel-in-progress: \$\{\{ (.+) \}\}\n/m);
   assert(
     block,
-    "ci.yml concurrency must group per-PR-or-ref and exempt main from cancel-in-progress",
+    "ci.yml concurrency must isolate main pushes and exempt them from cancel-in-progress",
   );
   // GitHub expression dereference is null-safe (missing pull_request reads as
   // null); emulate that with optional chaining so main-push contexts evaluate.
@@ -943,25 +939,36 @@ test("main CI runs are never cancelled in progress and finish in push order", ()
     `return \`${nullSafe(block[1]).replaceAll("${{ ", "${").replaceAll(" }}", "}")}\`;`,
   );
   const cancelsOf = new Function("github", `return (${nullSafe(block[2])});`);
-  const main = (sha) => ({ workflow: "ci", event: {}, ref: "refs/heads/main", sha });
-  const pr = (number, ref) => ({
+  const context = (event_name, sha, ref = "refs/heads/main", event = {}) => ({
     workflow: "ci",
-    event: { pull_request: { number } },
+    event,
+    event_name,
     ref,
-    sha: "x",
+    sha,
   });
-  // Main pushes share one group (serialized, in order) and are never cancelled.
-  assert.equal(groupOf(main("aaa")), groupOf(main("bbb")));
-  assert.equal(cancelsOf(main("aaa")), false);
-  // The nightly schedule runs on main's ref but must not share the push group: a
-  // pending nightly would cancel a pending push run, which deploy never sees.
-  const nightly = { ...main("ccc"), event_name: "schedule" };
-  assert.notEqual(groupOf(nightly), groupOf(main("aaa")));
-  assert.equal(cancelsOf(nightly), false);
-  // PR pushes for the same PR share a group and cancel superseded runs.
-  assert.equal(groupOf(pr(7, "refs/pull/7/merge")), groupOf(pr(7, "refs/pull/7/merge")));
-  assert.notEqual(groupOf(pr(7, "refs/pull/7/merge")), groupOf(pr(8, "refs/pull/8/merge")));
-  assert.equal(cancelsOf(pr(7, "refs/pull/7/merge")), true);
+  const pr = (number, sha) =>
+    context("pull_request", sha, `refs/pull/${number}/merge`, { pull_request: { number } });
+  const mainPush = context("push", sha);
+  const manualRef = "refs/heads/check-ci";
+  const mergeRef = "refs/heads/gh-readonly-queue/main/pr-7";
+  const stateOf = (github) => [groupOf(github), cancelsOf(github)];
+
+  assert.deepEqual(stateOf(mainPush), [`ci-${sha}`, false]);
+  assert.deepEqual(stateOf({ ...mainPush, run_id: 42, run_attempt: 2 }), [`ci-${sha}`, false]);
+  assert.deepEqual(stateOf(context("push", otherSha)), [`ci-${otherSha}`, false]);
+
+  assert.deepEqual(stateOf(context("schedule", sha)), ["ci-nightly", false]);
+  assert.deepEqual(stateOf(context("workflow_dispatch", sha)), ["ci-refs/heads/main", false]);
+  assert.deepEqual(stateOf(context("workflow_dispatch", sha, manualRef)), [
+    `ci-${manualRef}`,
+    true,
+  ]);
+  assert.deepEqual(stateOf(context("push", sha, manualRef)), [`ci-${manualRef}`, true]);
+  assert.deepEqual(stateOf(context("merge_group", sha, mergeRef)), [`ci-${mergeRef}`, false]);
+
+  assert.deepEqual(stateOf(pr(7, sha)), ["ci-7", true]);
+  assert.deepEqual(stateOf(pr(7, otherSha)), ["ci-7", true]);
+  assert.deepEqual(stateOf(pr(8, sha)), ["ci-8", true]);
 });
 
 test("staging guard runs from the workflow revision inside the existing lane before writes", () => {
