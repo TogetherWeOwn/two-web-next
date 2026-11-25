@@ -24,7 +24,7 @@ async function observe(origin, event, signal) {
   assert.fail(`Timed out waiting for ${event}. Worker observed ${JSON.stringify(events)}`);
 }
 
-async function checkDisconnect(origin) {
+async function checkDisconnect(origin, owner) {
   const body = JSON.stringify(mcpToolCall("list_events", mcpListEventsArgs, 93));
   const client = request(new URL("/mcp", origin), {
     method: "POST",
@@ -51,6 +51,7 @@ async function checkDisconnect(origin) {
     });
     response.resume();
     assert.equal(response.statusCode, 200);
+    assert.equal(response.headers["x-two-renderer"] ?? null, owner);
     assert.match(response.headers["content-type"] ?? "", /^text\/event-stream(?:;|$)/);
     assert.deepEqual(await observe(origin, "read-held", start), ["read-held"]);
     assert.ifError(clientError);
@@ -93,32 +94,35 @@ export default machineDisconnectWorker(inner, ${JSON.stringify(probePath)});`,
     external: [...builtinModules, "node:*", "cloudflare:*"],
   });
   const host = "127.0.0.1";
-  const runtime = new Miniflare(
-    convertV4MiniflareOptions({
-      host,
-      port: 0,
-      modules: true,
-      modulesRoot: scratch,
-      script: bundle.outputFiles[0].text,
-      compatibilityDate: "2026-09-29",
-      // ADR 0002 §7. This fixture predates the 2026-11-17 default.
-      compatibilityFlags: ["nodejs_compat", "enable_request_signal"],
-      // Wrangler's dev proxy can keep its upstream request open after the
-      // downstream socket closes. Connect straight to workerd instead.
-      unsafeDirectSockets: [{ host, port: 0 }],
-      outboundService() {
-        throw new Error("MCP disconnect fixture has no outbound services");
-      },
-    }),
-  );
-  try {
-    const origin = await runtime.unsafeGetDirectURL();
-    assert.equal(origin.hostname, host, "direct Worker listener must stay on loopback");
-    await checkDisconnect(origin);
-  } finally {
-    await runtime.dispose();
+  for (const owner of [null, "kit"]) {
+    const runtime = new Miniflare(
+      convertV4MiniflareOptions({
+        host,
+        port: 0,
+        modules: true,
+        modulesRoot: scratch,
+        script: bundle.outputFiles[0].text,
+        bindings: owner === "kit" ? { KIT_ROUTE_MCP: "true" } : {},
+        compatibilityDate: "2026-09-29",
+        // ADR 0002 §7. This fixture predates the 2026-11-17 default.
+        compatibilityFlags: ["nodejs_compat", "enable_request_signal"],
+        // Wrangler's dev proxy can keep its upstream request open after the
+        // downstream socket closes. Connect straight to workerd instead.
+        unsafeDirectSockets: [{ host, port: 0 }],
+        outboundService() {
+          throw new Error("MCP disconnect fixture has no outbound services");
+        },
+      }),
+    );
+    try {
+      const origin = await runtime.unsafeGetDirectURL();
+      assert.equal(origin.hostname, host, "direct Worker listener must stay on loopback");
+      await checkDisconnect(origin, owner);
+    } finally {
+      await runtime.dispose();
+    }
+    console.log(
+      `PASS ${owner ?? "hono"} MCP TCP reset propagated to request.signal and fixture waitUntil cleanup`,
+    );
   }
-  console.log(
-    "PASS installed Kit MCP TCP reset propagated to request.signal and waitUntil cleanup",
-  );
 }

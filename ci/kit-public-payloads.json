@@ -367,6 +367,11 @@
       "reason": "The vanity redirect has no Kit data representation. The installed Worker fixture compares the public response across both owners."
     },
     {
+      "route": "POST/OPTIONS /mcp",
+      "binding": "web/src/routes/mcp/+server.ts",
+      "reason": "Session-free JSON-RPC and CORS transport has no Kit GET or data representation. The installed Worker fixture checks credential independence and the wire responses across both owners."
+    },
+    {
       "route": "GET /admin/ops-overrides",
       "binding": "web/src/routes/admin/ops-overrides/+server.ts",
       "reason": "Private operator record behind independent control-bearer admission."

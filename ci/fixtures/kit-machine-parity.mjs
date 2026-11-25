@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { withEnv } from "cloudflare:workers";
+import { BODY_LIMIT_BYTES } from "../../src/http/body-limit.ts";
 import { makeFakeAgentDb } from "../../test/helpers/fake-agent-ingress-db.ts";
 import {
   agentCaller,
@@ -8,8 +9,15 @@ import {
   mcpListEventsArgs,
   mcpToolCall,
 } from "../../test/helpers/machine-requests.ts";
+import { withThrottleTx } from "../../test/helpers/throttle-tx-double.ts";
+import { FIXTURE_SECRETS, identityCookies } from "../parity/fixture.mjs";
 
 const ulid = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
+const renderer = "x-two-renderer";
+const rpcHeaders = {
+  accept: "application/json, text/event-stream",
+  "content-type": "application/json",
+};
 
 function checkHeaders(response, status, mediaType) {
   assert.equal(response.status, status, `${mediaType} status`);
@@ -66,14 +74,15 @@ function eventDb(readCount) {
   };
 }
 
-function checkMcpHeaders(response) {
+function checkMcpHeaders(response, owner) {
   checkHeaders(response, 200, "text/event-stream");
+  assert.equal(response.headers.get(renderer), owner);
   assert.equal(response.headers.get("x-accel-buffering"), "no");
   assert.equal(response.headers.has("mcp-session-id"), false);
   assert.ok(response.body, "MCP returned a readable body while the tool was held");
 }
 
-async function checkMcpStream(post, cancelReader) {
+async function checkMcpStream(post, owner, cancelReader) {
   const entered = Promise.withResolvers();
   const release = Promise.withResolvers();
   const adminDb = eventDb(() => {
@@ -102,7 +111,7 @@ async function checkMcpStream(post, cancelReader) {
         entered.promise,
       ]),
     ]);
-    checkMcpHeaders(response);
+    checkMcpHeaders(response, owner);
 
     if (cancelReader) {
       reader = response.body.getReader();
@@ -136,6 +145,135 @@ async function checkMcpStream(post, cancelReader) {
     release.resolve();
     reader?.releaseLock();
   }
+}
+
+async function checkMcpRefusal(response, owner, status, message) {
+  checkHeaders(response, status, "application/json");
+  assert.equal(response.headers.get(renderer), owner);
+  const envelope = await response.json();
+  assert.equal(envelope.jsonrpc, "2.0");
+  assert.equal(envelope.id, null);
+  assert.equal(envelope.error.code, -32600);
+  assert.ok(envelope.error.message.startsWith(message));
+  assert.equal(envelope.error.data.request_id, response.headers.get("x-request-id"));
+}
+
+async function checkMcpAdmission(send, owner, appUrl) {
+  const endpoint = "/mcp";
+  const call = JSON.stringify({ jsonrpc: "2.0", id: 90, method: "tools/list" });
+  const post = (body, headers, bindings) =>
+    send(endpoint, { method: "POST", headers: { ...rpcHeaders, ...headers }, body }, bindings);
+  const anonymous = await post(call);
+  checkMcpHeaders(anonymous, owner);
+  const list = await anonymous.text();
+  const frame = /^event: message\r?\ndata: (.+)\r?\n\r?\n$/.exec(list);
+  assert.ok(frame, "MCP sent a tool list in one SSE message");
+  assert.deepEqual(
+    JSON.parse(frame[1])
+      .result.tools.map(({ name }) => name)
+      .sort(),
+    ["get_community", "get_event", "get_join", "list_events"],
+  );
+
+  const { SESSION_SECRET } = FIXTURE_SECRETS;
+  const { moderator: cookie } = await identityCookies();
+  let sessionReads = 0;
+  const credentialed = await post(
+    call,
+    { cookie, authorization: "Bearer synthetic-mcp-fixture", origin: "http://localhost:6274" },
+    {
+      SESSION_SECRET,
+      SESSION_STORE: {
+        async get() {
+          sessionReads++;
+          return null;
+        },
+      },
+    },
+  );
+  checkMcpHeaders(credentialed, owner);
+  assert.equal(await credentialed.text(), list);
+  assert.equal(sessionReads, 0, "credentials never reach the session store");
+
+  const preflight = await send(endpoint, {
+    method: "OPTIONS",
+    headers: { origin: "http://localhost:6274", "access-control-request-method": "POST" },
+  });
+  assert.equal(preflight.status, 200);
+  assert.equal(preflight.headers.get(renderer), owner);
+  assert.equal(preflight.headers.get("access-control-allow-origin"), "*");
+  assert.equal(preflight.headers.get("access-control-allow-methods"), "GET, POST, DELETE, OPTIONS");
+  assert.equal(await preflight.text(), "");
+
+  const foreign = { origin: "https://foreign.example.test" };
+  for (const response of [
+    await post(call, foreign),
+    await send(endpoint, { method: "OPTIONS", headers: foreign }),
+  ]) {
+    checkHeaders(response, 403, "application/json");
+    assert.equal(response.headers.get(renderer), owner);
+    assert.deepEqual(await response.json(), {
+      jsonrpc: "2.0",
+      id: null,
+      error: { code: -32000, message: "Invalid Origin: foreign.example.test" },
+    });
+  }
+
+  for (const [method, path, status, headers] of [
+    ["GET", endpoint, 404],
+    ["HEAD", endpoint, 404],
+    ["DELETE", endpoint, 403, foreign],
+    ["PUT", endpoint, 404, { origin: appUrl }],
+    ["POST", "/mcp/", 404, { origin: appUrl }],
+    ["POST", "/mcp/__data.json", 404, { origin: appUrl }],
+    ["POST", "/m%63p", 404, { origin: appUrl }],
+    ["POST", endpoint, 404, { host: "foreign.example.test" }],
+  ]) {
+    const response = await send(path, { method, headers });
+    assert.equal(response.status, status, `${method} ${path}`);
+    assert.equal(response.headers.get(renderer), null, `${method} ${path} stays with Hono`);
+    await response.body?.cancel();
+  }
+
+  const brokenUpload = new ReadableStream({
+    pull(controller) {
+      controller.error(new Error("synthetic MCP upload failure"));
+    },
+  });
+  for (const [body, headers, status, message] of [
+    ["{}", { "content-length": String(BODY_LIMIT_BYTES.mcp + 1) }, 413, "Reduce the size"],
+    [" ".repeat(BODY_LIMIT_BYTES.mcp + 1), {}, 413, "Reduce the size"],
+    [brokenUpload, {}, 400, "Check your request"],
+    ["[]", {}, 400, "Invalid Request: batched requests"],
+  ]) {
+    await checkMcpRefusal(await post(body, headers), owner, status, message);
+  }
+
+  let budgetReads = 0;
+  const budgetBuckets = [];
+  const budgetHeaders = { "cf-connecting-ip": "192.0.2.180" };
+  const spentBudget = {
+    async THROTTLE_STORE() {
+      budgetReads++;
+      return withThrottleTx(async (strings, bucket) => {
+        const statement = strings.join("?");
+        if (statement.includes("SELECT count(*)")) {
+          budgetBuckets.push(bucket);
+          return [{ n: 60, wait: 37 }];
+        }
+        if (statement.includes("DELETE FROM web_throttle_hits")) return [];
+        throw new Error("Unexpected MCP budget fixture statement");
+      });
+    },
+  };
+  const overCap = await post(" ".repeat(BODY_LIMIT_BYTES.mcp + 1), budgetHeaders, spentBudget);
+  await checkMcpRefusal(overCap, owner, 413, "Reduce the size");
+  assert.equal(budgetReads, 0, "the body cap runs before budget admission");
+  const refused = await post("[]", budgetHeaders, spentBudget);
+  assert.equal(refused.headers.get("retry-after"), "37");
+  await checkMcpRefusal(refused, owner, 429, "Too many requests. Try again in 37 seconds.");
+  assert.equal(budgetReads, 1, "budget admission runs before batch refusal");
+  assert.deepEqual(budgetBuckets, ["events-read:192.0.2.180"], "MCP shares the public read bucket");
 }
 
 async function checkMarkdownErrors(read, expectedOwner) {
@@ -173,16 +311,26 @@ export function machineParityWorker(inner, probePath, kit) {
     async fetch(request, env, ctx) {
       if (new URL(request.url).pathname !== probePath) return inner.fetch(request, env, ctx);
       const { APP_URL } = env;
-      const post = (path, body, headers, fixture) => {
+      const send = (path, init, fixture) => {
         const url = new URL(path, APP_URL);
         const input = new Request(url, {
-          method: "POST",
-          headers: { "content-type": "application/json", host: url.host, ...headers },
-          body: JSON.stringify(body),
+          ...init,
+          headers: { host: url.host, ...init.headers },
+          duplex: "half",
         });
         const bindings = { APP_URL, ...fixture };
         return withEnv(bindings, () => inner.fetch(input, bindings, ctx));
       };
+      const post = (path, body, headers, fixture) =>
+        send(
+          path,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json", ...headers },
+            body: JSON.stringify(body),
+          },
+          fixture,
+        );
       const read = (path, fixture) => {
         const bindings = { APP_URL, KIT_ROUTE_EVENT_MARKDOWN: "true", ...fixture };
         const input = new Request(new URL(path, APP_URL), {
@@ -191,11 +339,30 @@ export function machineParityWorker(inner, probePath, kit) {
         return withEnv(bindings, () => inner.fetch(input, bindings, ctx));
       };
       await checkAgentCreate(post);
-      await checkMcpStream(post, false);
-      await checkMcpStream(post, true);
+      const mcpPost = (path, body, headers, fixture) =>
+        post(path, body, headers, { ...fixture, KIT_ROUTE_MCP: "true" });
+      const owner = kit ? "kit" : null;
+      await checkMcpAdmission(
+        (path, init, fixture) => send(path, init, { ...fixture, KIT_ROUTE_MCP: "true" }),
+        owner,
+        APP_URL,
+      );
+      await checkMcpStream(mcpPost, owner, false);
+      await checkMcpStream(mcpPost, owner, true);
+      if (kit) {
+        await checkMcpStream(post, null, false);
+        for (const flag of ["false", "TRUE"]) {
+          const off = await send("/mcp", { method: "OPTIONS" }, { KIT_ROUTE_MCP: flag });
+          assert.equal(off.status, 200);
+          assert.equal(off.headers.get("access-control-allow-origin"), "*");
+          assert.equal(off.headers.get(renderer), null);
+          await off.text();
+        }
+      }
       await checkMarkdownErrors(read, kit ? "kit" : null);
       return Response.json({
         agentCreate: 201,
+        mcpAdmission: "verified",
         mcpComplete: "eof",
         mcpReaderCancel: "cancelled",
         eventMarkdownErrors: [500, 503],
@@ -209,7 +376,7 @@ export function machineParityWorker(inner, probePath, kit) {
 export function machineDisconnectWorker(inner, probePath) {
   const events = [];
   return {
-    async fetch(request, _env, ctx) {
+    async fetch(request, env, ctx) {
       const url = new URL(request.url);
       assert.equal(url.hostname, "127.0.0.1");
       if (request.method === "GET" && url.pathname === probePath) return Response.json(events);
@@ -239,9 +406,10 @@ export function machineDisconnectWorker(inner, probePath) {
         );
         return read;
       });
-      const bindings = { APP_URL: url.origin, ADMIN_DB: adminDb };
+      const flag = env.KIT_ROUTE_MCP;
+      const bindings = { APP_URL: url.origin, ADMIN_DB: adminDb, KIT_ROUTE_MCP: flag };
       const response = await withEnv(bindings, () => inner.fetch(request, bindings, ctx));
-      checkMcpHeaders(response);
+      checkMcpHeaders(response, flag === "true" ? "kit" : null);
       return response;
     },
   };
