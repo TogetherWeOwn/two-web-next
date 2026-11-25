@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempDisposableSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -535,6 +542,138 @@ const e2eRun = (id, overrides = {}) => ({
   path: ".github/workflows/e2e-staging.yml",
   head_repository: { full_name: "fixture/repo" },
   ...overrides,
+});
+
+test("passive ledger selection requires valid GitHub listings", async (t) => {
+  const firstPage = {
+    workflow_runs: [
+      e2eRun(9),
+      ...Array.from({ length: 99 }, (_, index) =>
+        e2eRun(index + 20, { display_title: "another candidate" }),
+      ),
+    ],
+  };
+  const listPath = "/actions/workflows/e2e-staging.yml/runs";
+  const repositoryUrl = "https://api.github.com/repos/fixture/repo";
+  const blobUrl = "https://storage.example/passive-ledger.zip";
+
+  async function checkListing({ pages, artifacts, runId = 9, refusal, requests }) {
+    const dir = mkdtempDisposableSync(join(tmpdir(), "passive-listing-"));
+    const visited = [];
+    try {
+      const result = fetchPassiveLedgers(
+        { repository: "fixture/repo", sha: SHA, token: "fixture-only", dir: dir.path },
+        {
+          fetchImpl: async (url) => {
+            if (url === blobUrl) {
+              visited.push("blob");
+              return new Response("fixture");
+            }
+            assert.ok(url.startsWith(repositoryUrl));
+            const { pathname, searchParams } = new URL(url);
+            const path = pathname.slice("/repos/fixture/repo".length);
+            if (path === listPath) {
+              const page = Number(searchParams.get("page"));
+              visited.push(`page ${page}`);
+              assert.ok(page >= 1 && page <= pages.length);
+              return Response.json(pages[page - 1]);
+            }
+            visited.push(path);
+            if (path === `/actions/runs/${runId}/artifacts`) {
+              assert.equal(searchParams.get("name"), `staging-passive-ledger-${runId}`);
+              return Response.json(
+                artifacts ?? {
+                  artifacts: [{ id: 77, name: `staging-passive-ledger-${runId}`, expired: false }],
+                },
+              );
+            }
+            assert.equal(path, "/actions/artifacts/77/zip");
+            return new Response(null, { status: 302, headers: { location: blobUrl } });
+          },
+          unzip: (_zip, out) => {
+            visited.push("unzip");
+            writeFileSync(join(out, "commit"), SHA);
+            const identity = JSON.stringify({ sha: SHA, deployedAt: "2026-01-01T00:00:00.000Z" });
+            writeFileSync(join(out, "identity.before.json"), identity);
+            writeFileSync(join(out, "identity.after.json"), identity);
+          },
+        },
+      );
+      if (refusal) {
+        await assert.rejects(result, refusal);
+      } else {
+        assert.deepEqual(await result, { runId, artifactId: 77 });
+      }
+      assert.deepEqual(visited, requests);
+    } finally {
+      dir.remove();
+    }
+  }
+
+  await t.test("an explicit empty run listing reports no candidate", async () => {
+    await checkListing({
+      pages: [{ workflow_runs: [] }],
+      refusal: /No e2e-staging run/,
+      requests: ["page 1"],
+    });
+  });
+  for (const [label, workflowRuns, runId] of [
+    ["an empty last page preserves the candidate", [], 9],
+    ["an occupied later page can supply the newest candidate", [e2eRun(10)], 10],
+  ]) {
+    await t.test(label, async () => {
+      await checkListing({
+        pages: [firstPage, { workflow_runs: workflowRuns }],
+        runId,
+        requests: [
+          "page 1",
+          "page 2",
+          `/actions/runs/${runId}/artifacts`,
+          "/actions/artifacts/77/zip",
+          "blob",
+          "unzip",
+        ],
+      });
+    });
+  }
+  for (const [label, page] of [
+    ["missing workflow_runs", {}],
+    ["null workflow_runs", { workflow_runs: null }],
+    ["non-array workflow_runs", { workflow_runs: {} }],
+    ["unclassifiable run", { workflow_runs: [{ id: 10 }] }],
+  ]) {
+    await t.test(`a later page with ${label} refuses before artifact lookup`, async () => {
+      await checkListing({
+        pages: [firstPage, page],
+        refusal: /Malformed e2e-staging run listing on page 2/,
+        requests: ["page 1", "page 2"],
+      });
+    });
+  }
+  for (const [label, artifacts, refusal] of [
+    ["an empty array", { artifacts: [] }, /has no staging-passive-ledger-9 artifact/],
+    ["a missing array", {}, /Malformed passive ledger artifact listing/],
+    ["a non-array field", { artifacts: {} }, /Malformed passive ledger artifact listing/],
+    [
+      "an invalid row beside a valid artifact",
+      {
+        artifacts: [
+          { id: 77, name: "staging-passive-ledger-9", expired: false },
+          { id: 78, name: "staging-passive-ledger-9" },
+        ],
+      },
+      /Malformed passive ledger artifact listing/,
+    ],
+  ]) {
+    await t.test(`an artifact listing with ${label} refuses before download`, async () => {
+      await checkListing({
+        pages: [{ workflow_runs: [e2eRun(9)] }],
+        artifacts,
+        refusal,
+        requests: ["page 1", "/actions/runs/9/artifacts"],
+      });
+    });
+  }
 });
 
 test("passive ledgers use the soak E2E run even when a newer run exists", async () => {

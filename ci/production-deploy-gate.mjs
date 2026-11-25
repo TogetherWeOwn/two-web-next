@@ -1002,14 +1002,19 @@ export async function fetchPassiveLedgers(
   }
   for (let page = 1; expectedRunId === undefined && page <= 3; page += 1) {
     const query = new URLSearchParams({ branch: "main", per_page: "100", page: String(page) });
-    const batch =
-      (await get(`/actions/workflows/e2e-staging.yml/runs?${query}`)).workflow_runs ?? [];
+    const listing = await get(`/actions/workflows/e2e-staging.yml/runs?${query}`);
+    const batch = listing?.workflow_runs;
+    if (
+      !Array.isArray(batch) ||
+      batch.some((run) => typeof run?.display_title !== "string" || !run.display_title.trim())
+    ) {
+      throw new Error(`Malformed e2e-staging run listing on page ${page}`);
+    }
     runs.push(...batch.filter((run) => run.display_title === e2eTitle(sha)));
     if (batch.length < 100) break;
   }
   if (!runs.length) throw new Error(`No e2e-staging run for ${sha}`);
-  const latest = runs.reduce((a, b) => (b.id > a.id ? b : a));
-  if (!runs.every((run) => Number.isSafeInteger(run.id))) {
+  if (runs.some((run) => !Number.isSafeInteger(run.id) || run.id <= 0)) {
     throw new Error(`e2e-staging run for ${sha} has an invalid run id`);
   }
   if (
@@ -1022,15 +1027,30 @@ export async function fetchPassiveLedgers(
   ) {
     throw new Error("e2e-staging.yml evidence revision/branch/workflow mismatch");
   }
+  const latest = runs.reduce((a, b) => (b.id > a.id ? b : a));
   const name = REGRESSION_LEDGER_ARTIFACT(latest.id);
   if (latest.status !== "completed") {
     throw new Error(`Latest e2e-staging run ${latest.id} is not completed`);
   }
-  const { artifacts = [] } = await get(`/actions/runs/${latest.id}/artifacts?name=${name}`);
+  const listing = await get(`/actions/runs/${latest.id}/artifacts?name=${name}`);
+  const artifacts = listing?.artifacts;
+  if (
+    !Array.isArray(artifacts) ||
+    artifacts.some(
+      (entry) =>
+        typeof entry?.name !== "string" ||
+        !entry.name.trim() ||
+        typeof entry.expired !== "boolean" ||
+        !Number.isSafeInteger(entry.id) ||
+        entry.id <= 0,
+    )
+  ) {
+    throw new Error(`Malformed passive ledger artifact listing for run ${latest.id}`);
+  }
   const [artifact, duplicate] = artifacts.filter(
-    (entry) => entry?.name === name && entry.expired === false,
+    (entry) => entry.name === name && entry.expired === false,
   );
-  if (!artifact || duplicate || !Number.isSafeInteger(artifact.id)) {
+  if (!artifact || duplicate) {
     throw new Error(
       `e2e-staging run ${latest.id} has no ${name} artifact; the candidate's staging passive set was not recorded`,
     );
