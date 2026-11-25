@@ -525,6 +525,7 @@ export async function assertFeaturedUnpublishParity({ kit, off, hono, databaseUr
   const actor = 900000000000000000n + BigInt(`0x${randomBytes(7).toString("hex")}`);
   const moderatorId = String(actor);
   const memberId = String(actor + 1n);
+  const ip = "192.0.2.188";
   const title = `Fixture featured withdrawal ${moderatorId}`;
   const sql = postgres(databaseUrl, { max: 1 });
   try {
@@ -542,7 +543,11 @@ export async function assertFeaturedUnpublishParity({ kit, off, hono, databaseUr
     });
     assert.ok(list.text.includes(`method="post" action="${action(kitId)}"`));
     const cookie = renewedModerator(list.headers);
-    const form = { method: "POST", headers: { ...html, cookie }, body: new URLSearchParams() };
+    const form = {
+      method: "POST",
+      headers: { ...html, cookie, "cf-connecting-ip": ip, "x-forwarded-for": ip },
+      body: new URLSearchParams(),
+    };
 
     async function snapshot(id) {
       const [row] = await sql`
@@ -645,6 +650,7 @@ export async function assertFeaturedUnpublishParity({ kit, off, hono, databaseUr
       // Audit rows are append-only. The hosted job discards the disposable database.
       await sql`delete from featured_contents where created_by = ${moderatorId}`;
       await sql`delete from web_sessions where user_id in (${moderatorId}, ${memberId})`;
+      await sql`delete from web_throttle_hits where bucket = ${`admin-write:${ip}`}`;
     } finally {
       await sql.end({ timeout: 1 });
     }
