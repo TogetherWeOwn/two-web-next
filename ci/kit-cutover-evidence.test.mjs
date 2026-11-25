@@ -15,6 +15,7 @@ import {
   verifyStagingProof,
   writeManifest,
 } from "./kit-cutover-evidence.mjs";
+import { verifyServed } from "./kit-cutover-staging.mjs";
 
 const sourceSha = "a".repeat(40);
 const digest = "b".repeat(64);
@@ -114,6 +115,69 @@ test("cutover ledger admits exactly 1033 or 1037 and exact version readiness", (
       /canonical/,
     );
   }
+});
+
+test("isolated cutover repeats readiness and smoke when rollback is still propagating", async () => {
+  const origin = "https://cutover.example.invalid";
+  const prefixes = ledgerPrefixes(ledgerJournal);
+  const calls = [];
+  const routeCount = await verifyServed(origin, prefixes, identity, hono, "1033", "hono", {
+    probeReady: async (url, ledger, expected) => {
+      assert.equal(url, origin);
+      assert.equal(ledger, prefixes);
+      assert.deepEqual(expected, { version: hono, commit: sourceSha, state: "1033" });
+      calls.push("readiness");
+    },
+    probeRoutes: async (url, { expectedVersionId, expectedCutoverRenderer, onRoute }) => {
+      assert.equal(url, origin);
+      assert.equal(expectedVersionId, hono);
+      assert.equal(expectedCutoverRenderer, "hono");
+      const converged = calls.includes("wait");
+      calls.push("smoke");
+      onRoute("/up", converged ? 0 : 1);
+      onRoute("/", converged ? 0 : 1);
+      return converged;
+    },
+    wait: async (ms) => {
+      assert.equal(ms, 10_000);
+      calls.push("wait");
+    },
+  });
+  assert.equal(routeCount, 2);
+  assert.deepEqual(calls, ["readiness", "smoke", "wait", "readiness", "smoke"]);
+});
+
+test("isolated cutover refuses persistent smoke failures after six attempts", async () => {
+  const calls = [];
+  await assert.rejects(
+    verifyServed(
+      "https://cutover.example.invalid",
+      ledgerPrefixes(ledgerJournal),
+      identity,
+      hono,
+      "1033",
+      "hono",
+      {
+        probeReady: async () => {
+          calls.push("readiness");
+        },
+        probeRoutes: async (_origin, { onRoute }) => {
+          calls.push("smoke");
+          onRoute("/", 1);
+          return false;
+        },
+        wait: async () => {
+          calls.push("wait");
+        },
+      },
+    ),
+    /isolated public-route smoke failed/,
+  );
+  assert.deepEqual(calls, [
+    ...Array.from({ length: 5 }, () => ["readiness", "smoke", "wait"]).flat(),
+    "readiness",
+    "smoke",
+  ]);
 });
 
 test("isolated cutover proof requires both exact versions and six healthy transitions", () => {

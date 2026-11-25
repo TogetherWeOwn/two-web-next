@@ -63,29 +63,47 @@ function cloudflare() {
   };
 }
 
-async function verifyServed(origin, prefixes, identity, version, state, renderer) {
-  for (let attempt = 0; attempt < 6; attempt++) {
-    try {
-      await readReady(origin, prefixes, { version, commit: identity.sourceSha, state });
-      break;
-    } catch {
-      if (attempt === 5) throw new Error("staging failed exact version and ledger verification");
-      await delay(10_000);
+export async function verifyServed(
+  origin,
+  prefixes,
+  identity,
+  version,
+  state,
+  renderer,
+  { probeReady = readReady, probeRoutes = smoke, wait = delay } = {},
+) {
+  const attempts = 6;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    // Readiness and public routes are separate requests. During Worker
+    // propagation, one can reach the target while another reaches the prior version.
+    let failure = "staging failed exact version and ledger verification";
+    const ready = await probeReady(origin, prefixes, {
+      version,
+      commit: identity.sourceSha,
+      state,
+    }).then(
+      () => true,
+      () => false,
+    );
+    if (ready) {
+      let routes = 0;
+      const passed = await probeRoutes(origin, {
+        expectedVersionId: version,
+        expectedCutoverRenderer: renderer,
+        onRoute: () => {
+          routes += 1;
+        },
+      });
+      if (passed) {
+        assert.ok(routes > 0, "isolated route smoke ran no checks");
+        return routes;
+      }
+      failure = "isolated public-route smoke failed";
     }
+    if (attempt === attempts) throw new Error(failure);
+    console.info(`Isolated serving attempt ${attempt}/${attempts}: ${failure}; retrying`);
+    await wait(10_000);
   }
-  let routes = 0;
-  assert.ok(
-    await smoke(origin, {
-      expectedVersionId: version,
-      expectedCutoverRenderer: renderer,
-      onRoute: () => {
-        routes += 1;
-      },
-    }),
-    "isolated public-route smoke failed",
-  );
-  assert.ok(routes > 0, "isolated route smoke ran no checks");
-  return routes;
 }
 
 function verifyStagedBindings(version, id, config) {
