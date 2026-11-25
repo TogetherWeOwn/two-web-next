@@ -298,8 +298,8 @@ export async function assertKitSourceEvidence({ worker, honoWorker, scratch, dat
     try {
       await sql`delete from queue_failed_jobs where job_id = ${job}`;
       await sql`delete from web_sessions where user_id = ${moderator}`;
-      assert.deepEqual(await fixtureRows(), []);
-      assert.deepEqual(await fixtureSessions(), []);
+      assert.equal((await fixtureRows()).length, 0, "synthetic failure row removed");
+      assert.equal((await fixtureSessions()).length, 0, "synthetic moderator session removed");
       console.log("PASS synthetic source-evidence incident and moderator session removed");
     } finally {
       await sql.end({ timeout: 1 });
