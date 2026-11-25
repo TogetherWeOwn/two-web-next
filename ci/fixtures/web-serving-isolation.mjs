@@ -154,7 +154,7 @@ export async function prepareServingIsolation({
         },
       },
     );
-  return { capture, run, version };
+  return { capture, run, version, health, plan };
 }
 
 // The existing bridge rehearsal owns the databases, roles and Worker builds.
@@ -179,7 +179,7 @@ export async function rehearseServingIsolation({
   assert.deepEqual(originalSequence, { usage: false, update: true });
   const lastEnd = newHistory.at(-1).tag;
   const timestamps = oldHistory.map(({ created_at }) => Number(created_at));
-  const { capture, run } = await prepareServingIsolation({
+  const { capture, run, health, plan } = await prepareServingIsolation({
     owner,
     login,
     database,
