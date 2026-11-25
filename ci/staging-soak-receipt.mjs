@@ -184,7 +184,8 @@ export async function captureStagingSoakReceipt(
     });
     if (!response.ok) throw new Error("Cloudflare analytics response refused");
     const payload = await response.json();
-    if (payload?.errors !== undefined && !Array.isArray(payload.errors)) {
+    const errors = payload?.errors;
+    if (errors !== null && errors !== undefined && !Array.isArray(errors)) {
       throw new Error("Malformed Cloudflare analytics response");
     }
     counts = parseErrorRateResponse(payload, versionId);
