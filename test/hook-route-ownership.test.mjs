@@ -25,7 +25,11 @@ import {
   resolveRouteOwner,
 } from "../src/route-ownership";
 import { KIT_STATIC_FEED_ROUTES } from "../src/events/kit-static-feed-routes";
-import { KIT_EVENT_CALENDAR_ROUTE } from "../src/events/kit-event-calendar-route";
+import {
+  EVENT_CALENDAR_ROUTE,
+  KIT_EVENT_CALENDAR_ROUTE,
+  kitLegacyEventCalendarKey,
+} from "../src/events/kit-event-calendar-route";
 
 const APP_URL = "https://example.com";
 // Explicit Kit-owned view of the archive page for tests: the shipped manifest
@@ -819,6 +823,63 @@ describe("dormant API family admission", () => {
       const candidate = apiEvent(reserved, { routeId: calendarId });
       expect(await owner(candidate, { flag: "true", routes: [broad] })).toBe("hono");
     }
+  });
+
+  function legacyFeeds(flag = "true") {
+    return {
+      ...feeds,
+      flag,
+      legacySuffix: {
+        path: EVENT_CALENDAR_ROUTE,
+        keyFor: kitLegacyEventCalendarKey,
+        read: vi.fn(async () => new Response(null, { status: 404 })),
+      },
+    };
+  }
+
+  it.each([
+    ["/events/a/b.ics?source=%2f", "GET", HONO_FALLBACK_ROUTE_ID, "a/b"],
+    ["/events/a%2Fb%2Eics", "HEAD", calendarId, "a/b"],
+    ["/events/a%FF.ics", "GET", null, "a%FF"],
+  ])(
+    "dispatches the original legacy calendar %s to its shared read",
+    async (path, method, id, key) => {
+      const event = { ...apiEvent(path, { method }), route: { id } };
+      const family = legacyFeeds();
+      const d = deps({ apiFamilies: [family] });
+      const response = await dispatchHookRequest(event, d);
+      expect(response.status).toBe(404);
+      expect(response.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+      expect(family.legacySuffix.read).toHaveBeenCalledExactlyOnceWith(
+        event.request,
+        key,
+        response.headers.get("x-request-id"),
+      );
+      expect(d.resolve).not.toHaveBeenCalled();
+      expect(d.honoFetch).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps legacy calendar misses, reservations and inactive or conflicting reads on Hono", async () => {
+    const active = legacyFeeds();
+    const broad = legacyFeeds();
+    broad.legacySuffix.keyFor = () => "forced";
+    for (const [path, options, families] of [
+      ["/events/a/b.ics", {}, [legacyFeeds("false")]],
+      ["/events/a/b.ics", {}, [active, legacyFeeds()]],
+      ["/events/a/b.ics", { method: "POST" }, [active]],
+      ["/events/a/b.ics", { host: "untrusted.example" }, [active]],
+      ["/events/a/b.ics/", {}, [active]],
+      ["/events/a/b%0A.ics", {}, [active]],
+      ["/events/a/b.ics/__data.json", {}, [broad]],
+      ["/%61pi/a/b.ics", {}, [broad]],
+      ["/_app/a/b.ics", {}, [broad]],
+    ]) {
+      expect(await owner(apiEvent(path, options), ...families)).toBe("hono");
+      for (const family of families) expect(family.legacySuffix.read).not.toHaveBeenCalled();
+    }
+    expect(await owner(apiEvent(calendarPath, { routeId: calendarId }), active)).toBe("kit");
+    expect(active.legacySuffix.read).not.toHaveBeenCalled();
   });
 
   it.each([

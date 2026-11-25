@@ -47,15 +47,16 @@ export function disabled(el: Element): boolean {
 }
 
 /**
- * First-form input/textarea fixture subset, without a submitter. Textarea values
- * use native urlencoded CRLF (not DOM FormData's LF); text inputs drop breaks.
+ * Input/textarea fixture subset without a submitter. A document supplies its
+ * first form. Textareas use native urlencoded CRLF and text inputs drop breaks.
  * Not a browser: no selects, external form owners, duplicate-name lists, live
  * edits, constraint validation, or complete input-type sanitization/encoding.
  * Use actual browser requests for wire-fidelity claims.
  */
-export function submittedFields(html: string): Record<string, string> {
+export function submittedFields(source: string | Element): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const el of controls(firstForm(html))) {
+  const form = typeof source === "string" ? firstForm(source) : source;
+  for (const el of controls(form)) {
     const name = attr(el, "name");
     if (!name || disabled(el)) continue;
     const type = (attr(el, "type") ?? "text").toLowerCase();
