@@ -339,6 +339,7 @@ test("Worker analytics sample caps streamed bytes before production or legacy st
       extensions: { fixture: "é".repeat(100) },
     }),
   );
+  const split = payload.indexOf("é") + 1;
   const padding = Buffer.alloc(1024 * 1024 - payload.length, " ");
   const versions = versionsApi([[version(VERSION, SHA)]]);
   const legacySoak = (fetchImpl) =>
@@ -355,9 +356,15 @@ test("Worker analytics sample caps streamed bytes before production or legacy st
     async (fetchImpl) => (await regression(green, {}, fetchImpl)).production,
     legacySoak,
   ]) {
-    const { requests, errors } = await sample(
-      async () => new Response(new Blob([payload, padding])),
-    );
+    const validBody = new ReadableStream({
+      start(controller) {
+        controller.enqueue(payload.subarray(0, split));
+        controller.enqueue(payload.subarray(split));
+        controller.enqueue(padding);
+        controller.close();
+      },
+    });
+    const { requests, errors } = await sample(async () => new Response(validBody));
     assert.deepEqual({ requests, errors }, { requests: 600, errors: 3 });
 
     let pulls = 0;
@@ -389,6 +396,12 @@ test("Worker analytics sample caps streamed bytes before production or legacy st
       sample(async () => new Response("private fixture content")),
       {
         message: "Workers analytics response is not readable JSON",
+      },
+    );
+    await assert.rejects(
+      sample(async () => new Response(null)),
+      {
+        message: "Workers analytics response has no body",
       },
     );
   }
