@@ -114,8 +114,10 @@ async function unusedPort() {
 
 requireDisposableDatabase(databaseUrl);
 const args = process.argv.slice(2);
-const publicVoiceBrowser = args[0] === "--installed-output" && args[1] === "--public-voice-browser";
-if (publicVoiceBrowser) args.splice(1, 1);
+// The existing hosted Chromium lane opts in with --public-voice-browser.
+// Manual cutover qualification does not install Chromium or run this lane.
+const installedBrowser = args[0] === "--installed-output" && args[1] === "--public-voice-browser";
+if (installedBrowser) args.splice(1, 1);
 const { worker, assets } = await workerOutput(args);
 const scratch = await mkdtemp(
   join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "kit-worker-e2e-"),
@@ -359,7 +361,7 @@ function fetch(request, env, context) {
       DISCORD_LIVE_SNAPSHOT_KEY_ID: "fixture-snapshot",
       DISCORD_LIVE_SNAPSHOT_SECRET: "fixture-snapshot-value",
     };
-    if (publicVoiceBrowser) {
+    if (installedBrowser) {
       // Run the documents against separate persisted Workers so the hub starts
       // cold and the disabled fixture has a working session bridge.
       const browserVars = { ...liveVars, KIT_PARITY_FIXTURE_EVENT_DETAIL: "true" };
@@ -1131,7 +1133,7 @@ export default authFixtureWorker(inner);\n`,
   });
   await listen(auth.child, auth.origin, () => auth.log);
   const { assertAuthParity } = await import("./fixtures/kit-auth-parity.mjs");
-  await assertAuthParity(auth.origin, authSecret, !args.length || publicVoiceBrowser);
+  await assertAuthParity(auth.origin, authSecret, !args.length || installedBrowser);
 
   if (args.length) {
     const probePath = "/__fixture/machine-parity";
@@ -1205,6 +1207,37 @@ export default machineParityWorker(inner, ${JSON.stringify(probePath)}, ${name =
         await listen(instance.child, instance.origin, () => instance.log);
         return instance;
       },
+    });
+  }
+
+  if (installedBrowser) {
+    const { EMBER_CUTOVER_VARS } = await import("./kit-cutover-evidence.mjs");
+    const {
+      EMBER_FIXTURE_GUILD,
+      EMBER_FIXTURE_ORIGIN,
+      prepareEmberCutoverFixture,
+      verifyEmberCutoverJourney,
+    } = await import("./fixtures/kit-ember-cutover-browser.mjs");
+    const entry = join(scratch, "kit-ember-cutover.mjs");
+    await prepareEmberCutoverFixture(entry, worker);
+    const [ember, fallback] = await Promise.all(
+      ["true", "false"].map(async (enabled) => {
+        const name = enabled === "true" ? "kit-ember" : "kit-ember-fallback";
+        const instance = await startWorker(name, entry, assets, secret, {
+          ...EMBER_CUTOVER_VARS,
+          KIT_ROUTE_EMBER_PAGES: enabled,
+          APP_URL: EMBER_FIXTURE_ORIGIN,
+          DISCORD_GUILD_ID: EMBER_FIXTURE_GUILD,
+        });
+        await listen(instance.child, instance.origin, () => instance.log);
+        return instance;
+      }),
+    );
+    await verifyEmberCutoverJourney({
+      kitOrigin: ember.origin,
+      fallbackOrigin: fallback.origin,
+      databaseUrl,
+      secret,
     });
   }
 } catch (error) {
