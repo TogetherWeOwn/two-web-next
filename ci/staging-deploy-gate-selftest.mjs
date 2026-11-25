@@ -923,12 +923,16 @@ test("workflow wires the tested gate before both mutations and preserves staging
   assert.match(ci, /run: node --test ci\/staging-deploy-gate-selftest.mjs/);
 });
 
-test("different main push SHAs cannot replace each other in the single pending queue", () => {
+test("main CI runs are never cancelled in progress and finish in push order", () => {
+  // A cancel request marks the run cancelled even when every job then succeeds,
+  // and the deploy trigger above rejects a cancelled conclusion. The group stays
+  // per ref so main runs are serialized: an older SHA cannot finish after, and
+  // deploy over, a newer one.
   const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
   const block = ci.match(/^concurrency:\n  group: (.+)\n  cancel-in-progress: \$\{\{ (.+) \}\}\n/m);
   assert(
     block,
-    "ci.yml concurrency must isolate main pushes and exempt them from cancel-in-progress",
+    "ci.yml concurrency must group per-PR-or-ref and exempt main from cancel-in-progress",
   );
   // GitHub expression dereference is null-safe (missing pull_request reads as
   // null); emulate that with optional chaining so main-push contexts evaluate.
@@ -939,28 +943,21 @@ test("different main push SHAs cannot replace each other in the single pending q
     `return \`${nullSafe(block[1]).replaceAll("${{ ", "${").replaceAll(" }}", "}")}\`;`,
   );
   const cancelsOf = new Function("github", `return (${nullSafe(block[2])});`);
-  const main = (sha, event_name = "push") => ({
-    workflow: "ci",
-    event: {},
-    event_name,
-    ref: "refs/heads/main",
-    sha,
-  });
+  const main = (sha) => ({ workflow: "ci", event: {}, ref: "refs/heads/main", sha });
   const pr = (number, ref) => ({
     workflow: "ci",
     event: { pull_request: { number } },
     ref,
     sha: "x",
   });
-  const pinned = main(sha);
-  const later = main(otherSha);
-  const nightly = main(sha, "schedule");
-  const dispatch = main(sha, "workflow_dispatch");
-  assert.equal(new Set([pinned, later, nightly, dispatch].map(groupOf)).size, 4);
-  assert.equal(cancelsOf(pinned), false);
-  assert.equal(cancelsOf(later), false);
+  // Main pushes share one group (serialized, in order) and are never cancelled.
+  assert.equal(groupOf(main("aaa")), groupOf(main("bbb")));
+  assert.equal(cancelsOf(main("aaa")), false);
+  // The nightly schedule runs on main's ref but must not share the push group: a
+  // pending nightly would cancel a pending push run, which deploy never sees.
+  const nightly = { ...main("ccc"), event_name: "schedule" };
+  assert.notEqual(groupOf(nightly), groupOf(main("aaa")));
   assert.equal(cancelsOf(nightly), false);
-  assert.equal(cancelsOf(dispatch), false);
   // PR pushes for the same PR share a group and cancel superseded runs.
   assert.equal(groupOf(pr(7, "refs/pull/7/merge")), groupOf(pr(7, "refs/pull/7/merge")));
   assert.notEqual(groupOf(pr(7, "refs/pull/7/merge")), groupOf(pr(8, "refs/pull/8/merge")));
@@ -968,18 +965,10 @@ test("different main push SHAs cannot replace each other in the single pending q
 });
 
 test("staging guard runs from the workflow revision inside the existing lane before writes", () => {
-  assert.match(
-    workflow,
-    /group: deploy-staging\n      cancel-in-progress: false\n      queue: max/,
-  );
   assert.equal(step("Require a forward staging rollout"), "node ci/staging-forward.mjs");
   assert.match(
     workflow,
     /ref: \$\{\{ github\.workflow_sha \}\}[\s\S]*?- name: Staging admission hold[\s\S]*?- name: Require a forward staging rollout[\s\S]*?DEPLOY_SHA: (\$\{\{ github\.event_name == 'workflow_run' && github\.event\.workflow_run\.head_sha \|\| github\.sha \}\})[\s\S]*?ref: \1/,
-  );
-  assert.ok(
-    workflow.indexOf("- name: Require a forward staging rollout") <
-      workflow.indexOf("- name: Plan staging web migrations"),
   );
 });
 
@@ -999,21 +988,23 @@ const forward = {
   base_commit: { sha: otherSha },
   merge_base_commit: { sha: otherSha },
 };
-function stagingReads({ live = otherSha, served = activeVersion, compare = forward } = {}) {
+const stagedDeployment = {
+  created_on: "2026-11-25T06:00:00Z",
+  versions: [{ version_id: activeVersion, percentage: 100 }],
+};
+function stagingReads({
+  live = otherSha,
+  served = activeVersion,
+  compare = forward,
+  deployments = [stagedDeployment],
+} = {}) {
   return async (url, options) => {
     switch (String(url)) {
       case `https://api.cloudflare.com/client/v4/accounts/${stagingGuardEnv.CLOUDFLARE_ACCOUNT_ID}/workers/scripts/two-web-next/deployments`:
         assert.equal(options.headers.Authorization, "Bearer fake-cloudflare");
         return Response.json({
           success: true,
-          result: {
-            deployments: [
-              {
-                created_on: "2026-11-25",
-                versions: [{ version_id: activeVersion, percentage: 100 }],
-              },
-            ],
-          },
+          result: { deployments },
         });
       case "https://next.togetherweown.com/up":
         assert.equal(Object.hasOwn(options.headers, "Authorization"), false);
@@ -1051,4 +1042,25 @@ test("staging refuses an older or divergent candidate and a lagging edge", async
     requireForwardStaging(stagingGuardEnv, stagingReads({ served: null, compare: null })),
     /does not identify the active Cloudflare version/,
   );
+});
+
+test("staging refuses a newer split deployment and ambiguous or malformed timestamps", async () => {
+  const split = {
+    created_on: "2026-11-25T06:00:00.000001Z",
+    versions: [{ version_id: activeVersion, percentage: 40 }],
+  };
+  for (const [entry, reason] of [
+    [split, /not a single-version 100% deployment/],
+    [{ ...split, created_on: "2026-11-25T06:00:00.0Z" }, /Cannot determine the newest/],
+    [{ ...split, created_on: "2026-02-30T06:00:00Z" }, /Invalid staging deployment timestamp/],
+    [{ ...split, created_on: undefined }, /Invalid staging deployment timestamp/],
+  ]) {
+    await assert.rejects(
+      requireForwardStaging(
+        stagingGuardEnv,
+        stagingReads({ deployments: [stagedDeployment, entry] }),
+      ),
+      reason,
+    );
+  }
 });

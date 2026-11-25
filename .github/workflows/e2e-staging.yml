@@ -10,8 +10,8 @@ run-name: e2e-staging ${{ github.event.workflow_run.display_title || github.sha 
 # Blacksmith. QA_AUTH_TOKEN comes from the staging Environment secret and is
 # never printed; GitHub masks secrets in logs automatically. Browsers run here
 # in CI only, never on the controller.
-# Docs-only and test-only deploys (ci/change-scope.sh skip_e2e verdict,
-# mirrored from e2e.yml) skip the journeys below: prose that no gate, test or
+# Docs-only and test-only deploys skip journeys only with evidence that the
+# deployed commit's parent was serving. This covers prose that no gate, test or
 # build reads, and unit tests the journeys never execute, prove nothing about
 # the deployed Worker. There is no PR context here (workflow_run +
 # workflow_dispatch triggers), so the scope job diffs the deployed head SHA
@@ -77,12 +77,13 @@ jobs:
           HEAD_SHA: ${{ steps.candidate.outputs.sha }}
           WORKFLOW_SHA: ${{ github.sha }}
           EVENT_NAME: ${{ github.event_name }}
+          DEPLOY_SMOKE_SCOPED: ${{ steps.candidate.outputs.deploy_smoke_scoped }}
         run: |
           set -euo pipefail
           # The trusted tree supplies the helper import inventory. If main
           # moved past the candidate, that inventory cannot justify a skip.
-          # Manual dispatch and a candidate without a parent also run fully.
-          if [ "$EVENT_NAME" = workflow_dispatch ] || [ "$HEAD_SHA" != "$WORKFLOW_SHA" ] || ! git rev-parse --verify --quiet "$HEAD_SHA~1" >/dev/null; then
+          # The deploy must also have proved its parent was previously live.
+          if [ "$EVENT_NAME" = workflow_dispatch ] || [ "$DEPLOY_SMOKE_SCOPED" != true ] || [ "$HEAD_SHA" != "$WORKFLOW_SHA" ] || ! git rev-parse --verify --quiet "$HEAD_SHA~1" >/dev/null; then
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
             echo "skip_e2e=false" >> "$GITHUB_OUTPUT"
             exit 0

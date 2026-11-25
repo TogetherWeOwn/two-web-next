@@ -35,6 +35,51 @@ export function resolveStagingCandidate({ eventName, event, sha, ref, repository
   return candidate;
 }
 
+// Only the exact successful deploy attempt can prove that its smoke scope
+// was checked against adjacent staging. Old workflows lack the forward guard.
+export async function deploySmokeWasScoped(run, repository, fetchImpl = fetch) {
+  if (
+    run?.path !== ".github/workflows/deploy.yml" ||
+    run.event !== "workflow_run" ||
+    run.status !== "completed" ||
+    !isSha(run.head_sha) ||
+    !Number.isSafeInteger(run.id) ||
+    run.id <= 0 ||
+    !Number.isSafeInteger(run.run_attempt) ||
+    run.run_attempt <= 0
+  )
+    return false;
+
+  try {
+    // Public Actions metadata. A missing response or proof runs full E2E.
+    const response = await fetchImpl(
+      `https://api.github.com/repos/${repository}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100`,
+      { redirect: "error", signal: AbortSignal.timeout(10_000) },
+    );
+    if (!response.ok) return false;
+    const { total_count, jobs } = await response.json();
+    if (total_count !== 1 || !Array.isArray(jobs) || jobs.length !== 1) return false;
+    const [job] = jobs;
+    if (
+      job?.name !== "deploy-staging" ||
+      job.run_id !== run.id ||
+      job.run_attempt !== run.run_attempt ||
+      job.head_sha !== run.head_sha ||
+      job.status !== "completed" ||
+      job.conclusion !== "success" ||
+      !Array.isArray(job.steps)
+    )
+      return false;
+
+    const proof = job.steps.filter((step) => step?.name === "Record adjacent staging smoke skip");
+    return (
+      proof.length === 1 && proof[0].status === "completed" && proof[0].conclusion === "success"
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function validateStagingIdentityPair(expected, before, after, now = Date.now()) {
   if (
     !isSha(expected) ||
@@ -83,14 +128,19 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try {
     const [command, expected, phase, evidence, commitPath, ...extra] = process.argv.slice(2);
     if (command === "candidate" && !expected) {
-      const sha = resolveStagingCandidate({
+      const context = {
         eventName: process.env.GITHUB_EVENT_NAME,
         event: JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, "utf8")),
         sha: process.env.GITHUB_SHA,
         ref: process.env.GITHUB_REF,
         repository: process.env.GITHUB_REPOSITORY,
-      });
-      appendFileSync(process.env.GITHUB_OUTPUT, `sha=${sha}\n`);
+      };
+      const sha = resolveStagingCandidate(context);
+      const smokeScoped =
+        context.eventName === "workflow_run" &&
+        sha === context.sha &&
+        (await deploySmokeWasScoped(context.event.workflow_run, context.repository));
+      appendFileSync(process.env.GITHUB_OUTPUT, `sha=${sha}\ndeploy_smoke_scoped=${smokeScoped}\n`);
     } else if (
       command === "observe" &&
       ["before", "after"].includes(phase) &&

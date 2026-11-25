@@ -1,7 +1,24 @@
+import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { liveVersion, readLiveRevision, rollbackEnvironment } from "./rollback-target.mjs";
 
-const isSha = (value) => typeof value === "string" && /^[a-f0-9]{40}$/.test(value);
+const isSha = (value) =>
+  typeof value === "string" && value.length === 40 && /^[a-f0-9]{40}$/.test(value);
+
+function orderedDeploymentTime(value) {
+  const parsed =
+    typeof value === "string" &&
+    /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?Z$/.exec(value);
+  const second = parsed ? Date.parse(`${parsed[1]}Z`) : NaN;
+  if (
+    parsed?.[0] !== value ||
+    !Number.isFinite(second) ||
+    new Date(second).toISOString().slice(0, 19) !== parsed[1]
+  ) {
+    throw new Error("Invalid staging deployment timestamp");
+  }
+  return `${parsed[1]}.${(parsed[2] ?? "").padEnd(9, "0")}Z`;
+}
 
 // The caller holds the shared staging lane through the last mutation. Check
 // Cloudflare's active version as well as /up so a lagging edge cannot admit a
@@ -37,8 +54,17 @@ export async function requireForwardStaging(env, fetchImpl = fetch) {
     env.CLOUDFLARE_API_TOKEN,
     "Cloudflare deployment state",
   );
-  if (deployment?.success !== true) throw new Error("Missing active staging deployment");
-  const active = liveVersion(deployment.result?.deployments);
+  const deployments = deployment?.result?.deployments;
+  if (deployment?.success !== true || !Array.isArray(deployments) || !deployments.length) {
+    throw new Error("Missing active staging deployment");
+  }
+  const ordered = deployments
+    .map((item) => ({ ...item, created_on: orderedDeploymentTime(item?.created_on) }))
+    .sort((a, b) => b.created_on.localeCompare(a.created_on));
+  if (ordered[0].created_on === ordered[1]?.created_on) {
+    throw new Error("Cannot determine the newest staging deployment");
+  }
+  const active = liveVersion([ordered[0]]);
   const revision = await readLiveRevision({ origin, fetchImpl }).catch(() => null);
   if (revision?.versionId !== active || !isSha(revision.commit)) {
     throw new Error("Staging /up does not identify the active Cloudflare version");
@@ -70,6 +96,7 @@ export async function requireForwardStaging(env, fetchImpl = fetch) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const live = await requireForwardStaging(process.env);
+    appendFileSync(process.env.GITHUB_OUTPUT, `live_sha=${live}\n`);
     console.log(`Staging rollout admitted: ${process.env.DEPLOY_SHA} from ${live}`);
   } catch (error) {
     console.error(`::error::${error.message}`);

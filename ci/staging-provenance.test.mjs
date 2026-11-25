@@ -4,7 +4,11 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { observeStaging, resolveStagingCandidate } from "./staging-provenance.mjs";
+import {
+  deploySmokeWasScoped,
+  observeStaging,
+  resolveStagingCandidate,
+} from "./staging-provenance.mjs";
 import { stagingReceipt } from "./staging-receipt.mjs";
 
 const A = "a".repeat(40);
@@ -183,6 +187,58 @@ test("manual qualification uses the exact main dispatch revision, not a deploy t
   );
 });
 
+test("a smoke skip is proof only on the exact successful deploy attempt", async () => {
+  const trigger = {
+    ...run,
+    id: 55,
+    run_attempt: 2,
+    status: "completed",
+    event: "workflow_run",
+    path: ".github/workflows/deploy.yml",
+  };
+  const proof = {
+    name: "Record adjacent staging smoke skip",
+    status: "completed",
+    conclusion: "success",
+  };
+  const job = {
+    name: "deploy-staging",
+    run_id: 55,
+    run_attempt: 2,
+    head_sha: B,
+    status: "completed",
+    conclusion: "success",
+    steps: [proof],
+  };
+  const check = (changes = {}) =>
+    deploySmokeWasScoped(trigger, repository, async (url, options) => {
+      assert.equal(new URL(url).pathname, "/repos/example/site/actions/runs/55/attempts/2/jobs");
+      assert.equal(options.redirect, "error");
+      assert.equal(options.headers, undefined);
+      return Response.json({ total_count: 1, jobs: [{ ...job, ...changes }] });
+    });
+
+  assert.equal(await check(), true);
+  for (const changes of [
+    { run_id: 56 },
+    { run_attempt: 1 },
+    { head_sha: A },
+    { status: "in_progress" },
+    { steps: [] },
+    { steps: [proof, proof] },
+  ]) {
+    assert.equal(await check(changes), false);
+  }
+  assert.equal(
+    await deploySmokeWasScoped(
+      trigger,
+      repository,
+      async () => new Response(null, { status: 403 }),
+    ),
+    false,
+  );
+});
+
 test("qualification observes the fixed staging endpoint once without redirects or caching", async () => {
   const calls = [];
   const result = await observeStaging({
@@ -336,9 +392,9 @@ test("scope never skips candidate helpers using a later revision's import invent
     const script = block[2].replace(/^          /gm, "");
     assert.doesNotMatch(script, /\$\{\{/);
     assert.match(script, /\[ "\$EVENT_NAME" = workflow_dispatch \]/);
-    const evaluate = (head, trusted, event = "workflow_run") => {
+    const evaluate = (head, trusted, event = "workflow_run", scope = "true", command = script) => {
       write("output", "");
-      execFileSync("bash", ["-c", script], {
+      execFileSync("bash", ["-c", command], {
         cwd: directory,
         encoding: "utf8",
         env: {
@@ -346,6 +402,8 @@ test("scope never skips candidate helpers using a later revision's import invent
           HEAD_SHA: head,
           WORKFLOW_SHA: trusted,
           EVENT_NAME: event,
+          DEPLOY_SMOKE_SCOPED: scope,
+          LIVE_SHA: trusted,
           GITHUB_OUTPUT: join(directory, "output"),
           RUNNER_TEMP: directory,
         },
@@ -368,8 +426,27 @@ test("scope never skips candidate helpers using a later revision's import invent
     const prose = commit();
     assert.equal(evaluate(prose, workflowSha).skip_e2e, "false");
     assert.equal(evaluate(prose, prose).skip_e2e, "true");
+    assert.equal(evaluate(prose, prose, "workflow_run", "false").skip_e2e, "false");
     assert.equal(evaluate(prose, prose, "workflow_dispatch").skip_e2e, "false");
     assert.equal(evaluate(base, base).skip_e2e, "false");
+
+    const deploy = readFileSync(
+      new URL("../.github/workflows/deploy.yml", import.meta.url),
+      "utf8",
+    );
+    const smokeStep = deploy.split(
+      "      - name: Scope post-deploy smoke to web-affecting changes\n",
+    )[1];
+    const smoke = smokeStep
+      .split("\n      - ")[0]
+      .split("        run: |\n")[1]
+      .replace(/^          /gm, "");
+    assert.match(
+      deploy,
+      /- name: Record adjacent staging smoke skip\n +if: steps\.smoke-scope\.outputs\.skip_e2e == 'true'/,
+    );
+    assert.equal(evaluate(prose, deployed, "workflow_run", "false", smoke).skip_e2e, "false");
+    assert.equal(evaluate(prose, workflowSha, "workflow_run", "true", smoke).skip_e2e, "true");
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

@@ -85,6 +85,7 @@ jobs:
           set -eu
           [ "${STAGING_MIGRATION_HOLD:-}" = false ] || { printf '%s\n' 'Staging migrations are held (STAGING_MIGRATION_HOLD is not exactly "false").' >&2; exit 1; }
       - name: Require a forward staging rollout
+        id: forward
         run: node ci/staging-forward.mjs
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -325,6 +326,7 @@ jobs:
       # head commit only touches docs prose or the `test/` unit tree the
       # checkers never execute skips the smoke steps below — the full suite,
       # including those tests, already passed in the exact-SHA full CI run.
+      # A skip also requires the candidate's parent to have been serving.
       # ci/change-scope.sh fails closed: every other path runs the smoke.
       - name: Scope post-deploy smoke to web-affecting changes
         id: smoke-scope
@@ -332,21 +334,25 @@ jobs:
         # shell is sh (dash), which rejects `set -o pipefail`. Run this step
         # under bash.
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          LIVE_SHA: ${{ steps.forward.outputs.live_sha }}
         run: |
           set -euo pipefail
-          # A deploy with no parent (practically impossible on main) fails
-          # closed: run the smoke rather than failing the deploy on scope.
-          if ! git rev-parse --verify --quiet "HEAD~1" >/dev/null; then
+          if [ "$EVENT_NAME" != workflow_run ] || ! parent=$(git rev-parse --verify --quiet "HEAD~1") || [ "$LIVE_SHA" != "$parent" ]; then
             echo "skip_e2e=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # Same shape as the pull-request files API that ci/change-scope.sh
           # reads in e2e.yml: one `filename<TAB>previous_filename` line per
           # changed file. Rename rows print old-then-new, so they are swapped.
-          git diff --name-status -M "HEAD~1" HEAD \
+          git diff --name-status -M "$parent" HEAD \
             | awk -F'\t' '{ if ($1 ~ /^R/) print $3 "\t" $2; else print $2 "\t" }' > "$RUNNER_TEMP/deployed-files.tsv"
           EXPECTED=$(wc -l < "$RUNNER_TEMP/deployed-files.tsv")
           bash ci/change-scope.sh "$RUNNER_TEMP/deployed-files.tsv" "$EXPECTED" >> "$GITHUB_OUTPUT"
+      - name: Record adjacent staging smoke skip
+        if: steps.smoke-scope.outputs.skip_e2e == 'true'
+        run: echo 'Staging smoke scope verified against the previously serving parent'
       - name: Smoke test staging public routes
         if: steps.smoke-scope.outputs.skip_e2e != 'true'
         # bin/smoke.mjs requires /up db:ok + pending_migrations:0, fails
