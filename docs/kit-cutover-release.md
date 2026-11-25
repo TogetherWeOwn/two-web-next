@@ -62,14 +62,16 @@ packet.
 
 Pair the isolated packet evidence with the
 [shared staging deploy, smoke, E2E and soak](../CONTRIBUTING.md#merge-and-production-staging-evidence)
-for the same candidate SHA. Match the deployed commit and Worker version UUID
-against `/version` and `/up`. The `deployedAt` field in `/version` identifies
-the version's upload time. Use the Cloudflare deployment history and the
-staging E2E completion time to verify that version served through the required
-soak. A replacement before the soak finishes leaves the prior candidate
-unqualified. Use the deployed revision recorded by the jobs when the Actions
-run header identifies the trigger context. The isolated job exercises the
-exact packaged bytes, the selected renderer profile and its undo.
+for the same candidate SHA. Use the deployed revision recorded by the jobs
+when the Actions run header identifies the trigger context. Match the
+`sha` and `deployedAt` in the staging E2E before and after receipts to the
+commit tag and upload time of the Cloudflare Worker version identified by
+`/up`'s version UUID. This distinguishes separate uploads of the same SHA.
+Use Cloudflare deployment history for that UUID and the staging E2E completion
+time to verify the version served through the required soak. A replacement
+before the soak finishes leaves the prior candidate unqualified. The isolated
+job exercises the exact packaged bytes, the selected renderer profile and
+its undo.
 
 ## Protected release and recovery
 
