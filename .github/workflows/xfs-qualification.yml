@@ -142,25 +142,25 @@ jobs:
           --health-cmd "pg_isready -h 127.0.0.1 -U agent_test -d two_web_next"
           --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
-      - &installed-checkout
+      -
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0 # The recorder identifies the most recent Hono runtime-input commit.
           persist-credentials: false
-      - &installed-node
+      -
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           package-manager-cache: false
-      - &installed-tooling
+      -
         name: Check the runner's XFS tool and install locked Node tooling
         run: |
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
           sudo mkfs.xfs -V
           npm ci --include=dev --ignore-scripts --no-audit --no-fund
           npm ci --prefix web --include=dev --ignore-scripts --no-audit --no-fund
-      - &installed-build
+      -
         name: Build stock Kit output
         run: npm run build --prefix web
       - name: Install Chromium for the installed Kit homepage proof
@@ -184,12 +184,12 @@ jobs:
           path: artifacts/kit-worker-fatal/
           if-no-files-found: error
           retention-days: 14
-      - &installed-role
+      -
         name: Prepare disposable runtime role
         env:
           DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/two_web_next
         run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f ci/disposable-runtime-role.sql -f ci/disposable-runtime-role.sql
-      - &installed-migrate
+      -
         name: Migrate loopback Postgres and check migration history
         env:
           DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/two_web_next
@@ -274,7 +274,7 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 30
-      - &installed-stop-postgres
+      -
         name: Verify loopback Postgres stopped
         if: always()
         shell: bash
@@ -295,12 +295,33 @@ jobs:
       EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     services: *installed-services
     steps:
-      - *installed-checkout
-      - *installed-node
-      - *installed-tooling
-      - *installed-build
-      - *installed-role
-      - *installed-migrate
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Check the runner's XFS tool and install locked Node tooling
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+          sudo mkfs.xfs -V
+          npm ci --include=dev --ignore-scripts --no-audit --no-fund
+          npm ci --prefix web --include=dev --ignore-scripts --no-audit --no-fund
+      - name: Build stock Kit output
+        run: npm run build --prefix web
+      - name: Prepare disposable runtime role
+        env:
+          DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/two_web_next
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f ci/disposable-runtime-role.sql -f ci/disposable-runtime-role.sql
+      - name: Migrate loopback Postgres and check migration history
+        env:
+          DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/two_web_next
+        run: |
+          npm run db:migrate
+          npm run db:check
       - name: Prove installed live sockets and fan-out
         shell: bash
         env:
@@ -317,7 +338,15 @@ jobs:
             grep -Fx 'PASS installed Kit expired and failed post-pull authorization closes without a frame' "$RUNNER_TEMP/kit-live-socket.log"
           fi
           exit "$result"
-      - *installed-stop-postgres
+      - name: Verify loopback Postgres stopped
+        if: always()
+        shell: bash
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker stop "$POSTGRES_CONTAINER"
+          test "$(docker inspect --format '{{.State.Running}}' "$POSTGRES_CONTAINER")" = false
+          printf '%s\n' 'Disposable Postgres stopped; the runner removes job services at teardown'
 
   isolated-cutover:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.qualify_cutover
