@@ -1,13 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import {
-  existsSync,
-  mkdtempDisposableSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -558,11 +551,11 @@ test("passive ledger selection requires valid GitHub listings", async (t) => {
   const blobUrl = "https://storage.example/passive-ledger.zip";
 
   async function checkListing({ pages, artifacts, runId = 9, refusal, requests }) {
-    const dir = mkdtempDisposableSync(join(tmpdir(), "passive-listing-"));
+    const dir = mkdtempSync(join(tmpdir(), "passive-listing-"));
     const visited = [];
     try {
       const result = fetchPassiveLedgers(
-        { repository: "fixture/repo", sha: SHA, token: "fixture-only", dir: dir.path },
+        { repository: "fixture/repo", sha: SHA, token: "fixture-only", dir },
         {
           fetchImpl: async (url) => {
             if (url === blobUrl) {
@@ -606,7 +599,7 @@ test("passive ledger selection requires valid GitHub listings", async (t) => {
       }
       assert.deepEqual(visited, requests);
     } finally {
-      dir.remove();
+      rmSync(dir, { recursive: true, force: true });
     }
   }
 
