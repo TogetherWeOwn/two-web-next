@@ -88,6 +88,15 @@ test("readiness: only complete bodies within 16 KiB can provide version evidence
   }
 });
 
+test("readiness: empty and absent bodies are misses", async () => {
+  for (const body of ["", null]) {
+    assert.deepEqual(await probe(() => new Response(body)), {
+      state: "miss",
+      reason: "unreachable (SyntaxError)",
+    });
+  }
+});
+
 test("readiness: errors, bad status, unready envelopes and missing identity are misses", async () => {
   for (const answer of [
     () => {
