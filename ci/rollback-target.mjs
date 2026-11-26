@@ -161,6 +161,20 @@ async function migrationSqlAt({ repository, ref, tag, token, fetchImpl }) {
   return response.text();
 }
 
+function validatedJournalTags(entries, side) {
+  const seen = new Set();
+  return entries.map(({ tag }) => {
+    if (typeof tag !== "string" || !/^[\w.-]+$/.test(tag)) {
+      throw new Error(`${side} migration journal has an invalid tag`);
+    }
+    if (seen.has(tag)) {
+      throw new Error(`${side} migration journal has a duplicate tag`);
+    }
+    seen.add(tag);
+    return tag;
+  });
+}
+
 // Migrations the target adds since the rollback target's commit, and the
 // ones among them that would break the rollback target.
 export async function rollbackCompatibility({
@@ -177,15 +191,13 @@ export async function rollbackCompatibility({
     token,
     fetchImpl,
   });
+  // Shared tags disappear from the difference, so validate both journals first.
   const added = pendingMigrationTags(
-    target.map((entry) => entry.tag),
-    live.map((entry) => entry.tag),
+    validatedJournalTags(target, "Target"),
+    validatedJournalTags(live, "Live"),
   );
   const unsafe = [];
   for (const tag of added) {
-    if (typeof tag !== "string" || !/^[\w.-]+$/.test(tag)) {
-      throw new Error("Migration journal has an invalid tag");
-    }
     const sql = await migrationSqlAt({ repository, ref: targetSha, tag, token, fetchImpl });
     if (destructiveStatements(sql).length) unsafe.push(tag);
   }

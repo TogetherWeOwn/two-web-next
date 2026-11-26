@@ -962,12 +962,14 @@ when both legs moved traffic and passed the identity smoke.
 `deploy-production` refuses to promote while the newest completed drill is
 red (`node ci/rollback-target.mjs --check-drill`), and without a valid
 rollback target (`--check-target`): `/up` must name the live production
-version and its commit, and no migration the candidate adds since that commit
-may drop, rename, retype or tighten (`SET NOT NULL`) anything the live code
-uses. A contract migration that is safe for the live code says why on its own
-line: `-- rollback-safe: <reason>`; reviewers check that note. The deploy job
-then confirms the recorded version is still the single 100% deployment and
-still carries its required secrets before any production mutation.
+version and its commit. Both journals must contain valid, unique migration
+tags before the preflight reads any added migration SQL. No migration the
+candidate adds since the live commit may drop, rename, retype or tighten
+(`SET NOT NULL`) anything the live code uses. A contract migration that is safe
+for the live code says why on its own line: `-- rollback-safe: <reason>`;
+reviewers check that note. The deploy job then confirms the recorded version
+is still the single 100% deployment and still carries its required secrets
+before any production mutation.
 
 #### Default promotion ancestry admission
 
