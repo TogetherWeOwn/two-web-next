@@ -1206,6 +1206,19 @@ export async function assertKitAdminServing({
     });
     const eventPath = draft.headers.get("location")?.split("?")[0];
     assert.match(eventPath ?? "", /^\/admin\/events\/[0-9A-Z]{26}$/);
+    // Check the original draft before another fixture edits its title.
+    // The missing-route probes can cache public suggestions, so they also
+    // need to run before the duplication and publish fixtures seed public events.
+    await assertKitEventEditRedirectServing({
+      kit,
+      nativeEdit,
+      off,
+      hono,
+      cookie: () => session(sql, moderatorId, true),
+      member,
+      eventPath,
+    });
+
     const repeated = await visit(kit, `${eventPath}/duplicate`, 303, {
       ...form,
       body: new URLSearchParams(),
@@ -1360,19 +1373,6 @@ export async function assertKitAdminServing({
       assert.equal(parameter.headers.get("location"), "/auth/discord");
     }
     console.log("PASS installed Worker legacy event-create redirect with Kit ownership off and on");
-    // Check the original draft before the edit fallback changes its title.
-    // Missing routes may cache suggestions, so run this before publishing
-    // temporary public events as well.
-    await assertKitEventEditRedirectServing({
-      kit,
-      nativeEdit,
-      off,
-      hono,
-      cookie: () => session(sql, moderatorId, true),
-      member,
-      eventPath,
-    });
-
     // Draft edits have no Discord mirror; the queue stub serves publish requests only.
     assert.ok(kitEdit, "the installed Kit editor was reached");
     await assertEventEditFallback({
