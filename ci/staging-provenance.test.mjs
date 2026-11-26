@@ -1,17 +1,21 @@
 import "./fixtures/staging-reservation-store.mjs";
 
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+import soakFixture from "../test/fixtures/staging-soak-receipt.json" with { type: "json" };
+import { isRedStagingRun } from "./resolve-promotion-sha.mjs";
 import {
   deploySmokeWasScoped,
   observeStaging,
   resolveStagingCandidate,
 } from "./staging-provenance.mjs";
 import { stagingReceipt } from "./staging-receipt.mjs";
+import { validateStagingSoakReceipt } from "./staging-soak-receipt.mjs";
 
 const A = "a".repeat(40);
 const B = "b".repeat(40);
@@ -326,6 +330,135 @@ test("a replacement during journeys refuses the after observation", async () => 
   await assert.rejects(observe({ sha: B, deployedAt }, { previous }));
   await assert.rejects(observe({ sha: A, deployedAt: "2026-11-01T10:30:00.000Z" }, { previous }));
   assert.deepEqual(await observe({ sha: A, deployedAt }, { previous }), previous);
+});
+
+test("a passing journey ledger cannot replace the after identity in staging evidence", (t) => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/e2e-staging.yml", import.meta.url),
+    "utf8",
+  );
+  const job = workflow.match(/^  staging-journeys:\n(?:.*\n)*?(?=^  [\w-]+:)/m)?.[0] ?? "";
+  const steps = job.split("\n      - name: ");
+  const names = steps.map((step) => step.split("\n", 1)[0]);
+  const beforeIndex = names.indexOf("Staging identity before critical journeys");
+  assert.ok(beforeIndex > 0);
+  const [beforeStep, runnerStep, afterStep, ledgerStep] = steps.slice(beforeIndex);
+  for (const identityStep of [beforeStep, afterStep]) {
+    assert.match(
+      identityStep,
+      /\n {8}env:\n {10}CANDIDATE_SHA: \$\{\{ needs\.scope\.outputs\.sha \}\}\n/,
+    );
+  }
+  assert.match(beforeStep, /\n {8}id: identity-before\n/);
+  assert.match(
+    beforeStep,
+    /\n {8}run: node ci\/staging-provenance\.mjs observe "\$CANDIDATE_SHA" before staging-identity\/critical\n?$/,
+  );
+  assert.match(runnerStep, /^Staging critical journeys\n {8}run: npm run e2e:staging\n/);
+  assert.match(afterStep, /^Staging identity after critical journeys\n/);
+  assert.match(
+    afterStep,
+    /\n {8}if: \$\{\{ !cancelled\(\) && steps\.identity-before\.outcome == 'success' \}\}\n/,
+  );
+  assert.match(
+    afterStep,
+    /\n {8}run: node ci\/staging-provenance\.mjs observe "\$CANDIDATE_SHA" after staging-identity\/critical\n?$/,
+  );
+  assert.doesNotMatch(job, /\n +continue-on-error:/);
+  assert.match(ledgerStep, /\n {8}if: always\(\)\n {8}run: node ci\/check-staging-journeys\.mjs\n/);
+
+  const { evidence, receipt } = soakFixture;
+  const directory = mkdtempSync(join(tmpdir(), "staging-journey-identity-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const mock = join(directory, "fetch.mjs");
+  writeFileSync(
+    mock,
+    `globalThis.fetch = async (url) => {
+      if (url !== "https://next.togetherweown.com/version") throw new Error("Unexpected fetch");
+      return new Response(process.env.FIXTURE_IDENTITY);
+    };`,
+  );
+  for (const matches of [true, false]) {
+    const cwd = join(directory, matches ? "exact" : "replaced");
+    mkdirSync(join(cwd, "test-results"), { recursive: true });
+    writeFileSync(
+      join(cwd, "test-results/staging-journeys.json"),
+      JSON.stringify({
+        suites: [
+          {
+            specs: [
+              {
+                file: "e2e/staging/fixture.spec.ts",
+                title: "synthetic journey",
+                tests: [{ projectName: "chromium", status: "expected", results: [] }],
+              },
+            ],
+          },
+        ],
+        errors: [],
+      }),
+    );
+    const runCli = (file, args = [], env = {}) =>
+      spawnSync(
+        process.execPath,
+        ["--import", mock, fileURLToPath(new URL(file, import.meta.url)), ...args],
+        { cwd, env, encoding: "utf8", timeout: 10_000 },
+      );
+    const canary = "synthetic-origin-body";
+    const observeIdentity = (phase, identity) =>
+      runCli(
+        "./staging-provenance.mjs",
+        ["observe", evidence.sha, phase, "staging-identity/critical"],
+        { FIXTURE_IDENTITY: JSON.stringify({ ...identity, extra: canary }) },
+      );
+    const readIdentity = (phase) =>
+      JSON.parse(readFileSync(join(cwd, `staging-identity/critical.${phase}.json`), "utf8"));
+    const beforeResult = observeIdentity("before", evidence.e2e.before);
+    assert.equal(beforeResult.status, 0, beforeResult.stderr);
+    const before = readIdentity("before");
+    assert.deepEqual(before, evidence.e2e.before);
+
+    const afterResult = observeIdentity("after", {
+      ...evidence.e2e.after,
+      deployedAt: matches ? evidence.e2e.after.deployedAt : "2026-01-01T10:01:00.000Z",
+    });
+    assert.equal(afterResult.status, matches ? 0 : 1, afterResult.stderr);
+    assert.ok(!(afterResult.stdout + afterResult.stderr).includes(canary));
+    const ledger = runCli("./check-staging-journeys.mjs", [], {
+      GITHUB_SHA: C,
+      GITHUB_RUN_ID: String(evidence.e2e.runId),
+      GITHUB_RUN_ATTEMPT: String(evidence.e2e.attempt),
+    });
+    assert.equal(ledger.status, 0, ledger.stderr);
+    const diagnostic = JSON.parse(
+      readFileSync(join(cwd, "test-results/staging-journey-ledger.json"), "utf8"),
+    );
+    assert.equal(diagnostic.verdict, "pass");
+    assert.deepEqual(diagnostic.counts, { passed: 1, skipped: 0, failed: 0, flaky: 0, total: 1 });
+
+    const conclusion = afterResult.status === 0 ? "success" : "failure";
+    assert.equal(isRedStagingRun({ run_attempt: 1, status: "completed", conclusion }), !matches);
+    const after = existsSync(join(cwd, "staging-identity/critical.after.json"))
+      ? readIdentity("after")
+      : undefined;
+    const e2e = { ...evidence.e2e, conclusion, before, after };
+    const validate = (input) =>
+      validateStagingSoakReceipt({ ...evidence, e2e: input }, receipt, {
+        nowMs: Date.parse(receipt.floorAt),
+      });
+    if (matches) {
+      assert.deepEqual(after, evidence.e2e.after);
+      assert.deepEqual(validate(e2e), receipt);
+    } else {
+      assert.match(afterResult.stderr, /Staging provenance refused; qualification is not evidence/);
+      assert.equal(after, undefined);
+      assert.throws(() => validate(e2e), /successful first-attempt E2E evidence/);
+      assert.throws(
+        () => validate({ ...e2e, conclusion: "success" }),
+        /Staging identities do not prove the candidate/,
+      );
+    }
+  }
 });
 
 test("an HTTP error or network failure is never retried into green", async () => {
