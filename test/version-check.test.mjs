@@ -21,6 +21,20 @@ const fetchOf = (...responses) => {
 };
 const quiet = { sleep: async () => {}, log: () => {} };
 
+function chunkedVersion(byteLength) {
+  const encoder = new TextEncoder();
+  const payload = JSON.stringify({ sha: COMMIT, deployedAt: UPLOADED }).padEnd(byteLength);
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(payload.slice(0, 20)));
+        controller.enqueue(encoder.encode(payload.slice(20)));
+        controller.close();
+      },
+    }),
+  );
+}
+
 test("versionMismatch accepts the expected commit with a past upload time", () => {
   assert.equal(versionMismatch({ sha: COMMIT, deployedAt: UPLOADED }, COMMIT, NOW), null);
 });
@@ -64,10 +78,27 @@ test("verifyVersion retries a 404, a network error and an old commit, then passe
 });
 
 test("verifyVersion accepts a complete body at the byte limit", async () => {
-  const exact = { sha: COMMIT, deployedAt: UPLOADED };
-  const { fetchImpl } = fetchOf(() => new Response(JSON.stringify(exact).padEnd(4096)));
+  const { fetchImpl } = fetchOf(() => chunkedVersion(4096));
   const data = await verifyVersion("https://next.example.test", COMMIT, { fetchImpl, ...quiet });
-  assert.deepEqual(data, exact);
+  assert.deepEqual(data, { sha: COMMIT, deployedAt: UPLOADED });
+});
+
+test("verifyVersion refuses one byte beyond the limit", async () => {
+  const { fetchImpl } = fetchOf(() => chunkedVersion(4097));
+  await assert.rejects(
+    verifyVersion("https://next.example.test", COMMIT, { fetchImpl, attempts: 1, ...quiet }),
+    /\/version response exceeds 4096 bytes/,
+  );
+});
+
+test("verifyVersion refuses an empty HTTP 200 response", async () => {
+  for (const body of [null, ""]) {
+    const { fetchImpl } = fetchOf(() => new Response(body));
+    await assert.rejects(
+      verifyVersion("https://next.example.test", COMMIT, { fetchImpl, attempts: 1, ...quiet }),
+      /request failed \(SyntaxError\)/,
+    );
+  }
 });
 
 test("verifyVersion cancels an oversized stream before reaching EOF", async () => {
