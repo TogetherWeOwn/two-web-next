@@ -12,6 +12,7 @@ import { PLANETSCALE_PRODUCTION_BRANCH_ID, PLANETSCALE_PRODUCTION_HOST } from ".
 import { runRepair } from "./db-permissions-repair.mjs";
 import { runExecutorAuthority } from "./db-repair-executor.mjs";
 import { runServingIsolation } from "./db-serving-ledger-isolation.mjs";
+import { repairClientWithCloseFailure } from "./fixtures/db-repair-close/postgres.mjs";
 import { prepareServingIsolation } from "./fixtures/web-serving-isolation.mjs";
 import { addedAfter1033, publicServingRights } from "./web-readiness-scoped-acl.mjs";
 
@@ -101,35 +102,6 @@ test("executor authority replays committed provision and revoke without another 
   }
 });
 
-function repairClientWithCloseFailure({ states, acknowledge }, events, transactionError) {
-  const tx = ([sql]) => {
-    if (sql.startsWith("select pg_catalog.current_database()")) {
-      return [{ database: "postgres", authenticated: "repair_owner", effective: "repair_owner" }];
-    }
-    return [{ acquired: true, clear: true, authorized: true }];
-  };
-  tx.unsafe = (sql) => {
-    if (/^(GRANT|REVOKE|ALTER) /.test(sql)) {
-      events.push("mutation");
-      return [];
-    }
-    return [states.shift()];
-  };
-  return {
-    async begin(_, execute) {
-      events.push("begin");
-      const outcome = await execute(tx);
-      events.push(outcome);
-      if (!acknowledge) throw transactionError;
-      return outcome;
-    },
-    async end({ timeout }) {
-      events.push(`end:${timeout}`);
-      throw new Error("fixture close driver detail");
-    },
-  };
-}
-
 test("repair close failures preserve only acknowledged outcomes", async (t) => {
   const hash = (value) => createHash("sha256").update(value).digest("hex");
   const inventory = JSON.parse(read("db-permissions-repair-inventory.json"));
@@ -215,22 +187,15 @@ test("repair close failures preserve only acknowledged outcomes", async (t) => {
       const transactionError = new Error("fixture transaction driver detail");
       const events = [];
       // Substitute postgres before loading the CLI, so the subprocess cannot connect.
-      const stub = `export default () => (${repairClientWithCloseFailure.toString()})(
-        ${JSON.stringify(fixture)}, [], new Error("fixture transaction driver detail"));`;
-      const preload = `import { registerHooks } from "node:module";
-        registerHooks({resolve(specifier, context, next) {
-          if (specifier === "postgres") return {shortCircuit: true, url: ${JSON.stringify(`data:text/javascript,${encodeURIComponent(stub)}`)}};
-          return next(specifier, context);
-        }});`;
       const cli = spawnSync(
         process.execPath,
         [
           "--import",
-          `data:text/javascript,${encodeURIComponent(preload)}`,
+          fileURLToPath(new URL("fixtures/db-repair-close/preload.mjs", import.meta.url)),
           fileURLToPath(new URL("db-permissions-repair.mjs", import.meta.url)),
           operation,
         ],
-        { env: fixtureEnv, encoding: "utf8" },
+        { env: { ...fixtureEnv, REPAIR_CLOSE_FIXTURE: JSON.stringify(fixture) }, encoding: "utf8" },
       );
       assert.ifError(cli.error);
       assert.equal(cli.signal, null);
