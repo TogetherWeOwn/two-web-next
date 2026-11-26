@@ -44,8 +44,9 @@
 //     buildClientOptions -> bootstrapRole -> evidence JSON { outcome, role,
 //     ddlIssued }; refusal-before-connect (a missing secret or an invalid
 //     endpoint never opens a connection); deps.createClient is a test seam
-//     only. CLI: no args runs, --selftest is DB-free PASS, other args are
-//     usage errors (exit 2)
+//     only. A close failure after verification adds closeFailed: true to
+//     the JSON and exits 3. Bootstrap errors retain exit 1 and their reason.
+//     CLI: no args runs, --selftest is DB-free PASS, other args exit 2.
 // Plus: .github/workflows/staging-role-bootstrap.yml — workflow_dispatch
 // with no inputs, literal `environment: staging`, main-only ref gate before
 // install, the EXISTING staging secret consumed in place only, no
@@ -59,7 +60,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 // @ts-expect-error Standalone CI tooling has no declaration file.
 import * as dbMigratePins from "../ci/db-migrate.mjs";
 
@@ -93,7 +94,7 @@ interface RoleRow {
 
 interface FakeBootstrapClient {
   unsafe(sql: string): Promise<Record<string, unknown>[]>;
-  end(): Promise<void>;
+  end(options: { timeout: number }): Promise<void>;
 }
 
 interface ClientOptions {
@@ -643,6 +644,62 @@ describe("bootstrap orchestration over an injected client", () => {
     );
     expect(bootstrap.safeBootstrapError(new Error("plain failure"))).toMatch(/withheld|failed/i);
   });
+
+  describe.each([false, true])("client close fails: %s", (closeFailed) => {
+    it.each(["present", "created", "refused"] as const)(
+      "preserves the %s result",
+      async (outcome) => {
+        const bootstrap = await bootstrapModule();
+        const { ROLE_STATUS_QUERY: status } = bootstrap;
+        const row = { ...compatibleRow(), has_memberships: outcome === "refused" };
+        const fake = fakeClient((sql, calls) => {
+          if (sql === CREATE_ROLE_DDL) return [];
+          if (sql !== status) throw new Error(`unexpected SQL: ${sql}`);
+          return outcome === "created" && calls.length === 1 ? [] : [row];
+        });
+        const end = vi.fn(async (_options: { timeout: number }) => {
+          if (closeFailed) throw new Error(`Bootstrap driver failure ${SECRET_MARKER}`);
+        });
+        const stdout = vi.spyOn(console, "log").mockImplementation(() => {});
+        const stderr = vi.spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          const run = bootstrap.runBootstrap(
+            { [SECRET_NAME]: stagingUrl() },
+            { createClient: () => ({ ...fake, end }) },
+          );
+          if (outcome === "refused") {
+            await expect(run).rejects.toThrow("existing role has memberships; no changes made.");
+            expect(stdout).not.toHaveBeenCalled();
+            expect(stderr.mock.calls).toEqual(
+              closeFailed
+                ? [["Bootstrap connection close failed; database details withheld."]]
+                : [],
+            );
+          } else {
+            const evidence = { outcome, role: ROLE_NAME, ddlIssued: outcome === "created" };
+            if (closeFailed) {
+              await expect(run).rejects.toThrow(
+                "Bootstrap verified the role before connection close failed.",
+              );
+            } else {
+              await expect(run).resolves.toEqual(evidence);
+            }
+            expect(stdout.mock.calls).toEqual([
+              [JSON.stringify(closeFailed ? { ...evidence, closeFailed } : evidence)],
+            ]);
+            expect(stderr).not.toHaveBeenCalled();
+          }
+          expect(fake.calls).toEqual(
+            outcome === "created" ? [status, CREATE_ROLE_DDL, status] : [status],
+          );
+          expect(end.mock.calls).toEqual([[{ timeout: 5 }]]);
+        } finally {
+          stdout.mockRestore();
+          stderr.mockRestore();
+        }
+      },
+    );
+  });
 });
 
 describe("bootstrap runner secret and connection wiring", () => {
@@ -742,5 +799,45 @@ describe("bootstrap CLI surface", () => {
     });
     expect(run.status).toBe(2);
     expect(run.stderr).toMatch(/usage/i);
+  });
+
+  it.each([false, true])("distinguishes close failure from refusal (refused: %s)", (refused) => {
+    const row = { ...compatibleRow(), has_memberships: refused };
+    const driver = `data:text/javascript,${encodeURIComponent(`
+      export default () => ({
+        unsafe: async () => [${JSON.stringify(row)}],
+        end: async () => { throw new Error(${JSON.stringify(`Bootstrap driver failure ${SECRET_MARKER}`)}); },
+      });
+    `)}`;
+    const preload = `data:text/javascript,${encodeURIComponent(`
+      import { registerHooks } from "node:module";
+      registerHooks({ resolve(specifier, context, next) {
+        if (specifier === "postgres") return { url: ${JSON.stringify(driver)}, shortCircuit: true };
+        return next(specifier, context);
+      } });
+    `)}`;
+    const run = spawnSync(
+      process.execPath,
+      ["--import", preload, "ci/staging-role-bootstrap.mjs"],
+      {
+        cwd: repoRoot,
+        encoding: "utf8",
+        env: { [SECRET_NAME]: stagingUrl() },
+        timeout: 5_000,
+      },
+    );
+    expect(run.stderr).not.toContain(SECRET_MARKER);
+    expect(run.status).toBe(refused ? 1 : 3);
+    if (refused) {
+      expect(run.stdout).toBe("");
+      expect(run.stderr).toContain("Refusing bootstrap: existing role has memberships");
+    } else {
+      expect(JSON.parse(run.stdout)).toEqual({
+        outcome: "present",
+        role: ROLE_NAME,
+        ddlIssued: false,
+        closeFailed: true,
+      });
+    }
   });
 });
