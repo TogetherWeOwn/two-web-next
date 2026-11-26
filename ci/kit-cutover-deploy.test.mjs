@@ -123,6 +123,12 @@ test("only exact successful main XFS dispatch metadata can produce a cutover pac
     verifyProducer(identity, "synthetic", async () => Response.json({ ...run, run_attempt: 2 })),
     /attempt metadata/,
   );
+  for (const event of ["push", "pull_request"]) {
+    await assert.rejects(
+      verifyProducer(identity, "synthetic", async () => Response.json({ ...run, event })),
+      /attempt metadata/,
+    );
+  }
 });
 
 test("only undo preparation may admit confirmed deferred migrations", () => {

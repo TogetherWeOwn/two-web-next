@@ -17,6 +17,7 @@ export const INITIAL_ROUTE_DECISION =
 export const RECONCILIATION_ROUTE_DECISION = "2026-11-23-reconciliation-routes.json";
 export const ATTENDANCE_ROUTE_DECISION = "2026-11-24-attendance-route.json";
 export const STRICT_ROUTE_INVENTORY_DECISION = "2026-11-25-strict-route-inventory.json";
+export const ADMIN_RSVP_ROUTE_DECISION = "2026-11-25-admin-rsvp-endpoints.json";
 const plan = (files) => ({
   client: {
     js: files[CLIENT_FILES[0]].client.js,
@@ -67,6 +68,7 @@ export function approvedClientPlan(root) {
     RECONCILIATION_ROUTE_DECISION,
     ATTENDANCE_ROUTE_DECISION,
     STRICT_ROUTE_INVENTORY_DECISION,
+    ADMIN_RSVP_ROUTE_DECISION,
   ].filter((name) => decisions.includes(name));
   while (pending.length || admissions.length) {
     const index = pending.findIndex((record) => isDeepStrictEqual(record.before, approved));

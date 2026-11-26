@@ -11,20 +11,23 @@ export const KIT_ADMIN_OPS_ROUTES = ["GET", "POST", "PUT", "PATCH", "DELETE", "O
   (method) => ({ method, path: "/admin/ops-overrides", enabled: true, reads: "public" as const }),
 );
 
-export const KIT_QUEUE_PREVIEW_ROUTE = {
-  method: "GET",
-  path: "/admin/queue/failed/:id/preview",
-  enabled: true,
-} as const;
-export const KIT_QUEUE_PREVIEW_ID = "/admin/queue/failed/[id]/preview";
+const rsvpFormPaths = [
+  ["/admin/events/:key/rsvp-pause", "/admin/events/[key]/rsvp-pause"],
+  ["/admin/events/:key/rsvp-reopen", "/admin/events/[key]/rsvp-reopen"],
+] as const;
+
+export function isKitAdminRsvpForm(path: string | undefined): boolean {
+  return rsvpFormPaths.some(([pattern]) => pattern === path);
+}
 
 const formPaths = [
   ["/admin/events", "/admin/events"],
   ["/admin/featured", "/admin/featured"],
   ["/admin/events/:key", "/admin/events/[key]"],
   ["/admin/featured/:id", "/admin/featured/[id]"],
+  ...rsvpFormPaths,
   ["/admin/events/:key/duplicate", "/admin/[...action]"],
-  ...["publish", "cancel", "rsvp-pause", "rsvp-reopen"].map(
+  ...["publish", "cancel"].map(
     (action) => [`/admin/events/:key/${action}`, "/admin/[...action]"] as const,
   ),
   ...["delete", "unpublish"].map(
@@ -132,3 +135,10 @@ export function privateAdminResponse(request: Request, response: Response): Resp
     headers,
   });
 }
+
+export const KIT_QUEUE_PREVIEW_ROUTE = {
+  method: "GET",
+  path: "/admin/queue/failed/:id/preview",
+  enabled: true,
+} as const;
+export const KIT_QUEUE_PREVIEW_ID = "/admin/queue/failed/[id]/preview";

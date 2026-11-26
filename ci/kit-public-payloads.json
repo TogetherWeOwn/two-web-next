@@ -225,6 +225,16 @@
       "reads": "exact moderator form actions admitted by the hook before controller dispatch"
     },
     {
+      "route": "POST /admin/events/:key/rsvp-pause",
+      "binding": "web/src/routes/admin/events/[key]/rsvp-pause/+server.ts",
+      "reads": "moderator session and locked event row before pausing RSVPs"
+    },
+    {
+      "route": "POST /admin/events/:key/rsvp-reopen",
+      "binding": "web/src/routes/admin/events/[key]/rsvp-reopen/+server.ts",
+      "reads": "moderator session, locked event row and waitlist before reopening RSVPs"
+    },
+    {
       "route": "GET /events/:key",
       "binding": "web/src/routes/events/[key]/+server.ts",
       "reads": "event, moderator-only draft and viewer's own waitlist position after a non-rotating session check"
