@@ -1189,6 +1189,9 @@ describe("scope token boundary and verdict validation", () => {
     git("mv", "src/app.ts", "docs/moved.md");
     git("commit", "-qm", "rename");
     git("switch", "base");
+    writeFileSync(join(repo, "docs", "base-only.md"), "Only on the base branch.\n");
+    git("add", "docs/base-only.md");
+    git("commit", "-qm", "advance base");
     git("merge", "--no-ff", "-qm", "merge", "topic");
 
     const runnerTemp = dirname(repo);

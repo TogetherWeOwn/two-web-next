@@ -45,7 +45,9 @@ class AdmissionTest(TestCase):
         self.assertEqual(evidence()["pr-size-gate / gate"], (2, 1, 20))
         size["status"] = "queued"
         self.assertIsNone(evidence())
-        size["status"] = "completed"
+        size.update(status="completed", conclusion="failure")
+        self.assertIsNone(evidence())
+        size["conclusion"] = "success"
         runs[1]["run_attempt"] = 2
         self.assertIsNone(evidence())
         runs[1].update(run_attempt=1, status="completed", conclusion="success")
