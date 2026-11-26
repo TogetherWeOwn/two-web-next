@@ -139,11 +139,24 @@ export function installSoakCliReads({ finalReadUnavailable }) {
     {
       fetchImpl: async (input) => {
         const url = String(input);
+        if (url === `${STAGING_ORIGIN}/version`) {
+          const body = new ReadableStream(
+            {
+              async pull(controller) {
+                await setImmediate();
+                controller.enqueue(new TextEncoder().encode(JSON.stringify({ sha, deployedAt })));
+                reads.push(url);
+                controller.close();
+              },
+            },
+            { highWaterMark: 0 },
+          );
+          return new Response(body, { headers: { "content-type": "application/json" } });
+        }
         const trackedResponse = (body, init) => {
           const response = Response.json(body, init);
-          const reader = url === `${STAGING_ORIGIN}/version` ? "text" : "json";
-          const readBody = response[reader].bind(response);
-          response[reader] = async () => {
+          const readBody = response.json.bind(response);
+          response.json = async () => {
             await setImmediate();
             const payload = await readBody();
             reads.push(url);
@@ -151,7 +164,6 @@ export function installSoakCliReads({ finalReadUnavailable }) {
           };
           return response;
         };
-        if (url === `${STAGING_ORIGIN}/version`) return trackedResponse({ sha, deployedAt });
         if (url === `${STAGING_ORIGIN}/up`) {
           return trackedResponse(
             { revision: { commit: sha, version_id: workerVersion } },
