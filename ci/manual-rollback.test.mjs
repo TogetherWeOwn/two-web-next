@@ -72,6 +72,11 @@ test("protected manual rollback proves admission and live-version refusals befor
     ["green ancestor while dispatch-tip CI is pending", {}],
     ["already restored", { LIVE: previous }],
     ["recover a known partial promotion", { SPLIT: previous }],
+    [
+      "failed provider deployment query with valid JSON on stdout",
+      { DEPLOYMENT_QUERY_FAILS: "true" },
+      /Stub provider deployment query failed/,
+    ],
     ["refuse an unknown split", { SPLIT: other }, /split traffic must serve only/],
     ["wrong currently serving UUID", { LIVE: other }, /is neither the expected/],
     ["unknown dispatch workflow", { WORKFLOW: "unknown" }, /Unknown rollback dispatch/],
@@ -97,16 +102,27 @@ test("protected manual rollback proves admission and live-version refusals befor
   const steps = { dispatchGuard, resolve, recheck, scriptsCheckout, guard, mutation };
   for (const [name, overrides, error] of cases) {
     await t.test(name, () => {
-      const { result, calls, commands } = runFixture(dir, workflow, steps, dispatcher, overrides);
+      const { result, calls, commands, guardOutput } = runFixture(
+        dir,
+        workflow,
+        steps,
+        dispatcher,
+        overrides,
+      );
       assert.ifError(result.error);
       assert.equal(result.status, error ? 1 : 0, result.stdout + result.stderr);
       if (error) assert.match(result.stderr + result.stdout, error);
       assert.ok(!calls.includes(`head_sha=${dispatcher}`));
       if (!error) assert.equal(calls.split(`head_sha=${green}`).length - 1, 2);
+      const queriedDeployments = commands.includes("wrangler deployments list");
       assert.equal(
-        commands.includes("wrangler deployments list"),
-        !error || overrides.LIVE === other || overrides.SPLIT === other,
+        queriedDeployments,
+        !error ||
+          overrides.LIVE === other ||
+          overrides.SPLIT === other ||
+          overrides.DEPLOYMENT_QUERY_FAILS === "true",
       );
+      if (error && queriedDeployments) assert.equal(guardOutput, "");
       assert.equal(commands.includes("wrangler rollback"), !error && !overrides.LIVE);
     });
   }
