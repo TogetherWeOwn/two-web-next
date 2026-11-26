@@ -177,7 +177,7 @@ test("PID reuse stops observation instead of reporting an unrelated root", async
   assert.equal(records[1], '[node22-progress] {"status":"root-unavailable"}\n');
 });
 
-test("workflow retains the exact suite, scope gate, hosted runner, timeout and required dependency", () => {
+test("workflow retains the exact suite, scope gate, GitHub fallback, timeout and required dependency", () => {
   assert.ok(command, "workflow must start the sidecar around the shard command");
   assert.match(command, /^node ci\/node22-progress\.mjs "\$\$" &\n/);
   assert.match(
@@ -186,11 +186,11 @@ test("workflow retains the exact suite, scope gate, hosted runner, timeout and r
   );
   assert.match(
     job,
-    /if: \$\{\{ !cancelled\(\) && needs\.scope\.result == 'success' && needs\.scope\.outputs\.docs_only != 'true' && needs\.scope\.outputs\.draft != 'true' \}\}/,
+    /if: \$\{\{ !cancelled\(\) && needs\.scope\.result == 'success' && needs\.scope\.outputs\.docs_only != 'true' && needs\.scope\.outputs\.draft != 'true' && needs\.scope\.outputs\.isolated != 'true' \}\}/,
   );
   assert.doesNotMatch(step, /continue-on-error|timeout-minutes/);
   assert.match(job, /timeout-minutes: 45\n/);
-  assert.match(job, /^    runs-on: ubuntu-latest$/m);
+  assert.match(job, /^      && vars\.CI_BLACKSMITH_2VCPU \|\| 'ubuntu-latest' }}$/m);
   assert.match(job, /image: node:22\.23\.0-bookworm/);
   assert.match(job, /run: node --test ci\/node22-progress\.test\.mjs/);
   assert.match(job, /shard: \[1, 2, 3\]/);

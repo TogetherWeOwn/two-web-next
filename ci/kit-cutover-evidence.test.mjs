@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import {
   LEDGER_STATES,
   STAGING_WORKER,
   WranglerOperationError,
+  inventory,
   ledgerPrefixes,
   productionUploadConfig,
   sourceInputs,
@@ -17,8 +18,10 @@ import {
   verifyStagingProof,
   writeManifest,
 } from "./kit-cutover-evidence.mjs";
+import { packageCutover } from "./kit-cutover-package.mjs";
 import { exercise, verifyServed } from "./kit-cutover-staging.mjs";
 import "./fixtures/kit-cutover-cleanup.mjs";
+import { KIT_ROUTE_FLAGS } from "./production-deploy-gate.mjs";
 
 const sourceSha = "a".repeat(40);
 const digest = "b".repeat(64);
@@ -36,6 +39,87 @@ const ledgerJournal = [
 ].map((tag, i) => ({ tag, when: 1700000000000 + i }));
 
 const inputs = await sourceInputs();
+
+test("packaging refuses installed Kit asset drift after parity", async (t) => {
+  const scratch = await mkdtemp(join(tmpdir(), "cutover-packaging-test-"));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const repo = join(scratch, "repo");
+  const assets = join(scratch, "installed/cloudflare");
+  const asset = join(assets, "_app/immutable/fixture.js");
+  const name = "two-web-next-production";
+  const wrangler = { version: "1.2.3" };
+  const sourceFiles = {
+    "wrangler.jsonc": { env: { production: { name, main: "src/worker.ts" } } },
+    "web/wrangler.production.jsonc": {
+      name,
+      main: ".svelte-kit/cloudflare/_worker.js",
+      vars: Object.fromEntries(KIT_ROUTE_FLAGS.map((flag) => [flag, "false"])),
+      triggers: { crons: [] },
+      workers_dev: false,
+      preview_urls: false,
+      assets: { directory: ".svelte-kit/cloudflare" },
+    },
+    "drizzle/meta/_journal.json": { entries: [] },
+    "package-lock.json": { packages: { "node_modules/wrangler": wrangler } },
+    "node_modules/wrangler/package.json": wrangler,
+  };
+  for (const [file, data] of Object.entries(sourceFiles)) {
+    const path = join(repo, file);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, JSON.stringify(data));
+  }
+  await mkdir(join(repo, "public"));
+  await writeFile(join(repo, "public/fixture.txt"), "synthetic Hono asset");
+  await mkdir(join(repo, "node_modules/.bin"));
+  await writeFile(
+    join(repo, "node_modules/.bin/wrangler"),
+    "#!/bin/sh\nprintf 'invoked\\n' > wrangler-invoked\nexit 1\n",
+    { mode: 0o755 },
+  );
+
+  await mkdir(dirname(asset), { recursive: true });
+  await writeFile(join(assets, "_worker.js"), "synthetic Kit facade");
+  await writeFile(join(assets, "kit-adapter.js"), "synthetic Kit adapter");
+  await writeFile(asset, "parity-approved asset bytes");
+  const files = Object.fromEntries(
+    Object.entries(await inventory(assets)).map(([path, hash]) => [`cloudflare/${path}`, hash]),
+  );
+  const context = { sourceSha, runId: identity.runId, runAttempt: identity.runAttempt };
+  const output = join(scratch, "github-output");
+  const summary = join(scratch, "github-summary");
+  await writeFile(output, "");
+  await writeFile(summary, "");
+  for (const [key, value] of Object.entries({
+    RUNNER_TEMP: scratch,
+    GITHUB_OUTPUT: output,
+    GITHUB_STEP_SUMMARY: summary,
+  })) {
+    const previous = process.env[key];
+    t.after(() => {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    });
+    process.env[key] = value;
+  }
+
+  for (const [change, mutate] of [
+    ["changed", () => writeFile(asset, "changed after parity")],
+    ["missing", () => rm(asset)],
+  ]) {
+    await t.test(`${change} asset`, async () => {
+      await mutate();
+      const packet = join(scratch, `packet-${change}`);
+      await assert.rejects(packageCutover(packet, repo, { assets }, { files }, context), {
+        code: "ERR_ASSERTION",
+        message: /^installed Kit assets drifted after parity\b/,
+      });
+      await assert.rejects(lstat(join(packet, "manifest.json")), { code: "ENOENT" });
+      await assert.rejects(lstat(join(repo, "wrangler-invoked")), { code: "ENOENT" });
+      assert.equal(await readFile(output, "utf8"), "");
+      assert.equal(await readFile(summary, "utf8"), "");
+    });
+  }
+});
 
 async function writePacketFixture(dir) {
   for (const profile of ["hono", "kit"]) {
