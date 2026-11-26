@@ -1,21 +1,20 @@
 # Repository visibility flip checklist
 
 Run this list before changing this repository's visibility (public to private
-or back). The checked-in workflow jobs use GitHub-hosted runners in either
-visibility. This is a verification pass for whoever changes the setting, not
-proof of the state of any private runner fleet.
+or back). Verify the runner rules below in either visibility and confirm the
+state of any private runner fleet separately.
 
 ## Runner separation (verify, already in code)
 
-- Every direct job uses a literal `ubuntu-latest` label, except jobs pinned to
-  `ubuntu-24.04` in `test/workflow-runners.test.ts`. The contract rejects
-  runner groups, self-hosted and larger runners, and selectors that depend on
-  visibility, events, or variables.
-- Checked-in jobs select GitHub-hosted runners for all events and both
-  visibilities; reusable workflow calls are checked separately at their pinned
-  revisions or through their runner inputs. `test/workflow-runners.test.ts`
-  checks the current source contracts; run it on current `main` before flipping:
-  `npx vitest run test/workflow-runners.test.ts`.
+- Direct jobs use `ubuntu-latest` or a pinned `ubuntu-24.04`, with one exception.
+  `ci.yml` can select `boat` for `kit-browser-calendar` when `CI_HEAVY_RUNNER`
+  is `boat`, the pull request head belongs to this repository, and both the
+  original and triggering actors match the Boat allowlist. Fork pull requests,
+  all other events, and missing or disabled capacity use `ubuntu-latest`.
+- `test/workflow-runners.test.ts` pins the allowed direct job labels and the
+  exact calendar selector. It checks reusable workflow calls at their pinned
+  revisions or through their runner inputs. Run
+  `npx vitest run test/workflow-runners.test.ts` on current `main` before flipping.
 - A manual branch dispatch can load workflow YAML from that branch. Source tests
   on `main` do not enforce historical or modified branch definitions, repository
   settings, or the runtime behavior of external reusable workflows. Review the
@@ -35,14 +34,14 @@ proof of the state of any private runner fleet.
 
 - Confirm the fork pull-request approval policy for Actions runs (first-time
   and outside contributors) still matches intent for the new visibility.
-- Budget for GitHub-hosted minutes: pull-request and merge-queue CI stays on
-  GitHub-hosted runners by design, and private repositories draw on the
-  included minutes allowance instead of the free public allowance.
+- Budget for GitHub-hosted minutes. Merge-queue CI and fork PR CI use GitHub.
+  Eligible same-repository PRs can run the calendar job on Boat. Private
+  repositories draw on the included GitHub minutes allowance.
 
 ## After the flip
 
-- Open or re-run a pull request and confirm its jobs land on GitHub-hosted
-  runners; if a safe non-mutating manual workflow is authorized, dispatch it
-  from a reviewed ref and confirm its runner.
+- Open or re-run a pull request and confirm its runners match the rules above.
+  If a safe non-mutating manual workflow is authorized, dispatch it from a
+  reviewed ref and confirm its runner.
 - Confirm the required checks still report under their existing names before
   merging anything.

@@ -24,6 +24,13 @@ const workflows = readdirSync(dir)
 
 const hosted = "ubuntu-latest";
 const hostedJson = JSON.stringify([hosted]);
+const calendarRunner = [
+  "${{ github.event_name == 'pull_request'",
+  "&& github.event.pull_request.head.repo.full_name == github.repository",
+  `&& contains(fromJSON('["Rick7C2", "togetherweown[bot]"]'), github.actor)`,
+  `&& contains(fromJSON('["Rick7C2", "togetherweown[bot]"]'), github.triggering_actor)`,
+  "&& vars.CI_HEAVY_RUNNER == 'boat' && 'boat' || 'ubuntu-latest' }}",
+].join(" ");
 // Keep the fixed OS for browser fixtures, visual baselines, recovery and the XFS fixture.
 // Re-baseline browser-smoke in the same PR as any bump (docs/visual-regression.md).
 const pinnedHostedJobs = new Map([
@@ -67,8 +74,12 @@ function isVerifiedFrozenLocal(uses: string) {
 function expectHostedJob(name: string, id: string, job: Job) {
   const label = `${name} job ${id}`;
   if (job.uses === undefined) {
-    const expected = pinnedHostedJobs.get(name) === id ? "ubuntu-24.04" : hosted;
-    expect(job["runs-on"], `${label} uses literal ${expected}`).toBe(expected);
+    if (name === "ci.yml" && id === "kit-browser-calendar") {
+      expect(job["runs-on"], `${label} uses the approved Boat selector`).toBe(calendarRunner);
+    } else {
+      const expected = pinnedHostedJobs.get(name) === id ? "ubuntu-24.04" : hosted;
+      expect(job["runs-on"], `${label} uses literal ${expected}`).toBe(expected);
+    }
   } else {
     expect(job, `${label} is a reusable call without a local runner`).not.toHaveProperty("runs-on");
     const target = job.uses.match(localCall)?.[1];
@@ -166,9 +177,9 @@ describe("workflow runner labels", () => {
       "ci-ok",
     ]);
     for (const { id, runsOn } of ciJobs) {
-      // An unconditional selector also covers private workflow_dispatch on a
-      // non-main branch, which the former PR-only guard did not cover.
-      expect(runsOn, `ci.yml job ${id}`).toBe(hosted);
+      // The calendar selector falls back for workflow_dispatch in either visibility.
+      const expected = id === "kit-browser-calendar" ? calendarRunner : hosted;
+      expect(runsOn, `ci.yml job ${id}`).toBe(expected);
     }
     expect(events(workflow!.source.on)).toContain("workflow_dispatch");
   });
@@ -293,7 +304,7 @@ describe("workflow runner labels", () => {
     }
   });
 
-  it("requires the literal hosted runner or an assessed reusable call for every job", () => {
+  it("requires an approved runner or an assessed reusable call for every job", () => {
     for (const { name, source } of workflows) {
       for (const [id, job] of Object.entries(source.jobs)) expectHostedJob(name, id, job);
     }
@@ -310,6 +321,7 @@ describe("workflow runner labels", () => {
     ["an ARM runner", "runs-on: ubuntu-24.04-arm"],
     ["a larger runner", "runs-on: ubuntu-24.04-16core"],
     ["a variable selector", "runs-on: ${{ vars.CI_OVERFLOW_RUNNER }}"],
+    ["the calendar selector on another job", `runs-on: ${calendarRunner}`],
     [
       "a visibility selector",
       "runs-on: ${{ github.event.repository.private && 'self-hosted' || 'ubuntu-latest' }}",

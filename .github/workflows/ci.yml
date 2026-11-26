@@ -1649,7 +1649,14 @@ jobs:
     name: kit-browser-calendar
     needs: [scope]
     if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true') }}
-    runs-on: ubuntu-latest
+    # Merge groups can include fork changes. Only same-repo PR events with both
+    # actors on Boat's public CI allowlist may use the included capacity.
+    runs-on: >-
+      ${{ github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && contains(fromJSON('["Rick7C2", "togetherweown[bot]"]'), github.actor)
+      && contains(fromJSON('["Rick7C2", "togetherweown[bot]"]'), github.triggering_actor)
+      && vars.CI_HEAVY_RUNNER == 'boat' && 'boat' || 'ubuntu-latest' }}
     timeout-minutes: 30
     container:
       image: node:24-bookworm@sha256:e7add2a490bb17d97b485b8641bd88455fff7839ade0f5eba493c3508124d413
