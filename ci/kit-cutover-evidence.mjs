@@ -82,7 +82,13 @@ export async function inventory(dir) {
       const { size } = await lstat(path);
       total += size;
       assert.ok(size <= maxFileBytes && total <= maxPacketBytes, "cutover package size limit");
-      files[key] = sha256(await readFile(path));
+      // Define an own entry even when the filename matches an inherited setter.
+      Object.defineProperty(files, key, {
+        value: sha256(await readFile(path)),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
     }
   };
   await walk("");

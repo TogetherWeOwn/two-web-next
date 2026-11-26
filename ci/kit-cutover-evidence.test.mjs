@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -120,11 +121,14 @@ test("packaging refuses installed Kit asset drift after parity", async (t) => {
   }
 });
 
-async function writePacketFixture(dir) {
+async function writePacketFixture(dir, extraNames = []) {
   for (const profile of ["hono", "kit"]) {
     await mkdir(join(dir, profile, "modules"), { recursive: true });
     await mkdir(join(dir, profile, "assets"));
     await writeFile(join(dir, profile, "assets", ".assetsignore"), "fixture");
+    for (const name of extraNames) {
+      await writeFile(join(dir, profile, name), `${profile}/${name}`);
+    }
   }
   await writeFile(join(dir, "hono/modules/worker.js"), "pure Hono");
   await writeFile(join(dir, "kit/modules/_worker.js"), "facade");
@@ -132,6 +136,23 @@ async function writePacketFixture(dir) {
   const context = { sourceSha, runId: identity.runId, runAttempt: identity.runAttempt };
   return { ...context, digest: await writeManifest(dir, context, inputs) };
 }
+
+test("cutover inventory preserves filenames shared with object properties", async (t) => {
+  const scratch = await mkdtemp(join(tmpdir(), "cutover-inventory-names-test-"));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const names = ["__proto__", "constructor", "hasOwnProperty", "toString", "assets/__proto__"];
+  const pin = await writePacketFixture(scratch, names);
+  const manifest = await verifyPackage(scratch, pin, inputs);
+  for (const profile of ["hono", "kit"]) {
+    const files = await inventory(join(scratch, profile));
+    for (const name of names) {
+      const path = `${profile}/${name}`;
+      const digest = createHash("sha256").update(path).digest("hex");
+      assert.equal(Object.getOwnPropertyDescriptor(files, name)?.value, digest, path);
+    }
+    assert.deepEqual(manifest.files[profile], files);
+  }
+});
 
 test("cutover packet refuses wrong bytes, package identity, or source config", async (t) => {
   const scratch = await mkdtemp(join(tmpdir(), "cutover-packet-test-"));
