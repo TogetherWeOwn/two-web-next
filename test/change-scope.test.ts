@@ -29,7 +29,7 @@ function scope(rows: string[][], expected = rows.length, cwd = repo) {
   const list = join(cwd, "..", `pr-files-${Math.random().toString(36).slice(2)}.tsv`);
   writeFileSync(list, rows.map((row) => `${row.join("\t")}\n`).join(""));
   // The ceiling keeps git from finding a repository above the fixture root.
-  const env = { ...process.env, GIT_CEILING_DIRECTORIES: dirname(repo) };
+  const env = { ...process.env, GIT_CEILING_DIRECTORIES: dirname(repo), PR_SUITE_SCOPE: "true" };
   const result = spawnSync("bash", [script, list, String(expected)], {
     cwd,
     env,
@@ -116,7 +116,7 @@ describe("change-scope gate", () => {
       app: "true",
       worker: "false",
       db: "false",
-      full: "false",
+      full: "true",
       draft: "false",
     });
     expect(
@@ -211,6 +211,23 @@ describe("change-scope gate", () => {
       "ci/e2e-test-helpers.mjs",
     ]) {
       expect(scope([[path, ""]]).full, path).toBe("true");
+    }
+  });
+
+  it("selects standalone helpers and refuses mixed or ambiguous paths", () => {
+    const helper = "ci/kit-css-evidence.mjs";
+    expect(scope([[helper, ""]])).toMatchObject({ skipE2e: "true", full: "false" });
+    for (const shared of ["ci/kit-css-collect.mjs", "src/app.ts", "package-lock.json"]) {
+      expect(scope([[helper, shared]])).toMatchObject({ skipE2e: "false", full: "true" });
+    }
+    for (const rows of [
+      [[helper, "", "extra"]],
+      [
+        [helper, ""],
+        [helper, ""],
+      ],
+    ]) {
+      expect(scope(rows)).toMatchObject({ full: "true", skipE2e: "false" });
     }
   });
 
@@ -677,7 +694,7 @@ describe("ci heavy-job scope gates", () => {
   it("docs-links runs on every PR and ci-ok fails unless it passes", () => {
     const block = jobBlock("docs-links");
     expect(block).toMatch(/(^|\n)    needs: scope\n/);
-    expect(block).not.toMatch(/\n    if: /);
+    expect(block).toContain("!cancelled() && needs.scope.result == 'success'");
     expect(block).toContain("run: npm run docs:links");
     const guard = jobBlock("ci-ok").match(
       /- name: Require successful docs-links\n        env:\n          DOCS_LINKS_RESULT: \$\{\{ needs\.docs-links\.result \}\}\n        run: ([^\n]+)\n/,
@@ -821,7 +838,7 @@ describe("e2e scope gate", () => {
     expect(scopeJob).toContain('bash "$RUNNER_TEMP/trusted-scope/change-scope.sh"');
     expect(scopeJob).toContain("docs_only:");
     expect(scopeJob).toContain("skip_e2e:");
-    expect(scopeJob).toContain("repos/$REPO/pulls/$PR_NUMBER/files");
+    expect(scopeJob).toContain("git show -s --format=%P HEAD");
     expect(smoke).toMatch(/\n    needs: scope\n/);
     expect(smoke).toContain("needs.scope.outputs.skip_e2e != 'true'");
   });
@@ -836,10 +853,10 @@ describe("e2e scope gate", () => {
     expect(trigger).toMatch(/(^|\n)  schedule:\n/);
   });
 
-  it("keeps the scope and required verdict on standard hosted runners", () => {
+  it("keeps GitHub fallbacks for scope and verdict and requires only the verdict", () => {
     const verdict = e2e.split("\n  e2e-ok:\n")[1] ?? "";
-    expect(scopeJob).toMatch(/^ {4}runs-on: ubuntu-latest$/m);
-    expect(verdict).toMatch(/^ {4}runs-on: ubuntu-latest$/m);
+    expect(scopeJob).toMatch(/^      && vars\.CI_BLACKSMITH_2VCPU \|\| 'ubuntu-latest' }}$/m);
+    expect(verdict).toMatch(/^      && vars\.CI_BLACKSMITH_2VCPU \|\| 'ubuntu-latest' }}$/m);
     // browser-smoke is not a required check: CONTRIBUTING names exactly
     // ci-ok, gitleaks, e2e-ok and pr-lint, so a docs-only or test-only skip
     // never blocks a merge.
@@ -1153,11 +1170,54 @@ describe("scope token boundary and verdict validation", () => {
       expect(fetch).toContain("pull_request.base.sha");
       expect(fetch).toContain(`ci/${scriptName}`);
       expect(fetch).toMatch(/contents\/[^\s"]+\?ref=\$BASE_SHA/);
-      expect(fetch).toContain("pulls/$PR_NUMBER/files");
+      expect(fetch).toContain(
+        file === "ci.yml" || file === "e2e.yml"
+          ? "git show -s --format=%P HEAD"
+          : "pulls/$PR_NUMBER/files",
+      );
       expect(fetch).not.toMatch(/\b(bash|node|python3?)\s/);
       expect(fetch).not.toContain("GITHUB_OUTPUT");
     },
   );
+
+  it.each(["ci.yml", "e2e.yml"])("%s keeps both names of a merge-diff rename", (file) => {
+    git("config", "user.name", "Scope Fixture");
+    git("config", "user.email", "scope@example.test");
+    git("commit", "-qm", "base");
+    git("branch", "base");
+    git("switch", "-qc", "topic");
+    git("mv", "src/app.ts", "docs/moved.md");
+    git("commit", "-qm", "rename");
+    git("switch", "base");
+    writeFileSync(join(repo, "docs", "base-only.md"), "Only on the base branch.\n");
+    git("add", "docs/base-only.md");
+    git("commit", "-qm", "advance base");
+    git("merge", "--no-ff", "-qm", "merge", "topic");
+
+    const runnerTemp = dirname(repo);
+    const fetch = stepsOf(scopeJob(file)).find((step) => step.includes("GH_TOKEN:"));
+    const diff = fetch?.split("        run: |\n")[1]?.split("          mkdir -p")[0];
+    expect(diff).toBeDefined();
+    const parents = spawnSync("git", ["show", "-s", "--format=%P", "HEAD"], {
+      cwd: repo,
+      encoding: "utf8",
+    });
+    expect(parents.status, parents.stderr).toBe(0);
+    const [base, head] = parents.stdout.trim().split(" ");
+    const rows = join(runnerTemp, "pr-files.tsv");
+    for (const [headSha, expected] of [
+      [head, "docs/moved.md\tsrc/app.ts\n"],
+      [base, ""],
+    ]) {
+      const result = spawnSync("bash", ["-c", diff ?? ""], {
+        cwd: repo,
+        env: { PATH: process.env.PATH, RUNNER_TEMP: runnerTemp, BASE_SHA: base, HEAD_SHA: headSha },
+        encoding: "utf8",
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(rows, "utf8")).toBe(expected);
+    }
+  });
 
   it.each(workflows)(
     "$file classifies token-free with the base-branch script",
@@ -1262,7 +1322,7 @@ describe("scope token boundary and verdict validation", () => {
     });
     expect(result.status, result.stderr).toBe(0);
     const lines = result.outputs.trim().split("\n");
-    expect(lines).toHaveLength(7);
+    expect(lines).toHaveLength(8);
     for (const line of lines) expect(line).toMatch(/^[a-z0-9_]+=(true|false)$/);
     expect(lines).toContain("docs_only=true");
   });
