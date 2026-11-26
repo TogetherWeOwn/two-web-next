@@ -140,10 +140,12 @@ class AdmissionTest(TestCase):
                     evidence()
                 finally:
                     job[field] = before
-        runs[2]["conclusion"] = "cancelled"
+        runs[2]["conclusion"] = edit[0]["conclusion"] = "cancelled"
         self.assertIsNone(evidence())
         newer = add("pr-gates", "pr-lint")
         newer.append(dict(ignored, id=41, run_id=4))
+        self.assertIsNone(evidence(), "a cancelled run's raw scan name cannot establish its scope")
+        ignored["name"] = "pr-gates ignored edit (scan)"
         self.assertEqual(evidence()["pr-lint"], (4, 1, 40))
         self.assertEqual(evidence()["gitleaks"], (1, 2, 12))
         runs[0]["conclusion"] = "cancelled"

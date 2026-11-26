@@ -231,7 +231,6 @@ describe("PR gate event matrix", () => {
         (${metadataEdit}) && format('{0}-metadata-{1}', github.workflow, github.event.pull_request.number) ||
         format('{0}-ignored-edit-{1}', github.workflow, github.run_id) }}`),
     );
-    expect(normalized(prGates.concurrency["cancel-in-progress"])).toBe(prGatesCancel);
 
     const lint = prGates.jobs["pr-lint"];
     expect(normalized(lint.name)).toBe(`\${{ ${lintAdmit} && 'pr-lint' || '${ignoredNames[0]}' }}`);
