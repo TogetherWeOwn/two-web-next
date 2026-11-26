@@ -1539,13 +1539,10 @@ function stubAutoApi(staging, environment = autoEnvironment, seen = {}) {
         const page = Number(parsed.searchParams.get("page"));
         const size = Number(parsed.searchParams.get("per_page"));
         const runs = staging[file] ?? [];
-        const total_count = parsed.searchParams.has("created")
-          ? (staging.historyCounts?.[page - 1] ?? runs.length)
-          : runs.length;
         return {
           ok: true,
           json: async () => ({
-            total_count,
+            total_count: runs.length,
             workflow_runs: runs.slice((page - 1) * size, page * size),
           }),
         };
@@ -1590,6 +1587,25 @@ test("promotion callers require a complete e2e-staging history", async (t) => {
     }),
   );
   const history = [...staging["e2e-staging.yml"], ...filler];
+  const firstPage = { total_count: history.length, workflow_runs: history.slice(0, 100) };
+  const lastPage = { total_count: history.length, workflow_runs: history.slice(100) };
+  const listings = {
+    "complete history": [firstPage, lastPage],
+    "short first page": [{ ...firstPage, workflow_runs: history.slice(0, 99) }],
+    "short last page": [
+      { ...firstPage, total_count: 102 },
+      { ...lastPage, total_count: 102 },
+    ],
+    "too many rows for the count": [{ ...firstPage, total_count: 99 }],
+    "count decreases to match the returned rows": [{ ...firstPage, total_count: 102 }, lastPage],
+    "a repeated run from an earlier page": [firstPage, { ...lastPage, workflow_runs: [filler[0]] }],
+    "a missing run ID": [firstPage, { ...lastPage, workflow_runs: [{}] }],
+    "a missing count": [{ workflow_runs: firstPage.workflow_runs }],
+    "a string count": [{ ...firstPage, total_count: "101" }],
+    "a negative count": [{ total_count: -1, workflow_runs: [] }],
+    "a missing run list": [{ total_count: 0 }],
+    "a non-array run list": [{ total_count: 0, workflow_runs: { length: 0 } }],
+  };
   const checkout = { checkoutSha: dispatchSha };
   const scheduledEnv = { ...autoEnv, GITHUB_EVENT_NAME: "schedule" };
   const callers = {
@@ -1606,24 +1622,24 @@ test("promotion callers require a complete e2e-staging history", async (t) => {
       (await checkProductionGate(greenEnv, fetchImpl, checkout)).sha,
   };
   for (const [caller, check] of Object.entries(callers)) {
-    for (const [name, counts, expectedPages] of [
-      ["complete history", undefined, [1, 2]],
-      ["short first page", [101], [1]],
-      ["short last page", [102, 102], [1, 2]],
-      ["too many rows for the count", [99], [1]],
-      ["count decreases to match the returned rows", [102, 101], [1, 2]],
-    ]) {
+    for (const [name, pages] of Object.entries(listings)) {
       await t.test(`${caller}: ${name}`, async () => {
-        const visibleRuns = name === "short first page" ? history.slice(0, 99) : history;
         const api = stubAutoApi(
-          { ...staging, "e2e-staging.yml": visibleRuns, historyCounts: counts },
+          { ...staging, "e2e-staging.yml": history },
           caller === "reviewer production gate" ? protectedEnvironment : autoEnvironment,
         );
         const historyPages = [];
         const verdict = check((url, init) => {
           const { pathname, searchParams } = new URL(url);
           if (pathname.endsWith("/workflows/e2e-staging.yml/runs") && searchParams.has("created")) {
-            historyPages.push(Number(searchParams.get("page")));
+            assert.equal(searchParams.get("per_page"), "100");
+            const page = Number(searchParams.get("page"));
+            historyPages.push(page);
+            assert.ok(
+              page > 0 && page <= pages.length,
+              `unexpected e2e-staging history page ${page}`,
+            );
+            return Response.json(pages[page - 1]);
           }
           return api(url, init);
         });
@@ -1632,7 +1648,10 @@ test("promotion callers require a complete e2e-staging history", async (t) => {
         } else {
           await assert.rejects(verdict, /Cannot prove whole e2e-staging history/);
         }
-        assert.deepEqual(historyPages, expectedPages);
+        assert.deepEqual(
+          historyPages,
+          pages.map((_, i) => i + 1),
+        );
       });
     }
   }

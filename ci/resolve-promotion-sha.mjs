@@ -53,8 +53,9 @@ export const e2eTitle = (sha) => `e2e-staging deploy ${sha}`;
 // number of runs back. No run can name a commit before it was committed, so
 // every e2e-staging run created since its committer date (less a day for clock
 // skew) is read to the end of the list. Each page must agree with the reported
-// total. A history too long to read in full is refused. `get` is the caller's
-// GitHub API reader. Filter the returned runs by e2eTitle(sha).
+// total, and each run must have a distinct ID. A history too long to read in
+// full is refused. `get` is the caller's GitHub API reader. Filter the returned
+// runs by e2eTitle(sha).
 export const STAGING_HISTORY_SKEW_MS = 24 * 60 * 60 * 1000;
 export async function stagingRunsSinceCommit({ get, sha, maxPages = 10 }) {
   const committed = Date.parse((await get(`/commits/${sha}`))?.commit?.committer?.date ?? "");
@@ -64,6 +65,7 @@ export async function stagingRunsSinceCommit({ get, sha, maxPages = 10 }) {
   const since = new Date(committed - STAGING_HISTORY_SKEW_MS).toISOString();
   const perPage = 100;
   const runs = [];
+  const seenIds = new Set();
   let expectedTotal;
   for (let page = 1; page <= maxPages; page += 1) {
     const query = new URLSearchParams({
@@ -86,7 +88,16 @@ export async function stagingRunsSinceCommit({ get, sha, maxPages = 10 }) {
         `Cannot prove whole e2e-staging history for ${sha}: inconsistent Actions listing on page ${page}`,
       );
     }
-    runs.push(...batch);
+    for (const run of batch) {
+      const id = run?.id;
+      if (!Number.isSafeInteger(id) || id <= 0 || seenIds.has(id)) {
+        throw new Error(
+          `Cannot prove whole e2e-staging history for ${sha}: invalid or repeated run ID on page ${page}`,
+        );
+      }
+      seenIds.add(id);
+      runs.push(run);
+    }
     if (batch.length < perPage) return runs;
   }
   throw new Error(
