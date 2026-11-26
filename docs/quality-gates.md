@@ -153,6 +153,16 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   `test/seo-headers.test.ts`, replaced with a mapping-table pin that asserts
   every documented section exists in the file.
 
+## Pull-request CI selection
+
+Ready in-repository PRs require successful same-head lint, secret scan and size
+jobs before CI and browser suites start. After a metadata-only gate fix with the same base,
+rerun failed CI and E2E jobs. Forks run full suites and keep the separate required
+gates because Actions omits their run-to-PR association.
+Standalone join-state evidence and Kit CSS evidence changes skip the Vitest
+shards and browser suites. Static checks and dedicated fixtures still run.
+Shared or uncertain changes, main pushes and nightly runs keep full coverage.
+
 ## Patch coverage CLI
 
 `ci/patch-coverage.mjs` is the single patch-coverage authority. It reads the
