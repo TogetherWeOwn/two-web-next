@@ -400,7 +400,7 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
           const kind = command?.toLowerCase() ??
             (statement.startsWith("select pg_try_advisory_xact_lock(")
               ? "advisory-lock"
-              : statement.startsWith("lock table drizzle.__drizzle_migrations")
+              : statement === "lock table drizzle.__drizzle_migrations in share mode nowait"
                 ? "relation-lock"
                 : "other");
           if (command) aclCommands.add(command.toLowerCase());
