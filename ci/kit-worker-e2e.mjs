@@ -1018,6 +1018,19 @@ export default {
   }
 
   if (args.length) {
+    const { assertMembersNotFoundParity } = await import(
+      "./fixtures/kit-members-not-found-parity.mjs"
+    );
+    const members404 = await startKit("kit-members-not-found", {
+      KIT_ROUTE_MEMBERS_NOT_FOUND: "true",
+    });
+    await assertMembersNotFoundParity({
+      hono: honoWithSession,
+      off: kitWithSession,
+      on: members404,
+      databaseUrl,
+      secret,
+    });
     const entry = join(scratch, "kit-admin.mjs");
     const vars = await prepareAdminFixture(worker, entry);
     const publishEntry = await prepareAdminPublishFixture(entry, join(scratch, "kit-publish.mjs"));
