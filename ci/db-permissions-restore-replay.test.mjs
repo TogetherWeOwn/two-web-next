@@ -47,6 +47,7 @@ import {
   setPassword,
   webRoles,
 } from "./fixtures/db-restore-replay/seed.mjs";
+import { assertServingPostcheckRollback } from "./fixtures/db-restore-replay/serving-postcheck-case.mjs";
 import {
   prepareServingIsolation,
   probeServingLedger,
@@ -403,7 +404,23 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
   const readiness = await probe(base, false);
   t.diagnostic("Web, Jobs and both Bot logins passed on the repaired 1033 baseline.");
   const forward = { readiness: { ...readiness, revision: { version_id: version } } };
-  assert.equal(await isolate("forward", forward), "committed");
+  await t.test("failed serving postcheck rolls back ACLs and allows a clean retry", () =>
+    assertServingPostcheckRollback({
+      admin: restore.admin,
+      login: app,
+      isolate,
+      forward,
+      readAclState: async () => ({
+        repair: await inspect(fresh),
+        grants: await readRelationGrants(fresh, originalObjects),
+        roles: await roles(),
+      }),
+      probeBefore: () => probe(base, false),
+      retryForward: async () => {
+        assert.equal(await isolate("forward", forward), "committed");
+      },
+    }),
+  );
   const { digest: isolatedDigest } = await inspect(fresh);
   await assertDuplicateRefused("forward", forward);
   assert.equal(
