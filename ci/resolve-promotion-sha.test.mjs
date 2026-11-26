@@ -209,7 +209,10 @@ test("only an admitted deploy names a candidate for staging qualification", () =
       status: "completed",
       conclusion: "success",
       event: trigger.event_name,
-      head_branch: "main",
+      head_branch:
+        trigger.event_name === "workflow_dispatch"
+          ? trigger.ref.slice("refs/heads/".length)
+          : "main",
       head_repository,
       head_sha: trigger.sha,
       display_title: deployTitle.replace(/\$\{\{([\s\S]+?)\}\}/g, (_, expression) =>
@@ -226,6 +229,7 @@ test("only an admitted deploy names a candidate for staging qualification", () =
       expected ? "deploy-staging" : "e2e-staging-rejected-21",
     );
     if (expected === null) {
+      assert.equal(run.display_title, "staging deploy not admitted");
       assert.throws(candidate, /requires a successful same-repository main deploy title/);
     } else {
       assert.equal(run.display_title, `deploy ${expected}`);
@@ -235,10 +239,17 @@ test("only an admitted deploy names a candidate for staging qualification", () =
 
   const fromCi = { ...context, event_name: "workflow_run", sha: B };
   verifyHandoff({ ...fromCi, event: { workflow_run: ci } }, A);
-  for (const override of [{ event: "schedule" }, { conclusion: "failure" }]) {
+  for (const override of [
+    { event: "schedule" },
+    { conclusion: "failure" },
+    { head_branch: "feature" },
+    { head_repository: { full_name: "fork/site" } },
+  ]) {
     verifyHandoff({ ...fromCi, event: { workflow_run: { ...ci, ...override } } }, null);
   }
-  verifyHandoff({ ...context, event_name: "workflow_dispatch", event: {}, sha: B }, B);
+  const manualDeploy = { ...context, event_name: "workflow_dispatch", event: {}, sha: B };
+  verifyHandoff(manualDeploy, B);
+  verifyHandoff({ ...manualDeploy, ref: "refs/heads/feature" }, null);
 
   const manual = { ...context, event_name: "workflow_dispatch", event: {}, run_id: 21 };
   assert.equal(evaluate(scopeJob, manual), true);
