@@ -333,6 +333,21 @@
       "route": "GET /admin/featured/:id",
       "binding": "web/src/routes/admin/featured/[id]/+page.server.ts",
       "reads": "featured view (audited)"
+    },
+    {
+      "route": "GET /admin/featured-contents",
+      "binding": "web/src/routes/admin/featured-contents/+server.ts",
+      "reads": "moderator session admitted by the shared admin guard before the fixed redirect (no featured lookup)"
+    },
+    {
+      "route": "GET /admin/featured-contents/create",
+      "binding": "web/src/routes/admin/featured-contents/create/+server.ts",
+      "reads": "moderator session admitted by the shared admin guard before the fixed redirect (no featured lookup)"
+    },
+    {
+      "route": "GET /admin/featured-contents/:id/edit",
+      "binding": "web/src/routes/admin/featured-contents/[id]/edit/+server.ts",
+      "reads": "moderator session admitted by the shared admin guard before the bounded legacy_id to id lookup; redirect carries only the current id"
     }
   ],
   "outOfScope": [
