@@ -10,6 +10,12 @@ import { newEventKey } from "../../src/admin/validation-event-keys.ts";
 import { attr, elements, submittedFields } from "../../test/helpers/kit-edit-controls.ts";
 import { EMBER_CUTOVER_VARS } from "../kit-cutover-evidence.mjs";
 import { FIXTURE_SECRETS, SESSION_COOKIE } from "../parity/fixture.mjs";
+import {
+  parseRenderedPage,
+  renderedAttribute,
+  renderedElements,
+  renderedText,
+} from "../rendered-page.mjs";
 import { assertAdminDuplicateServing } from "./kit-admin-duplicate.mjs";
 
 const editor = "/admin/events/new";
@@ -141,6 +147,142 @@ async function visit(
   assert.match(response.headers.get("content-security-policy") ?? "", /form-action 'self'/, label);
   if (method === "HEAD") assert.equal(text.length, 0, label);
   return { headers: response.headers, text };
+}
+
+async function assertActivityLogReadParity({ kit, off, databaseUrl }) {
+  const path = "/admin/activity-log";
+  const pageSize = 50;
+  const actor = 900000000000000000n + BigInt(`0x${randomBytes(7).toString("hex")}`);
+  const moderatorId = String(actor);
+  const subject = `Fixture activity & ${moderatorId}`;
+  const filters = { subject, causer: moderatorId };
+  const sql = postgres(databaseUrl, { max: 1 });
+  let seededIds = [];
+
+  function row(index) {
+    return {
+      description: `Synthetic activity ${index}`,
+      subject_type: "FixtureActivity",
+      subject_id: subject,
+      causer_id: moderatorId,
+      created_at: new Date(Date.UTC(2000, 0, 1, 0, 0, index === 1 ? 0 : index)),
+    };
+  }
+
+  async function readPage(target, href, cookie, owned, page, expectedRows) {
+    const label = `${target.name} activity page ${page}`;
+    const { headers, text } = await visit(target, href, 200, {
+      owned,
+      headers: { ...html, cookie },
+    });
+    const cache = headers.get("cache-control") ?? "";
+    assert.deepEqual(
+      cache
+        .split(",")
+        .map((part) => part.trim().toLowerCase())
+        .sort(),
+      ["no-store", "private"],
+      label,
+    );
+    const doc = parseRenderedPage(text);
+    const table = [...renderedElements(doc, { tag: "table" })].find(
+      (node) => renderedAttribute(node, "data-testid") === "activity-log-table",
+    );
+    assert.ok(table, `${label}: activity table`);
+    const [body] = renderedElements(table, { tag: "tbody" });
+    assert.ok(body, `${label}: activity rows`);
+    const rows = [...renderedElements(body, { tag: "tr" })].map((entry) => {
+      const cells = [...renderedElements(entry, { tag: "td" })];
+      assert.equal(cells.length, 4, label);
+      const [time] = renderedElements(cells[2], { tag: "time" });
+      assert.ok(time, `${label}: activity instant`);
+      return [
+        renderedText(cells[0]).trim(),
+        renderedText(cells[1]).trim(),
+        renderedAttribute(time, "datetime"),
+        renderedText(cells[3]).trim(),
+      ];
+    });
+    assert.deepEqual(
+      rows,
+      expectedRows.map((entry) => [
+        entry.causer_id,
+        entry.description,
+        entry.created_at.toISOString(),
+        `${entry.subject_type} ${entry.subject_id}`,
+      ]),
+      `${label}: exactly the matching activities in newest-first order`,
+    );
+
+    const pager = [...renderedElements(doc, { tag: "nav" })].find(
+      (node) => renderedAttribute(node, "aria-label") === "Activity pages",
+    );
+    assert.ok(pager, `${label}: activity pagination`);
+    const [pageLabel] = renderedElements(pager, { tag: "span" });
+    assert.ok(pageLabel, `${label}: page label`);
+    assert.equal(renderedText(pageLabel).trim(), `Page ${page}`, label);
+    const links = [...renderedElements(pager, { tag: "a" })];
+    assert.equal(links.length, 1, `${label}: one direction is available`);
+    const direction = page === 1 ? "next" : "prev";
+    assert.equal(renderedAttribute(links[0], "rel"), direction, label);
+    const destination = new URL(renderedAttribute(links[0], "href"), target.origin);
+    assert.equal(destination.origin, target.origin, label);
+    assert.equal(destination.pathname, path, label);
+    assert.deepEqual(
+      [...destination.searchParams].sort(),
+      Object.entries({ ...filters, page: page === 1 ? "2" : "1" }).sort(),
+      `${label}: ${direction} preserves both filters`,
+    );
+    return { href: destination.pathname + destination.search, cookie: renewedModerator(headers) };
+  }
+
+  try {
+    const matching = Array.from({ length: pageSize + 1 }, (_, index) => row(index));
+    // The oldest two share an instant at the page boundary. Insert the second
+    // one last so its higher ID breaks the tie, and reverse the remaining insert
+    // order to distinguish chronological ordering from ID ordering.
+    const inserts = [
+      matching[0],
+      ...matching.slice(2).reverse(),
+      { ...row(pageSize + 1), subject_id: `Different fixture ${moderatorId}` },
+      { ...row(pageSize + 2), causer_id: String(actor + 1n) },
+      matching[1],
+    ];
+    const inserted = await sql`
+      insert into activity_log ${sql(inserts, "description", "subject_type", "subject_id", "causer_id", "created_at")}
+      returning id
+    `;
+    seededIds = inserted.map(({ id }) => id);
+    const newestFirst = matching.toReversed();
+    const first = `${path}?${new URLSearchParams(filters)}`;
+    for (const [target, owned] of [
+      [kit, true],
+      [off, false],
+    ]) {
+      const cookie = await session(sql, moderatorId, true);
+      const next = await readPage(target, first, cookie, owned, 1, newestFirst.slice(0, pageSize));
+      await readPage(target, next.href, next.cookie, owned, 2, newestFirst.slice(pageSize));
+    }
+  } finally {
+    try {
+      await sql.begin(async (tx) => {
+        await tx`delete from web_session_grace where user_id = ${moderatorId}`;
+        await tx`delete from web_sessions where user_id = ${moderatorId}`;
+        if (seededIds.length) {
+          // The historical synthetic rows qualify for ordinary retention cleanup.
+          // The hosted job discards the new, append-only access receipts with its database.
+          const removed =
+            await tx`delete from activity_log where id in ${tx(seededIds)} returning id`;
+          assert.equal(removed.length, seededIds.length, "synthetic activity rows removed");
+        }
+      });
+    } finally {
+      await sql.end({ timeout: 1 });
+    }
+  }
+  console.log(
+    "PASS installed Kit and Hono activity log filtering, pagination, private no-store and fixture cleanup",
+  );
 }
 
 export async function assertMixedAdminAuthRollback({ worker, scratch, databaseUrl, start }) {
@@ -839,6 +981,7 @@ async function assertEventEditFallback({
 }
 
 export async function assertKitAdminServing({ kit, nativeCreate, off, hono, databaseUrl }) {
+  await assertActivityLogReadParity({ kit, off, databaseUrl });
   const actor = 900000000000000000n + BigInt(`0x${randomBytes(7).toString("hex")}`);
   const moderatorId = String(actor);
   const memberId = String(actor + 1n);
