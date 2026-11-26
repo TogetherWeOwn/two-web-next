@@ -1563,7 +1563,10 @@ test("staging lane CLI requires trustworthy run listings", async (t) => {
       if (busy === undefined) {
         assert.equal(result.status, 1, result.stdout);
         assert.equal(result.stdout, "");
-        assert.equal(result.stderr, "::error::Staging lane lookup returned an invalid run listing\n");
+        assert.equal(
+          result.stderr,
+          "::error::Staging lane lookup returned an invalid run listing\n",
+        );
         assert.equal(existsSync(output), false);
       } else {
         assert.equal(result.status, 0, result.stderr);
