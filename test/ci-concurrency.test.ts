@@ -215,14 +215,8 @@ function planPrGates(context: PrGateContext) {
     group: `pr-gates-${slot}`,
     cancelActive: eventName === "pull_request",
     checks: [lint ? "pr-lint" : ignoredNames[0], admit ? "gitleaks" : ignoredNames[1]],
-    work: lint
-      ? {
-          lintSha: pr?.head.sha ?? sha,
-          lintBase: pr?.base,
-          scanSha: admit ? sha : undefined,
-          scanBase: admit ? (pr?.base.ref ?? mergeGroupBase) : undefined,
-        }
-      : null,
+    lintSha: lint ? (pr?.head.sha ?? sha) : null,
+    scan: admit ? { sha, base: pr?.base.ref ?? mergeGroupBase } : null,
   };
 }
 
@@ -283,12 +277,8 @@ describe("PR gate event matrix", () => {
       group: "pr-gates-source-87",
       cancelActive: true,
       checks: ["pr-lint", "gitleaks"],
-      work: {
-        lintSha: current.head.sha,
-        lintBase: current.base,
-        scanSha: sha,
-        scanBase: current.base.ref,
-      },
+      lintSha: current.head.sha,
+      scan: { sha, base: current.base.ref },
     });
   });
 
@@ -304,12 +294,8 @@ describe("PR gate event matrix", () => {
       group: "pr-gates-source-87",
       cancelActive: true,
       checks: ["pr-lint", "gitleaks"],
-      work: {
-        lintSha: pr.head.sha,
-        lintBase: current.base,
-        scanSha: retargetMerge,
-        scanBase: baseRef,
-      },
+      lintSha: pr.head.sha,
+      scan: { sha: retargetMerge, base: baseRef },
     });
   });
 
@@ -324,44 +310,33 @@ describe("PR gate event matrix", () => {
       group: "pr-gates-ignored-edit-42",
       cancelActive: true,
       checks: ignoredNames,
-      work: null,
+      lintSha: null,
+      scan: null,
     });
     expect(
-      planPrGates({ ...retarget, pr: { ...pr, base: { ...pr.base, ref: null } }, runId: 43 }).work,
+      planPrGates({ ...retarget, pr: { ...pr, base: { ...pr.base, ref: null } }, runId: 43 }).scan,
     ).toBeNull();
   });
 
   it.each([
-    ["in_progress", "synchronize", { title: { from: "previous title" } }],
-    ["failure", "edited", { body: { from: null } }],
+    ["synchronize", { title: { from: "previous title" } }],
+    ["edited", { body: { from: null } }],
   ] as const)(
-    "keeps a %s scan and a pending %s while material edits relint",
-    (scan, action, changes) => {
-      const active = planPrGates({
-        eventName: "pull_request",
-        action: "opened",
-        sha: initialMerge,
-        pr,
-      });
+    "compares an active and pending %s source group with material edit lint",
+    (action, changes) => {
+      const active = planPrGates({ ...retarget, action: "opened", sha: initialMerge, pr });
       const waiting = planPrGates({ ...retarget, action });
-      const required = new Map(active.checks.map((name) => [name, scan]));
       expect(waiting.group).toBe(active.group);
-      expect(waiting.work?.scanSha).toBe(retargetMerge);
+      expect(waiting.scan?.sha).toBe(retargetMerge);
       for (const runId of [44, 45]) {
         expect(planPrGates({ ...retarget, changes, runId })).toEqual({
           group: "pr-gates-metadata-87",
           cancelActive: true,
           checks: ["pr-lint", ignoredNames[1]],
-          work: {
-            lintSha: pr.head.sha,
-            lintBase: retarget.pr.base,
-            scanSha: undefined,
-            scanBase: undefined,
-          },
+          lintSha: pr.head.sha,
+          scan: null,
         });
       }
-      expect(required.get("gitleaks")).toBe(scan);
-      expect(PASSING).not.toContain(required.get("gitleaks"));
     },
   );
 
@@ -379,12 +354,8 @@ describe("PR gate event matrix", () => {
       group: `pr-gates-source-${context.dispatchNumber ?? context.sha}`,
       cancelActive: false,
       checks: ["pr-lint", "gitleaks"],
-      work: {
-        lintSha: context.sha,
-        lintBase: undefined,
-        scanSha: context.sha,
-        scanBase: context.mergeGroupBase,
-      },
+      lintSha: context.sha,
+      scan: { sha: context.sha, base: context.mergeGroupBase },
     });
   });
 });

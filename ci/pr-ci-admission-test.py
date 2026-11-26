@@ -106,9 +106,17 @@ class AdmissionTest(TestCase):
         size = add("pr-size", "pr-size-gate / gate")[0]
         edit = add("pr-gates", "pr-lint")
         self.assertIsNone(evidence())
-        ignored = dict(edit[0], id=31, name="pr-gates ignored edit (scan)", conclusion="skipped")
+        ignored = dict(edit[0], id=31, name="pr-gates ignored edit (scan)", conclusion="skipped", runner_id=None)
         edit.append(ignored)
         self.assertEqual(evidence()["gitleaks"], (1, 1, 11))
+        scan_yaml = Path(".github/workflows/pr-gates.yml").read_text().split("\n  gitleaks:\n")[1]
+        ignored["name"] = scan_yaml.split("name: >-\n")[1].split("\n    needs:")[0].strip()[3:-2].strip()
+        self.assertEqual(evidence()["gitleaks"], (1, 1, 11))
+        for key, invalid, valid in [("conclusion", "success", "skipped"), ("runner_id", 1, None)]:
+            ignored[key] = invalid
+            with self.assertRaisesRegex(ValueError, "Invalid advisory job"):
+                evidence()
+            ignored[key] = valid
         runs[1].update(status="in_progress", conclusion=None)
         self.assertEqual(evidence()["pr-size-gate / gate"], (2, 1, 20))
         size["status"] = "queued"
