@@ -1416,12 +1416,16 @@ function stubRepo({ target, previous, sql, up, seen = {} }) {
 test("rollback compatibility refuses malformed or duplicate journal tags before reading SQL", async (t) => {
   const base = ["1000_a"];
   const append = [...base, "1001_b"];
+  const invalidTarget = "Target migration journal has an invalid tag";
+  const invalidLive = "Live migration journal has an invalid tag";
+  const duplicateTarget = "Target migration journal has a duplicate tag";
+  const duplicateLive = "Live migration journal has a duplicate tag";
   const cases = [
-    ["invalid target tag after a valid append", [...append, "bad/tag"], base, /invalid tag/],
-    ["invalid live tag with a valid append", append, [...base, "bad/tag"], /invalid tag/],
-    ["duplicate target tag also present live", [...append, ...base], base, /duplicate tag/],
-    ["duplicate live tag also present in target", append, [...base, ...base], /duplicate tag/],
-    ["duplicate added tag", [...append, "1001_b"], base, /duplicate tag/],
+    ["invalid target tag after a valid append", [...append, "bad/tag"], base, invalidTarget],
+    ["invalid live tag with a valid append", append, [...base, "bad/tag"], invalidLive],
+    ["duplicate target tag also present live", [...append, ...base], base, duplicateTarget],
+    ["duplicate live tag also present in target", append, [...base, ...base], duplicateLive],
+    ["duplicate added tag", [...append, "1001_b"], base, duplicateTarget],
   ];
   for (const [label, tag] of [
     ["missing", undefined],
@@ -1432,10 +1436,10 @@ test("rollback compatibility refuses malformed or duplicate journal tags before 
     ["trailing newline", "1002_c\n"],
   ]) {
     const shared = [...base, tag];
-    cases.push([`shared ${label} tag`, shared, shared, /invalid tag/]);
+    cases.push([`shared ${label} tag`, shared, shared, invalidTarget]);
   }
 
-  for (const [label, target, previous, error] of cases) {
+  for (const [label, target, previous, message] of cases) {
     await t.test(label, async () => {
       const seen = {};
       await assert.rejects(
@@ -1446,7 +1450,7 @@ test("rollback compatibility refuses malformed or duplicate journal tags before 
           token: "fixture-only",
           fetchImpl: stubRepo({ target, previous, sql: { "1001_b": "SELECT 1;" }, seen }),
         }),
-        error,
+        { message },
       );
       assert.deepEqual(seen, { journals: [TARGET, PREVIOUS] });
     });
