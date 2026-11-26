@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -34,19 +35,23 @@ const ledgerJournal = [
 
 const inputs = await sourceInputs();
 
+async function writePacketFixture(dir) {
+  for (const profile of ["hono", "kit"]) {
+    await mkdir(join(dir, profile, "modules"), { recursive: true });
+    await mkdir(join(dir, profile, "assets"));
+    await writeFile(join(dir, profile, "assets", ".assetsignore"), "fixture");
+  }
+  await writeFile(join(dir, "hono/modules/worker.js"), "pure Hono");
+  await writeFile(join(dir, "kit/modules/_worker.js"), "facade");
+  await writeFile(join(dir, "kit/modules/kit-adapter.js"), "Kit adapter");
+  const context = { sourceSha, runId: identity.runId, runAttempt: identity.runAttempt };
+  return { ...context, digest: await writeManifest(dir, context, inputs) };
+}
+
 test("cutover packet refuses wrong bytes, package identity, or source config", async (t) => {
   const scratch = await mkdtemp(join(tmpdir(), "cutover-packet-test-"));
   t.after(() => rm(scratch, { recursive: true, force: true }));
-  for (const profile of ["hono", "kit"]) {
-    await mkdir(join(scratch, profile, "modules"), { recursive: true });
-    await mkdir(join(scratch, profile, "assets"));
-    await writeFile(join(scratch, profile, "assets", ".assetsignore"), "fixture");
-  }
-  await writeFile(join(scratch, "hono/modules/worker.js"), "pure Hono");
-  await writeFile(join(scratch, "kit/modules/_worker.js"), "facade");
-  await writeFile(join(scratch, "kit/modules/kit-adapter.js"), "Kit adapter");
-  const context = { sourceSha, runId: identity.runId, runAttempt: identity.runAttempt };
-  const pin = { ...context, digest: await writeManifest(scratch, context, inputs) };
+  const pin = await writePacketFixture(scratch);
   await verifyPackage(scratch, pin, inputs);
   await assert.rejects(verifyPackage(scratch, { ...pin, digest }, inputs), /manifest digest/);
   for (const [field, value] of [
@@ -77,6 +82,42 @@ test("cutover packet refuses wrong bytes, package identity, or source config", a
   await writeFile(join(scratch, "kit/modules/kit-adapter.js"), "Kit adapter");
   await writeFile(join(scratch, "hono/assets/.assetsignore"), "changed Hono asset control file");
   await assert.rejects(verifyPackage(scratch, pin, inputs), /hono bytes mismatch/);
+});
+
+test("isolated qualification refuses changed packet bytes and preserves earlier proof", async (t) => {
+  const scratch = await mkdtemp(join(tmpdir(), "cutover-handoff-test-"));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const packet = join(scratch, "kit-cutover-packet");
+  const proofPath = join(scratch, "proof.json");
+  const earlierProof = Buffer.from('{"fixture":"earlier isolated proof"}\n');
+  const pin = await writePacketFixture(packet);
+  await verifyPackage(packet, pin, inputs);
+  await writeFile(proofPath, earlierProof);
+  await writeFile(join(packet, "kit/modules/kit-adapter.js"), "Kit ADAPTER");
+
+  const result = spawnSync(process.execPath, ["ci/kit-cutover-staging.mjs", packet, proofPath], {
+    // Pass only the dispatch identity. The subprocess receives no service credentials.
+    env: {
+      GITHUB_ACTIONS: "true",
+      RUNNER_ENVIRONMENT: "github-hosted",
+      GITHUB_REF: "refs/heads/main",
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+      GITHUB_SHA: pin.sourceSha,
+      GITHUB_RUN_ID: pin.runId,
+      GITHUB_RUN_ATTEMPT: pin.runAttempt,
+      RUNNER_TEMP: scratch,
+      CUTOVER_PACKET_DIGEST: pin.digest,
+      CUTOVER_PROFILE: "ember",
+    },
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  assert.ifError(result.error);
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /AssertionError \[ERR_ASSERTION\]: cutover kit bytes mismatch/);
+  assert.equal(result.stdout, "");
+  assert.deepEqual(await readFile(proofPath), earlierProof);
+  assert.deepEqual((await readdir(scratch)).sort(), ["kit-cutover-packet", "proof.json"]);
 });
 
 test("cutover ledger admits exactly 1033 or 1037 and exact version readiness", () => {
