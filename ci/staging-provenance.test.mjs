@@ -216,6 +216,24 @@ test("staging E2E reservation receipt binds the verified lease through completio
   );
 });
 
+test("staging E2E reservation receipt binds one snapshot of the receipt", () => {
+  let shaReads = 0;
+  const receipt = { ...reservedE2e, e2e: { ...reservedE2e.e2e } };
+  Object.defineProperty(receipt, "sha", {
+    enumerable: true,
+    get: () => (shaReads++ === 0 ? reservedE2e.sha : B),
+  });
+  const bound = bindStagingE2eReservation(receipt, {
+    before: reservationRead,
+    after: reservationRead,
+    admission: reservationAdmission(),
+  });
+  assert.equal(shaReads, 1);
+  assert.equal(bound.sha, reservedE2e.sha);
+  assert.notEqual(bound.e2e, receipt.e2e);
+  assert.deepEqual(bound.e2e, reservedE2e.e2e);
+});
+
 test("staging E2E reservation receipt refuses expired, changed, or unverified leases", () => {
   const admission = reservationAdmission();
   const bind = (before, after, receipt = reservedE2e) =>
