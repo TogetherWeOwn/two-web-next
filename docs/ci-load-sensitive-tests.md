@@ -1,16 +1,24 @@
-# Load-sensitive tests in `check`
+# Load-sensitive CI tests
 
-`check` uses the included 2-vCPU Blacksmith runner for same-repository pull
-requests while capacity is enabled. GitHub-hosted `ubuntu-latest` handles other
-events and serves as the fallback at quota cutoff. The existing `check` limit
-covers runner and workload variation. Vitest runs test files serially within
-each coverage shard.
+When scope selects full Vitest coverage, CI runs it in three `coverage-shard`
+jobs. Each job has its own Postgres service and runs test files serially
+(`fileParallelism: false` in `vitest.config.ts`). `coverage-merge` verifies the
+shard reports and enforces the repository's coverage thresholds. The separate
+`check` job runs focused suites and other CI gates, including Tier-0 tests.
+
+`check`, `coverage-shard`, and `coverage-merge` use the included 2-vCPU
+Blacksmith runner on same-repository pull requests when `CI_BLACKSMITH_2VCPU`
+is set to `blacksmith-2vcpu-ubuntu-2404`. They use GitHub-hosted `ubuntu-latest`
+for other events or when the variable is unset or has any other value. The
+selector is covered by [`test/workflow-runners.test.ts`](../test/workflow-runners.test.ts).
 
 ## Budgets
 
 | Limit | Value | Where |
 | --- | --- | --- |
-| `check` job | 60 min | `.github/workflows/ci.yml`, pinned by `ci/a11y-policy.test.mjs` |
+| `check` job | 60 min | [CI workflow](../.github/workflows/ci.yml), pinned by [`ci/a11y-policy.test.mjs`](../ci/a11y-policy.test.mjs) |
+| Each `coverage-shard` job | 60 min | [CI workflow](../.github/workflows/ci.yml), capped at 60 min by [`ci/coverage-command.test.mjs`](../ci/coverage-command.test.mjs) |
+| `coverage-merge` job | 10 min | [CI workflow](../.github/workflows/ci.yml) |
 | Default test timeout | 30 s | `vitest.config.ts` (`testTimeout`) |
 | Default hook timeout | 60 s | `vitest.config.ts` (`hookTimeout`) |
 
