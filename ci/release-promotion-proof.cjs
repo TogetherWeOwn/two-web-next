@@ -25,8 +25,11 @@ function requireProof(condition, reason) {
 }
 
 function id(value) {
+  // CalVer consumes numeric evidence IDs, so decimal strings must stay exact.
   return (Number.isSafeInteger(value) && value > 0) ||
-    (typeof value === "string" && /^[1-9][0-9]{0,15}$/.test(value))
+    (typeof value === "string" &&
+      /^[1-9][0-9]{0,15}$/.test(value) &&
+      Number.isSafeInteger(Number(value)))
     ? String(value)
     : null;
 }
@@ -107,6 +110,12 @@ function verifyPromotion({ repo, sha }) {
         data[key].length === data.total_count,
       `incomplete or exhausted ${key} listing`,
     );
+    const ids = new Set();
+    for (const row of data[key]) {
+      const rowId = id(row?.id);
+      requireProof(rowId && !ids.has(rowId), `missing, invalid or duplicate IDs in ${key} listing`);
+      ids.add(rowId);
+    }
     return data[key];
   }
   const workflow = api("workflows/deploy-production.yml");

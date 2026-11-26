@@ -73,6 +73,63 @@ function refused(f, result, before) {
   );
 }
 
+test("promotion proof requires complete listings with exact identities", async (t) => {
+  const listings = [
+    ["workflow_runs", "runs", false, { event: "push" }],
+    ["jobs", "jobs", true, { name: "unrelated job" }],
+    ["artifacts (selected run)", "artifacts", true, { name: "unrelated artifact" }],
+    ["artifacts (discovery)", "artifacts", false, { name: "unrelated artifact" }],
+  ];
+  for (const [name, key, hints, fields] of listings) {
+    const listing = key === "runs" ? "workflow_runs" : key;
+    for (const identity of ["missing", "duplicate", "out-of-range"]) {
+      await t.test(`${name}: ${identity} row ID`, (t) => {
+        const f = fixture(t);
+        const rows = f.state[key];
+        const row = { ...rows[0], ...fields };
+        const before = f.git("show-ref", "--tags");
+        if (identity === "missing") delete row.id;
+        if (identity === "duplicate") row.id = String(row.id);
+        if (identity === "out-of-range") row.id = "9007199254740993";
+        rows.push(row);
+
+        const result = f.run({ hints });
+        refused(f, result, before);
+        assert.ok(
+          result.stderr.includes(`missing, invalid or duplicate IDs in ${listing} listing`),
+          result.stderr,
+        );
+        assert.ok(result.calls.every((args) => !args.some((arg) => arg.endsWith("/zip"))));
+        if (!hints) {
+          assert.ok(result.calls.every((args) => !args.some((arg) => arg.includes("/attempts/"))));
+        }
+      });
+    }
+  }
+
+  await t.test("distinct rows and the largest safe decimal ID preserve the request", (t) => {
+    const f = fixture(t);
+    f.state.runs[0].id = String(RUN);
+    f.state.runs[0].run_attempt = String(ATTEMPT);
+    f.state.runs.push({ ...f.state.runs[0], id: RUN + 1, event: "push" });
+    f.state.jobs[0].id = String(Number.MAX_SAFE_INTEGER);
+    f.state.artifacts.push({ ...f.state.artifacts[0], id: 801, name: "unrelated artifact" });
+    published(f.run(), f.sha);
+    published(f.run({ hints: false }), f.sha);
+  });
+
+  await t.test("out-of-range run and attempt selectors stop before looking up evidence", (t) => {
+    const f = fixture(t);
+    const before = f.git("show-ref", "--tags");
+    for (const selector of ["PROMOTION_RUN_ID", "PROMOTION_RUN_ATTEMPT"]) {
+      const result = f.run({ extraEnv: { [selector]: "9007199254740993" } });
+      refused(f, result, before);
+      assert.match(result.stderr, /both run and attempt selectors must be positive decimal IDs/);
+      assert.equal(result.calls.length, 1, "only the workflow identity was read");
+    }
+  });
+});
+
 const denials = [
   [
     "never-promoted main tip",
