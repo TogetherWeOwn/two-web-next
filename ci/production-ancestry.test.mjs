@@ -439,7 +439,10 @@ function incidentStaging() {
     if (pathname.endsWith("/actions/workflows/e2e-staging.yml/runs")) {
       const page = Number(searchParams.get("page"));
       const size = Number(searchParams.get("per_page"));
-      return okJson({ workflow_runs: incidentRuns.slice((page - 1) * size, page * size) });
+      return okJson({
+        total_count: incidentRuns.length,
+        workflow_runs: incidentRuns.slice((page - 1) * size, page * size),
+      });
     }
     const id = pathname.match(/\/actions\/runs\/(\d+)\/jobs$/)?.[1];
     if (id) {

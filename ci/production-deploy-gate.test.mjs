@@ -42,6 +42,7 @@ import {
   targetWebEndUnknown,
   targetWebEntries,
 } from "./production-deploy-gate.mjs";
+import { resolvePromotionSha } from "./resolve-promotion-sha.mjs";
 
 const enabled = {
   PRODUCTION_DEPLOY_ENABLED: "true",
@@ -1536,8 +1537,18 @@ function stubAutoApi(staging, environment = autoEnvironment, seen = {}) {
         assert.equal(parsed.searchParams.get("head_sha"), null);
         assert.equal(parsed.searchParams.get("branch"), "main");
         const page = Number(parsed.searchParams.get("page"));
-        const runs = (staging[file] ?? []).slice((page - 1) * 100, page * 100);
-        return { ok: true, json: async () => ({ total_count: runs.length, workflow_runs: runs }) };
+        const size = Number(parsed.searchParams.get("per_page"));
+        const runs = staging[file] ?? [];
+        const total_count = parsed.searchParams.has("created")
+          ? (staging.historyCounts?.[page - 1] ?? runs.length)
+          : runs.length;
+        return {
+          ok: true,
+          json: async () => ({
+            total_count,
+            workflow_runs: runs.slice((page - 1) * size, page * size),
+          }),
+        };
       }
     }
     const jobsOf = parsed.pathname.match(/\/actions\/runs\/(\d+)\/jobs$/)?.[1];
@@ -1567,6 +1578,64 @@ test("auto-approve passes without reviewers when CI, staging deploy and e2e-stag
   ]);
   assert.equal(seen["deploy.yml"], 1);
   assert.equal(seen["e2e-staging.yml"], 1);
+});
+
+test("promotion callers require a complete e2e-staging history", async (t) => {
+  const staging = stagingEvidence();
+  staging["e2e-staging.yml"][0].id = 300;
+  const filler = Array.from({ length: 100 }, (_, i) =>
+    stagingRun("e2e-staging.yml", 299 - i, {
+      display_title: `e2e-staging deploy ${otherSha}`,
+      conclusion: "cancelled",
+    }),
+  );
+  const history = [...staging["e2e-staging.yml"], ...filler];
+  const checkout = { checkoutSha: dispatchSha };
+  const scheduledEnv = { ...autoEnv, GITHUB_EVENT_NAME: "schedule" };
+  const callers = {
+    "automatic candidate resolver": (fetchImpl) =>
+      resolvePromotionSha({
+        repository: autoEnv.GITHUB_REPOSITORY,
+        token: autoEnv.GITHUB_TOKEN,
+        fetchImpl,
+        log: () => {},
+      }),
+    "automatic production gate": async (fetchImpl) =>
+      (await checkProductionGate(scheduledEnv, fetchImpl, checkout)).sha,
+    "reviewer production gate": async (fetchImpl) =>
+      (await checkProductionGate(greenEnv, fetchImpl, checkout)).sha,
+  };
+  for (const [caller, check] of Object.entries(callers)) {
+    for (const [name, counts, expectedPages] of [
+      ["complete history", undefined, [1, 2]],
+      ["short first page", [101], [1]],
+      ["short last page", [102, 102], [1, 2]],
+      ["too many rows for the count", [99], [1]],
+      ["count decreases to match the returned rows", [102, 101], [1, 2]],
+    ]) {
+      await t.test(`${caller}: ${name}`, async () => {
+        const visibleRuns = name === "short first page" ? history.slice(0, 99) : history;
+        const api = stubAutoApi(
+          { ...staging, "e2e-staging.yml": visibleRuns, historyCounts: counts },
+          caller === "reviewer production gate" ? protectedEnvironment : autoEnvironment,
+        );
+        const historyPages = [];
+        const verdict = check((url, init) => {
+          const { pathname, searchParams } = new URL(url);
+          if (pathname.endsWith("/workflows/e2e-staging.yml/runs") && searchParams.has("created")) {
+            historyPages.push(Number(searchParams.get("page")));
+          }
+          return api(url, init);
+        });
+        if (name === "complete history") {
+          assert.equal(await verdict, dispatchSha);
+        } else {
+          await assert.rejects(verdict, /Cannot prove whole e2e-staging history/);
+        }
+        assert.deepEqual(historyPages, expectedPages);
+      });
+    }
+  }
 });
 
 for (const [name, pattern, mutate] of [
