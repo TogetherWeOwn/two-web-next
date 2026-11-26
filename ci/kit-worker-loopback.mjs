@@ -10,7 +10,7 @@ export function tail(value, limit = 4000) {
   return value.length > limit ? `…${value.slice(-limit)}` : value;
 }
 
-async function unusedPort() {
+export async function unusedPort() {
   const server = createServer().listen(0, loopback);
   await once(server, "listening");
   const { port } = server.address();
@@ -63,7 +63,7 @@ async function waitForBind(worker, deadline, signal) {
       `Wrangler dev exited before ready (exit ${child.exitCode ?? child.signalCode}). Worker output:\n${tail(worker.log)}`,
     );
   }
-  if (!worker.bound) {
+  if (!worker.bound || Date.now() >= deadline) {
     throw new Error(
       `Timed out waiting for Wrangler to bind ${origin}. Worker output:\n${tail(worker.log)}`,
     );
@@ -86,6 +86,7 @@ export async function startLoopbackWorker(
     const worker = trackWorker(name, child, origin, port, workers);
     try {
       await waitForBind(worker, deadline, signal);
+      worker.deadline = deadline;
       return worker;
     } catch (error) {
       const collision = `Address already in use (${loopback}:${port}). Please check that you are not already running a server on this address or specify a different port with --port.`;
@@ -103,4 +104,34 @@ export async function startLoopbackWorker(
       console.log(`Loopback bind collision for ${name} Worker, retrying with a fresh port`);
     }
   }
+}
+
+export async function waitForHttpReady(child, origin, getLog, deadline, signal) {
+  const exited = () => child.exitCode !== null || child.signalCode !== null;
+  let lastStatus = "no response";
+  while (Date.now() < deadline) {
+    signal?.throwIfAborted();
+    if (exited()) {
+      throw new Error(
+        `Wrangler dev exited before ready (exit ${child.exitCode ?? child.signalCode}). Worker output:\n${tail(getLog())}`,
+      );
+    }
+    const timeout = AbortSignal.timeout(Math.max(1, Math.min(1_000, deadline - Date.now())));
+    try {
+      const response = await fetch(`${origin}/favicon.ico`, {
+        redirect: "manual",
+        signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+      });
+      lastStatus = `HTTP ${response.status}`;
+      await response.body?.cancel();
+      if (response.ok && !exited() && !signal?.aborted && Date.now() < deadline) return;
+    } catch {
+      // The bound listener is not serving the readiness request yet.
+    }
+    const remaining = deadline - Date.now();
+    if (remaining > 0) await delay(Math.min(250, remaining), undefined, { signal });
+  }
+  throw new Error(
+    `Timed out waiting for ${origin}/favicon.ico (${lastStatus}). Worker output:\n${tail(getLog())}`,
+  );
 }

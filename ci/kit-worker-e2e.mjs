@@ -22,7 +22,7 @@ import {
 import { assertEventReadsParity } from "./fixtures/kit-event-reads-parity.mjs";
 import { assertResponseContracts } from "./fixtures/kit-response-contracts.mjs";
 import { assertStaticFeedParity } from "./fixtures/kit-static-feed-parity.mjs";
-import { startLoopbackWorker, tail } from "./kit-worker-loopback.mjs";
+import { startLoopbackWorker, tail, waitForHttpReady } from "./kit-worker-loopback.mjs";
 import { expectedMarkerFor, kitHomeHeadingText } from "./kit-parity-gates.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
 import { FIXTURE_SECRETS } from "./parity/fixture.mjs";
@@ -58,54 +58,9 @@ function requireDisposableDatabase(value) {
   }
 }
 
-function listen(child, origin, getLog, timeoutMs = 60_000) {
-  const started = Date.now();
-  let lastStatus = "no response";
-  return new Promise((resolveReady, reject) => {
-    const attempt = async () => {
-      if (startup.signal.aborted) {
-        reject(startup.signal.reason);
-        return;
-      }
-      if (child.exitCode !== null || child.signalCode !== null) {
-        reject(
-          new Error(
-            `Wrangler dev exited before ready (exit ${child.exitCode ?? child.signalCode}). Worker output:\n${tail(getLog())}`,
-          ),
-        );
-        return;
-      }
-      try {
-        const response = await fetch(`${origin}/favicon.ico`, {
-          redirect: "manual",
-          signal: AbortSignal.any([startup.signal, AbortSignal.timeout(1_000)]),
-        });
-        lastStatus = `HTTP ${response.status}`;
-        await response.body?.cancel();
-        if (
-          response.ok &&
-          child.exitCode === null &&
-          child.signalCode === null &&
-          !startup.signal.aborted
-        ) {
-          resolveReady();
-          return;
-        }
-      } catch {
-        // The bound listener is not serving the readiness request yet.
-      }
-      if (Date.now() - started >= timeoutMs) {
-        reject(
-          new Error(
-            `Timed out waiting for ${origin}/favicon.ico (${lastStatus}). Worker output:\n${tail(getLog())}`,
-          ),
-        );
-        return;
-      }
-      setTimeout(attempt, 250);
-    };
-    void attempt();
-  });
+function listen(child, origin, getLog) {
+  const { deadline } = workers.find((worker) => worker.child === child);
+  return waitForHttpReady(child, origin, getLog, deadline, startup.signal);
 }
 
 requireDisposableDatabase(databaseUrl);
@@ -123,8 +78,9 @@ const workers = [];
 const starting = new Set();
 const startup = new AbortController();
 
-// Bind one Worker before its HTTP readiness probe. Each Kit and Hono pair
-// shares its fixture database and vars.
+// Start one loopback Worker. The generated Kit Worker and the direct Hono
+// Worker (src/worker.ts, the same app Kit's catch-all forwards to) share the
+// fixture database and vars within each pair.
 function startWorker(name, main, assetsDirectory, sessionSecret, vars, liveHub = false) {
   const bound = startLoopbackWorker(
     name,
@@ -961,13 +917,12 @@ export default {
     const entry = join(scratch, "kit-admin.mjs");
     const vars = await prepareAdminFixture(worker, entry);
     const publishEntry = await prepareAdminPublishFixture(entry, join(scratch, "kit-publish.mjs"));
-    const [admin, nativeCreate] = await Promise.all([
-      startAdminProbe("kit-admin", publishEntry, assets, vars),
-      startWorker("kit-admin-native-create", entry, assets, secret, {
-        ...vars,
-        KIT_PARITY_FIXTURE_ADMIN_EVENT_CREATE_REDIRECT: "true",
-      }),
-    ]);
+    const adminStart = startAdminProbe("kit-admin", publishEntry, assets, vars);
+    const createStart = startWorker("kit-admin-native-create", entry, assets, secret, {
+      ...vars,
+      KIT_PARITY_FIXTURE_ADMIN_EVENT_CREATE_REDIRECT: "true",
+    });
+    const [admin, nativeCreate] = await Promise.all([adminStart, createStart]);
     await Promise.all(
       [admin, nativeCreate].map((instance) =>
         listen(instance.child, instance.origin, () => instance.log),

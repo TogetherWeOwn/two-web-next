@@ -7,18 +7,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { startLoopbackWorker } from "./kit-worker-loopback.mjs";
+import { startLoopbackWorker, unusedPort, waitForHttpReady } from "./kit-worker-loopback.mjs";
 
 const loopback = "127.0.0.1";
 const wrangler = fileURLToPath(new URL("../web/node_modules/.bin/wrangler", import.meta.url));
 function failStartup(message) {
-  return spawn(
-    process.execPath,
-    ["-e", "console.error(process.argv[1]); process.exitCode = 1", message],
-    {
-      stdio: ["ignore", "pipe", "pipe", "ipc"],
-    },
-  );
+  return spawn(process.execPath, [
+    "-e",
+    "console.error(process.argv[1]); process.exitCode = 1",
+    message,
+  ]);
 }
 
 test("pinned Wrangler recovers from an occupied loopback port", async () => {
@@ -36,14 +34,7 @@ test("pinned Wrangler recovers from an occupied loopback port", async () => {
     await writeFile(main, "export default { fetch: (_, env) => new Response(env.APP_URL) };\n");
     const { port } = occupied.address();
     let selected = 0;
-    const selectPort = async () => {
-      if (selected++ === 0) return port;
-      const candidate = createServer().listen(0, loopback);
-      await once(candidate, "listening");
-      const { port: newPort } = candidate.address();
-      await new Promise((resolve) => candidate.close(resolve));
-      return newPort;
-    };
+    const selectPort = () => (selected++ === 0 ? port : unusedPort());
     const worker = await startLoopbackWorker(
       "collision-proof",
       async (port, origin) => {
@@ -55,53 +46,35 @@ test("pinned Wrangler recovers from an occupied loopback port", async () => {
             main,
             compatibility_date: "2026-09-29",
             vars: { APP_URL: origin },
+            dev: { ip: loopback, port, inspector_port: 0 },
           }),
         );
-        return spawn(
-          wrangler,
-          [
-            "dev",
-            "--config",
-            config,
-            "--local",
-            "--ip",
-            loopback,
-            "--port",
-            String(port),
-            "--inspector-port",
-            "0",
-            "--persist-to",
-            join(scratch, "state"),
-            "--log-level",
-            "error",
-          ],
-          {
-            cwd: scratch,
-            env: {
-              ...process.env,
-              WRANGLER_SEND_METRICS: "false",
-              CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: "false",
-              CLOUDFLARE_INCLUDE_PROCESS_ENV: "false",
-              WRANGLER_LOG_PATH: join(scratch, "wrangler.log"),
-            },
-            stdio: ["ignore", "pipe", "pipe", "ipc"],
+        return spawn(wrangler, ["dev", "--config", config, "--local", "--log-level", "error"], {
+          cwd: scratch,
+          env: {
+            ...process.env,
+            WRANGLER_SEND_METRICS: "false",
+            CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: "false",
+            CLOUDFLARE_INCLUDE_PROCESS_ENV: "false",
+            WRANGLER_LOG_PATH: join(scratch, "wrangler.log"),
           },
-        );
+          stdio: ["ignore", "pipe", "pipe", "ipc"],
+        });
       },
       workers,
       { selectPort },
     );
+    const probe = waitForHttpReady.bind(null, worker.child, worker.origin, () => worker.log);
+    await assert.rejects(probe(0), /Timed out waiting for/);
+    await probe(worker.deadline);
+    assert.equal(foreignRequests, 0);
     assert.equal(workers.length, 2);
     assert.equal(workers[0].child.exitCode, 1);
     assert.notEqual(worker.origin, `http://${loopback}:${port}`);
     const response = await fetch(`${worker.origin}/favicon.ico`);
     assert.equal(await response.text(), worker.origin);
-    assert.equal(foreignRequests, 0);
   } finally {
-    // The real Wrangler wrapper forwards SIGTERM to its local child.
-    for (const worker of workers) {
-      if (!worker.stopped) worker.child.kill("SIGTERM");
-    }
+    for (const worker of workers.filter(({ stopped }) => !stopped)) worker.child.kill("SIGTERM");
     await Promise.all(workers.map(({ closed }) => closed));
     await new Promise((resolve) => occupied.close(resolve));
     await rm(scratch, { recursive: true, force: true });
@@ -113,22 +86,18 @@ test("startup reports the final bind collision and never retries other errors", 
   const port = 32123;
   const options = { selectPort: () => port };
   const collision = `Address already in use (${loopback}:${port}). Please check that you are not already running a server on this address or specify a different port with --port.`;
-  const collisions = [];
-  const failures = [];
-  await assert.rejects(
-    startLoopbackWorker("synthetic", () => failStartup(collision), collisions, options),
-    /Wrangler dev exited before ready \(exit 1\)[\s\S]*Address already in use/,
-  );
-  assert.equal(collisions.length, 3);
-  await assert.rejects(
-    startLoopbackWorker(
-      "synthetic",
-      () => failStartup("Synthetic startup failure"),
-      failures,
-      options,
-    ),
-    /Wrangler dev exited before ready \(exit 1\)[\s\S]*Synthetic startup failure/,
-  );
-  assert.equal(failures.length, 1);
-  assert.ok([...collisions, ...failures].every(({ stopped }) => stopped));
+  for (const [message, attempts] of [
+    [collision, 3],
+    ["Synthetic startup failure", 1],
+  ]) {
+    const workers = [];
+    await assert.rejects(
+      startLoopbackWorker("synthetic", () => failStartup(message), workers, options),
+      (error) =>
+        error.message.startsWith("Wrangler dev exited before ready (exit 1)") &&
+        error.message.includes(message),
+    );
+    assert.equal(workers.length, attempts);
+    assert.ok(workers.every(({ stopped }) => stopped));
+  }
 });
