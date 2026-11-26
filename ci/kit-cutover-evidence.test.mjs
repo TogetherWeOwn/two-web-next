@@ -5,12 +5,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { readMigrationFiles } from "drizzle-orm/migrator";
-import {
-  calendarFixtures,
-  joinAction,
-  smokeFixtures,
-  startSmokeFixture,
-} from "../test/helpers/smoke-http.mjs";
+import { calendarFixtures, joinAction, smokeFixtures } from "../test/fixtures/smoke-routes.mjs";
+import { startSmokeFixture } from "../test/helpers/smoke-http.mjs";
 import {
   LEDGER_STATES,
   STAGING_WORKER,

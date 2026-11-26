@@ -20,8 +20,8 @@ import {
   calendarFixtures,
   joinAction,
   smokeFixtures as fixtures,
-  startSmokeFixture as stub,
-} from "./helpers/smoke-http.mjs";
+} from "./fixtures/smoke-routes.mjs";
+import { startSmokeFixture as stub } from "./helpers/smoke-http.mjs";
 
 async function run(url, options = {}) {
   const output = [];
