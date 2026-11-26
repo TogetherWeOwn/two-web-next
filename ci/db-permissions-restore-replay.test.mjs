@@ -505,7 +505,8 @@ test("serving isolation rejects the wrong database before write locks or ACL wor
       const sql = strings.join("?").replace(/\s+/g, " ").trim();
       trace.push(sql);
       if (settings.includes(sql)) return [];
-      if (sql === identityQuery) return [{ database, authenticated: migrator, effective: migrator }];
+      if (sql === identityQuery)
+        return [{ database, authenticated: migrator, effective: migrator }];
       if (sql === advisoryLockQuery) {
         assert.deepEqual(values, [webMigrationLockKey]);
         return [{ acquired: true }];
@@ -550,10 +551,12 @@ test("serving isolation rejects the wrong database before write locks or ACL wor
     }),
     [...throughIdentity, ...cleanup],
   );
-  assert.deepEqual(
-    await runWithDatabase("postgres", (error) => error === ledgerLock),
-    [...throughIdentity, advisoryLockQuery, ledgerLockQuery, ...cleanup],
-  );
+  assert.deepEqual(await runWithDatabase("postgres", (error) => error === ledgerLock), [
+    ...throughIdentity,
+    advisoryLockQuery,
+    ledgerLockQuery,
+    ...cleanup,
+  ]);
 });
 
 test("PostgreSQL 18 branch replay preserves repair and Bot scope with alternate ADMIN authority", async (t) => {
