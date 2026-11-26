@@ -1,9 +1,70 @@
+# guards: paths
 name: XFS qualification fixture
 
 on:
   pull_request:
-  push:
-    branches: [main]
+    paths:
+      - ".github/workflows/xfs-qualification.yml"
+      - ".github/actions/gradual-promote/**"
+      - ".npmrc"
+      - "package*.json"
+      - "web/.npmrc"
+      - "web/package*.json"
+      - "web/**"
+      - "src/**"
+      - "lib/**"
+      - "assets/**"
+      - "public/**"
+      - "vendor/design-kit/**"
+      - "drizzle.config.ts"
+      - "drizzle/**"
+      - "docs/kit-parity-gates.md"
+      - "docs/web-readiness-projection.sql"
+      - "migrations.lock"
+      - "tsconfig.json"
+      - "wrangler*.jsonc"
+      - "ci/xfs-qualification-fixture*"
+      - "ci/kit-archive-delta.mjs"
+      - "ci/kit-cutover-*"
+      - "ci/kit-live-socket.mjs"
+      - "ci/kit-lock-xfs.test.mjs"
+      - "ci/kit-parity-gates.mjs"
+      - "ci/kit-route-evidence.mjs"
+      - "ci/kit-section-contract.mjs"
+      - "ci/kit-worker-*"
+      - "ci/parity/**"
+      - "ci/fixtures/kit-*"
+      - "ci/disposable-runtime-role.sql"
+      - "ci/build-ember-tokens.mjs"
+      - "ci/build-events-css.mjs"
+      - "ci/build-leaf-css.mjs"
+      - "ci/css-dictionary.mjs"
+      - "ci/db-migrate.mjs"
+      - "ci/execution-receipt-authority.mjs"
+      - "ci/migration-*.mjs"
+      - "ci/operator-constants.mjs"
+      - "ci/production-deploy-gate.mjs"
+      - "ci/rendered-page.mjs"
+      - "ci/resolve-promotion-sha.mjs"
+      - "ci/robots-directives.mjs"
+      - "ci/rollback-target.mjs"
+      - "ci/rsvp-focus-require-executed.mjs"
+      - "ci/staging-*.mjs"
+      - "ci/worker-bundle-evidence.mjs"
+      - "ci/check-production-secrets.mjs"
+      - "ci/wrangler-config.mjs"
+      - "bin/smoke.mjs"
+      - "bin/revision-check.mjs"
+      - "bin/version-check.mjs"
+      - "e2e/discord-stub.ts"
+      - "tail/worker.ts"
+      - "test/fixtures/route-inventory.json"
+      - "test/fixtures/route-kit-map.json"
+      - "test/helpers/fake-agent-ingress-db.ts"
+      - "test/helpers/kit-edit-controls.ts"
+      - "test/helpers/machine-requests.ts"
+      - "test/helpers/throttle-tx-double.ts"
+      - "test/helpers/up.ts"
   workflow_dispatch:
     inputs:
       qualify_cutover:
@@ -15,6 +76,10 @@ on:
         type: choice
         options: [all-off, ember, admin]
         default: all-off
+      moderator_rsvp_only:
+        description: "On a PR branch, run focused moderator RSVP installed parity without cutover qualification"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -63,6 +128,7 @@ jobs:
     timeout-minutes: 15
     env:
       EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      MODERATOR_RSVP_ONLY: ${{ github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main' && !inputs.qualify_cutover && inputs.moderator_rsvp_only }}
     services:
       postgres:
         image: postgres:17@sha256:0d938e975177bef9f1f61f3f9dbcf2e0aa0a139568f66d3415ed8892eb97f6ac # 17.12-trixie
@@ -133,12 +199,18 @@ jobs:
         run: |
           result=0
           proof=()
-          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch ]]; then
+          if [[ "$MODERATOR_RSVP_ONLY" == true ]]; then
+            proof=(--moderator-rsvp-only)
+          elif [[ "$GITHUB_EVENT_NAME" != workflow_dispatch ]]; then
             proof=(--public-voice-browser)
           fi
           bash ci/xfs-qualification-fixture.sh bash ci/kit-worker-installed-output.sh "${proof[@]}" \
             | tee "$RUNNER_TEMP/kit-installed-output.log" || result=$?
           grep -Fx 'Fixture mounts and backing file removed' "$RUNNER_TEMP/kit-installed-output.log"
+          if [[ "$MODERATOR_RSVP_ONLY" == true ]]; then
+            grep -Fx 'PASS installed moderator RSVP pause and reopen admission, fallback, audit and FIFO parity' "$RUNNER_TEMP/kit-installed-output.log"
+            grep -Fx 'PASS loopback Workers and scratch cleaned up' "$RUNNER_TEMP/kit-installed-output.log"
+          fi
           exit "$result"
       - name: Retain installed Kit public voice screenshots
         if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && steps.installed.outcome != 'skipped' }}
@@ -149,10 +221,12 @@ jobs:
           if-no-files-found: ${{ steps.installed.outcome == 'success' && 'error' || 'warn' }}
           retention-days: 14
       - name: Build the Kit cutover server readiness profile
+        if: env.MODERATOR_RSVP_ONLY != 'true'
         run: npm run build --prefix web
         env:
           TWO_WEB_1033_COMPAT: "true"
       - name: Record all-off production Kit parity
+        if: env.MODERATOR_RSVP_ONLY != 'true'
         id: production-parity
         shell: bash
         env:
