@@ -163,24 +163,23 @@ async function main() {
     return;
   }
   assert.equal(command, "upload");
+  const uploaded = await uploadCutover(dir, profile, pin, inputs, process.env);
+  console.info(`Uploaded staged ${pin.mode} version ${uploaded}, manifest ${pin.digest}`);
+}
+
+export async function uploadCutover(dir, profile, pin, inputs, env, upload = uploadVersion) {
+  const { GITHUB_RUN_ID: runId, GITHUB_RUN_ATTEMPT: attempt } = env;
+  assert.match(`${runId}-${attempt}`, tagSuffix, "invalid deployment attempt");
   const mode = ["ember", "admin"].includes(pin.mode) ? pin.mode : "all-off";
   const config = productionUploadConfig(profile, inputs, mode);
   const directory = join(dir, profile);
   await writeFile(join(directory, "wrangler.json"), JSON.stringify(config), { flag: "wx" });
-  const { GITHUB_RUN_ID: runId, GITHUB_RUN_ATTEMPT: attempt } = process.env;
-  assert.match(`${runId}-${attempt}`, tagSuffix, "invalid deployment attempt");
-  const uploaded = uploadVersion(
-    profile,
-    directory,
-    config,
-    `${pin.sourceSha}-${runId}-${attempt}`,
-    {
-      message: pin.mode === "hono" ? undoMessage(pin.digest) : `two-web-cutover-kit:${pin.digest}`,
-      output: process.env.WRANGLER_OUTPUT_FILE_PATH,
-    },
-  );
-  await appendFile(process.env.GITHUB_OUTPUT, `version_id=${uploaded}\n`);
-  console.info(`Uploaded staged ${pin.mode} version ${uploaded}, manifest ${pin.digest}`);
+  const uploaded = upload(profile, directory, config, `${pin.sourceSha}-${runId}-${attempt}`, {
+    message: pin.mode === "hono" ? undoMessage(pin.digest) : `two-web-cutover-kit:${pin.digest}`,
+    output: env.WRANGLER_OUTPUT_FILE_PATH,
+  });
+  await appendFile(env.GITHUB_OUTPUT, `version_id=${uploaded}\n`);
+  return uploaded;
 }
 
 async function verifyOperatorDenial(origin) {

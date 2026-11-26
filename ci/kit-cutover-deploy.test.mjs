@@ -1,14 +1,18 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { first, preRollback, soakEnv, trustedReads } from "../test/fixtures/staging-soak-http.mjs";
 import { verifyOrdinaryLedger } from "./check-production-secrets.mjs";
-import { verifyReady, verifyStagingProof } from "./kit-cutover-evidence.mjs";
+import { productionUploadConfig, verifyReady, verifyStagingProof } from "./kit-cutover-evidence.mjs";
 import {
   selection,
   undoMessage,
+  uploadCutover,
   verifyEmberUndoVersion,
   verifyProducer,
   verifyUndoVersion,
@@ -444,4 +448,53 @@ test("ordinary promotion requires the full ledger for an Ember undo version", as
   assert.equal(readLedger.mock.callCount(), 1);
 
   await verifyOrdinaryLedger({}, () => assert.fail("ordinary rollback target must not probe"));
+});
+
+test("Ember upload validates the deployment attempt before writing the package config", async (t) => {
+  const scratch = await mkdtemp(join(tmpdir(), "ember-upload-attempt-"));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const directory = join(scratch, "kit");
+  const configPath = join(directory, "wrangler.json");
+  const env = {
+    GITHUB_RUN_ID: "99",
+    GITHUB_RUN_ATTEMPT: "2",
+    GITHUB_OUTPUT: join(scratch, "step-output"),
+    WRANGLER_OUTPUT_FILE_PATH: join(scratch, "upload-receipt"),
+  };
+  const pin = { ...identity, mode: "ember" };
+  const inputs = {
+    root: { env: { production: {} } },
+    kit: { name: "fixture-worker", vars: { KIT_ROUTE_EMBER_PAGES: "false" } },
+  };
+  const upload = t.mock.fn(() => kit);
+  await mkdir(directory);
+  await writeFile(env.GITHUB_OUTPUT, "mode=ember\n");
+  for (const invalid of [
+    { GITHUB_RUN_ID: undefined },
+    { GITHUB_RUN_ATTEMPT: undefined },
+    { GITHUB_RUN_ID: "9e1" },
+    { GITHUB_RUN_ATTEMPT: "02" },
+  ]) {
+    await assert.rejects(
+      uploadCutover(scratch, "kit", pin, inputs, { ...env, ...invalid }, upload),
+      /invalid deployment attempt/,
+    );
+    assert.deepEqual(await readdir(directory), []);
+    assert.equal(await readFile(env.GITHUB_OUTPUT, "utf8"), "mode=ember\n");
+    await assert.rejects(readFile(env.WRANGLER_OUTPUT_FILE_PATH), { code: "ENOENT" });
+    assert.equal(upload.mock.callCount(), 0);
+  }
+
+  assert.equal(await uploadCutover(scratch, "kit", pin, inputs, env, upload), kit);
+  const config = productionUploadConfig("kit", inputs, "ember");
+  assert.equal(await readFile(configPath, "utf8"), JSON.stringify(config));
+  assert.equal(upload.mock.callCount(), 1);
+  assert.deepEqual(upload.mock.calls[0].arguments, [
+    "kit",
+    directory,
+    config,
+    `${sourceSha}-99-2`,
+    { message: `two-web-cutover-kit:${digest}`, output: env.WRANGLER_OUTPUT_FILE_PATH },
+  ]);
+  assert.equal(await readFile(env.GITHUB_OUTPUT, "utf8"), `mode=ember\nversion_id=${kit}\n`);
 });
