@@ -568,7 +568,8 @@ test("executor rolls back a grant or revoke when the post-write membership query
 test("serving isolation readback verifies endpoints and closes without mutation or locks", async () => {
   const database = "postgres";
   const migrationRole = "fixture_executor";
-  const login = "two_web_app";
+  // Differs from the production default so a dropped login option fails.
+  const login = "fixture_runtime_login";
   const firstEnd = "1033_session-roles-checked-at";
   const { entries } = JSON.parse(read("../drizzle/meta/_journal.json"));
   const migrationCount = entries.findIndex(({ tag }) => tag === firstEnd) + 1;
@@ -631,8 +632,8 @@ test("serving isolation readback verifies endpoints and closes without mutation 
         ledger,
         [entries.length + 1],
       ],
-      [catalogQuery, state.acl],
-      [membershipQuery, state.membership],
+      [catalogQuery, state.acl, [login]],
+      [membershipQuery, state.membership, [login]],
     ];
     if (allowed !== undefined) {
       steps.push(
