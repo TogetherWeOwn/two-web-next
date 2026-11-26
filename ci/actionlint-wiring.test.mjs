@@ -33,7 +33,7 @@ test("original workflow lint and native queue smoke remain blocking", () => {
   );
   assert.match(smoke, /cancel-in-progress: false\n      queue: max/);
   assert.match(smoke, /permissions: \{\}/);
-  assert.match(smoke, /runs-on: ubuntu-latest/);
+  assert.match(smoke, /^      && vars\.CI_BLACKSMITH_2VCPU \|\| 'ubuntu-latest' }}$/m);
   assert.match(smoke, /timeout-minutes: 2/);
   assert.match(smoke, /- run: "true"/);
   assert.doesNotMatch(smoke, /uses:|secrets\.|environment:|continue-on-error:/);

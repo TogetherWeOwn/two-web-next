@@ -853,10 +853,10 @@ describe("e2e scope gate", () => {
     expect(trigger).toMatch(/(^|\n)  schedule:\n/);
   });
 
-  it("keeps the scope and required verdict on standard hosted runners", () => {
+  it("keeps GitHub fallbacks for scope and verdict and requires only the verdict", () => {
     const verdict = e2e.split("\n  e2e-ok:\n")[1] ?? "";
-    expect(scopeJob).toMatch(/^ {4}runs-on: ubuntu-latest$/m);
-    expect(verdict).toMatch(/^ {4}runs-on: ubuntu-latest$/m);
+    expect(scopeJob).toMatch(/^      && vars\.CI_BLACKSMITH_2VCPU \|\| 'ubuntu-latest' }}$/m);
+    expect(verdict).toMatch(/^      && vars\.CI_BLACKSMITH_2VCPU \|\| 'ubuntu-latest' }}$/m);
     // browser-smoke is not a required check: CONTRIBUTING names exactly
     // ci-ok, gitleaks, e2e-ok and pr-lint, so a docs-only or test-only skip
     // never blocks a merge.
