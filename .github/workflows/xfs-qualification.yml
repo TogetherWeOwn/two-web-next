@@ -129,7 +129,7 @@ jobs:
     env:
       EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       MODERATOR_RSVP_ONLY: ${{ github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main' && !inputs.qualify_cutover && inputs.moderator_rsvp_only }}
-    services: &installed-services
+    services:
       postgres:
         image: postgres:17@sha256:0d938e975177bef9f1f61f3f9dbcf2e0aa0a139568f66d3415ed8892eb97f6ac # 17.12-trixie
         env:
@@ -202,7 +202,7 @@ jobs:
         env:
           KIT_WORKER_TEST_DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/two_web_next
           KIT_PUBLIC_VOICE_SCREENSHOTS: ${{ runner.temp }}/kit-public-voice
-          KIT_INSTALLED_LIVE_SOCKET_SEPARATE: &separate-live-proof ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && !inputs.qualify_cutover && !inputs.moderator_rsvp_only) }}
+          KIT_INSTALLED_LIVE_SOCKET_SEPARATE: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && !inputs.qualify_cutover && !inputs.moderator_rsvp_only) }}
         run: |
           result=0
           proof=()
@@ -288,12 +288,23 @@ jobs:
   # The socket deadlines consume over three minutes on their own. A separate
   # job lets both proofs finish tearing down their own fixtures.
   kit-live-socket-proof:
-    if: *separate-live-proof
+    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && !inputs.qualify_cutover && !inputs.moderator_rsvp_only) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
       EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-    services: *installed-services
+    services:
+      postgres:
+        image: postgres:17@sha256:0d938e975177bef9f1f61f3f9dbcf2e0aa0a139568f66d3415ed8892eb97f6ac # 17.12-trixie
+        env:
+          POSTGRES_USER: agent_test
+          POSTGRES_DB: two_web_next
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 127.0.0.1::5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U agent_test -d two_web_next"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
