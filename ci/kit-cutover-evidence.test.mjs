@@ -656,9 +656,14 @@ test("cutover ledger requires the canonical pre-1033 journal", async (t) => {
   ]) {
     await t.test(label, () => {
       const journal = [...ledgerJournal.slice(0, 2), ...replacement, ...ledgerJournal.slice(4)];
-      assert.throws(() => ledgerPrefixes(journal), /noncanonical pre-1033 migration journal/);
+      assert.throws(() => ledgerPrefixes(journal), /noncanonical cutover migration journal/);
     });
   }
+  await t.test("changed cutover timestamp in order", () => {
+    const journal = structuredClone(ledgerJournal);
+    journal.at(-5).when += 1;
+    assert.throws(() => ledgerPrefixes(journal), /noncanonical cutover migration journal/);
+  });
 });
 
 test("cutover ledger admits exactly 1033 or 1037 and exact version readiness", () => {

@@ -175,15 +175,19 @@ export function ledgerPrefixes(journal) {
     timestamps.every((when, i) => Number.isSafeInteger(when) && when > (timestamps[i - 1] ?? 0)),
     "invalid canonical ledger timestamps",
   );
-  // Pin the ordered Drizzle entries through 1032. The rehearsal and the
+  // Pin the ordered Drizzle entries through 1038. The rehearsal and the
   // readiness contract otherwise both take their history from the same input.
-  const historicalEntries = journal
-    .slice(0, start)
-    .map(({ idx, version, when, tag, breakpoints }) => ({ idx, version, when, tag, breakpoints }));
+  const canonicalEntries = journal.map(({ idx, version, when, tag, breakpoints }) => ({
+    idx,
+    version,
+    when,
+    tag,
+    breakpoints,
+  }));
   assert.equal(
-    sha256(JSON.stringify(historicalEntries)),
-    "395e727a7227a4c974c78af3b6204dec1cb344e6b775e9df2648302aa828e85a",
-    "noncanonical pre-1033 migration journal",
+    sha256(JSON.stringify(canonicalEntries)),
+    "77c3066bd536ab24c020ca57296533985a724a1a17bd11ba9bf18fc1c88a257d",
+    "noncanonical cutover migration journal",
   );
   return {
     1033: timestamps.slice(0, start + 1),
