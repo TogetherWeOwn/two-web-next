@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { parse } from "yaml";
 
@@ -93,4 +96,58 @@ test("installed XFS socket and route proofs each migrate and stop their own Post
     /ci\/kit-worker-installed-output\.sh --live-socket-only/,
   );
   assert.equal(jobs["isolated-cutover"].needs, "kit-fatal-proof");
+});
+
+test("installed XFS commands reject duplicate socket launches and missing teardown evidence", (t) => {
+  const { jobs } = parse(read(".github/workflows/xfs-qualification.yml"));
+  const routeProof = jobs["kit-fatal-proof"].steps.find((step) => step.id === "installed").run;
+  const socketProof = jobs["kit-live-socket-proof"].steps.find(
+    (step) => step.name === "Prove installed live sockets and fan-out",
+  ).run;
+  const scratch = mkdtempSync(join(tmpdir(), "installed-xfs-proof-"));
+  t.after(() => rmSync(scratch, { recursive: true, force: true }));
+
+  const launch = "Launching loopback kit-live Worker";
+  const mounts = "Fixture mounts and backing file removed";
+  const workers = "PASS loopback Workers and scratch cleaned up";
+  for (const [label, command, split, lines, fixtureStatus, expected] of [
+    ["split route", routeProof, true, [mounts], 0, 0],
+    ["duplicate socket launch", routeProof, true, [launch, mounts], 0, 1],
+    ["unsplit route", routeProof, false, [launch, mounts], 0, 0],
+    ["failed socket proof with cleanup", socketProof, true, [workers, mounts], 42, 42],
+    ["failed socket proof without Worker cleanup", socketProof, true, [mounts], 42, 1],
+    ["failed socket proof without mount cleanup", socketProof, true, [workers], 42, 1],
+  ]) {
+    const result = spawnSync(
+      "bash",
+      [
+        "--noprofile",
+        "--norc",
+        "-eo",
+        "pipefail",
+        "-c",
+        `
+bash() {
+  printf '%s\\n' "$FIXTURE_LINES"
+  return "$FIXTURE_STATUS"
+}
+${command}`,
+      ],
+      {
+        cwd: scratch,
+        encoding: "utf8",
+        env: {
+          PATH: process.env.PATH,
+          RUNNER_TEMP: scratch,
+          GITHUB_EVENT_NAME: "workflow_dispatch",
+          MODERATOR_RSVP_ONLY: "false",
+          KIT_INSTALLED_LIVE_SOCKET_SEPARATE: String(split),
+          FIXTURE_LINES: lines.join("\n"),
+          FIXTURE_STATUS: String(fixtureStatus),
+        },
+      },
+    );
+    assert.ifError(result.error);
+    assert.equal(result.status, expected, `${label}: ${result.stdout}${result.stderr}`);
+  }
 });

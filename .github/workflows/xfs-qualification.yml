@@ -214,6 +214,11 @@ jobs:
           bash ci/xfs-qualification-fixture.sh bash ci/kit-worker-installed-output.sh "${proof[@]}" \
             | tee "$RUNNER_TEMP/kit-installed-output.log" || result=$?
           grep -Fx 'Fixture mounts and backing file removed' "$RUNNER_TEMP/kit-installed-output.log"
+          if [[ "${KIT_INSTALLED_LIVE_SOCKET_SEPARATE:-}" == true ]] &&
+            grep -Fxq 'Launching loopback kit-live Worker' "$RUNNER_TEMP/kit-installed-output.log"; then
+            printf '%s\n' 'Route proof launched the dedicated live socket Worker' >&2
+            exit 1
+          fi
           if [[ "$MODERATOR_RSVP_ONLY" == true ]]; then
             grep -Fx 'PASS installed moderator RSVP pause and reopen admission, fallback, audit and FIFO parity' "$RUNNER_TEMP/kit-installed-output.log"
             grep -Fx 'PASS loopback Workers and scratch cleaned up' "$RUNNER_TEMP/kit-installed-output.log"
@@ -301,12 +306,16 @@ jobs:
         env:
           KIT_WORKER_TEST_DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/two_web_next
         run: |
+          result=0
           bash ci/xfs-qualification-fixture.sh bash ci/kit-worker-installed-output.sh --live-socket-only \
-            | tee "$RUNNER_TEMP/kit-live-socket.log"
-          grep -Fx 'PASS Kit live socket upgrade, guest resync, frame limits, expiry, and revocation' "$RUNNER_TEMP/kit-live-socket.log"
-          grep -Fx 'PASS installed Kit expired and failed post-pull authorization closes without a frame' "$RUNNER_TEMP/kit-live-socket.log"
-          grep -Fx 'PASS loopback Workers and scratch cleaned up' "$RUNNER_TEMP/kit-live-socket.log"
+            | tee "$RUNNER_TEMP/kit-live-socket.log" || result=$?
           grep -Fx 'Fixture mounts and backing file removed' "$RUNNER_TEMP/kit-live-socket.log"
+          grep -Fx 'PASS loopback Workers and scratch cleaned up' "$RUNNER_TEMP/kit-live-socket.log"
+          if (( result == 0 )); then
+            grep -Fx 'PASS Kit live socket upgrade, guest resync, frame limits, expiry, and revocation' "$RUNNER_TEMP/kit-live-socket.log"
+            grep -Fx 'PASS installed Kit expired and failed post-pull authorization closes without a frame' "$RUNNER_TEMP/kit-live-socket.log"
+          fi
+          exit "$result"
       - *installed-stop-postgres
 
   isolated-cutover:
