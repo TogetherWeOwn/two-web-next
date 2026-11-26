@@ -321,10 +321,27 @@ test("isolated cutover proof requires both exact versions and six healthy transi
   };
   verifyStagingProof(proof, identity);
   const ember = { ...proof, bindingCheck: "isolated-and-ember" };
-  verifyStagingProof(ember, { ...identity, mode: "ember" });
+  const emberPin = { ...identity, mode: "ember" };
+  verifyStagingProof(ember, emberPin);
+  assert.throws(
+    () => verifyStagingProof({ ...ember, kit: hono }, emberPin),
+    /staging requires distinct versions on one Worker/,
+  );
+  assert.throws(
+    () =>
+      verifyStagingProof(
+        { ...ember, configs: { ...ember.configs, kit: "g".repeat(64) } },
+        emberPin,
+      ),
+    /invalid staged config digests/,
+  );
+  assert.throws(
+    () => verifyStagingProof({ ...ember, routeCount: 0 }, emberPin),
+    /empty staged route smoke/,
+  );
   verifyStagingProof(ember, { ...identity, mode: "hono" });
   assert.throws(() => verifyStagingProof(ember, { ...identity, mode: "kit" }), /profile/);
-  assert.throws(() => verifyStagingProof(proof, { ...identity, mode: "ember" }), /profile/);
+  assert.throws(() => verifyStagingProof(proof, emberPin), /profile/);
   assert.throws(() => verifyStagingProof({ ...proof, kitReadinessSamples: 5 }, identity));
   assert.throws(() => verifyStagingProof({ ...proof, bindingCheck: "unobserved" }, identity));
   for (const change of [{ status: 503 }, { pending: 1 }, { version: kit }, { smoke: "failed" }]) {
