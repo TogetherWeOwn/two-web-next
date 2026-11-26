@@ -1315,3 +1315,16 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
   );
   console.log("PASS Kit admin ownership, isolated bearers, and native form parity");
 }
+
+export async function assertInstalledJoinAttemptDetail({ worker, scratch, databaseUrl, start }) {
+  const { assertJoinAttemptDetailParity, startJoinAttemptDetailFixture } = await import(
+    "./kit-admin-join-attempt-detail.mjs"
+  );
+  const target = await startJoinAttemptDetailFixture({ worker, scratch, start });
+  const sql = postgres(databaseUrl, { max: 1 });
+  try {
+    await assertJoinAttemptDetailParity({ worker: target, sql, visit, session, renewedModerator });
+  } finally {
+    await sql.end({ timeout: 1 });
+  }
+}
