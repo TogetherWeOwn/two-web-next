@@ -66,15 +66,18 @@ for (const stalledPart of ["headers", "body"]) {
             signal.addEventListener("abort", () => reject(new Error("test-token")), { once: true });
           });
         if (stalledPart === "headers") return stalled();
-        return {
-          ok: true,
-          body: {
-            async *[Symbol.asyncIterator]() {
-              bodyStarted = true;
-              await stalled();
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              signal.addEventListener("abort", () => controller.error(new Error("test-token")), {
+                once: true,
+              });
             },
-          },
-        };
+            pull() {
+              bodyStarted = true;
+            },
+          }),
+        );
       },
     );
     const result = request("/pulls/1");

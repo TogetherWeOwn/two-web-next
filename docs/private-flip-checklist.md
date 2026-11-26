@@ -1,20 +1,33 @@
 # Repository visibility flip checklist
 
 Run this list before changing this repository's visibility (public to private
-or back). The checked-in workflow jobs use GitHub-hosted runners in either
-visibility. This is a verification pass for whoever changes the setting, not
-proof of the state of any private runner fleet.
+or back). Verify runner rules in both visibilities and check the state of any
+private runner fleet separately.
 
 ## Runner separation (verify, already in code)
 
-- Every direct job uses a literal `ubuntu-latest` label, except jobs pinned to
-  `ubuntu-24.04` in `test/workflow-runners.test.ts`. The contract rejects
-  runner groups, self-hosted and larger runners, and selectors that depend on
-  visibility, events, or variables.
-- Checked-in jobs select GitHub-hosted runners for all events and both
-  visibilities; reusable workflow calls are checked separately at their pinned
-  revisions or through their runner inputs. `test/workflow-runners.test.ts`
-  checks the current source contracts; run it on current `main` before flipping:
+- Direct jobs use `ubuntu-latest` or pinned `ubuntu-24.04` unless the runner
+  contract explicitly assigns a job to an opt-in. See the
+  [browser-smoke routing rules](critical-journeys.md#ci-isolation) before
+  changing merge-queue settings. The GitHub fallback covers fork pull requests.
+- The required PR gates and their CI dependencies use the organization
+  `CI_BLACKSMITH_2VCPU` switch for same-repository `pull_request` events. If
+  it is unset or the spending guard resets it to `ubuntu-latest`, newly
+  scheduled jobs use GitHub-hosted runners. The PR size labeller and weekly
+  tally are advisory and use GitHub capacity. The two prerequisite polling
+  jobs in `pr-ci-admission.yml` stay on GitHub while they await lint, scan
+  and size evidence.
+- `ci.yml` can select `boat` for `kit-browser-calendar` when `CI_HEAVY_RUNNER`
+  is `boat`, the pull request head belongs to this repository, and both the
+  original and triggering actors match the Boat allowlist. Fork pull requests,
+  all other events, and missing or disabled capacity use `ubuntu-latest`.
+- The platform capacity switch updates `CI_HEAVY_RUNNER` for newly queued
+  runs. If Boat pauses a job after GitHub has assigned its label, wait for the
+  switch to show `ubuntu-latest` before requeuing CI. Contact the CI platform
+  maintainer if the switch stays on `boat` after included capacity runs out.
+- `test/workflow-runners.test.ts` checks the current runner contracts and
+  checks reusable workflow calls at their pinned revisions or through their
+  runner inputs. Run it on current `main` before flipping:
   `npx vitest run test/workflow-runners.test.ts`.
 - A manual branch dispatch can load workflow YAML from that branch. Source tests
   on `main` do not enforce historical or modified branch definitions, repository
@@ -35,14 +48,14 @@ proof of the state of any private runner fleet.
 
 - Confirm the fork pull-request approval policy for Actions runs (first-time
   and outside contributors) still matches intent for the new visibility.
-- Budget for GitHub-hosted minutes: pull-request and merge-queue CI stays on
-  GitHub-hosted runners by design, and private repositories draw on the
-  included minutes allowance instead of the free public allowance.
+- Verify the organization's opt-in variables still apply as intended and
+  budget for GitHub-hosted jobs. Private repositories draw on the included
+  minutes allowance instead of the free public allowance.
 
 ## After the flip
 
-- Open or re-run a pull request and confirm its jobs land on GitHub-hosted
-  runners; if a safe non-mutating manual workflow is authorized, dispatch it
-  from a reviewed ref and confirm its runner.
+- Confirm runners match the rules above on a pull request. If a safe
+  non-mutating manual workflow is authorized, dispatch it from a reviewed ref
+  and confirm its runner.
 - Confirm the required checks still report under their existing names before
   merging anything.

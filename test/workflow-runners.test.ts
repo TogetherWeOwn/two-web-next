@@ -24,10 +24,24 @@ const workflows = readdirSync(dir)
 
 const hosted = "ubuntu-latest";
 const hostedJson = JSON.stringify([hosted]);
+const blacksmithSelection = [
+  "github.event_name == 'pull_request'",
+  "&& github.repository",
+  "&& github.event.pull_request.head.repo.full_name == github.repository",
+  "&& vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'",
+  "&& vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest'",
+].join(" ");
+const blacksmithRunner = `\${{ ${blacksmithSelection} }}`;
+const sizeGateRunner = `\${{ format('["{0}"]', ${blacksmithSelection}) }}`;
+const calendarRunner = [
+  "${{ github.event_name == 'pull_request'",
+  "&& github.event.pull_request.head.repo.full_name == github.repository",
+  `&& contains(fromJSON('["Rick7C2", "togetherweown[bot]"]'), github.actor)`,
+  `&& contains(fromJSON('["Rick7C2", "togetherweown[bot]"]'), github.triggering_actor)`,
+  "&& vars.CI_HEAVY_RUNNER == 'boat' && vars.CI_HEAVY_RUNNER || 'ubuntu-latest' }}",
+].join(" ");
 // Keep the fixed OS for browser fixtures, visual baselines, recovery and the XFS fixture.
-// Re-baseline browser-smoke in the same PR as any bump (docs/visual-regression.md).
 const pinnedHostedJobs = new Map([
-  ["e2e.yml", "browser-smoke"],
   ["kit-activity-log-diagnostic.yml", "browser"],
   ["kit-browser-fixture.yml", "activity-log-capture"],
   ["kit-home-evidence.yml", "capture"],
@@ -36,6 +50,39 @@ const pinnedHostedJobs = new Map([
   ["admin-stale-save-ubuntu24-proof.yml", "recovery-proof"],
   ["kit-footer-browser.yml", "footer-browser"],
   ["xfs-qualification.yml", "fixture"],
+]);
+const browserSmokeRunner = [
+  "${{ github.event_name && (github.event_name != 'pull_request'",
+  "|| (github.repository && github.event.pull_request.head.repo.full_name == github.repository))",
+  "&& vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'",
+  "&& vars.CI_BLACKSMITH_2VCPU || 'ubuntu-24.04' }}",
+].join(" ");
+const blacksmithJobs = new Map([
+  [
+    "ci.yml",
+    [
+      "join-evidence-source",
+      "bot-contract-drift",
+      "scope",
+      "queue-syntax-smoke",
+      "docs-links",
+      "a11y",
+      "dependency-admission",
+      "check",
+      "static-check",
+      "coverage-shard",
+      "coverage-merge",
+      "node22-shard",
+      "node22-compat",
+      "bundle-budget",
+      "lighthouse",
+      "kit-browser-fixture",
+      "kit-browser-lifeline",
+      "ci-ok",
+    ],
+  ],
+  ["e2e.yml", ["scope", "e2e-ok"]],
+  ["pr-gates.yml", ["pr-lint", "gitleaks"]],
 ]);
 const localCall = /^\.\/\.github\/workflows\/([\w.-]+\.ya?ml)$/;
 const frozenLocalCall =
@@ -66,9 +113,20 @@ function isVerifiedFrozenLocal(uses: string) {
 
 function expectHostedJob(name: string, id: string, job: Job) {
   const label = `${name} job ${id}`;
+  const sizeGate = name === "pr-size.yml" && id === "pr-size-gate";
   if (job.uses === undefined) {
-    const expected = pinnedHostedJobs.get(name) === id ? "ubuntu-24.04" : hosted;
-    expect(job["runs-on"], `${label} uses literal ${expected}`).toBe(expected);
+    if (name === "ci.yml" && id === "kit-browser-calendar") {
+      expect(job["runs-on"], `${label} uses the approved Boat selector`).toBe(calendarRunner);
+    } else if (name === "e2e.yml" && id === "browser-smoke") {
+      expect(job["runs-on"], `${label} uses the approved 2-vCPU selector`).toBe(browserSmokeRunner);
+    } else if (blacksmithJobs.get(name)?.includes(id)) {
+      expect(job["runs-on"], `${label} uses the same-repository 2-vCPU selector`).toBe(
+        blacksmithRunner,
+      );
+    } else {
+      const expected = pinnedHostedJobs.get(name) === id ? "ubuntu-24.04" : hosted;
+      expect(job["runs-on"], `${label} uses literal ${expected}`).toBe(expected);
+    }
   } else {
     expect(job, `${label} is a reusable call without a local runner`).not.toHaveProperty("runs-on");
     const target = job.uses.match(localCall)?.[1];
@@ -84,18 +142,24 @@ function expectHostedJob(name: string, id: string, job: Job) {
       // GitHub matches reusable-workflow inputs case-insensitively.
       const inputs = Object.entries(job.with ?? {});
       const overrides = inputs.filter(([key]) => key.toLowerCase() === input);
-      if (org?.startsWith("review-rules.yml@")) {
+      if (sizeGate || org?.startsWith("review-rules.yml@")) {
         expect(overrides, `${label} needs explicit ${input}`).not.toHaveLength(0);
       }
       for (const [key, value] of overrides) {
-        expect(value, `${label} overrides ${key} only with hosted Linux`).toBe(hostedJson);
+        expect(value, `${label} overrides ${key} only with its approved runner`).toBe(
+          sizeGate ? sizeGateRunner : hostedJson,
+        );
       }
     }
+  }
+  if (sizeGate) {
+    expect(job.with?.["runs-on"], `${label} routes the pinned reusable gate`).toBe(sizeGateRunner);
   }
   for (const inputs of [job.with, ...(job.steps ?? []).map((step) => step.with)]) {
     for (const [key, value] of Object.entries(inputs ?? {})) {
       const input = key.toLowerCase();
       if (input === "runs-on" || input === "runs-on-json") {
+        if (sizeGate && input === "runs-on" && inputs === job.with) continue;
         expect([JSON.stringify(hosted), hostedJson], `${label} input ${key}`).toContain(value);
       }
     }
@@ -140,7 +204,7 @@ describe("workflow runner labels", () => {
     expect(release.match(/^          runs-on-json: '"ubuntu-latest"'$/gm)).toHaveLength(4);
   });
 
-  it("keeps every main CI job hosted for public and private branch dispatches", () => {
+  it("pins every main CI job to its PR selector and GitHub fallback", () => {
     const workflow = workflows.find(({ name }) => name === "ci.yml");
     expect(workflow).toBeDefined();
     const ciJobs = directJobs(workflow!.source);
@@ -166,9 +230,8 @@ describe("workflow runner labels", () => {
       "ci-ok",
     ]);
     for (const { id, runsOn } of ciJobs) {
-      // An unconditional selector also covers private workflow_dispatch on a
-      // non-main branch, which the former PR-only guard did not cover.
-      expect(runsOn, `ci.yml job ${id}`).toBe(hosted);
+      const expected = id === "kit-browser-calendar" ? calendarRunner : blacksmithRunner;
+      expect(runsOn, `ci.yml job ${id}`).toBe(expected);
     }
     expect(events(workflow!.source.on)).toContain("workflow_dispatch");
   });
@@ -191,7 +254,7 @@ describe("workflow runner labels", () => {
       ],
       ["deploy.yml", ["deploy-staging"]],
       ["gradual-promote-proof.yml", ["proof"]],
-      ["pr-gates.yml", ["pr-lint", "gitleaks"]],
+      ["pr-ci-admission.yml", ["evidence"]],
       ["staging-rollback-drill.yml", ["plan", "verdict"]],
     ] as const) {
       const workflow = workflows.find((entry) => entry.name === name);
@@ -293,7 +356,7 @@ describe("workflow runner labels", () => {
     }
   });
 
-  it("requires the literal hosted runner or an assessed reusable call for every job", () => {
+  it("requires an approved runner or an assessed reusable call for every job", () => {
     for (const { name, source } of workflows) {
       for (const [id, job] of Object.entries(source.jobs)) expectHostedJob(name, id, job);
     }
@@ -309,6 +372,7 @@ describe("workflow runner labels", () => {
     ["a runner group", "runs-on: {group: private, labels: ubuntu-latest}"],
     ["an ARM runner", "runs-on: ubuntu-24.04-arm"],
     ["a larger runner", "runs-on: ubuntu-24.04-16core"],
+    ["the calendar selector on another job", `runs-on: ${calendarRunner}`],
     ["a variable selector", "runs-on: ${{ vars.CI_OVERFLOW_RUNNER }}"],
     [
       "a visibility selector",
@@ -325,12 +389,37 @@ describe("workflow runner labels", () => {
   it("requires fixed runner labels for the pinned jobs only", () => {
     const fixed = { "runs-on": "ubuntu-24.04" };
     const latest = { "runs-on": hosted };
-    expect(() => expectHostedJob("e2e.yml", "browser-smoke", fixed)).not.toThrow();
-    expect(() => expectHostedJob("e2e.yml", "browser-smoke", latest)).toThrow(
+    expect(() => expectHostedJob("xfs-qualification.yml", "fixture", fixed)).not.toThrow();
+    expect(() => expectHostedJob("xfs-qualification.yml", "fixture", latest)).toThrow(
       "uses literal ubuntu-24.04",
     );
     expect(() => expectHostedJob("fixture.yml", "check", fixed)).toThrow(
       "uses literal ubuntu-latest",
+    );
+  });
+
+  it("limits 2-vCPU placement to the approved jobs and keeps the smoke OS pinned", () => {
+    const optIn = { "runs-on": browserSmokeRunner };
+    expect(() => expectHostedJob("e2e.yml", "browser-smoke", optIn)).not.toThrow();
+    expect(() => expectHostedJob("e2e.yml", "browser-smoke", { "runs-on": hosted })).toThrow(
+      "uses the approved 2-vCPU selector",
+    );
+    expect(() => expectHostedJob("e2e.yml", "scope", optIn)).toThrow(
+      "uses the same-repository 2-vCPU selector",
+    );
+    expect(() => expectHostedJob("fixture.yml", "check", { "runs-on": blacksmithRunner })).toThrow(
+      "uses literal ubuntu-latest",
+    );
+  });
+
+  it("allows the JSON 2-vCPU selector on the required size gate only", () => {
+    const gate = workflows.find(({ name }) => name === "pr-size.yml")!.source.jobs["pr-size-gate"]!;
+    expect(() => expectHostedJob("pr-size.yml", "pr-size-gate", gate)).not.toThrow();
+    expect(() => expectHostedJob("pr-size.yml", "pr-size-gate", { ...gate, with: {} })).toThrow(
+      "needs explicit runs-on",
+    );
+    expect(() => expectHostedJob("pr-size.yml", "pr-size", gate)).toThrow(
+      "overrides runs-on only with its approved runner",
     );
   });
 
@@ -351,7 +440,7 @@ describe("workflow runner labels", () => {
     ] as const) {
       expect(() =>
         expectHostedJob("fixture.yml", "call", { uses, with: { [key]: value } }),
-      ).toThrow(`overrides ${key} only with hosted Linux`);
+      ).toThrow(`overrides ${key} only with its approved runner`);
     }
     expect(() =>
       expectHostedJob("fixture.yml", "direct", {

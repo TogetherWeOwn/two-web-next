@@ -47,6 +47,7 @@ import {
   setPassword,
   webRoles,
 } from "./fixtures/db-restore-replay/seed.mjs";
+import { assertServingPostcheckRollback } from "./fixtures/db-restore-replay/serving-postcheck-case.mjs";
 import {
   prepareServingIsolation,
   probeServingLedger,
@@ -248,6 +249,38 @@ const run = (connect, direction, before, after) => {
   );
 };
 
+async function rehearseSnapshotWriterRefusal(connect, repair, pre) {
+  const rollback = new Error("discard synthetic snapshot write");
+  await withClient(connect(app), async (writer) => {
+    // The completed INSERT holds its row-write lock until begin() rolls back.
+    // Keep the checks inside the callback so the writer cannot finish early.
+    await assert.rejects(
+      writer.begin(async (tx) => {
+        await assertLogin(tx, app, "postgres");
+        const inserted = await tx`insert into public.discord_event_snapshots (id) values (1)`;
+        assert.equal(inserted.count, 1);
+        await assert.rejects(repair("forward"), (error) => {
+          assert.equal(error.code, "55P03");
+          assert.ok(
+            error.message === "canceling statement due to lock timeout",
+            "Expected PostgreSQL to time out waiting for the snapshot lock",
+          );
+          return true;
+        });
+        const refused = await inspect(connect);
+        assert.deepEqual(refused.state.ledger, pre.state.ledger);
+        assert.equal(refused.digest, pre.digest);
+        throw rollback;
+      }),
+      (error) => error === rollback,
+    );
+  });
+  await withClient(connect(executor), async (sql) => {
+    const rows = await sql`select id from public.discord_event_snapshots`;
+    assert.equal(rows.length, 0);
+  });
+}
+
 const originalEnd = "1033_session-roles-checked-at";
 const expansion = [
   "1034_event-echoes",
@@ -403,7 +436,23 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
   const readiness = await probe(base, false);
   t.diagnostic("Web, Jobs and both Bot logins passed on the repaired 1033 baseline.");
   const forward = { readiness: { ...readiness, revision: { version_id: version } } };
-  assert.equal(await isolate("forward", forward), "committed");
+  await t.test("failed serving postcheck rolls back ACLs and allows a clean retry", () =>
+    assertServingPostcheckRollback({
+      admin: restore.admin,
+      login: app,
+      isolate,
+      forward,
+      readAclState: async () => ({
+        repair: await inspect(fresh),
+        grants: await readRelationGrants(fresh, originalObjects),
+        roles: await roles(),
+      }),
+      probeBefore: () => probe(base, false),
+      retryForward: async () => {
+        assert.equal(await isolate("forward", forward), "committed");
+      },
+    }),
+  );
   const { digest: isolatedDigest } = await inspect(fresh);
   await assertDuplicateRefused("forward", forward);
   assert.equal(
@@ -555,13 +604,18 @@ test("PostgreSQL 18 branch replay preserves repair and Bot scope with alternate 
       "Seeded ADMIN permits alternate replay and fresh SCRAM logins. The original grantor is still denied.",
     );
 
-    phase = "forward, exact undo and revoke";
+    phase = "refuse repair during a snapshot write";
     const unprovisioned = await inspect(connect);
     assert.deepEqual(namedRepairScope(unprovisioned), namedRepairScope(originalRepairState));
     await runAuthority(connect, "provision");
-    const { digest: before } = await inspect(connect);
+    const pre = await inspect(connect);
+    const before = pre.digest;
     const expected = await withClient(connect(executor), expectedForward);
     const repair = (direction) => run(connect, direction, before, expected.digest);
+    await rehearseSnapshotWriterRefusal(fresh, repair, pre);
+    t.diagnostic("Snapshot writer held through the repair lock timeout. PRE and ledger matched.");
+
+    phase = "forward, exact undo and revoke";
     assert.equal(await repair("readback"), "before");
     assert.equal(await repair("forward"), "committed");
     assert.equal(await repair("readback"), "after");

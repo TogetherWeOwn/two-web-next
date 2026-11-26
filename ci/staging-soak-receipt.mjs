@@ -118,9 +118,16 @@ export function validateStagingSoakReceipt(evidence, receipt, { nowMs = Date.now
 }
 
 async function observeServing(base, fetchImpl, now) {
+  let identity;
   try {
-    const identity = await observeStaging({ expected: base.sha, fetchImpl, now });
-    const revision = await readRevision(STAGING_ORIGIN, {
+    identity = await observeStaging({ expected: base.sha, fetchImpl, now });
+  } catch {
+    throw new Error("Staging origin identity could not be verified");
+  }
+
+  let revision;
+  try {
+    revision = await readRevision(STAGING_ORIGIN, {
       fetchImpl: async (url, init) => {
         const response = await fetchImpl(url, init);
         const cacheControl = response.headers.get("cache-control")?.toLowerCase().split(",");
@@ -134,15 +141,16 @@ async function observeServing(base, fetchImpl, now) {
         return response;
       },
     });
-    if (
-      identity.deployedAt !== base.deployedAt ||
-      revision?.commit !== base.sha ||
-      revision?.version_id !== base.workerVersion
-    ) {
-      throw new Error("Staging serving identity does not match the deployment");
-    }
   } catch {
-    throw new Error("Staging serving identity or readiness could not be verified");
+    throw new Error("Staging readiness contract could not be verified");
+  }
+
+  if (
+    identity.deployedAt !== base.deployedAt ||
+    revision?.commit !== base.sha ||
+    revision?.version_id !== base.workerVersion
+  ) {
+    throw new Error("Staging serving deployment or version mismatch");
   }
 }
 

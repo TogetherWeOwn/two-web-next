@@ -275,7 +275,14 @@ export async function assertRollbackDrillGreen({ repository, token, fetchImpl = 
   );
   if (response.status === 404) return null;
   if (!response.ok) throw new Error(`Rollback drill lookup failed (HTTP ${response.status})`);
-  const runs = ((await response.json()).workflow_runs ?? []).filter(
+  const history = (await response.json())?.workflow_runs;
+  if (!Array.isArray(history)) {
+    throw new Error("Malformed rollback drill response: expected workflow_runs array");
+  }
+  if (history.some((run) => !Number.isSafeInteger(run?.id) || run.id <= 0)) {
+    throw new Error("Malformed rollback drill response: invalid run ID");
+  }
+  const runs = history.filter(
     (run) => run.conclusion !== "cancelled" && run.conclusion !== "skipped",
   );
   if (!runs.length) return null;
