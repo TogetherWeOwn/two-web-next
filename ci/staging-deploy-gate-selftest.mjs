@@ -1061,21 +1061,16 @@ test("staging bounds chunked provider replies and cancels unfinished bodies", {
 }, async (t) => {
   for (const { field, source, limit, valid } of rolloutProviderCases) {
     await t.test(source, async () => {
+      const admit = (response) =>
+        requireForwardStaging(stagingGuardEnv, stagingReads({ [field]: response }));
+      const error = { message: `Cannot read ${source} for staging rollout` };
       const prefix = Buffer.from(JSON.stringify(valid));
       const remainder = Buffer.alloc(limit - prefix.byteLength, 0x20);
       const atLimit = stagingProviderStream([prefix, remainder]);
-      assert.equal(
-        await requireForwardStaging(stagingGuardEnv, stagingReads({ [field]: atLimit })),
-        otherSha,
-      );
+      assert.equal(await admit(atLimit), otherSha);
 
       const oversized = stagingProviderStream([prefix, remainder, Buffer.from(" ")]);
-      await assert.rejects(
-        requireForwardStaging(stagingGuardEnv, stagingReads({ [field]: oversized })),
-        {
-          message: `Cannot read ${source} for staging rollout`,
-        },
-      );
+      await assert.rejects(admit(oversized), error);
 
       let cancelled = false;
       const abandoned = stagingProviderStream([prefix, remainder, Buffer.from(" ")], {
@@ -1085,12 +1080,7 @@ test("staging bounds chunked provider replies and cancels unfinished bodies", {
           return new Promise(() => {});
         },
       });
-      await assert.rejects(
-        requireForwardStaging(stagingGuardEnv, stagingReads({ [field]: abandoned })),
-        {
-          message: `Cannot read ${source} for staging rollout`,
-        },
-      );
+      await assert.rejects(admit(abandoned), error);
       assert.equal(cancelled, true);
       assert.equal(abandoned.body.locked, false);
     });
@@ -1102,16 +1092,16 @@ test("staging sanitizes abandoned and malformed provider replies", {
 }, async (t) => {
   for (const { field, source, valid } of rolloutProviderCases) {
     await t.test(source, async (t) => {
+      const admit = (response) =>
+        requireForwardStaging(stagingGuardEnv, stagingReads({ [field]: response }));
       const reason = (error) => {
         assert.equal(error.message, `Cannot read ${source} for staging rollout`);
         assert.equal(error.cause, undefined);
         return true;
       };
-      const malformed = new Response("provider-private invalid JSON");
-      await assert.rejects(
-        requireForwardStaging(stagingGuardEnv, stagingReads({ [field]: malformed })),
-        reason,
-      );
+      await assert.rejects(admit(new Response(null)), reason);
+      await assert.rejects(admit(stagingProviderStream([])), reason);
+      await assert.rejects(admit(new Response("provider-private invalid JSON")), reason);
 
       const deadline = new AbortController();
       t.mock.method(AbortSignal, "timeout", () => deadline.signal);
@@ -1137,10 +1127,7 @@ test("staging sanitizes abandoned and malformed provider replies", {
           { highWaterMark: 0 },
         ),
       );
-      await assert.rejects(
-        requireForwardStaging(stagingGuardEnv, stagingReads({ [field]: response })),
-        reason,
-      );
+      await assert.rejects(admit(response), reason);
       assert.equal(cancelled, true);
       assert.equal(response.body.locked, false);
     });
@@ -1156,13 +1143,13 @@ test("staging admits the same SHA or a forward candidate independent of the main
     ],
     annotations: { "workers/message": "é".repeat(500) },
   }));
-  const addedLine = `+${"x".repeat(100)}\n`;
+  const addedLine = `+${"x".repeat(170)}${"\\".repeat(22)}\n`;
   const compare = {
     ...forward,
     commits: [{ sha: "d".repeat(40) }],
     files: Array.from({ length: 300 }, (_, index) => ({
       filename: `synthetic-${index}.txt`,
-      patch: `@@ -0,0 +1,30 @@\n${addedLine.repeat(30)}`,
+      patch: `@@ -0,0 +1,100 @@\n${addedLine.repeat(100)}`,
     })),
   };
   assert.equal(

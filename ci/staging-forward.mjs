@@ -8,8 +8,8 @@ import { isSha } from "./staging-provenance.mjs";
 // message of up to 1,000 bytes. Allow for JSON escaping and version metadata.
 const DEPLOYMENT_RESPONSE_BYTES = 1024 * 1024;
 // GitHub compare returns one commit with per_page=1, but its first page can
-// include 300 changed files and patches. Leave room for 1 MiB of raw diff
-// (GitHub's documented PR diff size), JSON escaping, and commit/file metadata.
+// include 300 changed files and patches. GitHub documents no compare byte
+// ceiling. Allow 8 MiB for the patches, JSON escaping, and commit/file metadata.
 const ANCESTRY_RESPONSE_BYTES = 8 * 1024 * 1024;
 
 async function readProviderJson(response, signal, maxBytes) {
