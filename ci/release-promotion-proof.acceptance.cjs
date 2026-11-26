@@ -74,6 +74,7 @@ function refused(f, result, before) {
 }
 
 test("promotion proof requires complete listings with exact identities", async (t) => {
+  const firstUnsafeId = "9007199254740992";
   const listings = [
     ["workflow_runs", "runs", false, { event: "push" }],
     ["jobs", "jobs", true, { name: "unrelated job" }],
@@ -90,7 +91,7 @@ test("promotion proof requires complete listings with exact identities", async (
         const before = f.git("show-ref", "--tags");
         if (identity === "missing") delete row.id;
         if (identity === "duplicate") row.id = String(row.id);
-        if (identity === "out-of-range") row.id = "9007199254740993";
+        if (identity === "out-of-range") row.id = firstUnsafeId;
         rows.push(row);
 
         const result = f.run({ hints });
@@ -122,7 +123,7 @@ test("promotion proof requires complete listings with exact identities", async (
     const f = fixture(t);
     const before = f.git("show-ref", "--tags");
     for (const selector of ["PROMOTION_RUN_ID", "PROMOTION_RUN_ATTEMPT"]) {
-      const result = f.run({ extraEnv: { [selector]: "9007199254740993" } });
+      const result = f.run({ extraEnv: { [selector]: firstUnsafeId } });
       refused(f, result, before);
       assert.match(result.stderr, /both run and attempt selectors must be positive decimal IDs/);
       assert.equal(result.calls.length, 1, "only the workflow identity was read");
