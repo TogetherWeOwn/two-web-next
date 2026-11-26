@@ -1431,15 +1431,35 @@ test("compatibility reads only the migrations the target adds since the rollback
   assert.deepEqual(seen.sql, ["1001_b", "1002_c"]);
 });
 
+const boundarySqlPrefix = "SELECT 1; --";
+const sqlAtByteLimit = `${boundarySqlPrefix}${"é".repeat((64 * 1024 - boundarySqlPrefix.length) / 2)}`;
+
+test("compatibility accepts a migration at the exact byte limit", async () => {
+  assert.equal(Buffer.byteLength(sqlAtByteLimit), 65_536);
+  const result = await rollbackCompatibility({
+    repository: "fixture/repo",
+    targetSha: TARGET,
+    previousSha: PREVIOUS,
+    token: "fixture-only",
+    fetchImpl: stubRepo({
+      target: ["1000_a", "1001_b"],
+      previous: ["1000_a"],
+      sql: { "1001_b": sqlAtByteLimit },
+    }),
+  });
+  assert.deepEqual(result, { added: ["1001_b"], unsafe: [] });
+});
+
 test("compatibility cancels an oversized later migration and refuses the whole scan", async () => {
-  const chunk = new TextEncoder().encode(`-- ${"é".repeat(16 * 1024)}\n`);
+  const encoder = new TextEncoder();
+  const chunks = [encoder.encode(sqlAtByteLimit), encoder.encode("\n")];
   let pulls = 0;
   let cancelled = false;
   const body = new ReadableStream(
     {
       pull(controller) {
         pulls += 1;
-        if (pulls <= 2) controller.enqueue(chunk);
+        if (pulls <= chunks.length) controller.enqueue(chunks[pulls - 1]);
         else controller.close();
       },
       cancel() {
@@ -1473,9 +1493,39 @@ test("compatibility cancels an oversized later migration and refuses the whole s
   assert.equal(cancelled, true);
 });
 
-test("compatibility refuses a migration with an invalid UTF-8 tail", async () => {
+test("compatibility refuses an empty migration or an invalid UTF-8 tail", async () => {
   const prefix = new TextEncoder().encode("SELECT 1; -- ");
-  const body = new Uint8Array([...prefix, 0xc3]);
+  for (const body of ["", new Uint8Array([...prefix, 0xc3])]) {
+    await assert.rejects(
+      rollbackCompatibility({
+        repository: "fixture/repo",
+        targetSha: TARGET,
+        previousSha: PREVIOUS,
+        token: "fixture-only",
+        fetchImpl: stubRepo({
+          target: ["1000_a", "1001_b"],
+          previous: ["1000_a"],
+          sql: { "1001_b": new Response(body) },
+        }),
+      }),
+      /Migration 1001_b lookup failed: invalid raw SQL body/,
+    );
+  }
+});
+
+test("compatibility refuses an interrupted migration even after valid SQL arrives", async () => {
+  let pulls = 0;
+  const body = new ReadableStream(
+    {
+      pull(controller) {
+        pulls += 1;
+        if (pulls === 1) controller.enqueue(new TextEncoder().encode("SELECT 1;"));
+        else controller.error(new Error("fixture stream failure"));
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const seen = {};
   await assert.rejects(
     rollbackCompatibility({
       repository: "fixture/repo",
@@ -1483,13 +1533,16 @@ test("compatibility refuses a migration with an invalid UTF-8 tail", async () =>
       previousSha: PREVIOUS,
       token: "fixture-only",
       fetchImpl: stubRepo({
-        target: ["1000_a", "1001_b"],
+        target: ["1000_a", "1001_b", "1002_c"],
         previous: ["1000_a"],
-        sql: { "1001_b": new Response(body) },
+        sql: { "1001_b": new Response(body), "1002_c": 'DROP TABLE "z";' },
+        seen,
       }),
     }),
-    /Migration 1001_b lookup failed: invalid raw SQL body/,
+    { message: "Migration 1001_b lookup failed: invalid raw SQL body" },
   );
+  assert.deepEqual(seen.sql, ["1001_b"]);
+  assert.equal(pulls, 2);
 });
 
 test("an unreadable migration file fails closed", async () => {
