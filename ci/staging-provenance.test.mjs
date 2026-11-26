@@ -87,7 +87,10 @@ test("staging mutation entry requires a verified caller and a successful reserva
   await assert.rejects(unreadable.enter, refusal);
   assert.deepEqual(unreadable.effects, ["read"]);
 
-  const incomplete = instrument(() => undefined, () => true);
+  const incomplete = instrument(
+    () => undefined,
+    () => true,
+  );
   await assert.rejects(incomplete.enter, refusal);
   assert.deepEqual(incomplete.effects, ["read"]);
 
@@ -104,7 +107,10 @@ test("staging mutation entry requires a verified caller and a successful reserva
     assert.deepEqual(unverified.effects, []);
   }
 
-  const ambiguous = instrument(() => null, () => "allow");
+  const ambiguous = instrument(
+    () => null,
+    () => "allow",
+  );
   await assert.rejects(ambiguous.enter, refusal);
   assert.deepEqual(ambiguous.effects, ["read", { record: null, context }]);
 
@@ -113,7 +119,10 @@ test("staging mutation entry requires a verified caller and a successful reserva
   assert.deepEqual(absent.effects, ["read", { record: null, context }, "proceed"]);
 
   const expiredLease = { ...activeLease, expiresAt: new Date(now).toISOString() };
-  const expired = instrument(() => expiredLease, () => true);
+  const expired = instrument(
+    () => expiredLease,
+    () => true,
+  );
   await expired.enter();
   assert.deepEqual(expired.effects, ["read", { record: expiredLease, context }, "proceed"]);
 });
