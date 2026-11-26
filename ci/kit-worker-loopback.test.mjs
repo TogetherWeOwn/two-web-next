@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { startLoopbackWorker, unusedPort, waitForHttpReady } from "./kit-worker-loopback.mjs";
+import * as launcher from "./kit-worker-loopback.mjs";
 
 const loopback = "127.0.0.1";
 const wrangler = fileURLToPath(new URL("../web/node_modules/.bin/wrangler", import.meta.url));
@@ -29,13 +29,19 @@ test("pinned Wrangler recovers from an occupied loopback port", async () => {
   }).listen(0, loopback);
   try {
     await once(occupied, "listening");
-    const main = join(scratch, "worker.mjs");
     const config = join(scratch, "wrangler.json");
-    await writeFile(main, "export default { fetch: (_, env) => new Response(env.APP_URL) };\n");
+    await writeFile(
+      join(scratch, "worker.mjs"),
+      `let requests = 0;
+export default { fetch: (_, env) => new Response(env.APP_URL, {
+  headers: { "x-fixture-requests": String(++requests) },
+}) };
+`,
+    );
     const { port } = occupied.address();
     let selected = 0;
-    const selectPort = () => (selected++ === 0 ? port : unusedPort());
-    const worker = await startLoopbackWorker(
+    const selectPort = () => (selected++ === 0 ? port : launcher.unusedPort());
+    const worker = await launcher.startLoopbackWorker(
       "collision-proof",
       async (port, origin) => {
         if (workers.length > 0) assert.equal(workers[0].stopped, true);
@@ -43,7 +49,7 @@ test("pinned Wrangler recovers from an occupied loopback port", async () => {
           config,
           JSON.stringify({
             name: "two-web-bind-collision-proof",
-            main,
+            main: "worker.mjs",
             compatibility_date: "2026-09-29",
             vars: { APP_URL: origin },
             dev: { ip: loopback, port, inspector_port: 0 },
@@ -64,14 +70,15 @@ test("pinned Wrangler recovers from an occupied loopback port", async () => {
       workers,
       { selectPort },
     );
-    const probe = waitForHttpReady.bind(null, worker.child, worker.origin, () => worker.log);
-    await assert.rejects(probe(0), /Timed out waiting for/);
-    await probe(worker.deadline);
+    await assert.rejects(launcher.waitForBind(worker, 0), /Timed out waiting for Wrangler to bind/);
+    await assert.rejects(launcher.waitForHttpReady(worker, 0), /Timed out waiting for/);
+    assert.equal(await worker.readiness, null);
     assert.equal(foreignRequests, 0);
     assert.equal(workers.length, 2);
     assert.equal(workers[0].child.exitCode, 1);
     assert.notEqual(worker.origin, `http://${loopback}:${port}`);
     const response = await fetch(`${worker.origin}/favicon.ico`);
+    assert.ok(Number(response.headers.get("x-fixture-requests")) >= 2);
     assert.equal(await response.text(), worker.origin);
   } finally {
     for (const worker of workers.filter(({ stopped }) => !stopped)) worker.child.kill("SIGTERM");
@@ -92,7 +99,7 @@ test("startup reports the final bind collision and never retries other errors", 
   ]) {
     const workers = [];
     await assert.rejects(
-      startLoopbackWorker("synthetic", () => failStartup(message), workers, options),
+      launcher.startLoopbackWorker("synthetic", () => failStartup(message), workers, options),
       (error) =>
         error.message.startsWith("Wrangler dev exited before ready (exit 1)") &&
         error.message.includes(message),

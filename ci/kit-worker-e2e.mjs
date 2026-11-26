@@ -22,7 +22,7 @@ import {
 import { assertEventReadsParity } from "./fixtures/kit-event-reads-parity.mjs";
 import { assertResponseContracts } from "./fixtures/kit-response-contracts.mjs";
 import { assertStaticFeedParity } from "./fixtures/kit-static-feed-parity.mjs";
-import { startLoopbackWorker, tail, waitForHttpReady } from "./kit-worker-loopback.mjs";
+import { startLoopbackWorker, tail } from "./kit-worker-loopback.mjs";
 import { expectedMarkerFor, kitHomeHeadingText } from "./kit-parity-gates.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
 import { FIXTURE_SECRETS } from "./parity/fixture.mjs";
@@ -58,9 +58,15 @@ function requireDisposableDatabase(value) {
   }
 }
 
-function listen(child, origin, getLog) {
-  const { deadline } = workers.find((worker) => worker.child === child);
-  return waitForHttpReady(child, origin, getLog, deadline, startup.signal);
+async function listen(child, origin, getLog) {
+  const { readiness } = workers.find((worker) => worker.child === child);
+  const failure = await readiness;
+  if (failure) throw failure.error;
+  if (child.exitCode !== null || child.signalCode !== null) {
+    throw new Error(
+      `Wrangler dev at ${origin} exited after readiness. Worker output:\n${tail(getLog())}`,
+    );
+  }
 }
 
 requireDisposableDatabase(databaseUrl);
@@ -872,16 +878,20 @@ export default {
     return startWorker(name, entry, directory, secret, vars);
   }
   const honoEntry = join(repo, "src/worker.ts");
-  const honoSessionEntry = args.length
-    ? await prepareAdminPublishFixture(honoEntry, join(scratch, "hono-publish.mjs"))
-    : honoEntry;
-  const kitSessionEntry = args.length
-    ? await prepareAdminPublishFixture(worker, join(scratch, "kit-off-publish.mjs"))
-    : worker;
-  const [honoWithSession, kitWithSession] = await Promise.all([
-    startAdminProbe("hono-session", honoSessionEntry, join(repo, "public")),
-    startAdminProbe("kit-session", kitSessionEntry, assets),
-  ]);
+  const honoWithSession = await startAdminProbe(
+    "hono-session",
+    args.length
+      ? await prepareAdminPublishFixture(honoEntry, join(scratch, "hono-publish.mjs"))
+      : honoEntry,
+    join(repo, "public"),
+  );
+  const kitWithSession = await startAdminProbe(
+    "kit-session",
+    args.length
+      ? await prepareAdminPublishFixture(worker, join(scratch, "kit-off-publish.mjs"))
+      : worker,
+    assets,
+  );
   await Promise.all(
     [honoWithSession, kitWithSession].map((instance) =>
       listen(instance.child, instance.origin, () => instance.log),

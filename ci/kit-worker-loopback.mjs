@@ -6,9 +6,7 @@ import { stripVTControlCharacters } from "node:util";
 const loopback = "127.0.0.1";
 const maxAttempts = 3;
 
-export function tail(value, limit = 4000) {
-  return value.length > limit ? `…${value.slice(-limit)}` : value;
-}
+export const tail = (value) => (value.length > 4000 ? `…${value.slice(-4000)}` : value);
 
 export async function unusedPort() {
   const server = createServer().listen(0, loopback);
@@ -52,7 +50,7 @@ function trackWorker(name, child, origin, port, workers) {
   return worker;
 }
 
-async function waitForBind(worker, deadline, signal) {
+export async function waitForBind(worker, deadline, signal) {
   const { child, origin } = worker;
   while (!worker.bound && !worker.stopped && Date.now() < deadline) {
     await delay(100, undefined, { signal });
@@ -86,7 +84,13 @@ export async function startLoopbackWorker(
     const worker = trackWorker(name, child, origin, port, workers);
     try {
       await waitForBind(worker, deadline, signal);
-      worker.deadline = deadline;
+      // A paired launch may still be binding. Start HTTP now and pass its
+      // outcome back to the caller without an unhandled rejection.
+      const ready = waitForHttpReady(worker, deadline, signal);
+      worker.readiness = ready.then(
+        () => null,
+        (error) => ({ error }),
+      );
       return worker;
     } catch (error) {
       const collision = `Address already in use (${loopback}:${port}). Please check that you are not already running a server on this address or specify a different port with --port.`;
@@ -106,14 +110,15 @@ export async function startLoopbackWorker(
   }
 }
 
-export async function waitForHttpReady(child, origin, getLog, deadline, signal) {
+export async function waitForHttpReady(worker, deadline, signal) {
+  const { child, origin } = worker;
   const exited = () => child.exitCode !== null || child.signalCode !== null;
   let lastStatus = "no response";
   while (Date.now() < deadline) {
     signal?.throwIfAborted();
     if (exited()) {
       throw new Error(
-        `Wrangler dev exited before ready (exit ${child.exitCode ?? child.signalCode}). Worker output:\n${tail(getLog())}`,
+        `Wrangler dev exited before ready (exit ${child.exitCode ?? child.signalCode}). Worker output:\n${tail(worker.log)}`,
       );
     }
     const timeout = AbortSignal.timeout(Math.max(1, Math.min(1_000, deadline - Date.now())));
@@ -132,6 +137,6 @@ export async function waitForHttpReady(child, origin, getLog, deadline, signal) 
     if (remaining > 0) await delay(Math.min(250, remaining), undefined, { signal });
   }
   throw new Error(
-    `Timed out waiting for ${origin}/favicon.ico (${lastStatus}). Worker output:\n${tail(getLog())}`,
+    `Timed out waiting for ${origin}/favicon.ico (${lastStatus}). Worker output:\n${tail(worker.log)}`,
   );
 }
