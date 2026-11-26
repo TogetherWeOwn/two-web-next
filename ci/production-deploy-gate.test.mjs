@@ -1600,6 +1600,11 @@ test("promotion callers require a complete e2e-staging history", async (t) => {
     "count decreases to match the returned rows": [{ ...firstPage, total_count: 102 }, lastPage],
     "a repeated run from an earlier page": [firstPage, { ...lastPage, workflow_runs: [filler[0]] }],
     "a missing run ID": [firstPage, { ...lastPage, workflow_runs: [{}] }],
+    "a zero run ID": [firstPage, { ...lastPage, workflow_runs: [{ id: 0 }] }],
+    "an unsafe run ID": [
+      firstPage,
+      { ...lastPage, workflow_runs: [{ id: Number.MAX_SAFE_INTEGER + 1 }] },
+    ],
     "a missing count": [{ workflow_runs: firstPage.workflow_runs }],
     "a string count": [{ ...firstPage, total_count: "101" }],
     "a negative count": [{ total_count: -1, workflow_runs: [] }],
@@ -1761,7 +1766,8 @@ for (const [name, pattern, mutate] of [
     /e2e-staging\.yml run 1 on [0-9a-f]{40} failed or was re-run/,
     (s) => {
       const other = { display_title: `e2e-staging deploy ${"e".repeat(40)}` };
-      for (let id = 500; id > 150; id -= 1) {
+      // Filler IDs stay clear of the candidate's passing run 200.
+      for (let id = 650; id > 300; id -= 1) {
         s["e2e-staging.yml"].push(stagingRun("e2e-staging.yml", id, other));
       }
       s["e2e-staging.yml"].push(stagingRun("e2e-staging.yml", 1, { conclusion: "failure" }));
