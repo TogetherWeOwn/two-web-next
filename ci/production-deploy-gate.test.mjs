@@ -2172,7 +2172,12 @@ test("production journal reads retain tags and timestamps at both commits", asyn
         entries: entries.map((entry, idx) => ({ ...entry, idx, version: "7", breakpoints: true })),
       };
       const encoded = Buffer.from(JSON.stringify(journal)).toString("base64");
-      return Response.json({ encoding: "base64", content: encoded.match(/.{1,60}/g).join("\n") });
+      const envelope = JSON.stringify({
+        encoding: "base64",
+        content: encoded.match(/.{1,60}/g).join("\n"),
+      });
+      // The ASCII envelope and its JSON whitespace occupy one byte per character.
+      return new Response(entries === target ? envelope.padEnd(256 * 1024, " ") : envelope);
     },
   });
   assert.deepEqual(result, { target, live });
@@ -2183,16 +2188,16 @@ test("production journal reads cancel an oversized Contents stream", async () =>
   const targetSha = "a".repeat(40);
   const liveSha = "b".repeat(40);
   const journal = { encoding: "base64", content: Buffer.from('{"entries":[]}').toString("base64") };
-  const padding = Buffer.alloc(64 * 1024, " ");
+  const envelope = Buffer.from(JSON.stringify(journal));
+  // Trailing JSON whitespace makes the response valid at the limit and one byte over.
+  const chunks = [envelope, Buffer.alloc(256 * 1024 - envelope.length, " "), Buffer.from(" ")];
   let pulls = 0;
   let cancelled = false;
   const body = new ReadableStream(
     {
       pull(controller) {
-        pulls += 1;
-        // Trailing JSON whitespace keeps the complete oversized response valid.
-        if (pulls === 1) controller.enqueue(Buffer.from(JSON.stringify(journal)));
-        else if (pulls <= 8) controller.enqueue(padding);
+        const chunk = chunks[pulls++];
+        if (chunk) controller.enqueue(chunk);
         else controller.close();
       },
       cancel() {
@@ -2216,9 +2221,39 @@ test("production journal reads cancel an oversized Contents stream", async () =>
     }),
     /Migration journal response exceeds 262144 bytes/,
   );
-  assert.equal(pulls, 5);
+  assert.equal(pulls, 3);
   assert.equal(cancelled, true);
   assert.equal(body.locked, false);
+});
+
+test("production journal reads reject missing and malformed Contents bodies", async () => {
+  const targetSha = "a".repeat(40);
+  const liveSha = "b".repeat(40);
+  for (const [body, error] of [
+    [null, /Migration journal lookup returned no body/],
+    ["", SyntaxError],
+    ["{", SyntaxError],
+    [
+      JSON.stringify({ encoding: "base64", content: Buffer.from("{}").toString("base64") }),
+      /Invalid migration journal/,
+    ],
+  ]) {
+    await assert.rejects(
+      productionJournalEntries({
+        repository: "fixture/repo",
+        targetSha,
+        liveSha,
+        token: "fixture-only",
+        fetchImpl: async (url) => {
+          const ref = new URL(url).searchParams.get("ref");
+          if (ref === targetSha) return new Response(body);
+          assert.equal(ref, liveSha);
+          return Response.json({ content: '{"entries":[]}' });
+        },
+      }),
+      error,
+    );
+  }
 });
 
 test("pending migration lookup compares journals at both commits and passes on unknown live", async () => {
