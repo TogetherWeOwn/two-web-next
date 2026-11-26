@@ -8,9 +8,9 @@ shard reports and enforces the repository's coverage thresholds. The separate
 
 `check`, `coverage-shard`, and `coverage-merge` use the included 2-vCPU
 Blacksmith runner on same-repository pull requests when `CI_BLACKSMITH_2VCPU`
-is set to `blacksmith-2vcpu-ubuntu-2404`. They use GitHub-hosted `ubuntu-latest`
-for other events or when the variable is unset or has any other value. The
-selector is covered by [`test/workflow-runners.test.ts`](../test/workflow-runners.test.ts).
+is set to `blacksmith-2vcpu-ubuntu-2404`. Fork pull requests, other events,
+and runs with the variable unset or set to another value use GitHub-hosted
+`ubuntu-latest`. See [`test/workflow-runners.test.ts`](../test/workflow-runners.test.ts).
 
 ## Budgets
 
