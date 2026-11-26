@@ -10,7 +10,9 @@ export async function acquireStagingReservation(
   { verified, proposed },
   { parseLease, inMutationLane, observeAllocation, now, reservationStore },
 ) {
-  const lease = parseLease(proposed);
+  // Write exactly the copy that was parsed and matched, never a second read of the input.
+  const record = { ...proposed };
+  const lease = parseLease(record);
   if (
     verified?.sha !== lease.sha ||
     verified?.allocationId !== lease.allocationId ||
@@ -18,7 +20,6 @@ export async function acquireStagingReservation(
   ) {
     return "unverified-lease";
   }
-  const record = { ...proposed };
 
   return inMutationLane(async () => {
     const observed = await observeAllocation();

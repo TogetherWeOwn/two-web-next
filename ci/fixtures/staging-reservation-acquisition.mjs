@@ -19,10 +19,12 @@ const allocation = { sha: verified.sha, allocationId: verified.allocationId };
 function fixture(request = { verified, proposed }) {
   const observations = [];
   const writes = [];
+  const parsed = [];
   let held = false;
   const adapters = {
     parseLease(record) {
       assert.deepEqual(record, proposed);
+      parsed.push(record);
       return { ...verified, issuedAtMs, expiresAtMs };
     },
     async inMutationLane(callback) {
@@ -48,6 +50,7 @@ function fixture(request = { verified, proposed }) {
         assert.equal(held, true);
         assert.equal(observations.length, 1);
         assert.equal(expected, null);
+        assert.equal(replacement, parsed.at(-1));
         if (state.current !== null) return false;
         state.current = replacement;
         writes.push(replacement);
@@ -61,6 +64,7 @@ function fixture(request = { verified, proposed }) {
     current: null,
     observations,
     writes,
+    parsed,
     adapters,
     acquire: () => acquireStagingReservation(request, adapters),
   };
@@ -72,6 +76,28 @@ test("staging acquisition commits the verified lease from inside the mutation la
   assert.equal(await state.acquire(), "acquired");
   assert.deepEqual(state.writes, [proposed]);
   assert.deepEqual(state.current, proposed);
+  assert.equal(state.writes[0], state.parsed[0]);
+  assert.notEqual(state.writes[0], proposed);
+});
+
+test("staging acquisition writes the parsed copy, not a second read of the proposal", async () => {
+  let reads = 0;
+  const shifting = {
+    ...proposed,
+    get sha() {
+      reads += 1;
+      return reads === 1 ? verified.sha : "b".repeat(40);
+    },
+  };
+  const state = fixture({ verified, proposed: shifting });
+  state.adapters.parseLease = (record) => {
+    state.parsed.push(record);
+    return { ...record, issuedAtMs, expiresAtMs };
+  };
+  assert.equal(await state.acquire(), "acquired");
+  assert.equal(state.writes[0], state.parsed[0]);
+  assert.equal(state.current.sha, verified.sha);
+  assert.equal(reads, 1);
 });
 
 test("staging acquisition refuses a changed allocation even when the staged SHA is unchanged", async () => {
