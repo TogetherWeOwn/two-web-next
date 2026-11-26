@@ -1,6 +1,9 @@
 # guards: release: exact-main commit lint and full-history scan (required on PRs: pr-lint, gitleaks)
 # guards: metadata-edit: pr-lint
 name: pr-gates
+run-name: >-
+  ${{ github.event.action == 'edited' && !github.event.changes.base &&
+      (github.event.changes.title != null || github.event.changes.body != null) && 'pr-gates metadata lint' || 'pr-gates' }}
 
 # Lightweight PR gates: PR-title lint + full-history secret scan in ONE
 # workflow with sequential jobs, so a PR push occupies one runner slot at a

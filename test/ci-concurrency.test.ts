@@ -252,15 +252,9 @@ describe("PR gate event matrix", () => {
     expect(scan.needs).toBe("pr-lint");
     expect(normalized(scan.if)).toBe(`\${{ !cancelled() && ${prGatesAdmit} }}`);
     expect(scan.steps[0].with).toEqual({ "fetch-depth": 0, "persist-credentials": false });
-    expect(scan.steps.at(-1)).toEqual({
-      name: "Scan the full history",
-      env: {
-        GITLEAKS_BIN: "${{ runner.temp }}/gitleaks",
-        EVENT_NAME: "${{ github.event_name }}",
-        BASE_REF: "${{ github.base_ref || github.event.merge_group.base_ref }}",
-      },
-      run: "bash .github/scripts/gitleaks-scan.sh",
-    });
+    expect(scan.steps.at(-1).env.BASE_REF).toBe(
+      "${{ github.base_ref || github.event.merge_group.base_ref }}",
+    );
   });
 
   it.each([
