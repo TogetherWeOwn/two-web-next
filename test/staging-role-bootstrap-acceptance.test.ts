@@ -57,9 +57,11 @@
 // URLs built from the live infrastructure pins, no live database, no
 // network, no workflow dispatch, no secret or environment changes.
 import { spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import postgres from "postgres";
 import { describe, expect, it, vi } from "vitest";
 // @ts-expect-error Standalone CI tooling has no declaration file.
 import * as dbMigratePins from "../ci/db-migrate.mjs";
@@ -700,6 +702,69 @@ describe("bootstrap orchestration over an injected client", () => {
       },
     );
   });
+
+  it.each([false, true])(
+    "detects whether postgres.js forced shutdown (forced: %s)",
+    async (forced) => {
+      const bootstrap = await bootstrapModule();
+      const ready = Buffer.from("5a0000000549", "hex"); // ReadyForQuery, idle
+      const startup = Buffer.concat([Buffer.from("520000000800000000", "hex"), ready]);
+      // A single boolean column with has_memberships=false is enough for this
+      // wire fixture. The full attribute contract is exercised above.
+      const result = Buffer.concat([
+        Buffer.from("54000000280001", "hex"), // RowDescription, one column
+        Buffer.from("has_memberships\0"),
+        Buffer.from("000000000000000000100001ffffffff0000", "hex"), // bool OID 16, text
+        Buffer.from("440000000b00010000000166", "hex"), // DataRow, false
+        Buffer.from("430000000d53454c454354203100", "hex"), // CommandComplete, SELECT 1
+        ready,
+      ]);
+      const socket = Object.assign(new EventEmitter(), {
+        negotiated: true,
+        write(data: Uint8Array) {
+          queueMicrotask(() => socket.emit("data", data[0] === 0x51 ? result : startup));
+          return true;
+        },
+        end: vi.fn(() => {
+          if (!forced) queueMicrotask(() => socket.emit("close"));
+        }),
+        destroy: vi.fn(() => socket.emit("close")),
+        pause: vi.fn(),
+        resume: vi.fn(),
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const stdout = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        const run = bootstrap.runBootstrap(
+          { [SECRET_NAME]: stagingUrl() },
+          {
+            createClient: (href, options) =>
+              postgres(href, { ...options, fetch_types: false, socket: () => socket }),
+          },
+        );
+        const outcome = run.catch((error: unknown) => error);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(socket.end).toHaveBeenCalledOnce();
+        expect(socket.destroy).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(socket.destroy).toHaveBeenCalledTimes(forced ? 1 : 0);
+        const evidence = { outcome: "present", role: ROLE_NAME, ddlIssued: false };
+        if (forced) {
+          expect(await outcome).toMatchObject({
+            message: "Bootstrap verified the role before connection close failed.",
+          });
+        } else {
+          expect(await outcome).toEqual(evidence);
+        }
+        expect(stdout.mock.calls).toEqual([
+          [JSON.stringify(forced ? { ...evidence, closeFailed: true } : evidence)],
+        ]);
+      } finally {
+        vi.useRealTimers();
+        stdout.mockRestore();
+      }
+    },
+  );
 });
 
 describe("bootstrap runner secret and connection wiring", () => {

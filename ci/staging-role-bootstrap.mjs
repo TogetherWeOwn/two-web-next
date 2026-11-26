@@ -53,6 +53,7 @@ export const ROLE_STATUS_QUERY =
 export const STATEMENT_TIMEOUT_MS = 30000;
 export const LOCK_TIMEOUT_MS = 10000;
 export const CONNECT_TIMEOUT_SECONDS = 10;
+const CLOSE_TIMEOUT_SECONDS = 5;
 
 export function assertBootstrapDdl(sql) {
   if (sql !== CREATE_ROLE_DDL) {
@@ -248,12 +249,20 @@ export async function runBootstrap(env = process.env, { createClient = postgres 
   try {
     evidence = await bootstrapRole(client);
   } finally {
+    // postgres.js can fulfill end() after forced shutdown. Start this timer
+    // first so it records the deadline before the driver's force-close timer.
+    const deadline = setTimeout(() => {
+      closeFailed = true;
+    }, CLOSE_TIMEOUT_SECONDS * 1000);
     try {
-      await client.end({ timeout: 5 });
+      await client.end({ timeout: CLOSE_TIMEOUT_SECONDS });
     } catch {
       closeFailed = true;
-      if (!evidence) console.warn("Bootstrap connection close failed; database details withheld.");
+    } finally {
+      clearTimeout(deadline);
     }
+    if (closeFailed && !evidence)
+      console.warn("Bootstrap connection close failed; database details withheld.");
   }
   // Only reached after a verified create or no-op. A close failure leaves
   // that database outcome intact while making the CLI run fail distinctly.
