@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -188,6 +188,10 @@ test("local promotion evidence pins the full three-dot diff and rejects changed 
   git("init", "-q", "--initial-branch=main");
   mkdirSync(join(scratch, ".github/workflows"), { recursive: true });
   mkdirSync(join(scratch, "docs"));
+  mkdirSync(join(scratch, "ci"));
+  for (const file of ["promotion-path-local.mjs", "promotion-path.mjs"]) {
+    writeFileSync(join(scratch, "ci", file), "trusted classifier source");
+  }
   writeFileSync(join(scratch, ".github/workflows/old.yml"), "old workflow");
   writeFileSync(join(scratch, "docs/guide.md"), "guide");
   const mergeBase = commit("Common history");
@@ -203,12 +207,13 @@ test("local promotion evidence pins the full three-dot diff and rejects changed 
   const addedHead = commit("Rename a protected path in");
   git("checkout", "-q", "main");
 
-  const baseRepo = { full_name: "TogetherWeOwn/two-web-next" };
+  const baseRepo = { full_name: "TogetherWeOwn/two-web-next", default_branch: "main" };
   const baseMetadata = { ref: "main", sha: mergeBase, repo: baseRepo };
   const classify = (head, alter = (_path, value) => value) => {
     let snapshot = 0;
     return classifyLocalPromotionPath(42, head, {
       git,
+      readSource: (path) => readFileSync(join(scratch, path)),
       read(path) {
         if (path === pull) {
           snapshot++;
@@ -218,7 +223,7 @@ test("local promotion evidence pins the full three-dot diff and rejects changed 
             snapshot,
           );
         }
-        assert.match(path, /^\/git\/ref\/heads\/(main|Main)$/);
+        assert.match(path, /^\/git\/ref\/heads\/(main|Main|release\/stable)$/);
         const ref = `refs/${path.slice("/git/ref/".length)}`;
         return alter(path, { ref, object: { type: "commit", sha: targetTip } }, snapshot);
       },
@@ -230,6 +235,7 @@ test("local promotion evidence pins the full three-dot diff and rejects changed 
     targetRef: "refs/heads/main",
     targetTip,
     reportedBase: mergeBase,
+    defaultRef: "refs/heads/main",
     mergeBase,
     classifierHead: targetTip,
     verdict: "no",
@@ -252,7 +258,7 @@ test("local promotion evidence pins the full three-dot diff and rejects changed 
         classify(ordinaryHead, (path, value, snapshot) =>
           path === pull && snapshot === 2 ? { ...value, base } : value,
         ),
-      /PR or live target changed/,
+      /PR or live branch changed/,
     );
   }
   assert.throws(
@@ -262,7 +268,7 @@ test("local promotion evidence pins the full three-dot diff and rejects changed 
           ? { ...value, object: { ...value.object, sha: mergeBase } }
           : value,
       ),
-    /PR or live target changed/,
+    /PR or live branch changed/,
   );
   assert.throws(
     () =>
@@ -276,6 +282,34 @@ test("local promotion evidence pins the full three-dot diff and rejects changed 
       classify(ordinaryHead, (path, value) =>
         path !== pull ? { ...value, ref: "refs/heads/Main" } : value,
       ),
-    /Missing exact-case target ref/,
+    /Missing exact-case branch ref/,
   );
+  const releaseTarget = (path, value) => {
+    if (path === pull) return { ...value, base: { ...value.base, ref: "release/stable" } };
+    if (path.endsWith("/release/stable")) {
+      return { ...value, object: { ...value.object, sha: mergeBase } };
+    }
+    return value;
+  };
+  const release = classify(ordinaryHead, releaseTarget);
+  assert.equal(release.targetRef, "refs/heads/release/stable");
+  assert.equal(release.targetTip, mergeBase);
+  assert.equal(release.classifierHead, targetTip);
+  assert.throws(
+    () =>
+      classify(ordinaryHead, (path, value, snapshot) =>
+        path.endsWith("/heads/main") && snapshot === 2
+          ? { ...value, object: { ...value.object, sha: mergeBase } }
+          : releaseTarget(path, value),
+      ),
+    /PR or live branch changed/,
+  );
+  git("checkout", "-q", "--detach", mergeBase);
+  assert.throws(
+    () => classify(ordinaryHead),
+    /checkout must match the live upstream default branch/,
+  );
+  git("checkout", "-q", "main");
+  writeFileSync(join(scratch, "ci/promotion-path.mjs"), "dirty classifier source");
+  assert.throws(() => classify(ordinaryHead), /Classifier source differs/);
 });

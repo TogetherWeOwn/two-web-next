@@ -119,9 +119,10 @@ Before merge, require:
    repository into a full-history clone. With `gh` authenticated, run the
    read-only classifier from a clean worktree of the trusted upstream default
    branch using `node ci/promotion-path-local.mjs <pr-number> <full-head-sha>`.
-   The classifier reads PR metadata and the exact-case live target ref before
-   and after checking the local three-dot diff, including both names on
-   renames. Record its trusted revision, PR number, head SHA, target ref and
+   The classifier verifies its source files against the live default-branch
+   commit and rereads that branch, the PR and its exact-case live target
+   after checking the local three-dot diff, including both names on renames.
+   Record its trusted revision, PR number, head SHA, target ref and
    live tip SHA, reported PR base SHA, merge-base SHA and verdict in the PR.
    Use the live target tip for the comparison because the reported PR base
    can lag it. Route a `yes` verdict through T0 review.
