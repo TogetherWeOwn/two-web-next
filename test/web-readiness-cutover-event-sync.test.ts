@@ -1,3 +1,4 @@
+import { setImmediate } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import { probeCutoverEventSync } from "../ci/web-readiness-cutover.mjs";
 
@@ -5,9 +6,13 @@ const discordEventId = "1000000000000000042";
 
 function eventSyncFixture({ claimSucceeds = true, acknowledged = true } = {}) {
   const readback = { state: "succeeded", discord_event_id: discordEventId, acknowledged };
+  let completed = false;
   const runtime = vi.fn(async (sql: TemplateStringsArray, ..._parameters: unknown[]) => {
     if (sql[0].startsWith("INSERT INTO events ")) return [{ id: 42 }];
-    if (sql[0].startsWith("SELECT a.state, e.discord_event_id,")) return [readback];
+    if (sql[0].startsWith("SELECT a.state, e.discord_event_id,")) {
+      if (!completed) throw new Error("Settlement read before completion finished");
+      return [readback];
+    }
     throw new Error("Unexpected query in the event-sync probe");
   });
   const prepareSync = vi.fn(async (eventKey: string, idempotencyKey: string, _now: Date) => ({
@@ -19,8 +24,10 @@ function eventSyncFixture({ claimSucceeds = true, acknowledged = true } = {}) {
   const claimSync = vi.fn(async (attempt: Attempt, _now: Date) =>
     claimSucceeds ? { ...attempt, requestAttempts: 1 } : null,
   );
-  const completeSync = vi.fn<(attempt: Attempt, eventId: string) => Promise<void>>();
-  completeSync.mockResolvedValue(undefined);
+  const completeSync = vi.fn<(attempt: Attempt, eventId: string) => Promise<void>>(async () => {
+    await setImmediate();
+    completed = true;
+  });
   const servingStore = vi.fn(() => ({ prepareSync, claimSync, completeSync }));
   return { runtime, servingStore, prepareSync, claimSync, completeSync, readback };
 }
@@ -51,9 +58,6 @@ it("settles a claimed cutover event and reads back its acknowledged revision", a
   expect(otherParameters).toEqual([]);
   expect(prepareSync).toHaveBeenCalledBefore(claimSync);
   expect(claimSync).toHaveBeenCalledBefore(completeSync);
-  expect(completeSync.mock.invocationCallOrder[0]).toBeLessThan(
-    runtime.mock.invocationCallOrder[1],
-  );
 });
 
 it("rejects an unclaimed cutover event before completing it or reading settlement", async () => {
