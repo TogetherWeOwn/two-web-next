@@ -314,7 +314,7 @@ test("regression check refuses an elevated staging soak error rate and a missing
   );
 });
 
-function versionsApi(pages) {
+function versionsApi(pages, seen = []) {
   return async (url, init) => {
     const parsed = new URL(url);
     assert.equal(
@@ -322,8 +322,11 @@ function versionsApi(pages) {
       `/client/v4/accounts/${ACCOUNT}/workers/scripts/two-web-next/versions`,
     );
     assert.equal(init.headers.authorization, "Bearer fixture-only");
-    const items = pages[Number(parsed.searchParams.get("page")) - 1] ?? [];
-    return { ok: true, json: async () => ({ result: { items } }) };
+    assert.equal(parsed.searchParams.get("per_page"), "100");
+    const page = Number(parsed.searchParams.get("page"));
+    seen.push(page);
+    const items = pages[page - 1] ?? [];
+    return items instanceof Response ? items : Response.json({ result: { items } });
   };
 }
 const version = (id, tag, created_on = "2026-11-01T10:00:00Z") => ({
@@ -880,20 +883,31 @@ test("a passive ledger zip exactly at the size limit is accepted", async () => {
   assert.deepEqual(result, { runId: 9, artifactId: 77 });
 });
 
-test("staging soak sample sums every tagged version over one window", async () => {
+test("legacy staging soak requires complete bounded history across pages", async () => {
   const older = "00000000-0000-4000-8000-000000000000";
+  const nonmatch = "22222222-2222-4222-8222-222222222222";
   const seen = [];
-  const versions = versionsApi([
-    [version(VERSION, SHA, "2026-11-01T11:00:00Z"), version(older, SHA, "2026-11-01T10:00:00Z")],
-  ]);
+  const seenPages = [];
+  const firstPage = [
+    version(VERSION, SHA, "2026-11-01T11:00:00Z"),
+    ...Array.from({ length: 99 }, () => version(nonmatch, `${SHA}-preview`)),
+  ];
+  const lastPage = JSON.stringify({ result: { items: [version(older, SHA)] }, padding: "é" });
+  const pageLimit = 1024 * 1024;
+  const atLimit = lastPage.padEnd(lastPage.length + pageLimit - Buffer.byteLength(lastPage));
   const sums = analytics(500, 2, seen);
-  const sample = await stagingSoakSample(
-    { CLOUDFLARE_ACCOUNT_ID: ACCOUNT, CLOUDFLARE_API_TOKEN: "fixture-only", DEPLOY_SHA: SHA },
-    {
-      fetchImpl: (url, init) => (url.includes("/graphql") ? sums(url, init) : versions(url, init)),
-      nowMs: Date.parse("2026-11-01T12:00:00Z"),
-    },
-  );
+  const readSoak = (last) => {
+    const versions = versionsApi([firstPage, last], seenPages);
+    return stagingSoakSample(
+      { CLOUDFLARE_ACCOUNT_ID: ACCOUNT, CLOUDFLARE_API_TOKEN: "fixture-only", DEPLOY_SHA: SHA },
+      {
+        fetchImpl: (url, init) =>
+          url.includes("/graphql") ? sums(url, init) : versions(url, init),
+        nowMs: Date.parse("2026-11-01T12:00:00Z"),
+      },
+    );
+  };
+  const sample = await readSoak(new Response(atLimit));
   // Each invocation belongs to exactly one version, so one window per version
   // never double-counts: 500 requests and 2 errors on each of the two.
   assert.deepEqual(sample, {
@@ -907,4 +921,46 @@ test("staging soak sample sums every tagged version over one window", async () =
     [older, VERSION],
   );
   assert.equal(seen[0].datetime_geq, "2026-11-01T10:00:00.000Z");
+  assert.deepEqual(seenPages, [1, 2]);
+
+  let pulls = 0;
+  let cancelled = false;
+  const oversized = new Response(
+    new ReadableStream(
+      {
+        pull(controller) {
+          pulls += 1;
+          if (pulls === 1) controller.enqueue(Buffer.from(atLimit));
+          else if (pulls === 2) controller.enqueue(Buffer.from(" "));
+          else controller.close();
+        },
+        cancel() {
+          cancelled = true;
+        },
+      },
+      { highWaterMark: 0 },
+    ),
+    { headers: { "content-length": String(pageLimit) } },
+  );
+  for (const [response, message] of [
+    [oversized, "Staging versions response exceeds the 1 MiB page limit"],
+    [new Response(), "Staging versions response is unreadable or invalid JSON"],
+    [new Response(""), "Staging versions response is unreadable or invalid JSON"],
+    [
+      new Response("fixture-only malformed JSON"),
+      "Staging versions response is unreadable or invalid JSON",
+    ],
+    [
+      Response.json({ result: { items: "fixture-only invalid items" } }),
+      "Staging versions response has no items",
+    ],
+  ]) {
+    seen.length = 0;
+    seenPages.length = 0;
+    await assert.rejects(readSoak(response), { message });
+    assert.deepEqual(seenPages, [1, 2]);
+    assert.deepEqual(seen, []);
+  }
+  assert.equal(pulls, 2);
+  assert.equal(cancelled, true);
 });

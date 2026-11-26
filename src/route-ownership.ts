@@ -50,6 +50,7 @@ import { isTrustedHost } from "./trust-hosts";
 import {
   adminFormPath,
   admitsKitAdmin,
+  isKitAdminRsvpForm,
   kitAdminAdmission,
   KIT_ADMIN_OPS_ROUTES,
   KIT_FEATURED_UNPUBLISH_PATH,
@@ -1209,8 +1210,9 @@ async function dispatchKitAdminRequest(
   // The static endpoint shadows [key] in Kit's route IDs. POST to the
   // bookmark still selects the existing parameterized form controller.
   const formPath =
-    request.method === "POST" &&
-    adminFormPath(url.pathname, legacyCreate ? "/admin/events/[key]" : routeId);
+    request.method === "POST"
+      ? adminFormPath(url.pathname, legacyCreate ? "/admin/events/[key]" : routeId)
+      : undefined;
   if (
     formPath === KIT_FEATURED_UNPUBLISH_PATH &&
     (env.KIT_PARITY_FIXTURE_ADMIN_FEATURED_UNPUBLISH !== "true" ||
@@ -1248,6 +1250,11 @@ async function dispatchKitAdminRequest(
   const originRefused = await sameOrigin(context, async () => {});
   if (originRefused) return finish(originRefused);
   if (operator) return finish(await deps.resolve(event));
+  if (isKitAdminRsvpForm(formPath)) {
+    // The endpoint delegates moderator admission and the write to Hono.
+    event.locals = { ...(event.locals as object), requestId };
+    return finish(await deps.resolve(event));
+  }
 
   const admission = await kitAdminAdmission(context, () => deps.sessionFor?.(event));
   if (admission.kind === "refused") return finish(admission.response);

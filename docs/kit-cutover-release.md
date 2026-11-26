@@ -83,7 +83,7 @@ before the soak finishes leaves the prior candidate unqualified. The isolated
 job exercises the exact packaged bytes, the selected renderer profile and
 its undo.
 
-On pull requests and pushes to `main`, the
+On pull requests that touch its qualification inputs, the
 [XFS qualification job](../.github/workflows/xfs-qualification.yml) runs the
 [installed Worker browser fixture](../ci/fixtures/kit-ember-cutover-browser.mjs).
 It keeps Ember Home open in Chromium while the same loopback origin switches

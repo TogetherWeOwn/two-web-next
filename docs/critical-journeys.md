@@ -1,8 +1,10 @@
 # Critical browser journeys
 
-The browser smoke suite runs **only in GitHub Actions on Linux** (public
-repo: standard GitHub-hosted `ubuntu-latest` runners only — never paid larger
-runners or Blacksmith).
+The browser smoke suite runs **only in GitHub Actions on Linux**.
+The organization opts `browser-smoke` into Blacksmith Ubuntu 24.04 at 2 vCPUs
+through `CI_BLACKSMITH_2VCPU`. Fork pull requests and runs with the variable
+unset use GitHub-hosted `ubuntu-24.04`. The job also uses that image when the
+spending guard sets the variable to `ubuntu-latest`.
 Never install/run Playwright browsers on the controller. `npm run check` only
 checks the specs' types, safety guards and existing Vitest tests; it does not
 launch a browser. The Playwright config, fixture preparation and seeding refuse
@@ -50,7 +52,10 @@ in `ci/kit-parity-gates.mjs`; worker and generated-asset budgets in
 
 ## CI isolation
 
-`.github/workflows/e2e.yml` runs on pull requests, main pushes and manual dispatch.
+`.github/workflows/e2e.yml` runs on pull requests, main pushes, the nightly
+schedule and manual dispatch. It also listens for `merge_group`. The `main`
+merge queue is disabled. Revisit runner routing before enabling it because
+GitHub's merge groups can include changes from fork pull requests.
 It has read-only repository permissions, no deployment environment, and no
 Cloudflare, Discord, staging or production secrets. A new Postgres 17 service
 container is migrated and seeded for each job: `agent_test`, `127.0.0.1:5432`,
@@ -94,7 +99,7 @@ synchronization.
   rendering cases remain ungated in the two featured-unpublish suites. No new
   conditional skip is added. Full SQL verification still needs the disposable
   test database described in the README.
-- On the `ubuntu-latest` runner: `npm run e2e` after prepare, migrations,
+- In `browser-smoke`: `npm run e2e` after prepare, migrations,
   seed and `npx playwright install --with-deps chromium`.
 - Chromium only, one worker, fresh browser context per spec, zero retries.
 - On failure, the job uploads `test-results/` traces/screenshots and the HTML
@@ -122,10 +127,9 @@ against its parent) skips the journeys when the deploy only touches prose
 that no gate, test or build reads, or only the `test/` unit tree the journeys
 never execute; manual dispatches always run. The same verdict also skips the
 two post-deploy smoke steps inside `deploy.yml` itself (the full suite,
-including those tests, already ran in that job). The runner
-is the same `ubuntu-latest` Chromium setup as CI; the difference is the
-target: real Hyperdrive and queues instead of `wrangler dev --local` and the
-disposable Postgres service. The token travels as the `staging` Environment
+including those tests, already ran in that job). The staging journeys use
+GitHub-hosted `ubuntu-latest` with Chromium, real Hyperdrive and queues.
+The token travels as the `staging` Environment
 secret `QA_AUTH_TOKEN` (secret name only here — never a value), masked in logs,
 sent only as the `X-TWO-QA-Auth` header next to an explicit staging `Origin`,
 and never printed or placed in a URL.
