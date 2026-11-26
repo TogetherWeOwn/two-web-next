@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
+import { fileURLToPath } from "node:url";
 import { first, preRollback, soakEnv, trustedReads } from "../test/fixtures/staging-soak-http.mjs";
 import { verifyOrdinaryLedger } from "./check-production-secrets.mjs";
 import { verifyReady, verifyStagingProof } from "./kit-cutover-evidence.mjs";
@@ -48,6 +50,126 @@ const emberUndoVersion = {
     "workers/message": `two-web-cutover-kit:${undoDigest}`,
   },
 };
+
+const readbackSection = "## Ember release input readback";
+const qualificationPin = `21:3:${digest}`;
+const readbackFields = {
+  candidate_sha: sourceSha,
+  candidate_pin: qualificationPin,
+  hono_sha: sourceSha,
+  hono_pin: qualificationPin,
+  hono_serving_version: hono,
+  hono_version_id: hono,
+  hono_tag: `${sourceSha}-99-1`,
+  hono_annotation: undoMessage(digest),
+};
+
+function evidencePacket(fields) {
+  return [
+    "# Release evidence",
+    "",
+    "Historical candidate and private notes go here.",
+    "",
+    readbackSection,
+    "",
+    "```text",
+    ...Object.entries(fields).map(([field, value]) => `${field}=${value}`),
+    "```",
+    "",
+    "### Further release evidence",
+  ].join("\n");
+}
+
+function offlineReadback(input) {
+  const cli = fileURLToPath(new URL("./read-ember-release-evidence.mjs", import.meta.url));
+  return spawnSync(process.execPath, [cli], { input, encoding: "utf8", env: {}, timeout: 5_000 });
+}
+
+function assertReadbackRejected(input) {
+  const result = offlineReadback(input);
+  assert.equal(result.status, 1, result.error?.message);
+  assert.equal(result.stdout, "");
+  assert.equal(
+    result.stderr,
+    "Ember release readback failed. Check the evidence section, candidate pin and Hono undo binding.\n",
+  );
+}
+
+test("offline Ember readback emits only the candidate and bound production undo identifiers", () => {
+  const result = offlineReadback(evidencePacket(readbackFields).replaceAll("\n", "\r\n"));
+  assert.equal(result.status, 0, result.error?.message || result.stderr);
+  assert.equal(result.stderr, "");
+  assert.deepEqual(JSON.parse(result.stdout), {
+    mode: "ember",
+    candidateSha: sourceSha,
+    qualificationPin,
+    honoUndoVersion: hono,
+    undoManifestSha256: digest,
+  });
+});
+
+test("offline Ember readback refuses mismatched, absent and ambiguous evidence without echoing it", () => {
+  const otherSha = "d".repeat(40);
+  const otherEvidence = [
+    { candidate_pin: `21:03:${digest}`, hono_pin: `21:03:${digest}` },
+    { hono_sha: otherSha },
+    { hono_pin: `21:4:${digest}` },
+    { hono_serving_version: kit },
+    { hono_tag: `${otherSha}-99-1` },
+    { hono_annotation: undoMessage(undoDigest) },
+    { hono_annotation: "" },
+    { candidate_sha: "private-note-that-must-not-appear" },
+  ];
+  const packet = evidencePacket(readbackFields);
+  const rejected = [
+    ...otherEvidence.map((changes) => evidencePacket({ ...readbackFields, ...changes })),
+    ...Object.keys(readbackFields).map((absent) =>
+      evidencePacket(
+        Object.fromEntries(Object.entries(readbackFields).filter(([key]) => key !== absent)),
+      ),
+    ),
+    packet.replace(readbackSection, "## Historical candidate"),
+    `${packet}\n${packet}`,
+  ];
+  for (const input of rejected) assertReadbackRejected(input);
+});
+
+test("offline Ember readback ignores archived readbacks in Markdown fences", () => {
+  const previous = evidencePacket({
+    ...readbackFields,
+    candidate_pin: `20:1:${digest}`,
+    hono_pin: `20:1:${digest}`,
+  });
+  const current = evidencePacket(readbackFields);
+  for (const fence of ["````", "~~~"]) {
+    const archive = `${fence}markdown\n${fence}example\n<!--\n${previous}\n${fence}\n`;
+    assertReadbackRejected(archive);
+    const result = offlineReadback(`${archive}\n${current}`);
+    assert.equal(result.status, 0, result.error?.message || result.stderr);
+    assert.equal(JSON.parse(result.stdout).qualificationPin, qualificationPin);
+  }
+});
+
+test("offline Ember readback ignores commented headings and fence markers", () => {
+  const comment = "<!-- Example fence\n```text\n-->\n";
+  const current = evidencePacket(readbackFields);
+  const result = offlineReadback(`${comment}\n${current}`);
+  assert.equal(result.status, 0, result.error?.message || result.stderr);
+  assert.equal(JSON.parse(result.stdout).qualificationPin, qualificationPin);
+  assertReadbackRejected(`${comment}\n${current}\n${current}`);
+  assertReadbackRejected(`<!-- Archived evidence\n${current}\n-->`);
+});
+
+test("offline Ember readback enforces the byte limit and UTF-8 decoding", () => {
+  const packet = Buffer.from(`${evidencePacket(readbackFields)}\n`);
+  const atLimit = Buffer.concat([packet, Buffer.alloc(512 * 1024 - packet.length, 32)]);
+  const result = offlineReadback(atLimit);
+  assert.equal(result.status, 0, result.error?.message || result.stderr);
+  assert.equal(JSON.parse(result.stdout).qualificationPin, qualificationPin);
+  assertReadbackRejected(Buffer.concat([atLimit, Buffer.from(" ")]));
+  assertReadbackRejected(Buffer.concat([packet, Buffer.from([0xff])]));
+  assertReadbackRejected("");
+});
 
 test("cutover requires explicit protected selection and the paired Hono UUID", () => {
   const active = {
@@ -125,7 +247,7 @@ test("admin rollback admits only the recorded production Ember version with admi
   }
 });
 
-test("cutover producer requires the exact main attempt and its successful proof upload", async () => {
+test("cutover producer requires the exact main attempt and its successful proof upload", async (t) => {
   const own = { full_name: "TogetherWeOwn/two-web-next", fork: false, id: 23 };
   const run = {
     id: 21,
@@ -139,7 +261,7 @@ test("cutover producer requires the exact main attempt and its successful proof 
     status: "completed",
     conclusion: "success",
   };
-  const workflow = parse(readFileSync(new URL(`../${run.path}`, import.meta.url), "utf8"));
+  const workflow = parse(readFileSync(new URL("../" + run.path, import.meta.url), "utf8"));
   const upload = workflow.jobs["isolated-cutover"].steps.find((step) =>
     step.uses?.startsWith("actions/upload-artifact@"),
   );
@@ -149,9 +271,11 @@ test("cutover producer requires the exact main attempt and its successful proof 
   const job = completedCutoverJob(identity);
   const check = (attempt = run, isolated = job) =>
     verifyProducer(identity, "synthetic", async (url) => {
-      const path = new URL(url).pathname;
+      const parsed = new URL(url);
+      const path = parsed.pathname;
       if (path.endsWith("/runs/21/attempts/3")) return Response.json(attempt);
       assert.ok(path.endsWith("/runs/21/attempts/3/jobs"));
+      assert.equal(parsed.search, "?per_page=100&page=1");
       return Response.json({ total_count: 1, jobs: [isolated] });
     });
   assert.equal((await check()).runAttempt, "3");
@@ -169,8 +293,28 @@ test("cutover producer requires the exact main attempt and its successful proof 
   ]) {
     await assert.rejects(check(run, { ...job, ...changes }), /proof upload did not succeed/);
   }
+  const mismatches = {
+    "wrong source SHA": { head_sha: "d".repeat(40) },
+    "wrong source branch": { head_branch: "release" },
+    "different workflow": { path: ".github/workflows/archive-hono-recovery.yml" },
+    "XFS workflow on another ref": { path: run.path + "@release" },
+    "push event": { event: "push" },
+    "pull request event": { event: "pull_request" },
+    "foreign run repository": { repository: { ...own, full_name: "Elsewhere/repo" } },
+    "forked head repository": { head_repository: { ...own, fork: true } },
+    "different head repository ID": { head_repository: { ...own, id: 24 } },
+    "unfinished run": { status: "in_progress" },
+    "cancelled run": { conclusion: "cancelled" },
+  };
+  for (const [label, mismatch] of Object.entries(mismatches)) {
+    await t.test("refuses " + label, async () => {
+      await assert.rejects(
+        verifyProducer(identity, "synthetic", async () => Response.json({ ...run, ...mismatch })),
+        { message: "pure Hono recovery run refused: inconsistent GitHub attempt metadata" },
+      );
+    });
+  }
 });
-
 test("a newer main tip and a newer staging allocation have different effects on cutover evidence", async () => {
   const successor = "d".repeat(40);
   const repository = preRollback.head_repository.full_name;

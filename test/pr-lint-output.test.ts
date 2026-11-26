@@ -565,13 +565,15 @@ describe("unchanged convention policy and workflow gates", () => {
     }
   });
 
-  it("retains the required check name, metadata sources, hosted runners and read-only permissions", () => {
+  it("retains the required check name, metadata sources, GitHub fallbacks and read-only permissions", () => {
     const resolve = step("Resolve PR title/body");
     expect(resolve.run).toBe("python3 ci/pr-lint-output.py resolve");
     expect(readFileSync(helper, "utf8")).toContain('with_name("resolve-pr-metadata.py")');
     expect(resolve.text).toContain("          PR_NUMBER: ${{ inputs.pr_number }}\n");
     expect(workflow).toContain("    name: pr-lint\n");
-    expect(workflow.match(/^    runs-on: ubuntu-latest$/gm)).toHaveLength(2);
+    expect(
+      workflow.match(/^      && vars\.CI_BLACKSMITH_2VCPU \|\| 'ubuntu-latest' }}$/gm),
+    ).toHaveLength(2);
     expect(workflow).not.toMatch(/CI_OVERFLOW_RUNNER|two-selfhosted/);
     expect(workflow.match(/^permissions:\n((?:  .*\n)+)/m)?.[1]).toMatch(
       /^  contents: read\n  pull-requests: read # \S[^\n]*\n$/,
