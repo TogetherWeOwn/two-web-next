@@ -1,21 +1,37 @@
+# guards: release: exact-head promotion-path routing evidence
 name: promotion-path
 on:
   pull_request_target:
-    # Base retargets arrive as edited events. Every queued run reads live refs.
+    # GitHub reports same-head base retargets through edited.
     types: [opened, reopened, synchronize, edited]
 permissions: {}
 concurrency:
-  group: promotion-path-refresh-${{ github.event.pull_request.number }}
+  # Concurrency is evaluated before runner admission. Rejected edits get
+  # their own slot so they cannot cancel a real refresh or replace its queue.
+  group: >-
+    ${{ (github.event.action != 'edited' ||
+      (github.event.changes.base.ref.from &&
+       github.event.changes.base.ref.from != github.event.pull_request.base.ref))
+      && format('promotion-path-refresh-{0}', github.event.pull_request.number)
+      || format('promotion-path-noop-{0}', github.run_id) }}
   cancel-in-progress: true
 
 jobs:
   label:
     # Keep serializing against runs started by the previous workflow revision.
     concurrency:
-      group: promotion-path-${{ github.event.pull_request.number }}
+      group: >-
+        ${{ (github.event.action != 'edited' ||
+          (github.event.changes.base.ref.from &&
+           github.event.changes.base.ref.from != github.event.pull_request.base.ref))
+          && format('promotion-path-{0}', github.event.pull_request.number)
+          || format('promotion-path-noop-job-{0}', github.run_id) }}
       cancel-in-progress: false
-    # Let the runner re-evaluate individual steps when the workflow is canceled.
-    if: ${{ always() }}
+    # Match workflow admission and let an admitted publisher drain.
+    if: >-
+      ${{ always() && (github.event.action != 'edited' ||
+        (github.event.changes.base.ref.from &&
+         github.event.changes.base.ref.from != github.event.pull_request.base.ref)) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

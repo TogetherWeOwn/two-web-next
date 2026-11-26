@@ -25,6 +25,10 @@ const file = (filename, status = "modified", previous_filename) => ({
 const http = (status = 200) => new Response(null, { status });
 const docs = (length) => Array.from({ length }, (_, i) => file(`docs/${i}.md`));
 const ordinary = docs(101);
+const workflow = readFileSync(
+  new URL("../.github/workflows/promotion-path.yml", import.meta.url),
+  "utf8",
+);
 
 function github(rows, options = {}) {
   const labels = options.labelState ?? new Set(["unrelated", ...(options.labels ?? [])]);
@@ -173,16 +177,81 @@ test("ref changes prevent publication, including same-SHA retarget and a race du
   assert.ok(moved.summary[0].includes("verdict **unknown**"));
 });
 
-test("a PR event burst cancels superseded reads and drains in-flight label writes", async (t) => {
-  const workflow = readFileSync(
-    new URL("../.github/workflows/promotion-path.yml", import.meta.url),
-    "utf8",
+test("a PR event burst isolates unrelated edits before runner admission", () => {
+  const expression = (block) =>
+    workflow
+      .match(block)?.[1]
+      .trim()
+      .replace(/\s+/g, " ")
+      .match(/^\$\{\{ (.*) \}\}$/)?.[1];
+  const admission =
+    "(github.event.action != 'edited' || (github.event.changes.base.ref.from && github.event.changes.base.ref.from != github.event.pull_request.base.ref))";
+  assert.match(workflow, /^# guards: release: exact-head promotion-path routing evidence$/m);
+  assert.match(workflow, /^    types: \[opened, reopened, synchronize, edited\]$/m);
+  assert.equal(
+    expression(/^  group: >-\n((?:    [^\n]+\n)+)/m),
+    `${admission} && format('promotion-path-refresh-{0}', github.event.pull_request.number) || format('promotion-path-noop-{0}', github.run_id)`,
   );
+  assert.equal(
+    expression(/^      group: >-\n((?:        [^\n]+\n)+)/m),
+    `${admission} && format('promotion-path-{0}', github.event.pull_request.number) || format('promotion-path-noop-job-{0}', github.run_id)`,
+  );
+  assert.equal(expression(/^    if: >-\n((?:      [^\n]+\n)+)/m), `always() && ${admission}`);
+  assert.deepEqual(
+    [...workflow.matchAll(/^  (\w+):\n/gm)].map(([, key]) => key),
+    ["pull_request_target", "label"],
+  );
+
+  // Model the trusted webhook shape. Actions ignores case in string comparisons.
+  const route = (action, runId, changes, currentRef) => {
+    const from = changes?.base?.ref?.from;
+    const admitted =
+      action !== "edited" || Boolean(from && from.toLowerCase() !== currentRef.toLowerCase());
+    return {
+      admitted,
+      group: admitted ? "promotion-path-refresh-42" : `promotion-path-noop-${runId}`,
+      writerGroup: admitted ? "promotion-path-42" : `promotion-path-noop-job-${runId}`,
+    };
+  };
+  const retarget = { base: { ref: { from: "main" }, sha: { from: base } } };
+  const running = route("synchronize", 1);
+  const pending = route("edited", 2, retarget, "stable");
+  assert.deepEqual(pending, running);
+  assert.ok(pending.admitted);
+  assert.deepEqual(route("opened", 1), running);
+  assert.deepEqual(route("reopened", 1), running);
+
+  for (const [index, [changes, currentRef]] of [
+    [undefined, "main"],
+    [{ title: { from: "old" }, body: { from: "old" } }, "main"],
+    [{ base: { sha: { from: base } } }, "main"],
+    [{ base: { ref: {} } }, "main"],
+    [{ base: { ref: { from: null } } }, "main"],
+    [{ base: { ref: { from: "" } } }, "main"],
+    [retarget, "main"],
+    [retarget, "Main"],
+  ].entries()) {
+    const runId = index + 3;
+    const ignored = route("edited", runId, changes, currentRef);
+    assert.deepEqual(ignored, {
+      admitted: false,
+      group: `promotion-path-noop-${runId}`,
+      writerGroup: `promotion-path-noop-job-${runId}`,
+    });
+    assert.notEqual(ignored.group, running.group);
+    assert.notEqual(ignored.group, pending.group);
+    assert.notEqual(ignored.writerGroup, running.writerGroup);
+    assert.notEqual(ignored.writerGroup, pending.writerGroup);
+    assert.notEqual(ignored.writerGroup, ignored.group);
+  }
+});
+
+test("a PR event burst cancels superseded reads and drains in-flight label writes", async (t) => {
   const cancelRunning = /^  cancel-in-progress: true$/m.test(workflow);
   // Model Actions' per-group running slot and replaceable pending slot. Only
   // the publication condition stays true when Actions re-evaluates steps.
   const drainWrites =
-    workflow.includes("    if: ${{ always() }}\n") &&
+    workflow.includes("      ${{ always() && (github.event.action != 'edited' ||\n") &&
     workflow.includes(
       "if: ${{ always() && (steps.classify.outcome == 'success' || steps.classify.outcome == 'failure') }}",
     );
@@ -288,6 +357,6 @@ test("a PR event burst cancels superseded reads and drains in-flight label write
   }
   assert.match(
     workflow,
-    /^      group: promotion-path-\$\{\{ github\.event\.pull_request\.number \}\}\n      cancel-in-progress: false$/m,
+    /^          && format\('promotion-path-\{0\}', github\.event\.pull_request\.number\)\n          \|\| format\('promotion-path-noop-job-\{0\}', github\.run_id\) \}\}\n      cancel-in-progress: false$/m,
   );
 });
