@@ -23,7 +23,12 @@ import {
 } from "../../src/kit-session";
 import { dispatchHookRequest } from "../../src/route-ownership";
 import { dispatchEventDetailRequest } from "../../src/events/kit-detail";
-import { KIT_EVENT_CALENDAR_ROUTE } from "../../src/events/kit-event-calendar-route";
+import {
+  EVENT_CALENDAR_ROUTE,
+  KIT_EVENT_CALENDAR_ROUTE,
+  kitLegacyEventCalendarKey,
+} from "../../src/events/kit-event-calendar-route";
+import { fetchKitFeed } from "../../src/events/kit-feed-fetch";
 import { KIT_EVENT_COLLECTION_ROUTE, KIT_EVENT_JSON_ROUTE } from "../../src/events/kit-json-routes";
 import { KIT_STATIC_FEED_ROUTES } from "../../src/events/kit-static-feed-routes";
 import { KIT_EVENT_WRITE_ROUTES } from "../../src/events/kit-event-write-routes";
@@ -86,6 +91,12 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
       {
         flag: env.KIT_ROUTE_FEEDS,
         routes: [...KIT_STATIC_FEED_ROUTES, KIT_EVENT_CALENDAR_ROUTE, KIT_EVENT_COLLECTION_ROUTE],
+        legacySuffix: {
+          path: EVENT_CALENDAR_ROUTE,
+          keyFor: kitLegacyEventCalendarKey,
+          read: (request, key, requestId) =>
+            fetchKitFeed(request, env, { kind: "event-calendar", key }, requestId),
+        },
       },
       { flag: env.KIT_ROUTE_STATIC_TEXT, routes: KIT_STATIC_TEXT_ROUTES },
       { flag: env.KIT_ROUTE_EVENT_JSON, routes: [KIT_EVENT_JSON_ROUTE] },
