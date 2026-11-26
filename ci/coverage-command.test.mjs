@@ -224,9 +224,16 @@ test("all split installs require successful dependency admission", () => {
   for (const id of ["static-check", "coverage-shard", "coverage-merge"]) {
     const extra = id === "coverage-merge" ? ", coverage-shard" : "";
     assert(job(id).includes(`    needs: [scope, dependency-admission${extra}]\n`), id);
-    assert.match(
-      job(id),
-      /^    if: \$\{\{ !cancelled\(\) && needs\.scope\.result == 'success' && needs\.dependency-admission\.result == 'success' && needs\.scope\.outputs\.docs_only != 'true' && needs\.scope\.outputs\.draft != 'true' \}\}$/m,
+    const condition = job(id)
+      .split("\n")
+      .find((line) => line.startsWith("    if: "));
+    assert.equal(
+      condition?.replace(" && needs.scope.outputs.isolated != 'true'", ""),
+      "    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.dependency-admission.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' }}",
+    );
+    assert.equal(
+      condition?.includes("needs.scope.outputs.isolated != 'true'"),
+      id !== "static-check",
     );
   }
 });

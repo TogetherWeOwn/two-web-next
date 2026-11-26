@@ -153,6 +153,18 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   `test/seo-headers.test.ts`, replaced with a mapping-table pin that asserts
   every documented section exists in the file.
 
+## Pull-request CI selection
+
+Ready PRs require successful lint, secret scan and size jobs from the same
+head and base before CI and browser suites start. If a prerequisite is fixed
+without a push, rerun the failed CI and E2E jobs after it passes.
+The join-state evidence and Kit CSS evidence helpers and their dedicated tests
+can skip the Vitest shards, browser smoke and app performance audits when
+they are the only changed paths. Static checks and both focused fixtures still
+run. Workflow, dependency, shared helper and shared application changes
+select full coverage. Main pushes, nightly runs and exact-SHA runs retain
+their full coverage.
+
 ## Patch coverage CLI
 
 `ci/patch-coverage.mjs` is the single patch-coverage authority. It reads the

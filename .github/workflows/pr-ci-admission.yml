@@ -1,0 +1,26 @@
+name: pr-ci-admission
+on: workflow_call
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    # The callers have separate lanes. At most two runners can wait on
+    # prerequisites across all PRs, leaving capacity for the producers.
+    concurrency:
+      group: pr-ci-admission-${{ github.workflow }}
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require current lint, scan and size
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 ci/pr-ci-admission.py

@@ -51,10 +51,15 @@ permissions:
 # default queue a newly queued run cancels any pending run in its group, so a
 # nightly or dispatch sharing main's group would replace a waiting push run.
 concurrency:
-  group: e2e-${{ github.event.pull_request.number || (github.event_name == 'schedule' && 'nightly') || (github.event_name == 'workflow_dispatch' && github.run_id) || github.ref }}
+  group: e2e-${{ github.event.pull_request.number || (github.event_name == 'schedule' && 'nightly') || (github.event_name == 'workflow_dispatch' && github.run_id) || (github.event_name == 'push' && github.sha) || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  pr-admission:
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    permissions: { actions: read, contents: read, pull-requests: read }
+    uses: ./.github/workflows/pr-ci-admission.yml
+
   # Cheap change-scope gate (mirrors ci.yml): a PR that only touches prose
   # (`docs/**`, root `*.md`) that no gate, test or build reads, or only the
   # `test/` unit tree the journeys never execute, fast-passes the browser
@@ -63,6 +68,8 @@ jobs:
   # every other path resolve to skip_e2e=false and run the full smoke.
   scope:
     name: scope
+    needs: pr-admission
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.draft == true || needs.pr-admission.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -85,10 +92,21 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate \
-            --jq '.[] | "\(.filename)\t\(.previous_filename // "")"' > "$RUNNER_TEMP/pr-files.tsv"
+          pr="repos/$REPO/pulls/$PR_NUMBER"
+          current=$(gh api "$pr" --jq '[.base.sha, .head.sha] | join(" ")')
+          gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate --jq '
+            .[] | if .status == "renamed" and (.previous_filename // "") == "" then "invalid row"
+            else [.filename, (.previous_filename // "")] |
+              if any(.[] | explode[]; . < 32 or . == 127) then "invalid row" else join("\t") end
+            end
+          ' > "$RUNNER_TEMP/pr-files.tsv"
+          if [ "$current" != "$BASE_SHA $HEAD_SHA" ] ||
+             [ "$(gh api "$pr" --jq '[.base.sha, .head.sha] | join(" ")')" != "$current" ]; then
+            printf "invalid row\n" > "$RUNNER_TEMP/pr-files.tsv"
+          fi
           mkdir -p "$RUNNER_TEMP/trusted-scope"
           for script in ci/change-scope.sh ci/e2e-test-helpers.mjs; do
             gh api "repos/$REPO/contents/$script?ref=$BASE_SHA" \
@@ -111,6 +129,11 @@ jobs:
           fi
           bash "$RUNNER_TEMP/trusted-scope/change-scope.sh" "$RUNNER_TEMP/pr-files.tsv" "$CHANGED_FILES" > "$RUNNER_TEMP/scope-verdict.txt"
           keys="docs_only skip_e2e app worker db full draft"
+          if grep -q '^isolated=' "$RUNNER_TEMP/scope-verdict.txt"; then
+            keys="$keys isolated"
+          else
+            verdict_isolated=false
+          fi
           for key in $keys; do
             count=$(grep -c "^$key=" "$RUNNER_TEMP/scope-verdict.txt") || count=0
             if [ "$count" != 1 ]; then
@@ -125,12 +148,14 @@ jobs:
             printf -v "verdict_$key" '%s' "$value"
           done
           lines=$(wc -l < "$RUNNER_TEMP/scope-verdict.txt")
-          if [ "$lines" != 7 ]; then
+          set -- $keys
+          if [ "$lines" != "$#" ]; then
             echo "::error::unexpected scope verdict output; failing closed."
             exit 1
           fi
           docs_only=$verdict_docs_only
           skip_e2e=$verdict_skip_e2e
+          isolated=$verdict_isolated
           while IFS=$'\t' read -r name previous || [ -n "$name" ]; do
             for path in "$name" ${previous:+"$previous"}; do
               case "$path" in
@@ -145,11 +170,23 @@ jobs:
                 *.md) ;;
                 *) skip_e2e=false ;;
               esac
+              case "$path" in
+                ci/join-state-evidence-source.mjs|ci/join-state-evidence-source.test.mjs|\
+                ci/kit-css-evidence.mjs|ci/kit-css-evidence.test.mjs) ;;
+                *) isolated=false ;;
+              esac
             done
           done < "$RUNNER_TEMP/pr-files.tsv"
+          if [ ! -s "$RUNNER_TEMP/pr-files.tsv" ] ||
+             [ "$(wc -l < "$RUNNER_TEMP/pr-files.tsv")" != "$CHANGED_FILES" ]; then
+            docs_only=false
+            isolated=false
+            skip_e2e=false
+          fi
           if [ "$docs_only" != "$verdict_docs_only" ] || [ "$skip_e2e" != "$verdict_skip_e2e" ]; then
             echo "::warning::scope verdict disagreed with the changed-file list; publishing the conservative verdict."
           fi
+          if [ "$isolated" = true ] && [ "$verdict_full$verdict_app$verdict_db$verdict_worker$docs_only" = falsefalsefalsefalsefalse ]; then skip_e2e=true; fi
           {
             echo "docs_only=$docs_only"
             echo "skip_e2e=$skip_e2e"

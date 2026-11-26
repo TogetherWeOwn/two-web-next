@@ -49,6 +49,7 @@ function scope(rows: string[][], expected = rows.length, cwd = repo) {
     db: verdict("db"),
     full: verdict("full"),
     draft: verdict("draft"),
+    isolated: verdict("isolated"),
   };
 }
 
@@ -116,7 +117,7 @@ describe("change-scope gate", () => {
       app: "true",
       worker: "false",
       db: "false",
-      full: "false",
+      full: "true",
       draft: "false",
     });
     expect(
@@ -178,7 +179,11 @@ describe("change-scope gate", () => {
     }
     // Other ci/ tooling is still an app input.
     const other = scope([["ci/db-backup-selftest.sh", ""]]);
-    expect({ app: other.app, db: other.db }).toEqual({ app: "true", db: "false" });
+    expect({ app: other.app, db: other.db, full: other.full }).toEqual({
+      app: "true",
+      db: "false",
+      full: "true",
+    });
   });
 
   it.each(["ci/check-snapshot-chain.mjs", "ci/check-snapshot-chain-selftest.mjs"])(
@@ -211,6 +216,23 @@ describe("change-scope gate", () => {
       "ci/e2e-test-helpers.mjs",
     ]) {
       expect(scope([[path, ""]]).full, path).toBe("true");
+    }
+  });
+
+  it("selects standalone helpers and refuses mixed or ambiguous paths", () => {
+    const helper = "ci/kit-css-evidence.mjs";
+    expect(scope([[helper, ""]])).toMatchObject({ isolated: "true", full: "false" });
+    for (const shared of ["ci/kit-css-collect.mjs", "src/app.ts", "package-lock.json"]) {
+      expect(scope([[helper, shared]])).toMatchObject({ isolated: "false", full: "true" });
+    }
+    for (const rows of [
+      [[helper, "", "extra"]],
+      [
+        [helper, ""],
+        [helper, ""],
+      ],
+    ]) {
+      expect(scope(rows)).toMatchObject({ isolated: "false", full: "true", skipE2e: "false" });
     }
   });
 
@@ -1262,7 +1284,7 @@ describe("scope token boundary and verdict validation", () => {
     });
     expect(result.status, result.stderr).toBe(0);
     const lines = result.outputs.trim().split("\n");
-    expect(lines).toHaveLength(7);
+    expect(lines).toHaveLength(8);
     for (const line of lines) expect(line).toMatch(/^[a-z0-9_]+=(true|false)$/);
     expect(lines).toContain("docs_only=true");
   });

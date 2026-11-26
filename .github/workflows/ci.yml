@@ -37,6 +37,11 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'merge_group' }}
 
 jobs:
+  pr-admission:
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    permissions: { actions: read, contents: read, pull-requests: read }
+    uses: ./.github/workflows/pr-ci-admission.yml
+
   join-evidence-source:
     name: join-evidence-source
     runs-on: ubuntu-latest
@@ -90,6 +95,8 @@ jobs:
   # would leave it missing and block the PR, so it is deliberately not used).
   scope:
     name: scope
+    needs: pr-admission
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.draft == true || needs.pr-admission.result == 'success') }}
     runs-on: ubuntu-latest
     # Includes the pinned stock source build and upstream test inventory.
     timeout-minutes: 15
@@ -100,6 +107,7 @@ jobs:
       db: ${{ steps.scope.outputs.db }}
       full: ${{ steps.scope.outputs.full }}
       draft: ${{ steps.scope.outputs.draft }}
+      isolated: ${{ steps.scope.outputs.isolated }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: github.event_name == 'pull_request'
@@ -116,10 +124,21 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate \
-            --jq '.[] | "\(.filename)\t\(.previous_filename // "")"' > "$RUNNER_TEMP/pr-files.tsv"
+          pr="repos/$REPO/pulls/$PR_NUMBER"
+          current=$(gh api "$pr" --jq '[.base.sha, .head.sha] | join(" ")')
+          gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate --jq '
+            .[] | if .status == "renamed" and (.previous_filename // "") == "" then "invalid row"
+            else [.filename, (.previous_filename // "")] |
+              if any(.[] | explode[]; . < 32 or . == 127) then "invalid row" else join("\t") end
+            end
+          ' > "$RUNNER_TEMP/pr-files.tsv"
+          if [ "$current" != "$BASE_SHA $HEAD_SHA" ] ||
+             [ "$(gh api "$pr" --jq '[.base.sha, .head.sha] | join(" ")')" != "$current" ]; then
+            printf "invalid row\n" > "$RUNNER_TEMP/pr-files.tsv"
+          fi
           mkdir -p "$RUNNER_TEMP/trusted-scope"
           for script in ci/change-scope.sh ci/e2e-test-helpers.mjs; do
             gh api "repos/$REPO/contents/$script?ref=$BASE_SHA" \
@@ -147,11 +166,17 @@ jobs:
               echo "db=true"
               echo "full=true"
               echo "draft=false"
+              echo "isolated=false"
             } >> "$GITHUB_OUTPUT"
             exit 0
           fi
           bash "$RUNNER_TEMP/trusted-scope/change-scope.sh" "$RUNNER_TEMP/pr-files.tsv" "$CHANGED_FILES" > "$RUNNER_TEMP/scope-verdict.txt"
           keys="docs_only skip_e2e app worker db full draft"
+          if grep -q '^isolated=' "$RUNNER_TEMP/scope-verdict.txt"; then
+            keys="$keys isolated"
+          else
+            verdict_isolated=false
+          fi
           for key in $keys; do
             count=$(grep -c "^$key=" "$RUNNER_TEMP/scope-verdict.txt") || count=0
             if [ "$count" != 1 ]; then
@@ -166,16 +191,26 @@ jobs:
             printf -v "verdict_$key" '%s' "$value"
           done
           lines=$(wc -l < "$RUNNER_TEMP/scope-verdict.txt")
-          if [ "$lines" != 7 ]; then
+          set -- $keys
+          if [ "$lines" != "$#" ]; then
             echo "::error::unexpected scope verdict output; failing closed."
             exit 1
           fi
           docs_only=$verdict_docs_only
           full=$verdict_full
+          isolated=$verdict_isolated
           while IFS=$'\t' read -r name previous || [ -n "$name" ]; do
             for path in "$name" ${previous:+"$previous"}; do
               case "$path" in
-                .github/*|ci/change-scope.sh|ci/e2e-test-helpers.mjs) full=true ;;
+                ci/check-migration-*|ci/check-snapshot-chain*|ci/db-migrate*) ;;
+                ci/join-state-evidence-source.mjs|ci/join-state-evidence-source.test.mjs|\
+                ci/kit-css-evidence.mjs|ci/kit-css-evidence.test.mjs) ;;
+                .github/*|src/*|ci/*) full=true ;;
+              esac
+              case "$path" in
+                ci/join-state-evidence-source.mjs|ci/join-state-evidence-source.test.mjs|\
+                ci/kit-css-evidence.mjs|ci/kit-css-evidence.test.mjs) ;;
+                *) isolated=false ;;
               esac
               case "$path" in
                 docs/*) ;;
@@ -185,6 +220,12 @@ jobs:
               esac
             done
           done < "$RUNNER_TEMP/pr-files.tsv"
+          if [ ! -s "$RUNNER_TEMP/pr-files.tsv" ] ||
+             [ "$(wc -l < "$RUNNER_TEMP/pr-files.tsv")" != "$CHANGED_FILES" ]; then
+            docs_only=false
+            isolated=false
+            full=true
+          fi
           if [ "$docs_only" != "$verdict_docs_only" ] || [ "$full" != "$verdict_full" ]; then
             echo "::warning::scope verdict disagreed with the changed-file list; publishing the conservative verdict."
           fi
@@ -196,6 +237,8 @@ jobs:
             echo "db=$verdict_db"
             echo "full=$full"
             echo "draft=$verdict_draft"
+            if [ "$full$verdict_app$verdict_db$verdict_worker$docs_only" != falsefalsefalsefalsefalse ]; then isolated=false; fi
+            echo "isolated=$isolated"
           } >> "$GITHUB_OUTPUT"
       # Tier 0 (pipeline review 2026-10-10): workflow logic was the largest class of review
       # findings a linter catches. scope gates ci-ok (fails closed), so a red lint blocks merge.
@@ -204,6 +247,9 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
+      - name: PR admission evidence fixtures
+        if: github.event_name == 'pull_request'
+        run: python3 -B ci/pr-ci-admission-test.py
       - name: Install-hook inventory and asset boundary tests
         if: github.event_name == 'pull_request'
         run: node --test ci/install-hook-inventory.test.mjs ci/asset-output-boundary.test.mjs
@@ -1251,7 +1297,7 @@ jobs:
   coverage-shard:
     name: coverage-shard (${{ matrix.shard }})
     needs: [scope, dependency-admission]
-    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.dependency-admission.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' }}
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.dependency-admission.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && needs.scope.outputs.isolated != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -1307,7 +1353,7 @@ jobs:
 
   coverage-merge:
     needs: [scope, dependency-admission, coverage-shard]
-    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.dependency-admission.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' }}
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.dependency-admission.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && needs.scope.outputs.isolated != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     container:
@@ -1371,7 +1417,7 @@ jobs:
   node22-shard:
     name: node22-shard (${{ matrix.shard }})
     needs: [scope]
-    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' }}
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && needs.scope.outputs.isolated != 'true' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -1469,28 +1515,28 @@ jobs:
         env:
           SCOPE_RESULT: ${{ needs.scope.result }}
         run: test "$SCOPE_RESULT" = success
-      - name: Docs-only fast pass (no code changed)
-        if: needs.scope.outputs.docs_only == 'true' || needs.scope.outputs.draft == 'true'
-        run: echo "Docs-only or draft change per the scope job; Node 22 compatibility leg passes without the suite."
+      - name: Scope fast pass
+        if: needs.scope.outputs.docs_only == 'true' || needs.scope.outputs.draft == 'true' || needs.scope.outputs.isolated == 'true'
+        run: echo "Scope excluded the unit suite; Node 22 compatibility leg passes without the suite."
       - name: Require every selected Node 22 shard to succeed
-        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true'
+        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && needs.scope.outputs.isolated != 'true'
         env:
           SHARD_RESULT: ${{ needs.node22-shard.result }}
         run: test "$SHARD_RESULT" = success
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true'
+        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && needs.scope.outputs.isolated != 'true'
         with:
           persist-credentials: false
       - run: npm ci --no-audit --no-fund
-        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true'
+        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && needs.scope.outputs.isolated != 'true'
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true'
+        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && needs.scope.outputs.isolated != 'true'
         with:
           pattern: node22-vitest-*
           path: vitest-blob
           merge-multiple: true
       - name: Merge Node 22 Vitest reports
-        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true'
+        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && needs.scope.outputs.isolated != 'true'
         run: |
           # Vitest can replay valid blobs that omit test files.
           set -- vitest-blob/*
@@ -1801,7 +1847,11 @@ jobs:
         env:
           STATIC_RESULT: ${{ needs.static-check.result }}
           COVERAGE_RESULT: ${{ needs.coverage-merge.result }}
-        run: test "$STATIC_RESULT" = success && test "$COVERAGE_RESULT" = success
+          ISOLATED: ${{ needs.scope.outputs.isolated }}
+        run: >-
+          test "$STATIC_RESULT" = success &&
+          { { test "$ISOLATED" = true && test "$COVERAGE_RESULT" = skipped; } ||
+          { test "$ISOLATED" = false && test "$COVERAGE_RESULT" = success; }; }
       - name: Require successful accessibility audit
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         env:
