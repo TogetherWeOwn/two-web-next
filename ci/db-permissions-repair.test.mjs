@@ -408,7 +408,11 @@ test("executor rolls back a grant or revoke when the post-write membership query
     ],
     ["revoke", false, "revoke two_web_migrate from ? granted by current_user restrict"],
   ]) {
-    const plan = JSON.stringify({ operation, executor, identity: hash(`postgres\0${provisioner}`) });
+    const plan = JSON.stringify({
+      operation,
+      executor,
+      identity: hash(`postgres\0${provisioner}`),
+    });
     const env = {
       PRODUCTION_DB_EXECUTOR_PLAN: plan,
       PRODUCTION_DB_EXECUTOR_PLAN_SHA256: hash(plan),
