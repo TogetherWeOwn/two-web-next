@@ -626,7 +626,11 @@ test("serving isolation readback verifies endpoints and closes without mutation 
         /^select pg_catalog\.current_database\(\)/,
         [{ database, authenticated: migrationRole, effective: migrationRole }],
       ],
-      [/^select hash, created_at from drizzle\.__drizzle_migrations\b/, ledger],
+      [
+        /^select hash, created_at from drizzle\.__drizzle_migrations order by created_at, id limit \?$/,
+        ledger,
+        [entries.length + 1],
+      ],
       [catalogQuery, state.acl],
       [membershipQuery, state.membership],
     ];
@@ -647,8 +651,12 @@ test("serving isolation readback verifies endpoints and closes without mutation 
       const step = steps[queryCount++];
       assert.ok(step, `Unexpected readback statement: ${sql}`);
       const [pattern, rows, expectedParams] = step;
-      assert.match(sql.trim(), pattern);
-      assert.doesNotMatch(sql, /;|\bpg_(?:try_)?advisory_/i);
+      const statement = sql.trim().replace(/\s+/g, " ");
+      assert.doesNotMatch(
+        statement,
+        /;|\bpg_(?:try_)?advisory_|\bfor (?:no key update|key share|update|share)\b/i,
+      );
+      assert.match(statement, pattern);
       if (expectedParams) assert.deepEqual(params, expectedParams);
       return rows;
     };
