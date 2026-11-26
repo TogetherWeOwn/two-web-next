@@ -290,8 +290,12 @@ test("qualification bounds the staging identity stream and accepts matching evid
   });
 
   for (const chunks of [
-    [JSON.stringify({ ...candidate, padding: " ".repeat(maxPadding) }), " "],
-    ["€".repeat(2048), " ".repeat(7)],
+    [
+      encoder.encode(JSON.stringify({ ...candidate, padding: " ".repeat(maxPadding) })),
+      encoder.encode(" "),
+    ],
+    // An incomplete UTF-8 sequence exceeds the byte cap before it emits another code unit.
+    [encoder.encode(`\uFEFF\uFEFF${"€".repeat(2048)}`), Uint8Array.of(0xe2)],
   ]) {
     let pulls = 0;
     let cancelled = false;
@@ -299,7 +303,7 @@ test("qualification bounds the staging identity stream and accepts matching evid
       {
         pull(controller) {
           const chunk = chunks[pulls++];
-          if (chunk) controller.enqueue(encoder.encode(chunk));
+          if (chunk) controller.enqueue(chunk);
           else controller.close();
         },
         cancel() {
