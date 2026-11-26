@@ -447,11 +447,10 @@ describe("acceptance: JSON/ICS have no Kit entries and RSVP mutations stay Hono-
   it("the shipped manifest carries no JSON, feed, or mutation entry", () => {
     const suspect = ROUTE_MANIFEST.filter((entry) => /ics|json|rss|rsvp|__data/i.test(entry.path));
     expect(suspect).toEqual([]);
-    // The only event :key entries are the disabled admin edit page and the
-    // disabled detail page itself: nothing JSON/feed/mutation-shaped.
+    // The edit page, legacy edit alias and public detail are document reads.
     expect(
       ROUTE_MANIFEST.filter((entry) => entry.path.includes(":key")).map((entry) => entry.path),
-    ).toEqual(["/admin/events/:key", "/e/:key"]);
+    ).toEqual(["/admin/events/:key", "/admin/events/:key/edit", "/e/:key"]);
   });
 
   it.each([
