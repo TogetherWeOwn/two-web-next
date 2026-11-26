@@ -590,7 +590,7 @@ export async function assertKitAttendanceDisabled(off, databaseUrl) {
   console.log("PASS built Kit Worker keeps attendance disabled for a moderator by default");
 }
 
-export async function assertFeaturedLegacyRedirects({ on, off, hono, databaseUrl }) {
+export async function assertFeaturedLegacyRedirects({ on, off, rollback, hono, databaseUrl }) {
   const actor = 900000000000000000n + BigInt(`0x${randomBytes(7).toString("hex")}`);
   const moderatorId = String(actor);
   const memberId = String(actor + 1n);
@@ -605,7 +605,8 @@ export async function assertFeaturedLegacyRedirects({ on, off, hono, databaseUrl
       insert into featured_contents (legacy_id, title, created_by)
       values (${legacyId}, 'Synthetic imported bookmark', ${moderatorId}) returning id
     `;
-    const targets = [hono, off, on];
+    // rollback keeps the bookmark flag on with Kit admin off, so Hono owns it.
+    const targets = [hono, off, rollback, on];
     const bearers = new Map();
     for (const target of targets) {
       let moderator = await session(sql, moderatorId, true);
@@ -714,13 +715,18 @@ export async function assertFeaturedLegacyRedirects({ on, off, hono, databaseUrl
     });
   } finally {
     try {
-      await sql`delete from featured_contents where created_by = ${moderatorId}`;
-      await sql`delete from web_sessions where user_id in (${moderatorId}, ${memberId})`;
+      await sql.begin(async (tx) => {
+        await tx`delete from featured_contents where created_by = ${moderatorId}`;
+        await tx`delete from web_session_grace where user_id in (${moderatorId}, ${memberId})`;
+        await tx`delete from web_sessions where user_id in (${moderatorId}, ${memberId})`;
+      });
     } finally {
       await sql.end({ timeout: 1 });
     }
   }
-  console.log("PASS installed Worker legacy featured redirects with Kit ownership off and on");
+  console.log(
+    "PASS installed Worker legacy featured redirects with Kit ownership off, rolled back and on",
+  );
 }
 
 export async function assertStagedAdminServing({ origin, owner, secrets, enabled }) {

@@ -1080,9 +1080,18 @@ export default {
       KIT_PARITY_FIXTURE_ADMIN_FEATURED_REDIRECTS: "true",
     });
     await listen(featuredLegacy.child, featuredLegacy.origin, () => featuredLegacy.log);
+    const featuredRollback = await startWorker(
+      "kit-featured-legacy-rollback",
+      worker,
+      assets,
+      secret,
+      { KIT_PARITY_FIXTURE_ADMIN_FEATURED_REDIRECTS: "true" },
+    );
+    await listen(featuredRollback.child, featuredRollback.origin, () => featuredRollback.log);
     await assertFeaturedLegacyRedirects({
       on: featuredLegacy,
       off: admin,
+      rollback: featuredRollback,
       hono: honoWithSession,
       databaseUrl,
     });
