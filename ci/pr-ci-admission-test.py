@@ -140,6 +140,18 @@ class AdmissionTest(TestCase):
                     evidence()
                 finally:
                     job[field] = before
+        runs[2]["conclusion"] = "cancelled"
+        self.assertIsNone(evidence())
+        newer = add("pr-gates", "pr-lint")
+        newer.append(dict(ignored, id=41, run_id=4))
+        self.assertEqual(evidence()["pr-lint"], (4, 1, 40))
+        self.assertEqual(evidence()["gitleaks"], (1, 2, 12))
+        runs[0]["conclusion"] = "cancelled"
+        self.assertIsNone(evidence())
+        runs[0]["conclusion"] = "success"
+        ignored["conclusion"] = "cancelled"
+        with self.assertRaisesRegex(ValueError, "Invalid advisory job"):
+            evidence()
 
 
 if __name__ == "__main__":

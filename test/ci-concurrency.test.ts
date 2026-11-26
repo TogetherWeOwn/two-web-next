@@ -164,12 +164,7 @@ type PrGateContext = {
   action?: string;
   sha: string;
   runId?: number;
-  pr?: {
-    number: number;
-    draft: boolean;
-    head: { sha: string };
-    base: { ref: unknown; sha: string };
-  };
+  pr?: { number: number; head: { sha: string }; base: { ref: unknown } };
   changes?: {
     base?: { ref?: { from?: unknown }; sha?: { from: string } };
     title?: object;
@@ -195,6 +190,8 @@ const retarget = {
   pr: { ...pr, base: { ref: "release", sha: "f".repeat(40) } },
   changes: { base: { ref: { from: pr.base.ref }, sha: { from: pr.base.sha } } },
 };
+const caseOnlyPR = { ...retarget.pr, base: { ...retarget.pr.base, ref: "Main" } };
+const combinedEdit = { ...retarget.changes, title: { from: "prior title" } };
 const ignoredNames = ["pr-gates ignored edit (lint)", "pr-gates ignored edit (scan)"];
 
 // Model only the Actions expressions pinned below. Skipped jobs still get
@@ -268,34 +265,19 @@ describe("PR gate event matrix", () => {
   });
 
   it.each([
-    ["draft opened", "opened", { ...pr, draft: true }, initialMerge],
-    ["ready on the same head", "ready_for_review", pr, initialMerge],
-    ["source update", "synchronize", { ...pr, head: { sha: newHead } }, "new-merge"],
-    ["reopen", "reopened", pr, initialMerge],
-  ] as const)("%s runs both jobs in the same PR slot", (_case, action, current, sha) => {
-    expect(planPrGates({ eventName: "pull_request", action, sha, pr: current })).toEqual({
+    ["draft opened", "opened", { ...pr, draft: true }, initialMerge, undefined],
+    ["ready on the same head", "ready_for_review", pr, initialMerge, undefined],
+    ["source update", "synchronize", { ...pr, head: { sha: newHead } }, "new-merge", undefined],
+    ["reopen", "reopened", pr, initialMerge, undefined],
+    ["retarget with title edit", "edited", retarget.pr, retargetMerge, combinedEdit],
+    ["case-only retarget", "edited", caseOnlyPR, retargetMerge, retarget.changes],
+  ] as const)("%s runs both jobs in the same PR slot", (_case, action, current, sha, changes) => {
+    expect(planPrGates({ eventName: "pull_request", action, sha, pr: current, changes })).toEqual({
       group: "pr-gates-source-87",
       cancelActive: true,
       checks: ["pr-lint", "gitleaks"],
       lintSha: current.head.sha,
       scan: { sha, base: current.base.ref },
-    });
-  });
-
-  it.each(["release", "Main"])("retargets the same head to %s with a fresh gate run", (baseRef) => {
-    const current = { ...retarget.pr, base: { ...retarget.pr.base, ref: baseRef } };
-    expect(
-      planPrGates({
-        ...retarget,
-        pr: current,
-        changes: { ...retarget.changes, title: { from: "prior title" } },
-      }),
-    ).toEqual({
-      group: "pr-gates-source-87",
-      cancelActive: true,
-      checks: ["pr-lint", "gitleaks"],
-      lintSha: pr.head.sha,
-      scan: { sha: retargetMerge, base: baseRef },
     });
   });
 

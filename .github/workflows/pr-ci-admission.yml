@@ -77,8 +77,7 @@ jobs:
                       # The advisory labeler may outlive the size gate. On the first
                       # attempt there are no earlier job verdicts to confuse with it.
                       first_size_attempt = workflow == "pr-size" and run["run_attempt"] == 1
-                      if run["conclusion"] == "cancelled" or (
-                              run["status"] != "completed" and not first_size_attempt):
+                      if run["status"] != "completed" and not first_size_attempt:
                           return None
                       run_id = run["id"]
                       jobs = collection(api, f"actions/runs/{run_id}/jobs?filter=all", "jobs")
@@ -98,7 +97,8 @@ jobs:
                                       and job.get("runner_id", 0) is None):
                                   continue
                               raise ValueError(f"Invalid advisory job for {name}")
-                          if (job["status"] != "completed" or job["conclusion"] == "cancelled"
+                          if (run["conclusion"] == "cancelled" or job["status"] != "completed"
+                                  or job["conclusion"] == "cancelled"
                                   or (run["status"] != "completed" and job["conclusion"] != "success")):
                               return None
                           if job["conclusion"] != "success":
