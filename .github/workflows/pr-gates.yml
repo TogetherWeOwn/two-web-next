@@ -1,12 +1,16 @@
 name: pr-gates
+run-name: >-
+  ${{ (github.event.action != 'edited' ||
+    (startsWith(toJSON(github.event.changes.base.ref.from), '"') && github.event.changes.base.ref.from != '' &&
+     startsWith(toJSON(github.event.pull_request.base.ref), '"') && github.event.pull_request.base.ref != '')) && 'pr-gates' || 'pr-gates (ignored metadata edit)' }}
 
 # Lightweight PR gates: PR-title lint + full-history secret scan in ONE
 # workflow with sequential jobs, so a PR push occupies one runner slot at a
 # time instead of two parallel `pr-lint` + `secret-scan` runs.
 #
-# Required-check names are the JOB names, not the workflow name, and are pinned
-# equal to the ids: `pr-lint` (ruleset pr-conventions) and `gitleaks` (ruleset
-# protect-main). Keep both names byte-identical or merges block.
+# Required-check names are the job display names: `pr-lint` (pr-conventions)
+# and `gitleaks` (protect-main). A rejected edit publishes only advisory
+# skipped checks. Skipped jobs with required names would count as passing.
 #
 # Same-repository pull requests use included 2-vCPU capacity when enabled.
 # The GitHub-hosted fallback is ubuntu-latest.
@@ -33,14 +37,20 @@ permissions:
   contents: read
   pull-requests: read # Read PR metadata and commit subjects for pr-lint.
 
-# A title/body edit leaves the active run alone. GitHub still replaces the
-# waiting run with the latest event in this group. Keep that run's real scan:
-# the replaced run may have been the only one queued for this head and base.
-# Source updates and retargets still cancel superseded runs. Pushes and merge
-# groups have SHA-specific groups, and a dispatch never cancels an active run.
+# GitHub's edited payload supplies changes.base.ref.from only on a base-ref
+# change. Require string refs and trust the delta, including case-only changes.
+# Give rejected edits a private group because GitHub can replace the pending
+# run in a shared group even with cancel-in-progress disabled.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' && !(github.event.action == 'edited' && !github.event.changes.base && (github.event.changes.title || github.event.changes.body)) }}
+  group: >-
+    ${{ github.workflow }}-${{ !(github.event.action != 'edited' ||
+      (startsWith(toJSON(github.event.changes.base.ref.from), '"') && github.event.changes.base.ref.from != '' &&
+       startsWith(toJSON(github.event.pull_request.base.ref), '"') && github.event.pull_request.base.ref != '')) &&
+        format('ignored-edit-{0}', github.run_id) || github.event.pull_request.number || inputs.pr_number || github.sha }}
+  cancel-in-progress: >-
+    ${{ github.event_name == 'pull_request' && (github.event.action != 'edited' ||
+      (startsWith(toJSON(github.event.changes.base.ref.from), '"') && github.event.changes.base.ref.from != '' &&
+       startsWith(toJSON(github.event.pull_request.base.ref), '"') && github.event.pull_request.base.ref != '')) }}
 
 env:
   # This repository is public, so internal card IDs (TOG-1234, PAP-1234) must stay out of PR
@@ -73,9 +83,15 @@ jobs:
   #     main is one conventional commit per PR. The push job below flags any commit that bypasses it
   #     (for example a merge call that passes its own commit_title).
   #
-  # name pinned equal to the id: `pr-lint` is a required check.
   pr-lint:
-    name: pr-lint
+    name: >-
+      ${{ (github.event.action != 'edited' ||
+        (startsWith(toJSON(github.event.changes.base.ref.from), '"') && github.event.changes.base.ref.from != '' &&
+         startsWith(toJSON(github.event.pull_request.base.ref), '"') && github.event.pull_request.base.ref != '')) && 'pr-lint' || 'pr-gates ignored edit (lint)' }}
+    if: >-
+      ${{ (github.event.action != 'edited' ||
+        (startsWith(toJSON(github.event.changes.base.ref.from), '"') && github.event.changes.base.ref.from != '' &&
+         startsWith(toJSON(github.event.pull_request.base.ref), '"') && github.event.pull_request.base.ref != '')) }}
     runs-on: >-
       ${{ github.event_name == 'pull_request'
       && github.repository
@@ -328,11 +344,16 @@ jobs:
   #
   # Sequential after pr-lint: one runner slot at a time. Runs even
   # when pr-lint fails, so a non-conventional push to main is still scanned.
-  # name pinned equal to the id: `gitleaks` is a required check.
   gitleaks:
-    name: gitleaks
+    name: >-
+      ${{ (github.event.action != 'edited' ||
+        (startsWith(toJSON(github.event.changes.base.ref.from), '"') && github.event.changes.base.ref.from != '' &&
+         startsWith(toJSON(github.event.pull_request.base.ref), '"') && github.event.pull_request.base.ref != '')) && 'gitleaks' || 'pr-gates ignored edit (scan)' }}
     needs: pr-lint
-    if: ${{ !cancelled() }}
+    if: >-
+      ${{ !cancelled() && (github.event.action != 'edited' ||
+        (startsWith(toJSON(github.event.changes.base.ref.from), '"') && github.event.changes.base.ref.from != '' &&
+         startsWith(toJSON(github.event.pull_request.base.ref), '"') && github.event.pull_request.base.ref != '')) }}
     runs-on: >-
       ${{ github.event_name == 'pull_request'
       && github.repository

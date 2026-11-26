@@ -283,6 +283,29 @@ describe("PR lint dispatch binding (hermetic workflow/API fixtures)", () => {
     },
   );
 
+  it("relints live metadata on a base retarget without changing the submitted checkout", () => {
+    const fixture = pullRequest(true);
+    const newBase = { ...fixture.live.base, ref: "strict-base", sha: "f".repeat(40) };
+    fixture.checkoutSha = headSha;
+    fixture.checkedSha = headSha;
+    fixture.workflowSha = "e".repeat(40);
+    fixture.waiverBaseSha = newBase.sha;
+    fixture.event.pull_request!.base = newBase;
+    fixture.live.base = newBase;
+    fixture.live.title = "fix(ci): preserve lint after retarget";
+    Object.assign(fixture.event, {
+      action: "edited",
+      changes: { base: { ref: { from: "main" }, sha: { from: baseSha } } },
+    });
+
+    const result = runWorkflow(fixture);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(JSON.parse(result.output).title).toBe(fixture.live.title);
+    expect(result.stdout).toContain(
+      "PR floor-waiver trailers are visible to merge-queue validation",
+    );
+  });
+
   describe.each(["workflow_dispatch", "pull_request"])("queue-visible waivers (%s)", (event) => {
     const fixtureForEvent = () => (event === "workflow_dispatch" ? dispatch() : pullRequest(true));
 

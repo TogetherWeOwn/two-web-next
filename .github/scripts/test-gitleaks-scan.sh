@@ -103,10 +103,11 @@ expect() {
 }
 
 # Exit 1 can also mean a scan error. Require the redacted finding at HEAD.
+# expect_fixture NAME [BASE_REF]
 expect_fixture() {
   local rc fingerprint log="${work}/last-plain.log"
   fingerprint="$(git -C "${repo}" rev-parse HEAD):fixture.txt:github-pat:1"
-  rc="$(scan_rc pull_request)"
+  rc="$(scan_rc pull_request "${2:-main}")"
   # Gitleaks can style the verbose Secret field even when output is redirected.
   sed -E $'s/\033\\[[0-9;]*m//g' "${work}/last.log" > "${log}"
   cases=$((cases + 1))
@@ -267,6 +268,28 @@ base_commit
 printf 'more docs\n' >> "${repo}/README.md"
 pr_commit
 expect "pr: unfetched base branch fails the scan" 2 "$(scan_rc pull_request missing-branch)"
+
+# Same submitted head, different synthetic merge SHA and base policy.
+new_repo pr-retarget
+write_allowlist_config
+base_commit
+git -C "${repo}" switch -q -c strict-base
+write_stock_config
+pr_commit
+git -C "${repo}" update-ref refs/remotes/origin/strict-base HEAD
+git -C "${repo}" switch -q -c topic main
+plant_token
+pr_commit
+for target in main strict-base; do
+  git -C "${repo}" switch -q -c "merge-into-${target}" "${target}"
+  git -C "${repo}" merge -q --no-ff -m "merge topic into ${target}" topic
+  test "$(git -C "${repo}" rev-parse HEAD^2)" = "$(git -C "${repo}" rev-parse topic)"
+  if [[ "${target}" == main ]]; then
+    expect "pr retarget: original base policy accepts the head" 0 "$(scan_rc pull_request main)"
+  else
+    expect_fixture "pr retarget: new base policy detects the same head on its new merge SHA" strict-base
+  fi
+done
 
 # -- non-PR runs keep the repo's own (already merged) policy ------------------
 new_repo push-allowlist

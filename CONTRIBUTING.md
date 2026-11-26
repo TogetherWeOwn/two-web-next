@@ -358,8 +358,12 @@ merge SHA. Use commit-scoped ignore fingerprints to limit an exception to one
 occurrence. A fingerprint scoped to the original commit does not also exempt
 the merge occurrence.
 
-Title and body edits leave the active `pr-gates` run in place. The latest edit
-can replace a waiting run, so it still runs both required jobs in sequence.
+GitHub sends base retargets as edits with a previous base ref. Even when the
+submitted head stays the same, `pr-gates` runs both required jobs against the
+new base. A title or body edit without a base retarget uses no `pr-gates`
+runner and reports neither required check. The repository lint reads the
+latest metadata on the next admitted run. The organization `pr-standards`
+check also reacts to edits.
 
 On a pull request the job applies the base branch's
 `.gitleaks.toml` and `.gitleaksignore` and ignores inline `gitleaks:allow`
