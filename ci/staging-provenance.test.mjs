@@ -237,6 +237,12 @@ test("staging E2E reservation receipt refuses expired, changed, or unverified le
   ]) {
     assert.throws(() => bind(reservationRead, after), refusedBinding);
   }
+  for (const receipt of [
+    { ...reservedE2e, sha: B },
+    { ...reservedE2e, allocationId: reservedE2e.workerVersion },
+  ]) {
+    assert.throws(() => bind(reservationRead, reservationRead, receipt), refusedBinding);
+  }
   assert.throws(() => bind(null, reservationRead), refusedBinding);
   assert.throws(() => bind(undefined, undefined), refusedBinding);
   assert.throws(

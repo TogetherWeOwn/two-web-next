@@ -27,6 +27,8 @@ export function bindStagingE2eReservation(receipt, evidence) {
     if (Object.hasOwn(receipt, "reservation")) throw new Error(REFUSED);
     if (before === null && after === null) return receipt;
 
+    // Validate and bind one plain-data copy so later reads cannot diverge.
+    receipt = structuredClone(receipt);
     const startedAtMs = e2eTime(receipt.e2e.startedAt);
     const completedAtMs = e2eTime(receipt.e2e.completedAt);
     const reservation = admission.parseStagingReservation(before.record);
@@ -44,6 +46,8 @@ export function bindStagingE2eReservation(receipt, evidence) {
     // lease through completion and the same canonical lease at both reads.
     if (
       startedAtMs >= completedAtMs ||
+      reservation.sha !== receipt.sha ||
+      reservation.allocationId !== receipt.allocationId ||
       completedAtMs >= reservation.expiresAtMs ||
       !isDeepStrictEqual(reservation, admission.parseStagingReservation(after.record)) ||
       !admits(before, startedAtMs) ||
