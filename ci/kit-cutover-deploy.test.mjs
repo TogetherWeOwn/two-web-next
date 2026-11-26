@@ -310,35 +310,46 @@ test("cutover select publishes only verified producer outputs", async (t) => {
     GITHUB_TOKEN: "synthetic",
   };
 
-  function select(name, env, fetchBody) {
+  const fetchStub = `data:text/javascript,${encodeURIComponent(`
+    globalThis.fetch = async () => {
+      const json = process.env.SYNTHETIC_CUTOVER_PRODUCER;
+      if (!json) throw new Error("unexpected producer lookup");
+      return new Response(json, { headers: { "content-type": "application/json" } });
+    };
+  `)}`;
+
+  function select(name, env, metadata) {
     const path = join(dir, name);
     writeFileSync(path, priorOutput);
-    const stub = encodeURIComponent(`globalThis.fetch = async () => { ${fetchBody} };`);
-    const result = spawnSync(
-      process.execPath,
-      ["--import", `data:text/javascript,${stub}`, script, "select"],
-      { env: { ...env, GITHUB_OUTPUT: path }, encoding: "utf8", timeout: 10_000 },
-    );
+    const result = spawnSync(process.execPath, ["--import", fetchStub, script, "select"], {
+      env: {
+        ...env,
+        GITHUB_OUTPUT: path,
+        SYNTHETIC_CUTOVER_PRODUCER: metadata ? JSON.stringify(metadata) : "",
+      },
+      encoding: "utf8",
+      timeout: 10_000,
+    });
     assert.ifError(result.error);
     return { ...result, output: readFileSync(path, "utf8") };
   }
 
   await t.test("refused Ember producer preserves the existing output", () => {
     const rejected = { ...producer, run_attempt: 2 };
-    const result = select("refused", ember, `return Response.json(${JSON.stringify(rejected)});`);
+    const result = select("refused", ember, rejected);
     assert.equal(result.status, 1, result.stderr);
     assert.match(result.stderr, /inconsistent GitHub attempt metadata/);
     assert.equal(result.output, priorOutput);
   });
 
   await t.test("verified Ember producer publishes mode, run and attempt", () => {
-    const result = select("verified", ember, `return Response.json(${JSON.stringify(producer)});`);
+    const result = select("verified", ember, producer);
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.output, `${priorOutput}mode=ember\nrun_id=21\nrun_attempt=3\n`);
   });
 
   await t.test("ordinary selection publishes only mode without fetching", () => {
-    const result = select("ordinary", {}, 'throw new Error("unexpected producer lookup");');
+    const result = select("ordinary", {});
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.output, `${priorOutput}mode=ordinary\n`);
   });
