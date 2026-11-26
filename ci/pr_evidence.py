@@ -110,7 +110,15 @@ def collect(api, pr, web):
     return "\n".join(rows)
 
 
-def route(api, event):
+def route(api, event, *, event_name=None):
+    if event_name == "workflow_dispatch":
+        raw = event["inputs"]["pr_numbers"]
+        require(isinstance(raw, str) and len(raw) <= 4096, "Invalid backfill PR destinations")
+        numbers = json.loads(raw)
+        require(isinstance(numbers, list) and 0 < len(numbers) <= 256
+                and all(positive(number) and number < 2**53 for number in numbers),
+                "Invalid backfill PR destinations")
+        return sorted(set(numbers))
     if "workflow_run" not in event:
         require(positive(event["number"]), "Invalid PR number")
         return [event["number"]]
@@ -197,7 +205,8 @@ if __name__ == "__main__":
         if os.getenv("PR_NUMBER"):
             publish(api, repo, int(os.environ["PR_NUMBER"]))
         else:
-            numbers = route(api, json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text()))
+            event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+            numbers = route(api, event, event_name=os.getenv("GITHUB_EVENT_NAME"))
             Path(os.environ["GITHUB_OUTPUT"]).write_text(f"numbers={json.dumps(numbers)}\n")
     except (ValueError, KeyError, TypeError, subprocess.SubprocessError):
         sys.exit("PR evidence publication failed. Check the exact-head Actions and PR metadata.")

@@ -6,6 +6,12 @@ on:
   workflow_run:
     workflows: [ci, e2e, pr-gates, pr-size, "PR standards (required entry point)"]
     types: [completed]
+  workflow_dispatch:
+    inputs:
+      pr_numbers:
+        description: JSON array of open main PR numbers to refresh
+        type: string
+        required: true
 permissions: {}
 
 # Direct events can locate the PR before GitHub indexes its head commit.
@@ -17,6 +23,8 @@ concurrency:
         github.event_name == 'workflow_run' &&
         contains(fromJSON('["pull_request","pull_request_review"]'), github.event.workflow_run.event) &&
         format('pr-evidence-completed-{0}-{1}', github.event.workflow_run.head_repository.id, github.event.workflow_run.head_sha) ||
+        github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' &&
+        format('pr-evidence-backfill-{0}', github.run_id) ||
         'pr-evidence-ignored' }}
   cancel-in-progress: true
 
@@ -24,7 +32,8 @@ jobs:
   route:
     if: >-
       github.event_name == 'pull_request_target' && github.base_ref == 'main' ||
-      contains(fromJSON('["pull_request","pull_request_review"]'), github.event.workflow_run.event)
+      contains(fromJSON('["pull_request","pull_request_review"]'), github.event.workflow_run.event) ||
+      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 2
     permissions: { contents: read, pull-requests: read }
@@ -45,6 +54,8 @@ jobs:
     if: ${{ always() && needs.route.result == 'success' && needs.route.outputs.numbers != '[]' }}
     strategy:
       fail-fast: false
+      # A backfill shares the hosted pool with required checks.
+      max-parallel: ${{ github.event_name == 'workflow_dispatch' && 2 || 256 }}
       matrix:
         number: ${{ fromJSON(needs.route.outputs.numbers) }}
     concurrency:

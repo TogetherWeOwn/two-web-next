@@ -151,6 +151,26 @@ class EvidenceTest(unittest.TestCase):
             self.assertRegex(self.publish(), r"\| ci-ok \| \[success\].*runs/101/attempts/2\).*\| success \|")
         self.assertEqual(self.writes, ["POST", "PATCH"])
 
+    def test_manual_backfill_only_routes_explicit_positive_pr_numbers(self):
+        def no_lookup(*args, **kwargs):
+            self.fail("unexpected API call")
+
+        def dispatch(pr_numbers):
+            return route(no_lookup, {"inputs": {"pr_numbers": pr_numbers}}, event_name="workflow_dispatch")
+
+        self.assertEqual(dispatch("[43,42,43]"), [42, 43])
+        for raw in ("[]", "42", '["42"]', "[true]", "[0]", "[9007199254740992]",
+                    "[1," * 2048, json.dumps([1] * 257)):
+            with self.subTest(raw=raw[:32]):
+                with self.assertRaisesRegex(ValueError, "Invalid backfill PR destinations"):
+                    dispatch(raw)
+        self.pr["draft"] = True
+        self.records()
+        for number in dispatch("[42,42]"):
+            self.assertEqual(number, 42)
+            self.assertIn("| draft |", self.publish())
+        self.assertEqual(self.writes, ["POST"])
+
     def test_queued_stale_route_and_same_sha_fork_cannot_replace_current_evidence(self):
         queued = route(self.api, completion())
         self.assertEqual(queued, [42])
@@ -176,13 +196,18 @@ class EvidenceTest(unittest.TestCase):
                          r"    types: \[opened, reopened, synchronize, ready_for_review, converted_to_draft\]$")
         self.assertRegex(triggers, r"(?m)^  workflow_run:\n    workflows: [^\n]+\n    types: \[completed\]$")
         self.assertRegex(triggers, r"(?m)^    workflows: \[[^\n]*\bpr-gates\b")
+        self.assertIn("\n  workflow_dispatch:\n    inputs:\n      pr_numbers:\n", triggers)
         self.assertIn("\nconcurrency:\n", triggers)
         self.assertIn("format('pr-evidence-direct-{0}', github.event.pull_request.number)", triggers)
         self.assertIn("format('pr-evidence-completed-{0}-{1}', github.event.workflow_run.head_repository.id, "
                       "github.event.workflow_run.head_sha)", triggers)
+        dispatch_guard = "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'"
+        self.assertIn(dispatch_guard + " &&\n        format('pr-evidence-backfill-{0}', github.run_id)", triggers)
         self.assertIn("\n  cancel-in-progress: true\n", triggers)
-        publisher = jobs.split("\n  publish:\n", 1)[1]
+        router, publisher = jobs.split("\n  publish:\n", 1)
+        self.assertIn(dispatch_guard, router)
         self.assertIn("always() && needs.route.result == 'success'", publisher)
+        self.assertIn("max-parallel: ${{ github.event_name == 'workflow_dispatch' && 2 || 256 }}", publisher)
         self.assertIn("group: pr-evidence-${{ matrix.number }}\n      cancel-in-progress: false", publisher)
         self.assertIn("ref: ${{ github.workflow_sha }}\n          persist-credentials: false", publisher)
         self.assertIn("always() && steps.trusted-source.outcome == 'success'", publisher)
