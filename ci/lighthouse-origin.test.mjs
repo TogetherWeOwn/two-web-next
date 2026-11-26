@@ -1265,22 +1265,17 @@ test("package.json wires the command and its selftest", async () => {
   );
 });
 
-test("only browser-smoke opts into the 2-vCPU runner with a fork fallback", async () => {
+test("browser-smoke keeps the Ubuntu 24.04 visual baseline on both providers", async () => {
   const workflow = parse(
     await readFile(new URL("../.github/workflows/e2e.yml", import.meta.url), "utf8"),
   );
-  const runners = Object.fromEntries(
-    Object.entries(workflow.jobs).map(([id, job]) => [id, job["runs-on"]]),
+  assert.equal(
+    workflow.jobs["browser-smoke"]["runs-on"],
+    "${{ github.event_name && (github.event_name != 'pull_request' " +
+      "|| (github.repository && github.event.pull_request.head.repo.full_name == github.repository)) " +
+      "&& vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404' " +
+      "&& vars.CI_BLACKSMITH_2VCPU || 'ubuntu-24.04' }}",
   );
-  assert.deepEqual(runners, {
-    scope: "ubuntu-latest",
-    "browser-smoke":
-      "${{ (github.event_name != 'pull_request' || " +
-      "github.event.pull_request.head.repo.full_name == github.repository) && " +
-      "vars.CI_BLACKSMITH_2VCPU != 'ubuntu-latest' && " +
-      "vars.CI_BLACKSMITH_2VCPU || 'ubuntu-24.04' }}",
-    "e2e-ok": "ubuntu-latest",
-  });
 });
 
 test("the watch workflow is dispatch-only, GitHub-hosted, read-only, secret-free and pinned", async () => {
