@@ -375,10 +375,18 @@ test("each Ember opt-in probes the exact staging GET after revision verification
     [path, 503, "kit", 1],
   ]);
   for (const [path, status, marker, expected] of [...cases, ["/join/callback", 200, "kit", 1]]) {
-    const stub = `globalThis.fetch = async (url, options) => {
+    const stub = `const timeout = AbortSignal.timeout;
+    let probeSignal;
+    AbortSignal.timeout = (ms) => {
+      if (ms !== 10_000) throw new Error("Unexpected probe timeout");
+      probeSignal = timeout(ms);
+      return probeSignal;
+    };
+    globalThis.fetch = async (url, options) => {
       if (url !== "https://next.togetherweown.com${path}" || options.method !== "GET" ||
           options.credentials !== "omit" || options.headers ||
-          options.redirect !== "manual" || options.cache !== "no-store" || !options.signal) {
+          options.redirect !== "manual" || options.cache !== "no-store" ||
+          !probeSignal || options.signal !== probeSignal) {
         throw new Error("Unexpected probe request");
       }
       return new Response(null, {status: ${status}, headers: ${JSON.stringify(marker ? { "x-two-renderer": marker } : {})}});
@@ -427,6 +435,52 @@ test("the staging Kit renderer probe fails after six Hono responses", () => {
   assert.match(result.stderr, /GET \/ did not return x-two-renderer: kit/);
   assert.match(result.stderr, /^Probe requests: 6$/m);
   assert.match(result.stderr, /^Retry delays: 10000,10000,10000,10000,10000$/m);
+});
+
+test("the staging Kit renderer probe preserves observations when body cancellation rejects", async (t) => {
+  const cases = [
+    { status: 200, renderer: "kit", failure: null },
+    { status: 200, renderer: "hono", failure: "did not return x-two-renderer: kit" },
+    { status: 503, renderer: "kit", failure: "returned HTTP 503; expected 200" },
+  ];
+  for (const { status, renderer, failure } of cases) {
+    await t.test(`HTTP ${status} / ${renderer}`, () => {
+      const result = runKitProbe(
+        "/join",
+        `let calls = 0;
+        let cancellations = 0;
+        globalThis.fetch = async () => {
+          calls += 1;
+          return new Response(new ReadableStream({
+            cancel() {
+              cancellations += 1;
+              throw new Error("synthetic cancellation detail");
+            }
+          }), {status: ${status}, headers: {"x-two-renderer": ${JSON.stringify(renderer)}}});
+        };
+        process.on("exit", () => {
+          console.error("Probe requests:", calls);
+          console.error("Body cancellations:", cancellations);
+          console.error("Retry delays:", JSON.stringify(retryDelays));
+        });`,
+        {},
+      );
+      const attempts = failure ? 6 : 1;
+      assert.ifError(result.error);
+      assert.equal(result.status, failure ? 1 : 0, result.stderr);
+      assert.equal(
+        result.stdout,
+        failure ? "" : "GET /join: HTTP 200, x-two-renderer: kit (attempt 1)\n",
+      );
+      assert.deepEqual(result.stderr.trimEnd().split("\n"), [
+        ...Array(attempts).fill("Warning: could not cancel the staging Kit response body"),
+        ...(failure ? [`Staging Kit renderer check failed: GET /join ${failure}`] : []),
+        `Probe requests: ${attempts}`,
+        `Body cancellations: ${attempts}`,
+        `Retry delays: ${failure ? "[10000,10000,10000,10000,10000]" : "[]"}`,
+      ]);
+    });
+  }
 });
 
 const denied = [
