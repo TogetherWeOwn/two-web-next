@@ -310,6 +310,7 @@ export async function readLiveProductionLedger({
       headers: { "cache-control": "no-cache" },
       signal: AbortSignal.timeout(10_000),
     });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
     body = await response.json();
   } catch (error) {
     throw new Error(

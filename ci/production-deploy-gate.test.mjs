@@ -2260,9 +2260,8 @@ test("ledger state requires a current database and the applied set", () => {
 
 test("live ledger read fails closed with a ledger reason on transport errors", async () => {
   const applied = await readLiveProductionLedger({
-    fetchImpl: async () => ({
-      json: async () => ({ db: "ok", pending_migrations: 0, migration_ledger: [40, 41, 42] }),
-    }),
+    fetchImpl: async () =>
+      Response.json({ db: "ok", pending_migrations: 0, migration_ledger: [40, 41, 42] }),
   });
   assert.deepEqual(applied, [40, 41, 42]);
   await assert.rejects(
@@ -2275,12 +2274,30 @@ test("live ledger read fails closed with a ledger reason on transport errors", a
   );
   await assert.rejects(
     readLiveProductionLedger({
-      fetchImpl: async () => ({
-        json: async () => ({ db: "error", pending_migrations: null, migration_ledger: null }),
-      }),
+      fetchImpl: async () =>
+        Response.json({ db: "error", pending_migrations: null, migration_ledger: null }),
     }),
     /ledger/i,
   );
+});
+
+test("live ledger read rejects non-2xx responses before reading the body", async (t) => {
+  for (const status of [302, 503]) {
+    await t.test(`HTTP ${status}`, async () => {
+      const response = Response.json(
+        { db: "ok", pending_migrations: 0, migration_ledger: [40, 41, 42] },
+        { status, statusText: "Untrusted status text" },
+      );
+      await assert.rejects(
+        readLiveProductionLedger({
+          origin: "https://stub.invalid",
+          fetchImpl: async () => response,
+        }),
+        { message: `production ledger read failed (HTTP ${status})` },
+      );
+      assert.equal(response.bodyUsed, false);
+    });
+  }
 });
 
 test("pending migrations stop the promotion with a migrator-blocked error (CLI)", () => {
