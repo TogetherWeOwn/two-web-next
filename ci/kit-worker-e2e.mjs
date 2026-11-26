@@ -14,6 +14,7 @@ import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 import { STAGING_STATIC_DOCUMENT_READY } from "../src/kit-staging-static.ts";
 import { prepareAdminDuplicateProbe } from "./fixtures/kit-admin-duplicate.mjs";
 import {
+  assertInstalledJoinAttemptDetail,
   assertKitAdminServing,
   assertKitAttendanceDisabled,
   assertMixedAdminAuthRollback,
@@ -25,6 +26,7 @@ import {
   prepareAdminRsvpFixture,
 } from "./fixtures/kit-admin-rsvp-controls.mjs";
 import { assertEventReadsParity } from "./fixtures/kit-event-reads-parity.mjs";
+import { assertEventCreateFormParity } from "./fixtures/kit-event-create-form-parity.mjs";
 import { assertResponseContracts } from "./fixtures/kit-response-contracts.mjs";
 import { assertStaticFeedParity } from "./fixtures/kit-static-feed-parity.mjs";
 import { expectedMarkerFor, kitHomeHeadingText } from "./kit-parity-gates.mjs";
@@ -341,6 +343,28 @@ export default {
     listen(kit.child, kit.origin, () => kit.log),
     listen(hono.child, hono.origin, () => hono.log),
   ]);
+
+  if (args.length) {
+    const { assertMemberBoardRollback } = await import("./fixtures/kit-member-board-rollback.mjs");
+    const secret = FIXTURE_SECRETS.SESSION_SECRET;
+    await assertMemberBoardRollback({
+      databaseUrl,
+      scratch,
+      secret,
+      worker,
+      startKit: async (entry, vars) => {
+        const instance = await startWorker(
+          "kit-member-board-rollback",
+          entry,
+          assets,
+          secret,
+          vars,
+        );
+        await listen(instance.child, instance.origin, () => instance.log);
+        return instance;
+      },
+    });
+  }
 
   if (args.length) {
     const { assertHotzoneSignalParity } = await import("./fixtures/kit-hotzone-signal-parity.mjs");
@@ -1010,6 +1034,22 @@ export default {
       databaseUrl,
     });
 
+    await assertInstalledJoinAttemptDetail({
+      worker,
+      scratch,
+      databaseUrl,
+      start: async (main, vars) => {
+        const instance = await startWorker(
+          "kit-admin-join-attempt-detail",
+          main,
+          assets,
+          secret,
+          vars,
+        );
+        await listen(instance.child, instance.origin, () => instance.log);
+        return { name: instance.name, origin: instance.origin };
+      },
+    });
     await runAdminRsvpControls();
 
     async function observeDataRedirect(worker, path) {
@@ -1215,6 +1255,12 @@ export default {
     }),
   ]);
   await assertResponseContracts({ hono: honoWithSession, off: kitWithSession, on: eventWritesOn });
+  await assertEventCreateFormParity({
+    hono: honoWithSession,
+    off: kitWithSession,
+    on: eventWritesOn,
+    databaseUrl,
+  });
   await assertEventReadsParity({
     hono: honoWithSession,
     unset: kitWithSession,
