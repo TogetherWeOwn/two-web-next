@@ -89,8 +89,11 @@ export async function stagingReceipt(
     soak = "This E2E rerun disqualifies the commit and blocks candidates with older runs";
   } else if (e2e && env.STAGING_SKIP_E2E === "true") {
     soak = "This E2E run is ineligible (journeys scope-skipped)";
-  } else if (!e2e && env.STAGING_JOB_STATUS === "failure") {
-    soak = "This deploy run is ineligible (deploy job failed)";
+  } else if (!e2e && env.STAGING_JOB_STATUS !== "success") {
+    soak =
+      env.STAGING_JOB_STATUS === "failure"
+        ? "This deploy run is ineligible (deploy job failed)"
+        : "This deploy run is ineligible (deploy job did not succeed)";
   } else if (!matched) {
     soak = "Unproven (identity receipt refused)";
   } else if (e2e) {

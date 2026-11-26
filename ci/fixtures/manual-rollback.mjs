@@ -89,6 +89,10 @@ case "$*" in
       printf '[{"versions":[{"version_id":"%s","percentage":5},{"version_id":"%s","percentage":95}]}]\\n' "$LIVE" "$SPLIT"
     else
       printf '[{"versions":[{"version_id":"%s","percentage":100}]}]\\n' "$LIVE"
+    fi
+    if [ "$DEPLOYMENT_QUERY_FAILS" = true ]; then
+      printf '%s\\n' 'Stub provider deployment query failed' >&2
+      exit 1
     fi ;;
   'wrangler rollback ${previous} --name stub-worker') exit 0 ;;
   *) exit 2 ;;
@@ -185,6 +189,7 @@ export function runFixture(dir, workflow, steps, dispatcher, overrides) {
         ROLLBACK_WORKER_NAME: "stub-worker",
         LIVE: expected,
         SPLIT: "",
+        DEPLOYMENT_QUERY_FAILS: "false",
         FETCH_STUB_JSON: JSON.stringify(responses.preflight),
         RECHECK_JSON: JSON.stringify(responses.recheck),
         ...overrides,
@@ -194,6 +199,7 @@ export function runFixture(dir, workflow, steps, dispatcher, overrides) {
       result,
       calls: readFileSync(requests, "utf8"),
       commands: readFileSync(wrangler, "utf8"),
+      guardOutput: readFileSync(output, "utf8"),
     };
   } finally {
     git("worktree", "remove", "--force", checkout);

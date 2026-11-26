@@ -117,6 +117,8 @@ export type Env = AgentEventsEnv & {
   KIT_ROUTE_HOME?: string;
   KIT_ROUTE_JOIN?: string;
   KIT_ROUTE_EMBER_PAGES?: string;
+  // Only the literal string "true" serves the retired directory 404s in Kit.
+  KIT_ROUTE_MEMBERS_NOT_FOUND?: string;
   DISCORD_LIVE_SOCKET_ENABLED?: string;
   // Browser auth endpoints. Only the literal string "true" opts in.
   KIT_ROUTE_AUTH?: string;

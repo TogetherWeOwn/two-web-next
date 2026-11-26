@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { readMigrationFiles } from "drizzle-orm/migrator";
 import {
   LEDGER_STATES,
   STAGING_WORKER,
@@ -16,7 +17,7 @@ import {
   verifyStagingProof,
   writeManifest,
 } from "./kit-cutover-evidence.mjs";
-import { verifyServed } from "./kit-cutover-staging.mjs";
+import { exercise, verifyServed } from "./kit-cutover-staging.mjs";
 
 const sourceSha = "a".repeat(40);
 const digest = "b".repeat(64);
@@ -200,6 +201,41 @@ test("isolated cutover repeats readiness and smoke when rollback is still propag
   ]);
 });
 
+test("isolated cutover refuses six stale readiness observations at the 1037 rollback target", async () => {
+  const origin = "https://cutover.example.invalid";
+  const prefixes = ledgerPrefixes(ledgerJournal);
+  const stale = {
+    db: "ok",
+    pending_migrations: 0,
+    migration_ledger: prefixes["1037"],
+    revision: { version_id: kit, commit: sourceSha },
+  };
+  const calls = [];
+  await assert.rejects(
+    verifyServed(origin, prefixes, identity, hono, "1037", "hono", {
+      probeReady: async (url, ledger, expected) => {
+        calls.push(["readiness", url, ledger, expected]);
+        return verifyReady(200, stale, ledger, expected);
+      },
+      probeRoutes: async (_origin, { onRoute }) => {
+        calls.push(["smoke"]);
+        onRoute("/", 0);
+        return true;
+      },
+      wait: async (ms) => {
+        calls.push(["wait", ms]);
+      },
+    }),
+    { message: "staging failed exact version and ledger verification" },
+  );
+  const expected = { version: hono, commit: sourceSha, state: "1037" };
+  const readiness = ["readiness", origin, prefixes, expected];
+  assert.deepEqual(calls, [
+    ...Array.from({ length: 5 }, () => [readiness, ["wait", 10_000]]).flat(),
+    readiness,
+  ]);
+});
+
 test("isolated cutover refuses persistent smoke failures after six attempts", async () => {
   const calls = [];
   await assert.rejects(
@@ -233,6 +269,34 @@ test("isolated cutover refuses persistent smoke failures after six attempts", as
   ]);
 });
 
+test("isolated cutover refuses successful smoke with no route checks", async () => {
+  const calls = [];
+  await assert.rejects(
+    verifyServed(
+      "https://cutover.example.invalid",
+      ledgerPrefixes(ledgerJournal),
+      identity,
+      hono,
+      "1037",
+      "hono",
+      {
+        probeReady: async () => {
+          calls.push("readiness");
+        },
+        probeRoutes: async () => {
+          calls.push("smoke");
+          return true;
+        },
+        wait: async () => {
+          calls.push("wait");
+        },
+      },
+    ),
+    { message: "isolated route smoke ran no checks" },
+  );
+  assert.deepEqual(calls, ["readiness", "smoke"]);
+});
+
 test("isolated cutover proof requires both exact versions and six healthy transitions", () => {
   const checks = LEDGER_STATES.flatMap((state) =>
     ["hono", "kit", "undo"].map((step) => ({
@@ -258,10 +322,27 @@ test("isolated cutover proof requires both exact versions and six healthy transi
   };
   verifyStagingProof(proof, identity);
   const ember = { ...proof, bindingCheck: "isolated-and-ember" };
-  verifyStagingProof(ember, { ...identity, mode: "ember" });
+  const emberPin = { ...identity, mode: "ember" };
+  verifyStagingProof(ember, emberPin);
+  assert.throws(
+    () => verifyStagingProof({ ...ember, kit: hono }, emberPin),
+    /staging requires distinct versions on one Worker/,
+  );
+  assert.throws(
+    () =>
+      verifyStagingProof(
+        { ...ember, configs: { ...ember.configs, kit: "g".repeat(64) } },
+        emberPin,
+      ),
+    /invalid staged config digests/,
+  );
+  assert.throws(
+    () => verifyStagingProof({ ...ember, routeCount: 0 }, emberPin),
+    /empty staged route smoke/,
+  );
   verifyStagingProof(ember, { ...identity, mode: "hono" });
   assert.throws(() => verifyStagingProof(ember, { ...identity, mode: "kit" }), /profile/);
-  assert.throws(() => verifyStagingProof(proof, { ...identity, mode: "ember" }), /profile/);
+  assert.throws(() => verifyStagingProof(proof, emberPin), /profile/);
   assert.throws(() => verifyStagingProof({ ...proof, kitReadinessSamples: 5 }, identity));
   assert.throws(() => verifyStagingProof({ ...proof, bindingCheck: "unobserved" }, identity));
   for (const change of [{ status: 503 }, { pending: 1 }, { version: kit }, { smoke: "failed" }]) {
@@ -338,6 +419,118 @@ test("isolated database admission fixes the host, database, owner, and run scope
     login: "two_web_cutover_21_3_runtime",
   });
   assert.throws(() => fixtureNames("21", "03"));
+});
+
+test("Ember fixture requires the exact 1033 starting prefix before recording 1037 proof", async (t) => {
+  const prefixes = ledgerPrefixes(inputs.journal);
+  const migrations = readMigrationFiles({ migrationsFolder: "drizzle" });
+  const names = { login: "two_web_cutover_21_3_runtime" };
+  const pin = { ...identity, mode: "ember" };
+
+  for (const [name, extraRows] of [
+    ["canonical 1034 prefix refuses", 1],
+    ["canonical 1033 prefix advances", 0],
+  ]) {
+    await t.test(name, async (t) => {
+      // Supply the ledger at the transition read, after the 1033 observations.
+      const rows = migrations
+        .slice(0, prefixes[1033].length + extraRows)
+        .map(({ folderMillis, hash }) => ({ created_at: String(folderMillis), hash }));
+      const owner = ([query]) => {
+        assert.match(
+          query,
+          /^SELECT created_at::text(?:, hash)? FROM drizzle\.__drizzle_migrations/,
+        );
+        return rows;
+      };
+      owner.begin = t.mock.fn(async (transaction) => {
+        const sql = (query, ...values) => {
+          if (typeof query === "string") {
+            assert.equal(query, names.login);
+            return query;
+          }
+          if (query[0].startsWith("INSERT INTO drizzle.__drizzle_migrations")) {
+            const [hash, createdAt] = values;
+            rows.push({ hash, created_at: String(createdAt) });
+            return;
+          }
+          assert.match(query[0], /^GRANT /);
+        };
+        sql.unsafe = () => {};
+        await transaction(sql);
+      });
+
+      const proof = {
+        schema: 1,
+        identity,
+        worker: `${STAGING_WORKER}-21-3`,
+        hono,
+        kit,
+        checks: [],
+        configs: { kit: digest, hono: digest },
+        kitReadinessSamples: 0,
+        bindingCheck: "isolated-and-ember",
+      };
+      let live = hono;
+      const traffic = [];
+      const run = exercise(
+        proof,
+        prefixes,
+        owner,
+        names,
+        "https://cutover.example.invalid",
+        ".",
+        {},
+        {
+          profile: "ember",
+          runWrangler: (profile, [command, subcommand, target]) => {
+            assert.equal(profile, "hono");
+            if (command === "deployments" && subcommand === "list") {
+              return JSON.stringify([{ versions: [{ version_id: live, percentage: 100 }] }]);
+            }
+            if (command === "versions" && subcommand === "deploy") {
+              assert.equal(target, `${kit}@100%`);
+              live = kit;
+            } else {
+              assert.equal(command, "rollback");
+              assert.equal(subcommand, hono);
+              live = hono;
+            }
+            traffic.push(live);
+          },
+          serve: async (_origin, _prefixes, _identity, version, state, renderer) => {
+            assert.equal(renderer, version === kit ? "kit" : "hono");
+            if (state === "1037") {
+              assert.deepEqual(
+                rows.map(({ created_at }) => Number(created_at)),
+                prefixes[1037],
+              );
+            }
+            return 1;
+          },
+          ready: async () => {},
+          wait: async () => {},
+        },
+      );
+
+      if (extraRows) {
+        await assert.rejects(run, /unexpected starting prefix/);
+        assert.equal(owner.begin.mock.callCount(), 0);
+        assert.deepEqual(traffic, [kit, hono]);
+        assert.deepEqual(
+          proof.checks.map(({ state }) => state),
+          ["1033", "1033", "1033"],
+        );
+        assert.equal(proof.kitReadinessSamples, 3);
+        assert.throws(() => verifyStagingProof(proof, pin));
+      } else {
+        await run;
+        assert.equal(owner.begin.mock.callCount(), 1);
+        assert.deepEqual(traffic, [kit, hono, kit, hono]);
+        verifyStagingProof(proof, pin);
+      }
+    });
+  }
 });
 
 test("isolated upload diagnostics keep only the operation, exit status and provider code", () => {
