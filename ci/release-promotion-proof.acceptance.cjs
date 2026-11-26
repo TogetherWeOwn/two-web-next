@@ -379,10 +379,14 @@ test("CalVer plans keep the original repair identity and distinguish a later att
     name: artifactName(f.sha, laterAttempt),
     digest: `sha256:${"5".repeat(64)}`,
   };
-  f.state.additionalAttempts[laterAttempt] = {
-    run: { ...producer, run_attempt: laterAttempt },
-    jobs: f.state.jobs.map((job) => ({ ...job, id: job.id + 10, run_attempt: laterAttempt })),
-  };
+  f.state.previousAttempts[ATTEMPT] = { run: producer, jobs: f.state.jobs };
+  f.state.latestAttempt = laterAttempt;
+  f.state.runs[0] = { ...producer, run_attempt: laterAttempt };
+  f.state.jobs = f.state.jobs.map((job) => ({
+    ...job,
+    id: job.id + 10,
+    run_attempt: laterAttempt,
+  }));
   f.state.additionalReceipts[laterArtifact.id] = {
     ...f.state.receipt,
     run_attempt: String(laterAttempt),

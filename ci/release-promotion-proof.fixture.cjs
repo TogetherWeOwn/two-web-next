@@ -96,11 +96,12 @@ function fakeGh() {
     }
     const selectedAttempt = action.match(/^runs\/([0-9]+)(?:\/attempts\/([0-9]+))?(\/jobs)?$/);
     if (selectedAttempt?.[1] === String(RUN)) {
-      const [, , attempt = String(ATTEMPT), jobsRoute] = selectedAttempt;
+      const latestAttempt = String(state.latestAttempt);
+      const [, , attempt = latestAttempt, jobsRoute] = selectedAttempt;
       const entry =
-        attempt === String(ATTEMPT)
+        attempt === latestAttempt
           ? { run: state.runs[0], jobs: state.jobs }
-          : state.additionalAttempts[attempt];
+          : state.previousAttempts[attempt];
       if (entry && jobsRoute) json({ total_count: entry.jobs.length, jobs: entry.jobs });
       if (!entry?.run) fail("gh: Not Found (HTTP 404)");
       json(entry.run);
@@ -206,7 +207,8 @@ function fixture(t) {
   const success = (name, number) => ({ name, number, status: "completed", conclusion: "success" });
   const state = {
     runs: [run],
-    additionalAttempts: {},
+    latestAttempt: ATTEMPT,
+    previousAttempts: {},
     jobs: [
       {
         id: 701,
