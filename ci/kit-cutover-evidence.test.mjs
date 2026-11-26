@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import {
   LEDGER_STATES,
@@ -48,6 +49,177 @@ async function writePacketFixture(dir) {
   const context = { sourceSha, runId: identity.runId, runAttempt: identity.runAttempt };
   return { ...context, digest: await writeManifest(dir, context, inputs) };
 }
+
+test("Ember upload CLI publishes only a valid native Wrangler receipt", async (t) => {
+  const scratch = await mkdtemp(join(tmpdir(), "ember-upload-receipt-"));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const packet = join(scratch, "packet");
+  const { runId, runAttempt, digest: manifest } = await writePacketFixture(packet);
+  const preload = join(scratch, "offline.mjs");
+  await writeFile(
+    preload,
+    `import assert from "node:assert/strict";
+import childProcess from "node:child_process";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+
+const { env } = process;
+globalThis.fetch = async (url) => {
+  assert.equal(url.href, "https://togetherweown.com/up");
+  return Response.json(JSON.parse(env.FIXTURE_READINESS));
+};
+childProcess.execFileSync = (tool, args, options) => {
+  if (tool === "git") {
+    assert.deepEqual(args, ["rev-parse", "HEAD"]);
+    return env.DEPLOY_SHA;
+  }
+  if (tool === "node_modules/.bin/wrangler") {
+    assert.deepEqual(args.slice(0, 3), ["versions", "view", env.ROLLBACK_VERSION_ID]);
+    return env.FIXTURE_UNDO;
+  }
+  assert.equal(tool, "web/node_modules/.bin/wrangler");
+  assert.deepEqual(args.slice(0, 3), ["versions", "upload", "--config"]);
+  const config = JSON.parse(fs.readFileSync(args[3], "utf8"));
+  assert.equal(config.vars.KIT_ROUTE_EMBER_PAGES, "true");
+  assert.equal(options.env.WRANGLER_OUTPUT_FILE_PATH, env.WRANGLER_OUTPUT_FILE_PATH);
+  fs.copyFileSync(env.FIXTURE_RECEIPT, options.env.WRANGLER_OUTPUT_FILE_PATH);
+  return "";
+};
+if (env.FIXTURE_RECEIPT_GROWS === "true") {
+  const fstat = fs.fstatSync;
+  fs.fstatSync = (fd) => {
+    const stat = fstat(fd);
+    const receipt = fs.statSync(env.WRANGLER_OUTPUT_FILE_PATH);
+    if (stat.dev === receipt.dev && stat.ino === receipt.ino) {
+      fs.appendFileSync(env.WRANGLER_OUTPUT_FILE_PATH, " ");
+    }
+    return stat;
+  };
+}
+syncBuiltinESMExports();
+`,
+  );
+  const worker = inputs.kit.name;
+  const upload = (overrides = {}) =>
+    JSON.stringify({
+      type: "version-upload",
+      version: 1,
+      worker_name: worker,
+      version_id: kit,
+      ...overrides,
+    });
+  const valid = `${JSON.stringify({ type: "version-upload-start" })}\r\n${upload()}\r\n`;
+  const atLimit = valid.padEnd(1024 * 1024);
+  const invalidUtf8 = Buffer.concat([
+    Buffer.from(`${valid}{"message":"`),
+    Buffer.from([0xff]),
+    Buffer.from('"}\n'),
+  ]);
+  const readiness = JSON.stringify({
+    db: "ok",
+    pending_migrations: 0,
+    migration_ledger: ledgerPrefixes(inputs.journal)["1033"],
+    revision: { version_id: hono, commit: sourceSha },
+  });
+  const undo = JSON.stringify({
+    id: hono,
+    annotations: {
+      "workers/tag": `${sourceSha}-1-1`,
+      "workers/message": `two-web-cutover-undo:${manifest}`,
+    },
+  });
+  const cases = [
+    { name: "normal", raw: valid },
+    { name: "at the byte limit", raw: atLimit },
+    { name: "over the byte limit", raw: `${atLimit} `, error: /Wrangler output too large/ },
+    {
+      name: "grows past the byte limit",
+      raw: atLimit,
+      grows: true,
+      error: /Wrangler output too large/,
+    },
+    {
+      name: "malformed JSON after upload",
+      raw: `${valid}{fixture-receipt-content}\n`,
+      error: /invalid JSON/,
+    },
+    {
+      name: "non-object after upload",
+      raw: `${valid}42\n`,
+      error: /invalid Wrangler output record/,
+    },
+    { name: "invalid UTF-8 after upload", raw: invalidUtf8, error: /invalid UTF-8/ },
+    { name: "no upload", raw: "{}\n", error: /expected one native version upload/ },
+    {
+      name: "duplicate upload",
+      raw: `${valid}${upload()}\n`,
+      error: /expected one native version upload/,
+    },
+    { name: "wrong target", raw: upload({ worker_name: "other-worker" }), error: /wrong target/ },
+    { name: "wrong schema", raw: upload({ version: 2 }), error: /wrong target/ },
+    {
+      name: "invalid version ID",
+      raw: upload({ version_id: "invalid" }),
+      error: /Worker Version ID/,
+    },
+  ];
+  for (const [index, { name, raw, error, grows }] of cases.entries()) {
+    await t.test(name, async () => {
+      const directory = join(scratch, `case-${index}`);
+      const receipt = join(directory, "fixture.jsonl");
+      const output = join(directory, "github-output");
+      // verifyPackage requires the top-level packet inventory to remain exact.
+      const artifact = join(directory, "artifact");
+      await cp(packet, artifact, { recursive: true });
+      await writeFile(receipt, raw);
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          preload,
+          fileURLToPath(new URL("./kit-cutover-deploy.mjs", import.meta.url)),
+          "upload",
+          artifact,
+        ],
+        {
+          cwd: fileURLToPath(new URL("../", import.meta.url)),
+          encoding: "utf8",
+          timeout: 5_000,
+          env: {
+            CUTOVER_MODE: "ember",
+            CUTOVER_PIN: `${runId}:${runAttempt}:${manifest}`,
+            CUTOVER_UNDO_VERSION: hono,
+            INPUT_SHA: sourceSha,
+            DEPLOY_SHA: sourceSha,
+            GITHUB_EVENT_NAME: "workflow_dispatch",
+            GITHUB_REF: "refs/heads/main",
+            PRODUCTION_AUTO_PROMOTE_DISABLED: "true",
+            ROLLBACK_VERSION_ID: hono,
+            GITHUB_RUN_ID: runId,
+            GITHUB_RUN_ATTEMPT: runAttempt,
+            GITHUB_OUTPUT: output,
+            WRANGLER_OUTPUT_FILE_PATH: join(directory, "native.jsonl"),
+            FIXTURE_READINESS: readiness,
+            FIXTURE_UNDO: undo,
+            FIXTURE_RECEIPT: receipt,
+            FIXTURE_RECEIPT_GROWS: String(Boolean(grows)),
+          },
+        },
+      );
+      assert.ifError(result.error);
+      if (error) {
+        assert.equal(result.status, 1, result.stdout);
+        assert.match(result.stderr, error);
+        assert.doesNotMatch(result.stderr, /fixture-receipt-content/);
+        assert.doesNotMatch(result.stdout, /Uploaded staged/);
+        await assert.rejects(readFile(output), { code: "ENOENT" });
+      } else {
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(await readFile(output, "utf8"), `version_id=${kit}\n`);
+      }
+    });
+  }
+});
 
 test("cutover packet refuses wrong bytes, package identity, or source config", async (t) => {
   const scratch = await mkdtemp(join(tmpdir(), "cutover-packet-test-"));
