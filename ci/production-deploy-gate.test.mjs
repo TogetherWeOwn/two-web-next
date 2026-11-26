@@ -185,13 +185,13 @@ function stubProductionApi(evidence, seen = {}) {
       assert.equal(parsed.searchParams.get("head_sha"), dispatchSha);
       assert.equal(parsed.searchParams.get("branch"), "main");
       assert.equal(parsed.searchParams.get("event"), "push");
-      return { ok: true, json: async () => evidence.runs };
+      return Response.json(evidence.runs);
     }
     if (parsed.pathname.endsWith("/runs/42/jobs")) {
-      return { ok: true, json: async () => evidence.jobs };
+      return Response.json(evidence.jobs);
     }
     if (parsed.pathname.endsWith("/runs/42")) {
-      return { ok: true, json: async () => evidence.current };
+      return Response.json(evidence.current);
     }
     assert.fail(`unexpected production gate API path ${parsed.pathname}`);
   };
