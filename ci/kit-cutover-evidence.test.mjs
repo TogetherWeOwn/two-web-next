@@ -109,36 +109,53 @@ test("isolated Worker settings and deletion readback uses bounded offline stream
     ["DELETE", script],
     ["GET", settings],
   ]) {
+    const request = (respond) => offlineApi(method, path, respond)(path, method);
     const oversized = fixture([...chunks, padding, Uint8Array.of(32)]);
-    await assert.rejects(offlineApi(method, path, () => oversized.response)(path, method), {
-      message: "staging Workers API response was unreadable, invalid or oversized",
-    });
+    await assert.rejects(
+      request(() => oversized.response),
+      {
+        message: "staging Workers API response was unreadable, invalid or oversized",
+      },
+    );
     assert.deepEqual(oversized.state(), { pulls: 4, cancelled: true, locked: false });
 
     const missing = fixture([], 404);
-    assert.equal(await offlineApi(method, path, () => missing.response)(path, method), null);
+    assert.equal(await request(() => missing.response), null);
     assert.deepEqual(missing.state(), { pulls: 0, cancelled: true, locked: false });
+
+    const refused = fixture([], 502);
+    for (const [response, message] of [
+      [fixture([]).response, "staging Workers API response was unreadable, invalid or oversized"],
+      [
+        fixture([new TextEncoder().encode("synthetic private response")]).response,
+        "staging Workers API response was unreadable, invalid or oversized",
+      ],
+      [refused.response, "staging Workers API refused the request"],
+      [
+        fixture([encode({ success: "synthetic private response" })]).response,
+        "staging Workers API returned an error",
+      ],
+    ]) {
+      await assert.rejects(
+        request(() => response),
+        { message },
+      );
+    }
+    assert.deepEqual(refused.state(), { pulls: 0, cancelled: true, locked: false });
+    await assert.rejects(
+      request(() => {
+        throw new Error("synthetic private transport error");
+      }),
+      { message: "staging Workers API request failed" },
+    );
   }
   assert.deepEqual(existing.state(), { pulls: 4, cancelled: false, locked: false });
   assert.deepEqual(deleted.state(), { pulls: 2, cancelled: false, locked: false });
 
-  const malformed = fixture([new TextEncoder().encode("synthetic private response")]);
-  const refused = fixture([], 502);
-  const rejected = fixture([encode({ success: "synthetic private response" })]);
   const missingResult = fixture([encode({ success: true, result: null })]);
-  for (const [response, message] of [
-    [malformed.response, "staging Workers API response was unreadable, invalid or oversized"],
-    [refused.response, "staging Workers API refused the request"],
-    [rejected.response, "staging Workers API returned an error"],
-    [missingResult.response, "staging Workers API returned invalid settings"],
-  ]) {
-    await assert.rejects(offlineApi("GET", settings, () => response)(settings), { message });
-  }
-  assert.deepEqual(refused.state(), { pulls: 0, cancelled: true, locked: false });
-  const failedFetch = offlineApi("GET", settings, () => {
-    throw new Error("synthetic private transport error");
+  await assert.rejects(offlineApi("GET", settings, () => missingResult.response)(settings), {
+    message: "staging Workers API returned invalid settings",
   });
-  await assert.rejects(failedFetch(settings), { message: "staging Workers API request failed" });
   assert.ok(timeout.mock.calls.length > 0);
   for (const call of timeout.mock.calls) assert.deepEqual(call.arguments, [10_000]);
 });
