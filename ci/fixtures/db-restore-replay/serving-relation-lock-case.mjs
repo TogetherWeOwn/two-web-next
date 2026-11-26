@@ -2,9 +2,6 @@ import assert from "node:assert/strict";
 import { webMigrationLockKey } from "../../db-migrate.mjs";
 import { withClient } from "./cluster.mjs";
 
-const advisoryStatement = "select pg_try_advisory_xact_lock($1) as acquired";
-const relationStatement = "lock table drizzle.__drizzle_migrations in share mode nowait";
-
 export async function assertServingLedgerRelationLock({
   admin,
   isolate,
@@ -28,13 +25,12 @@ export async function assertServingLedgerRelationLock({
       });
       // The recipe reaches the relation lock only after the advisory try-lock succeeds.
       const advisoryIndex = isolationQueries.findIndex(
-        ({ statement, advisoryKey }) =>
-          statement === advisoryStatement && advisoryKey === webMigrationLockKey,
+        ({ kind, advisoryKey }) => kind === "advisory-lock" && advisoryKey === webMigrationLockKey,
       );
       assert.ok(advisoryIndex >= 0, "Isolation must try the Web migration lock");
-      assert.equal(isolationQueries[advisoryIndex + 1]?.statement, relationStatement);
+      assert.equal(isolationQueries[advisoryIndex + 1]?.kind, "relation-lock");
       assert.ok(
-        isolationQueries.every(({ statement }) => !/^\s*(?:grant|revoke)\b/i.test(statement)),
+        isolationQueries.every(({ kind }) => kind !== "grant" && kind !== "revoke"),
         "Isolation must refuse before issuing scoped ACL changes",
       );
 

@@ -397,10 +397,16 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
       connect: () => {
         const client = fresh(migrator, "postgres", (_id, statement, parameters) => {
           const command = /^(grant|revoke)\b/i.exec(statement.trimStart())?.[0];
+          const kind = command?.toLowerCase() ??
+            (statement.startsWith("select pg_try_advisory_xact_lock(")
+              ? "advisory-lock"
+              : statement.startsWith("lock table drizzle.__drizzle_migrations")
+                ? "relation-lock"
+                : "other");
           if (command) aclCommands.add(command.toLowerCase());
           isolationQueries.push({
-            statement,
-            advisoryKey: statement.startsWith("select pg_try_advisory_xact_lock(")
+            kind,
+            advisoryKey: kind === "advisory-lock"
               ? Number(parameters[0])
               : undefined,
           });
