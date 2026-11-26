@@ -1,10 +1,11 @@
 name: e2e
 
 # Browser smoke for the critical journeys (docs/critical-journeys.md).
-# Public repo: standard GitHub-hosted ubuntu-latest runners only — never paid
-# larger runners or Blacksmith. The Postgres service is disposable per job;
-# the guard in e2e/ci-only.mjs permits only that target, never staging or
-# production. Browsers run here in CI only, never on the controller.
+# Only browser-smoke opts in to the organization's 2-vCPU runner. Fork PRs
+# and runs without the opt-in use GitHub-hosted ubuntu-latest. Each smoke job
+# gets a disposable Postgres service. The guard in e2e/ci-only.mjs permits
+# only that target, never staging or production. Browsers run here in CI
+# only, never on the controller.
 # Docs-only and test-only PRs (ci/change-scope.sh skip_e2e verdict, mirrored
 # from ci.yml) skip the smoke below: prose that no gate, test or build reads,
 # and unit tests the journeys never execute, prove nothing about browser
@@ -164,11 +165,11 @@ jobs:
     needs: scope
     # Drafts skip the 25-minute smoke; undrafting re-runs via ready_for_review.
     if: needs.scope.outputs.skip_e2e != 'true' && github.event.pull_request.draft != true
-    # Pinned for visual-regression stability: body text renders with the
-    # runner's system fonts, so a floating ubuntu-latest image change would
-    # shift every baseline with no code change. Bump deliberately and
-    # re-baseline in the same PR (docs/visual-regression.md).
-    runs-on: ubuntu-24.04
+    # The merge queue is disabled. Revisit this route before enabling it:
+    # merge_group can include fork changes without pull_request provenance.
+    # The fallback follows GitHub's ubuntu-latest image. Verify runner image
+    # changes against the existing baselines (docs/visual-regression.md).
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}
     timeout-minutes: 25
     services:
       postgres:

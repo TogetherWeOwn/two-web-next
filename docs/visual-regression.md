@@ -43,11 +43,11 @@ Each baseline exists at both widths (`<name>-desktop.png`, `<name>-mobile.png`).
   grows with page height, so a vanished primary button still passes. CI never
   rewrites an existing baseline (`updateSnapshots: "missing"` only creates
   absent ones), and the job fails while any generated baseline is uncommitted.
-- **Runner pin:** `browser-smoke` runs on pinned `ubuntu-24.04` (not
-  `ubuntu-latest`) because body text uses the runner's system fonts. A runner
-  image bump or a Playwright bump (`@playwright/test` in `package.json`) can
-  shift text rendering, so either bump is expected to re-baseline through the
-  failure artifact in its own PR.
+- **Runner images:** The opt-in Blacksmith runner uses Ubuntu 24.04. The
+  GitHub-hosted fallback follows `ubuntu-latest`, which can change across
+  runs. Body text uses system fonts, so run the existing visual checks when
+  either image or Playwright changes. Review any intentional rendering changes
+  in the failure artifact before accepting baselines.
 
 ## Evidence lookup
 

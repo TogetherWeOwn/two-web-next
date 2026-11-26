@@ -32,9 +32,7 @@ const calendarRunner = [
   "&& vars.CI_HEAVY_RUNNER == 'boat' && vars.CI_HEAVY_RUNNER || 'ubuntu-latest' }}",
 ].join(" ");
 // Keep the fixed OS for browser fixtures, visual baselines, recovery and the XFS fixture.
-// Re-baseline browser-smoke in the same PR as any bump (docs/visual-regression.md).
 const pinnedHostedJobs = new Map([
-  ["e2e.yml", "browser-smoke"],
   ["kit-activity-log-diagnostic.yml", "browser"],
   ["kit-browser-fixture.yml", "activity-log-capture"],
   ["kit-home-evidence.yml", "capture"],
@@ -44,6 +42,10 @@ const pinnedHostedJobs = new Map([
   ["kit-footer-browser.yml", "footer-browser"],
   ["xfs-qualification.yml", "fixture"],
 ]);
+const browserSmokeRunner =
+  "${{ (github.event_name != 'pull_request' || " +
+  "github.event.pull_request.head.repo.full_name == github.repository) && " +
+  "vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}";
 const localCall = /^\.\/\.github\/workflows\/([\w.-]+\.ya?ml)$/;
 const frozenLocalCall =
   /^TogetherWeOwn\/two-web-next\/\.github\/workflows\/([\w.-]+\.ya?ml)@([0-9a-f]{40})$/;
@@ -76,6 +78,8 @@ function expectHostedJob(name: string, id: string, job: Job) {
   if (job.uses === undefined) {
     if (name === "ci.yml" && id === "kit-browser-calendar") {
       expect(job["runs-on"], `${label} uses the approved Boat selector`).toBe(calendarRunner);
+    } else if (name === "e2e.yml" && id === "browser-smoke") {
+      expect(job["runs-on"], `${label} uses the approved 2-vCPU selector`).toBe(browserSmokeRunner);
     } else {
       const expected = pinnedHostedJobs.get(name) === id ? "ubuntu-24.04" : hosted;
       expect(job["runs-on"], `${label} uses literal ${expected}`).toBe(expected);
@@ -320,8 +324,8 @@ describe("workflow runner labels", () => {
     ["a runner group", "runs-on: {group: private, labels: ubuntu-latest}"],
     ["an ARM runner", "runs-on: ubuntu-24.04-arm"],
     ["a larger runner", "runs-on: ubuntu-24.04-16core"],
-    ["a variable selector", "runs-on: ${{ vars.CI_OVERFLOW_RUNNER }}"],
     ["the calendar selector on another job", `runs-on: ${calendarRunner}`],
+    ["a variable selector", "runs-on: ${{ vars.CI_OVERFLOW_RUNNER }}"],
     [
       "a visibility selector",
       "runs-on: ${{ github.event.repository.private && 'self-hosted' || 'ubuntu-latest' }}",
@@ -337,13 +341,22 @@ describe("workflow runner labels", () => {
   it("requires fixed runner labels for the pinned jobs only", () => {
     const fixed = { "runs-on": "ubuntu-24.04" };
     const latest = { "runs-on": hosted };
-    expect(() => expectHostedJob("e2e.yml", "browser-smoke", fixed)).not.toThrow();
-    expect(() => expectHostedJob("e2e.yml", "browser-smoke", latest)).toThrow(
+    expect(() => expectHostedJob("xfs-qualification.yml", "fixture", fixed)).not.toThrow();
+    expect(() => expectHostedJob("xfs-qualification.yml", "fixture", latest)).toThrow(
       "uses literal ubuntu-24.04",
     );
     expect(() => expectHostedJob("fixture.yml", "check", fixed)).toThrow(
       "uses literal ubuntu-latest",
     );
+  });
+
+  it("allows the 2-vCPU selector only on browser-smoke", () => {
+    const optIn = { "runs-on": browserSmokeRunner };
+    expect(() => expectHostedJob("e2e.yml", "browser-smoke", optIn)).not.toThrow();
+    expect(() => expectHostedJob("e2e.yml", "browser-smoke", { "runs-on": hosted })).toThrow(
+      "uses the approved 2-vCPU selector",
+    );
+    expect(() => expectHostedJob("e2e.yml", "scope", optIn)).toThrow("uses literal ubuntu-latest");
   });
 
   it("rejects unassessed reusable pins and non-hosted runner overrides", () => {
