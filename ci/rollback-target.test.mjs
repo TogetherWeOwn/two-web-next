@@ -1555,6 +1555,10 @@ test("staging rollback drill uses the latest decisive run and permits empty hist
   assert.equal(await drill(null, 404), null);
   await assert.rejects(drill(null, 503), /Rollback drill lookup failed \(HTTP 503\)/);
   assert.equal(await drill({ workflow_runs: [] }), null);
+  assert.equal(
+    await drill({ workflow_runs: [drillRun(Number.MAX_SAFE_INTEGER, "success")] }),
+    Number.MAX_SAFE_INTEGER,
+  );
   const cancelled = drillRun(3, "cancelled");
   const skipped = drillRun(4, "skipped");
   assert.equal(await drill({ workflow_runs: [cancelled, skipped] }), null);
