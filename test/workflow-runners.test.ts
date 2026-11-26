@@ -29,7 +29,7 @@ const calendarRunner = [
   "&& github.event.pull_request.head.repo.full_name == github.repository",
   `&& contains(fromJSON('["Rick7C2", "togetherweown[bot]"]'), github.actor)`,
   `&& contains(fromJSON('["Rick7C2", "togetherweown[bot]"]'), github.triggering_actor)`,
-  "&& vars.CI_HEAVY_RUNNER == 'boat' && 'boat' || 'ubuntu-latest' }}",
+  "&& vars.CI_HEAVY_RUNNER == 'boat' && vars.CI_HEAVY_RUNNER || 'ubuntu-latest' }}",
 ].join(" ");
 // Keep the fixed OS for browser fixtures, visual baselines, recovery and the XFS fixture.
 // Re-baseline browser-smoke in the same PR as any bump (docs/visual-regression.md).

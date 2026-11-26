@@ -11,6 +11,10 @@ state of any private runner fleet separately.
   is `boat`, the pull request head belongs to this repository, and both the
   original and triggering actors match the Boat allowlist. Fork pull requests,
   all other events, and missing or disabled capacity use `ubuntu-latest`.
+- The platform capacity switch updates `CI_HEAVY_RUNNER` for newly queued
+  runs. If Boat pauses a job after GitHub has assigned its label, wait for the
+  switch to show `ubuntu-latest` before requeuing CI. Contact the CI platform
+  maintainer if the switch stays on `boat` after included capacity runs out.
 - `test/workflow-runners.test.ts` pins the allowed direct job labels and the
   exact calendar selector. It checks reusable workflow calls at their pinned
   revisions or through their runner inputs. Run
