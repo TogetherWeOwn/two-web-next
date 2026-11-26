@@ -63,6 +63,115 @@ test("verifyVersion retries a 404, a network error and an old commit, then passe
   assert.equal(calls.length, 4);
 });
 
+test("verifyVersion accepts a complete body at the byte limit", async () => {
+  const exact = { sha: COMMIT, deployedAt: UPLOADED };
+  const { fetchImpl } = fetchOf(() => new Response(JSON.stringify(exact).padEnd(4096)));
+  const data = await verifyVersion("https://next.example.test", COMMIT, { fetchImpl, ...quiet });
+  assert.deepEqual(data, exact);
+});
+
+test("verifyVersion cancels an oversized stream before reaching EOF", async () => {
+  const encoder = new TextEncoder();
+  const chunks = [
+    encoder.encode(`{"sha":"${COMMIT}","deployedAt":"${UPLOADED}","extra":"`),
+    encoder.encode("é".repeat(2048)),
+    encoder.encode('"}'),
+  ];
+  let pulls = 0;
+  let cancelled = false;
+  const body = new ReadableStream(
+    {
+      pull(controller) {
+        const chunk = chunks[pulls++];
+        if (chunk) controller.enqueue(chunk);
+        else controller.close();
+      },
+      cancel() {
+        cancelled = true;
+        throw new Error("synthetic cleanup failure");
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const { fetchImpl } = fetchOf(() => new Response(body));
+
+  await assert.rejects(
+    verifyVersion("https://next.example.test", COMMIT, { fetchImpl, attempts: 1, ...quiet }),
+    /\/version response exceeds 4096 bytes/,
+  );
+  assert.equal(pulls, 2);
+  assert.equal(cancelled, true);
+  assert.equal(body.locked, false);
+});
+
+test("verifyVersion refuses malformed JSON even after a complete matching object", async () => {
+  const exact = JSON.stringify({ sha: COMMIT, deployedAt: UPLOADED });
+  const { fetchImpl } = fetchOf(() => new Response(`${exact}{`));
+  await assert.rejects(
+    verifyVersion("https://next.example.test", COMMIT, { fetchImpl, attempts: 1, ...quiet }),
+    /request failed \(SyntaxError\)/,
+  );
+});
+
+test("verifyVersion refuses malformed UTF-8 in otherwise matching JSON", async () => {
+  const encoded = new TextEncoder().encode(
+    JSON.stringify({ sha: COMMIT, deployedAt: UPLOADED, extra: "x" }),
+  );
+  encoded[encoded.length - 3] = 0xff;
+  const { fetchImpl } = fetchOf(() => new Response(encoded));
+  await assert.rejects(
+    verifyVersion("https://next.example.test", COMMIT, { fetchImpl, attempts: 1, ...quiet }),
+    /request failed \(TypeError\)/,
+  );
+});
+
+test("verifyVersion discards unread redirects and retries refused bodies before passing", async () => {
+  let pulls = 0;
+  let cancels = 0;
+  const redirectBody = new ReadableStream(
+    {
+      pull() {
+        pulls++;
+      },
+      cancel() {
+        cancels++;
+        return new Promise(() => {});
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const exact = { sha: COMMIT, deployedAt: UPLOADED };
+  const { fetchImpl, calls } = fetchOf(
+    () => new Response(redirectBody, { status: 302, headers: { location: "https://other.test" } }),
+    () => json({ ...exact, extra: "x".repeat(4096) }),
+    () => new Response("{"),
+    () => json(exact),
+  );
+  const delays = [];
+  const logs = [];
+  const data = await verifyVersion("https://next.example.test", COMMIT, {
+    fetchImpl,
+    attempts: 4,
+    sleep: async (ms) => delays.push(ms),
+    log: (message) => logs.push(message),
+  });
+
+  assert.equal(pulls, 0);
+  assert.equal(cancels, 1);
+  assert.deepEqual(data, exact);
+  assert.deepEqual(delays, [5000, 5000, 5000]);
+  assert.deepEqual(logs, [
+    "version attempt 1/4: /version answered HTTP 302",
+    "version attempt 2/4: /version response exceeds 4096 bytes",
+    "version attempt 3/4: request failed (SyntaxError)",
+  ]);
+  assert.equal(calls.length, 4);
+  for (const { url, init } of calls) {
+    assert.equal(url, "https://next.example.test/version");
+    assert.equal(init.redirect, "manual");
+  }
+});
+
 test("verifyVersion fails closed after the last attempt and names why", async () => {
   const { fetchImpl, calls } = fetchOf(() => json({ sha: OTHER, deployedAt: UPLOADED }));
   await assert.rejects(
