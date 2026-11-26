@@ -362,7 +362,11 @@ test("the regression gate refuses a recorded staging soak with elevated errors",
         STAGING_SOAK_REQUESTS: String(sample.requests),
         STAGING_SOAK_ERRORS: String(sample.errors),
       }),
-      { readJson: (path) => structuredClone(green[path]), fetchImpl: analytics(10_000, 100), nowMs },
+      {
+        readJson: (path) => structuredClone(green[path]),
+        fetchImpl: analytics(10_000, 100),
+        nowMs,
+      },
     );
 
   const elevated = await capture(2);
@@ -750,10 +754,7 @@ test("deploy-production runs the regression check before the deploy job", () => 
     regression,
     /STAGING_SOAK_REQUESTS: \$\{\{ needs\.staging-soak\.outputs\.requests \}\}/,
   );
-  assert.match(
-    regression,
-    /STAGING_SOAK_ERRORS: \$\{\{ needs\.staging-soak\.outputs\.errors \}\}/,
-  );
+  assert.match(regression, /STAGING_SOAK_ERRORS: \$\{\{ needs\.staging-soak\.outputs\.errors \}\}/);
   // The gate runs from the tip, the checkers from the candidate.
   assert.match(regression, /ref: \$\{\{ needs\.preflight\.outputs\.sha \}\}/);
   assert.match(regression, /ref: \$\{\{ github\.sha \}\}\n {10}path: gate-tip\n/);
