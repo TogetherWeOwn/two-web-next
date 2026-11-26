@@ -549,13 +549,32 @@ test("passive ledger selection requires valid GitHub listings", async (t) => {
   const listPath = "/actions/workflows/e2e-staging.yml/runs";
   const repositoryUrl = "https://api.github.com/repos/fixture/repo";
   const blobUrl = "https://storage.example/passive-ledger.zip";
+  const malformedArtifactListing = {
+    artifacts: [
+      { id: 77, name: "staging-passive-ledger-9", expired: false },
+      { id: 78, name: "staging-passive-ledger-9" },
+    ],
+  };
 
-  async function checkListing({ pages, artifacts, runId = 9, refusal, requests }) {
+  async function checkListing({
+    pages = [],
+    artifacts,
+    runId = 9,
+    pinned = false,
+    refusal,
+    requests,
+  }) {
     const dir = mkdtempSync(join(tmpdir(), "passive-listing-"));
     const visited = [];
     try {
       const result = fetchPassiveLedgers(
-        { repository: "fixture/repo", sha: SHA, token: "fixture-only", dir },
+        {
+          repository: "fixture/repo",
+          sha: SHA,
+          token: "fixture-only",
+          dir,
+          expectedRunId: pinned ? runId : undefined,
+        },
         {
           fetchImpl: async (url) => {
             if (url === blobUrl) {
@@ -572,6 +591,11 @@ test("passive ledger selection requires valid GitHub listings", async (t) => {
               return Response.json(pages[page - 1]);
             }
             visited.push(path);
+            if (pinned && path === `/actions/runs/${runId}`) {
+              return Response.json(
+                e2eRun(runId, { event: "workflow_run", run_attempt: 1, conclusion: "success" }),
+              );
+            }
             if (path === `/actions/runs/${runId}/artifacts`) {
               assert.equal(searchParams.get("name"), `staging-passive-ledger-${runId}`);
               return Response.json(
@@ -657,16 +681,11 @@ test("passive ledger selection requires valid GitHub listings", async (t) => {
     ["a non-array field", { artifacts: {} }, /Malformed passive ledger artifact listing/],
     [
       "an invalid row beside a valid artifact",
-      {
-        artifacts: [
-          { id: 77, name: "staging-passive-ledger-9", expired: false },
-          { id: 78, name: "staging-passive-ledger-9" },
-        ],
-      },
+      malformedArtifactListing,
       /Malformed passive ledger artifact listing/,
     ],
     [
-      "an artifact with ID zero",
+      "a zero artifact ID",
       { artifacts: [{ id: 0, name: "staging-passive-ledger-9", expired: false }] },
       /Malformed passive ledger artifact listing/,
     ],
@@ -680,6 +699,14 @@ test("passive ledger selection requires valid GitHub listings", async (t) => {
       });
     });
   }
+  await t.test("a pinned run refuses a malformed artifact listing before download", async () => {
+    await checkListing({
+      pinned: true,
+      artifacts: malformedArtifactListing,
+      refusal: /Malformed passive ledger artifact listing/,
+      requests: ["/actions/runs/9", "/actions/runs/9/artifacts"],
+    });
+  });
 });
 
 test("passive ledgers use the soak E2E run even when a newer run exists", async () => {
