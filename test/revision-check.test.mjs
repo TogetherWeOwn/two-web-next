@@ -143,6 +143,7 @@ test("CLI and staging receipt bound /up before accepting revision evidence", asy
   for (const [name, status, body, accepted] of [
     ["200 at the byte limit", 200, atLimit, true],
     ["503 with revision metadata", 503, marker, true],
+    ["empty 200 response", 200, "", false],
     ["malformed JSON", 200, `${marker} unexpected-text`, false],
     ["chunked over the byte limit", 200, `${atLimit} `, false],
     ["compressed over the decoded byte limit", 503, gzipSync(`${atLimit} `), false],
