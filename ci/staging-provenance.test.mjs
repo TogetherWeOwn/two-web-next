@@ -76,6 +76,7 @@ test("staging receipts follow the served candidate through an out-of-order main 
   assert.ok(deploy.includes(`Live /up source \`${A}\`, Worker version \`${worker}\``));
   assert.ok(deploy.includes(`Live /version source \`${A}\`, deployed at \`${deployedAt}\``));
   assert.match(deploy, /Identity receipt matched at observation/);
+  assert.match(deploy, /^- \*\*Soak eligibility\*\* Pending a qualifying staging E2E run$/m);
   assert.deepEqual(calls.splice(0), ["/up", "/version"]);
 
   const failedDeploy = await stagingReceipt(
@@ -87,6 +88,25 @@ test("staging receipts follow the served candidate through an out-of-order main 
   assert.match(failedDeploy, /Identity receipt matched at observation/);
   assert.match(failedDeploy, /This deploy run is ineligible \(deploy job failed\)/);
   assert.deepEqual(calls.splice(0), ["/up", "/version"]);
+
+  for (const jobStatus of ["cancelled", "skipped", "", undefined, "<private response>"]) {
+    const ineligible = await stagingReceipt(
+      "deploy",
+      { ...env, STAGING_JOB_STATUS: jobStatus },
+      {},
+      { fetchImpl: fetchOrigins(A, A), now },
+    );
+    assert.ok(ineligible.includes(`Live /up source \`${A}\`, Worker version \`${worker}\``));
+    assert.ok(ineligible.includes(`Live /version source \`${A}\`, deployed at \`${deployedAt}\``));
+    assert.match(ineligible, /^- Identity receipt matched at observation$/m);
+    assert.match(
+      ineligible,
+      /^- \*\*Soak eligibility\*\* This deploy run is ineligible \(deploy job did not succeed\)$/m,
+      `job status ${JSON.stringify(jobStatus)}`,
+    );
+    assert.doesNotMatch(ineligible, /private response|Pending a qualifying staging E2E run/);
+    assert.deepEqual(calls.splice(0), ["/up", "/version"]);
+  }
 
   const failedUpload = await stagingReceipt(
     "deploy",
