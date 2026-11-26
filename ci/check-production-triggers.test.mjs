@@ -116,7 +116,7 @@ const DRIFTED = {
   "/queues/fixture-queue-internal/consumers": { body: consumers(WEB_SCRIPT) },
 };
 
-function cliWithStubbedFetch(responses, { env = {} } = {}) {
+function cliWithStubbedFetch(responses) {
   const scratch = mkdtempSync(
     join(
       process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(),
@@ -133,7 +133,28 @@ globalThis.fetch = async (input) => {
   const key = url.pathname.replace(/^\\/client\\/v4\\/accounts\\/[^/]+/, "");
   const hit = responses[key];
   if (!hit) throw new Error("unexpected fetch: " + url.pathname);
-  return { status: hit.status ?? 200, text: async () => JSON.stringify(hit.body) };
+  const init = { status: hit.status ?? 200 };
+  const json = JSON.stringify(hit.body);
+  if (hit.bytes === undefined) return new Response(json, init);
+
+  // End with a split multibyte character and trailing JSON whitespace. The
+  // over-limit stream crosses the ceiling while one byte remains unread.
+  const prefix = json.slice(0, -1) + ',"padding":"éé';
+  const tail = 'é"}\\n';
+  const bytes = new TextEncoder().encode(
+    prefix + " ".repeat(hit.bytes - Buffer.byteLength(prefix + tail)) + tail,
+  );
+  const chunks = [bytes.subarray(0, -4), bytes.subarray(-4, -1), bytes.subarray(-1)];
+  let nextChunk = 0;
+  return new Response(new ReadableStream({
+    pull(controller) {
+      if (nextChunk === chunks.length) controller.close();
+      else controller.enqueue(chunks[nextChunk++]);
+    },
+    cancel() {
+      console.error("fixture stream cancelled after " + nextChunk + " chunks");
+    },
+  }, { highWaterMark: 0 }), init);
 };
 `,
       { mode: 0o600 },
@@ -145,11 +166,9 @@ globalThis.fetch = async (input) => {
         encoding: "utf8",
         timeout: 30_000,
         env: {
-          ...process.env,
           CF_ACCOUNT_ID: "fixture-account-id",
           CLOUDFLARE_API_TOKEN: "fixture-token-never-real",
           STUB_RESPONSES: JSON.stringify(responses),
-          ...env,
         },
       },
     );
@@ -165,6 +184,29 @@ test("CLI exits 0 with a clean report when live triggers match the reviewed conf
   assert.equal(result.status, 0);
   assert.match(result.stdout, /no drift/);
   assert.equal(result.stderr, "");
+});
+
+test("CLI accepts valid JSON at the exact 1 MiB byte ceiling", () => {
+  const result = cliWithStubbedFetch({
+    ...CLEAN,
+    [schedules(WEB_SCRIPT)]: { body: crons(), bytes: 1_048_576 },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /no drift/);
+  assert.equal(result.stderr, "");
+});
+
+test("CLI refuses and cancels a stream crossing the 1 MiB byte ceiling", () => {
+  const result = cliWithStubbedFetch({
+    ...CLEAN,
+    [schedules(WEB_SCRIPT)]: { body: crons(), bytes: 1_048_578 },
+  });
+  assert.equal(result.status, 2, result.stdout || result.stderr);
+  assert.equal(result.stdout, "");
+  assert.equal(
+    result.stderr,
+    `fixture stream cancelled after 2 chunks\n::error::oversized response from ${schedules(WEB_SCRIPT)}\n`,
+  );
 });
 
 test("CLI exits 1 naming the drift on the pre-transfer web-owned topology", () => {
