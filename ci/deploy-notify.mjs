@@ -195,7 +195,7 @@ export async function notify(env, { fetchImpl = fetch, now = () => new Date() } 
   try {
     await response.body?.cancel();
   } catch {
-    // The HTTP status determines the notification outcome even if cleanup fails.
+    console.warn("::warning::deploy-notify could not cancel the webhook response body");
   }
   if (!response.ok) throw new Error(`deploy-notify webhook answered HTTP ${response.status}`);
   return { sent: true, payload };

@@ -325,6 +325,7 @@ test("notify cancels unread webhook bodies without changing the HTTP outcome", a
   for (const status of [202, 401]) {
     for (const cleanupFails of [false, true]) {
       await t.test(`HTTP ${status}, cleanup fails: ${cleanupFails}`, async () => {
+        const warning = t.mock.method(console, "warn", () => {});
         let reads = 0;
         let cancellations = 0;
         const stream = new ReadableStream(
@@ -354,6 +355,12 @@ test("notify cancels unread webhook bodies without changing the HTTP outcome", a
         }
         assert.equal(reads, 0);
         assert.equal(cancellations, 1);
+        assert.deepEqual(
+          warning.mock.calls.map((call) => call.arguments),
+          cleanupFails
+            ? [["::warning::deploy-notify could not cancel the webhook response body"]]
+            : [],
+        );
       });
     }
   }
