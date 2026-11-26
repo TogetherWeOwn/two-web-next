@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { parse } from "yaml";
 import { main } from "./lighthouse-origin-run.mjs";
 import { navigationMetadata } from "../test/lighthouse-navigation-fixtures.mjs";
 
@@ -1264,7 +1265,25 @@ test("package.json wires the command and its selftest", async () => {
   );
 });
 
-test("the workflow is dispatch-only, hosted, read-only, secret-free and pinned", async () => {
+test("only browser-smoke opts into the 2-vCPU runner with a fork fallback", async () => {
+  const workflow = parse(
+    await readFile(new URL("../.github/workflows/e2e.yml", import.meta.url), "utf8"),
+  );
+  const runners = Object.fromEntries(
+    Object.entries(workflow.jobs).map(([id, job]) => [id, job["runs-on"]]),
+  );
+  assert.deepEqual(runners, {
+    scope: "ubuntu-latest",
+    "browser-smoke":
+      "${{ (github.event_name != 'pull_request' || " +
+      "github.event.pull_request.head.repo.full_name == github.repository) && " +
+      "vars.CI_BLACKSMITH_2VCPU != 'ubuntu-latest' && " +
+      "vars.CI_BLACKSMITH_2VCPU || 'ubuntu-24.04' }}",
+    "e2e-ok": "ubuntu-latest",
+  });
+});
+
+test("the watch workflow is dispatch-only, GitHub-hosted, read-only, secret-free and pinned", async () => {
   const text = await readFile(
     new URL("../.github/workflows/watch-lighthouse.yml", import.meta.url),
     "utf8",
@@ -1274,10 +1293,7 @@ test("the workflow is dispatch-only, hosted, read-only, secret-free and pinned",
     .filter((line) => !/^\s*#/.test(line))
     .join("\n");
   assert.match(code, /^on:\n {2}workflow_dispatch:\n/m);
-  assert.doesNotMatch(
-    code,
-    /^ {2}(?:push|pull_request\w*|schedule|workflow_run|repository_dispatch):/m,
-  );
+  assert.deepEqual(Object.keys(parse(text).on), ["workflow_dispatch"]);
   assert.match(code, /^permissions:\n {2}contents: read\n\n/m);
   assert.doesNotMatch(code, /^\s+\w+: write\b/m);
   assert.equal(

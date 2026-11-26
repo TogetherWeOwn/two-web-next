@@ -22,11 +22,7 @@ globalThis.fetch = async (input) => {
       if (behavior.fail) throw new TypeError("fetch failed");
       const status = behavior.status ?? 200;
       const body = behavior.body ?? {};
-      return {
-        ok: status >= 200 && status < 300,
-        status,
-        json: async () => structuredClone(body),
-      };
+      return Response.json(body, { status });
     }
   }
   throw new Error(`unexpected fetch ${url}`);

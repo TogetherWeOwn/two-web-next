@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { readGitHubMetadataJson } from "./github-metadata-json.mjs";
 
 const ciPath = ".github/workflows/ci.yml";
 const shaPattern = /^[a-f0-9]{40}$/;
@@ -76,7 +77,7 @@ export async function requireSuccessfulMainPushCi(
       signal: AbortSignal.timeout(10_000),
     });
     requireEvidence(response.ok, `CI evidence request failed (HTTP ${response.status})`);
-    return response.json();
+    return readGitHubMetadataJson(response.body);
   }
   const query = new URLSearchParams({
     branch: "main",

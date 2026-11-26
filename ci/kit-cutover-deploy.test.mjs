@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
+import { first, preRollback, soakEnv, trustedReads } from "../test/fixtures/staging-soak-http.mjs";
 import { verifyOrdinaryLedger } from "./check-production-secrets.mjs";
-import { verifyReady } from "./kit-cutover-evidence.mjs";
+import { verifyReady, verifyStagingProof } from "./kit-cutover-evidence.mjs";
 import {
   selection,
   undoMessage,
@@ -11,6 +12,10 @@ import {
   verifyProducer,
   verifyUndoVersion,
 } from "./kit-cutover-deploy.mjs";
+import { STAGING_ORIGIN } from "./operator-constants.mjs";
+import { verifyAllocationSoak } from "./production-deploy-gate.mjs";
+import { deploymentTarget } from "./staging-deploy-gate.mjs";
+import { resolveStagingCandidate } from "./staging-provenance.mjs";
 
 const sourceSha = "a".repeat(40);
 const digest = "b".repeat(64);
@@ -18,6 +23,24 @@ const undoDigest = "c".repeat(64);
 const hono = "11111111-1111-1111-1111-111111111111";
 const kit = "22222222-2222-2222-2222-222222222222";
 const identity = { sourceSha, runId: "21", runAttempt: "3", digest };
+const proofUpload = {
+  name: "Retain successful isolated cutover proof",
+  status: "completed",
+  conclusion: "success",
+};
+
+function completedCutoverJob({ runId, runAttempt }) {
+  return {
+    id: 25,
+    name: "isolated-cutover",
+    run_id: Number(runId),
+    run_attempt: Number(runAttempt),
+    status: "completed",
+    conclusion: "success",
+    steps: [proofUpload],
+  };
+}
+
 const emberUndoVersion = {
   id: kit,
   annotations: {
@@ -120,18 +143,10 @@ test("cutover producer requires the exact main attempt and its successful proof 
   const upload = workflow.jobs["isolated-cutover"].steps.find((step) =>
     step.uses?.startsWith("actions/upload-artifact@"),
   );
+  assert.equal(upload.name, proofUpload.name);
   assert.equal(upload.with.name, "kit-cutover-proof-${{ github.run_attempt }}");
   assert.equal(upload.with["if-no-files-found"], "error");
-  const step = { name: upload.name, status: "completed", conclusion: "success" };
-  const job = {
-    id: 25,
-    name: "isolated-cutover",
-    run_id: 21,
-    run_attempt: 3,
-    status: "completed",
-    conclusion: "success",
-    steps: [step],
-  };
+  const job = completedCutoverJob(identity);
   const check = (attempt = run, isolated = job) =>
     verifyProducer(identity, "synthetic", async (url) => {
       const path = new URL(url).pathname;
@@ -147,13 +162,156 @@ test("cutover producer requires the exact main attempt and its successful proof 
   }
   for (const changes of [
     { steps: [] },
-    { steps: [{ ...step, conclusion: "failure" }] },
-    { steps: [{ ...step, conclusion: "skipped" }] },
+    { steps: [{ ...proofUpload, conclusion: "failure" }] },
+    { steps: [{ ...proofUpload, conclusion: "skipped" }] },
     { conclusion: "skipped", steps: [] },
     { run_attempt: 2 },
   ]) {
     await assert.rejects(check(run, { ...job, ...changes }), /proof upload did not succeed/);
   }
+});
+
+test("a newer main tip and a newer staging allocation have different effects on cutover evidence", async () => {
+  const successor = "d".repeat(40);
+  const repository = preRollback.head_repository.full_name;
+  const context = { repository, ref: "refs/heads/main", sha: successor };
+  const ciRun = {
+    ...preRollback,
+    event: "push",
+    path: ".github/workflows/ci.yml",
+  };
+  const trigger = { repository: { full_name: repository }, workflow_run: ciRun };
+  assert.equal(
+    deploymentTarget({
+      ...context,
+      eventName: "workflow_run",
+      event: trigger,
+      checkoutSha: sourceSha,
+    }),
+    sourceSha,
+  );
+  const deployRun = { ...ciRun, head_sha: successor, display_title: `deploy ${sourceSha}` };
+  assert.equal(
+    resolveStagingCandidate({
+      ...context,
+      eventName: "workflow_run",
+      event: { workflow_run: deployRun },
+    }),
+    sourceSha,
+  );
+  assert.equal(resolveStagingCandidate({ ...context, eventName: "workflow_dispatch" }), successor);
+
+  const own = { full_name: "TogetherWeOwn/two-web-next", fork: false, id: 23 };
+  const successorPin = { ...identity, sourceSha: successor, runId: "22" };
+  const readIsolatedRun = async (input) => {
+    const { pathname, search } = new URL(input);
+    const path = pathname.replace(/\/jobs$/, "");
+    const pin = [identity, successorPin].find(
+      ({ runId, runAttempt }) =>
+        path === `/repos/${own.full_name}/actions/runs/${runId}/attempts/${runAttempt}`,
+    );
+    assert.ok(pin);
+    if (pathname !== path) {
+      assert.equal(search, "?per_page=100&page=1");
+      return Response.json({ total_count: 1, jobs: [completedCutoverJob(pin)] });
+    }
+    return Response.json({
+      id: Number(pin.runId),
+      run_attempt: Number(pin.runAttempt),
+      repository: own,
+      head_repository: own,
+      head_sha: pin.sourceSha,
+      head_branch: "main",
+      path: ".github/workflows/xfs-qualification.yml",
+      event: "workflow_dispatch",
+      status: "completed",
+      conclusion: "success",
+    });
+  };
+  await verifyProducer(successorPin, "synthetic", readIsolatedRun);
+  await assert.rejects(
+    verifyProducer({ ...successorPin, sourceSha }, "synthetic", readIsolatedRun),
+    /attempt metadata/,
+  );
+  await verifyProducer(identity, "synthetic", readIsolatedRun);
+  const isolatedHono = "77777777-7777-7777-7777-777777777777";
+  const proof = {
+    identity,
+    schema: 1,
+    worker: `two-web-kit-cutover-proof-${identity.runId}-${identity.runAttempt}`,
+    hono: isolatedHono,
+    kit,
+    configs: { hono: digest, kit: digest },
+    routeCount: 1,
+    bindingCheck: "isolated-and-all-off",
+    kitReadinessSamples: 6,
+    checks: ["1033", "1037"].flatMap((state) =>
+      ["hono", "kit", "undo"].map((step) => ({
+        state,
+        step,
+        version: step === "kit" ? kit : isolatedHono,
+        status: 200,
+        pending: 0,
+        smoke: "passed",
+      })),
+    ),
+  };
+  verifyStagingProof(proof, identity);
+  assert.throws(() => verifyStagingProof(proof, { ...identity, sourceSha: successor }), /identity/);
+
+  const run = { ...preRollback, id: 103, head_sha: successor };
+  const floor = Date.parse(run.updated_at) + 30 * 60 * 1000;
+  const sharedVersion = first.versions[0].version_id;
+  const env = soakEnv({ accountId: "c".repeat(32), token: "synthetic-cloudflare-token" });
+  let analyticsReads = 0;
+  const fetchImpl = async (input, init) => {
+    const url = String(input);
+    if (url === `${STAGING_ORIGIN}/version`) {
+      return Response.json({ sha: sourceSha, deployedAt: "2026-01-01T10:00:00.000Z" });
+    }
+    if (url === `${STAGING_ORIGIN}/up`) {
+      return Response.json(
+        { revision: { commit: sourceSha, version_id: sharedVersion } },
+        { headers: { "x-two-origin": "two-web-next", "cache-control": "no-store" } },
+      );
+    }
+    assert.equal(url, "https://api.cloudflare.com/client/v4/graphql");
+    const { versionId, since, until } = JSON.parse(init.body).variables;
+    assert.equal(versionId, sharedVersion);
+    assert.equal(since, run.run_started_at);
+    assert.equal(Date.parse(until), floor);
+    analyticsReads += 1;
+    const sample = {
+      dimensions: { scriptVersion: sharedVersion },
+      sum: { requests: 250, errors: 0 },
+    };
+    return Response.json({
+      data: { viewer: { accounts: [{ workersInvocationsAdaptive: [sample] }] } },
+    });
+  };
+  const sample = (nowMs, allocations) =>
+    verifyAllocationSoak(env, {
+      now: () => nowMs,
+      fetchImpl: trustedReads({ fetchImpl }, { run, deployments: () => allocations }),
+    });
+
+  // A successor takes 100% after A's E2E passes and one second before A's floor.
+  const replacement = {
+    id: "66666666-6666-6666-6666-666666666666",
+    created_on: new Date(floor - 1000).toISOString(),
+    versions: [{ version_id: "88888888-8888-8888-8888-888888888888", percentage: 100 }],
+  };
+  await assert.rejects(sample(floor, [first, replacement]), /fresh E2E is required/);
+  await assert.rejects(sample(floor - 1, [first]), /has not soaked 30 minutes/);
+  assert.equal(analyticsReads, 0);
+
+  // The same executed E2E and isolated proof pair if only main advances.
+  const receipt = await sample(floor, [first]);
+  assert.equal(receipt.sha, proof.identity.sourceSha);
+  assert.equal(receipt.allocationId, first.id);
+  assert.equal(receipt.e2e.runId, run.id);
+  assert.deepEqual([receipt.sample.requests, receipt.sample.errors], [250, 0]);
+  assert.equal(analyticsReads, 1);
 });
 
 test("only undo preparation may admit confirmed deferred migrations", () => {

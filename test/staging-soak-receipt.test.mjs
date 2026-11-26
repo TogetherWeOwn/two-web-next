@@ -14,6 +14,7 @@ import {
   trustedReads,
 } from "./fixtures/staging-soak-http.mjs";
 import {
+  captureAllocationSoak,
   captureStagingSoakReceipt,
   validateStagingSoakReceipt,
 } from "../ci/staging-soak-receipt.mjs";
@@ -27,6 +28,9 @@ const otherVersion = "22222222-2222-2222-2222-222222222222";
 const revision = { commit: sha, version_id: workerVersion };
 const byFloor = Date.parse(floorAt);
 test("the staging soak CLI writes allocation evidence and outputs", () => assertSoakCli());
+test("the staging soak CLI emits no evidence when the final allocation read is unavailable", () => {
+  assertSoakCli({ finalReadUnavailable: true });
+});
 const graphUrl = "https://api.cloudflare.com/client/v4/graphql";
 const tag = (version = workerVersion, requests = 250, errors = 2) => ({
   dimensions: { scriptVersion: version },
@@ -186,6 +190,40 @@ test("records explicit supersession before or after the floor and preserves earl
   assert.equal(JSON.stringify(historical), saved);
 });
 
+test("allocation soak refuses a new allocation for the same Worker and candidate", async () => {
+  const soakEvidence = {
+    sha,
+    e2e: { ...evidence.e2e, startedAt: preRollback.run_started_at },
+  };
+  const sample = (deploymentReads) => {
+    const { queries, options } = mockReads();
+    return {
+      queries,
+      result: captureAllocationSoak(soakEvidence, {
+        ...options,
+        fetchImpl: trustedReads(options, {
+          deployments: () => deploymentReads.shift(),
+          run: preRollback,
+        }),
+      }),
+    };
+  };
+
+  const stableReads = [[first], [first]];
+  const receipt = await sample(stableReads).result;
+  assert.deepEqual(stableReads, []);
+  assert.equal(receipt.schema, "staging-soak/2");
+  assert.equal(receipt.allocationId, first.id);
+  assert.deepEqual(receipt.sample, expected.sample);
+
+  const replacement = { ...restored, created_on: floorAt };
+  const changedReads = [[first], [replacement, first]];
+  const during = sample(changedReads);
+  await assert.rejects(during.result, { message: "Staging allocation changed during sampling" });
+  assert.equal(during.queries.length, 1);
+  assert.deepEqual(changedReads, []);
+});
+
 test("a restored Worker needs continuous soak and fresh E2E for its new allocation", async () => {
   let deployments = () => [first];
   const sample = ({
@@ -213,11 +251,6 @@ test("a restored Worker needs continuous soak and fresh E2E for its new allocati
   assert.deepEqual(historical.sample, expected.sample);
   const saved = JSON.stringify(historical);
   await assert.rejects(sample({ run: failedManual }).result, /failed or was re-run/);
-  let reads = 0;
-  deployments = () => (reads++ === 0 ? [first] : [rollback, restored, first]);
-  const during = sample();
-  await assert.rejects(during.result, /allocation changed during sampling/);
-  assert.equal(during.queries.length, 1);
   deployments = () => [rollback, restored, first];
   const stale = sample({ nowMs: Date.parse("2026-01-01T10:44:00Z") });
   await assert.rejects(stale.result, /fresh E2E is required/);
