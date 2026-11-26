@@ -114,6 +114,14 @@
         "maxFiles": 2
       }
     },
+    "/admin/events/[key]/rsvp-pause": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
+    "/admin/events/[key]/rsvp-reopen": {
+      "js": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 },
+      "css": { "maxRawBytes": 0, "maxGzipBytes": 0, "maxFiles": 0 }
+    },
     "/admin/events/new": {
       "js": {
         "maxRawBytes": 153088,

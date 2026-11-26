@@ -18,6 +18,7 @@ import { gzipSync } from "node:zlib";
 import { parse } from "yaml";
 import { ROUTE_BUDGET, ROUTE_SCOPE } from "./check-kit-route-perf.mjs";
 import {
+  ADMIN_RSVP_ROUTE_DECISION,
   approvedClientBudget,
   approvedRouteBudget,
   ATTENDANCE_ROUTE_DECISION,
@@ -636,6 +637,7 @@ function beforeReconciliationAdmission(source) {
     !source.endsWith(`/${RECONCILIATION_ROUTE_DECISION}`) &&
     !source.endsWith(`/${ATTENDANCE_ROUTE_DECISION}`) &&
     !source.endsWith(`/${STRICT_ROUTE_INVENTORY_DECISION}`) &&
+    !source.endsWith(`/${ADMIN_RSVP_ROUTE_DECISION}`) &&
     !/\/auto-client-ratchet-[a-f0-9]{12}\.md$/.test(source)
   );
 }
