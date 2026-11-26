@@ -155,7 +155,8 @@ while keeping Ember's public pages on Kit.
 Before constructing the Ember workflow inputs, compare the selected candidate
 and serving Hono undo recorded in the reviewed release evidence. Add this
 section once to the evidence packet as a Markdown heading and text block,
-keeping the field names and order. Enclose any archived examples in a fence.
+keeping the field names and order. The helper skips headings inside fenced
+examples and HTML comment blocks.
 Use the approved Ember qualification SHA and pin for the candidate fields.
 Use the protected Hono dispatch's SHA and pin for the next two fields. Copy
 the UUID from the recorded 100% serving readback into `hono_serving_version`.
@@ -183,5 +184,7 @@ node ci/read-ember-release-evidence.mjs < release-evidence.md
 
 The command prints the mode, candidate SHA, pin, Hono undo UUID and bound
 manifest digest after checking that the recorded values agree. It reads up to
-512 KiB of local evidence. Keep `cutover_undo_digest` empty for Ember. Follow
-the protected release steps for live verification, approval and dispatch.
+512 KiB of local evidence. Copy `mode` to `cutover_mode`, `candidateSha` to
+`sha`, `qualificationPin` to `cutover_pin`, and `honoUndoVersion` to
+`cutover_undo_version`. Keep `cutover_undo_digest` empty for Ember. Follow the
+protected release steps for live verification, approval and dispatch.

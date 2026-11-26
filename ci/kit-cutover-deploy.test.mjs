@@ -123,12 +123,22 @@ test("offline Ember readback ignores archived readbacks in Markdown fences", () 
   });
   const current = evidencePacket(readbackFields);
   for (const fence of ["````", "~~~"]) {
-    const archive = `${fence}markdown\n${fence}example\n${previous}\n${fence}\n`;
+    const archive = `${fence}markdown\n${fence}example\n<!--\n${previous}\n${fence}\n`;
     assertReadbackRejected(archive);
     const result = offlineReadback(`${archive}\n${current}`);
     assert.equal(result.status, 0, result.error?.message || result.stderr);
     assert.equal(JSON.parse(result.stdout).qualificationPin, qualificationPin);
   }
+});
+
+test("offline Ember readback ignores commented headings and fence markers", () => {
+  const comment = "<!-- Example fence\n```text\n-->\n";
+  const current = evidencePacket(readbackFields);
+  const result = offlineReadback(`${comment}\n${current}`);
+  assert.equal(result.status, 0, result.error?.message || result.stderr);
+  assert.equal(JSON.parse(result.stdout).qualificationPin, qualificationPin);
+  assertReadbackRejected(`${comment}\n${current}\n${current}`);
+  assertReadbackRejected(`<!-- Archived evidence\n${current}\n-->`);
 });
 
 test("offline Ember readback enforces the byte limit and UTF-8 decoding", () => {

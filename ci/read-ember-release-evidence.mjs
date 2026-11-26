@@ -17,7 +17,12 @@ const maxPacketBytes = 512 * 1024;
 function sectionStart(lines) {
   let start = -1;
   let openFence;
+  let inComment = false;
   for (const [index, line] of lines.entries()) {
+    if (!openFence && (inComment || /^ {0,3}<!--/.test(line))) {
+      inComment = !line.includes("-->");
+      continue;
+    }
     const [, marker, info] = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line) ?? [];
     if (openFence) {
       if (marker?.startsWith(openFence) && /^[\t ]*$/.test(info)) openFence = undefined;
