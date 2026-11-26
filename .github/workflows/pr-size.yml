@@ -86,6 +86,12 @@ jobs:
       pull-requests: write # Maintain the gate's PR comment.
     uses: TogetherWeOwn/.github/.github/workflows/pr-size-gate.yml@ac9ce8d63e0cebd19ede904ac79137190c329964
     with:
+      runs-on: >-
+        ${{ format('["{0}"]', github.event_name == 'pull_request'
+        && github.repository
+        && github.event.pull_request.head.repo.full_name == github.repository
+        && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'
+        && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest') }}
       pr-number: ${{ inputs.pr_number || '' }}
       exclude-extra: "public/islands/**,public/styles.css,drizzle/meta/**"
 
