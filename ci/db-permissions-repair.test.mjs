@@ -33,7 +33,11 @@ test("executor authority replays committed provision and revoke without another 
     ["revoke", ["read present", "revoke", "read absent"]],
     ["revoke", ["read absent"]],
   ]) {
-    const plan = JSON.stringify({ operation, executor, identity: hash(`postgres\0${provisioner}`) });
+    const plan = JSON.stringify({
+      operation,
+      executor,
+      identity: hash(`postgres\0${provisioner}`),
+    });
     const env = {
       PRODUCTION_DB_EXECUTOR_PLAN: plan,
       PRODUCTION_DB_EXECUTOR_PLAN_SHA256: hash(plan),
