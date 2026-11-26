@@ -4,10 +4,19 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { generateSignedCookie } from "hono/cookie";
+import { parse } from "parse5";
 import postgres from "postgres";
 import { newEventKey } from "../../src/admin/validation-event-keys.ts";
+import { attr, elements, submittedFields } from "../../test/helpers/kit-edit-controls.ts";
 import { EMBER_CUTOVER_VARS } from "../kit-cutover-evidence.mjs";
 import { FIXTURE_SECRETS, SESSION_COOKIE } from "../parity/fixture.mjs";
+import {
+  parseRenderedPage,
+  renderedAttribute,
+  renderedElements,
+  renderedText,
+} from "../rendered-page.mjs";
+import { assertAdminDuplicateServing } from "./kit-admin-duplicate.mjs";
 
 const editor = "/admin/events/new";
 const legacyCreate = "/admin/events/create";
@@ -138,6 +147,142 @@ async function visit(
   assert.match(response.headers.get("content-security-policy") ?? "", /form-action 'self'/, label);
   if (method === "HEAD") assert.equal(text.length, 0, label);
   return { headers: response.headers, text };
+}
+
+async function assertActivityLogReadParity({ kit, off, databaseUrl }) {
+  const path = "/admin/activity-log";
+  const pageSize = 50;
+  const actor = 900000000000000000n + BigInt(`0x${randomBytes(7).toString("hex")}`);
+  const moderatorId = String(actor);
+  const subject = `Fixture activity & ${moderatorId}`;
+  const filters = { subject, causer: moderatorId };
+  const sql = postgres(databaseUrl, { max: 1 });
+  let seededIds = [];
+
+  function row(index) {
+    return {
+      description: `Synthetic activity ${index}`,
+      subject_type: "FixtureActivity",
+      subject_id: subject,
+      causer_id: moderatorId,
+      created_at: new Date(Date.UTC(2000, 0, 1, 0, 0, index === 1 ? 0 : index)),
+    };
+  }
+
+  async function readPage(target, href, cookie, owned, page, expectedRows) {
+    const label = `${target.name} activity page ${page}`;
+    const { headers, text } = await visit(target, href, 200, {
+      owned,
+      headers: { ...html, cookie },
+    });
+    const cache = headers.get("cache-control") ?? "";
+    assert.deepEqual(
+      cache
+        .split(",")
+        .map((part) => part.trim().toLowerCase())
+        .sort(),
+      ["no-store", "private"],
+      label,
+    );
+    const doc = parseRenderedPage(text);
+    const table = [...renderedElements(doc, { tag: "table" })].find(
+      (node) => renderedAttribute(node, "data-testid") === "activity-log-table",
+    );
+    assert.ok(table, `${label}: activity table`);
+    const [body] = renderedElements(table, { tag: "tbody" });
+    assert.ok(body, `${label}: activity rows`);
+    const rows = [...renderedElements(body, { tag: "tr" })].map((entry) => {
+      const cells = [...renderedElements(entry, { tag: "td" })];
+      assert.equal(cells.length, 4, label);
+      const [time] = renderedElements(cells[2], { tag: "time" });
+      assert.ok(time, `${label}: activity instant`);
+      return [
+        renderedText(cells[0]).trim(),
+        renderedText(cells[1]).trim(),
+        renderedAttribute(time, "datetime"),
+        renderedText(cells[3]).trim(),
+      ];
+    });
+    assert.deepEqual(
+      rows,
+      expectedRows.map((entry) => [
+        entry.causer_id,
+        entry.description,
+        entry.created_at.toISOString(),
+        `${entry.subject_type} ${entry.subject_id}`,
+      ]),
+      `${label}: exactly the matching activities in newest-first order`,
+    );
+
+    const pager = [...renderedElements(doc, { tag: "nav" })].find(
+      (node) => renderedAttribute(node, "aria-label") === "Activity pages",
+    );
+    assert.ok(pager, `${label}: activity pagination`);
+    const [pageLabel] = renderedElements(pager, { tag: "span" });
+    assert.ok(pageLabel, `${label}: page label`);
+    assert.equal(renderedText(pageLabel).trim(), `Page ${page}`, label);
+    const links = [...renderedElements(pager, { tag: "a" })];
+    assert.equal(links.length, 1, `${label}: one direction is available`);
+    const direction = page === 1 ? "next" : "prev";
+    assert.equal(renderedAttribute(links[0], "rel"), direction, label);
+    const destination = new URL(renderedAttribute(links[0], "href"), target.origin);
+    assert.equal(destination.origin, target.origin, label);
+    assert.equal(destination.pathname, path, label);
+    assert.deepEqual(
+      [...destination.searchParams].sort(),
+      Object.entries({ ...filters, page: page === 1 ? "2" : "1" }).sort(),
+      `${label}: ${direction} preserves both filters`,
+    );
+    return { href: destination.pathname + destination.search, cookie: renewedModerator(headers) };
+  }
+
+  try {
+    const matching = Array.from({ length: pageSize + 1 }, (_, index) => row(index));
+    // The oldest two share an instant at the page boundary. Insert the second
+    // one last so its higher ID breaks the tie, and reverse the remaining insert
+    // order to distinguish chronological ordering from ID ordering.
+    const inserts = [
+      matching[0],
+      ...matching.slice(2).reverse(),
+      { ...row(pageSize + 1), subject_id: `Different fixture ${moderatorId}` },
+      { ...row(pageSize + 2), causer_id: String(actor + 1n) },
+      matching[1],
+    ];
+    const inserted = await sql`
+      insert into activity_log ${sql(inserts, "description", "subject_type", "subject_id", "causer_id", "created_at")}
+      returning id
+    `;
+    seededIds = inserted.map(({ id }) => id);
+    const newestFirst = matching.toReversed();
+    const first = `${path}?${new URLSearchParams(filters)}`;
+    for (const [target, owned] of [
+      [kit, true],
+      [off, false],
+    ]) {
+      const cookie = await session(sql, moderatorId, true);
+      const next = await readPage(target, first, cookie, owned, 1, newestFirst.slice(0, pageSize));
+      await readPage(target, next.href, next.cookie, owned, 2, newestFirst.slice(pageSize));
+    }
+  } finally {
+    try {
+      await sql.begin(async (tx) => {
+        await tx`delete from web_session_grace where user_id = ${moderatorId}`;
+        await tx`delete from web_sessions where user_id = ${moderatorId}`;
+        if (seededIds.length) {
+          // The historical synthetic rows qualify for ordinary retention cleanup.
+          // The hosted job discards the new, append-only access receipts with its database.
+          const removed =
+            await tx`delete from activity_log where id in ${tx(seededIds)} returning id`;
+          assert.equal(removed.length, seededIds.length, "synthetic activity rows removed");
+        }
+      });
+    } finally {
+      await sql.end({ timeout: 1 });
+    }
+  }
+  console.log(
+    "PASS installed Kit and Hono activity log filtering, pagination, private no-store and fixture cleanup",
+  );
 }
 
 export async function assertMixedAdminAuthRollback({ worker, scratch, databaseUrl, start }) {
@@ -722,7 +867,121 @@ async function assertAdminPublish({ kit, off, hono, sql, moderatorId, member }) 
   console.log("PASS installed Worker admin publish admission, transitions, audit, and write-back");
 }
 
+function eventEditFields(html, path) {
+  const forms = elements(parse(html)).filter(
+    (el) => el.tagName === "form" && attr(el, "data-event-editor") !== undefined,
+  );
+  assert.equal(forms.length, 1, "one event editor form");
+  assert.equal(attr(forms[0], "method"), "post");
+  assert.equal(attr(forms[0], "action"), path);
+  return submittedFields(forms[0]);
+}
+
+async function assertEventEditFallback({
+  kit,
+  off,
+  sql,
+  eventPath,
+  editHtml,
+  moderatorId,
+  moderatorCookie,
+  member,
+}) {
+  const key = eventPath.split("/").at(-1);
+  const fields = eventEditFields(editHtml, eventPath);
+  const baseline = fields.saved_baseline;
+  assert.match(baseline ?? "", /^[0-9a-f]{64}$/, "the Kit editor renders a saved baseline");
+  const moderator = { ...html, cookie: moderatorCookie };
+  const title = "Fixture admin draft edited on Kit";
+  const body = new URLSearchParams({ ...fields, title });
+  const post = { method: "POST", body };
+
+  async function snapshot() {
+    const series = await sql`
+      select id, event_key, title, description, status, starts_at, ends_at, timezone, updated_at,
+        recurrence_frequency, recurrence_count, recurrence_ends_on, recurrence_index, parent_event_id
+      from events
+      where event_key = ${key} or parent_event_id = (select id from events where event_key = ${key})
+      order by recurrence_index
+    `;
+    const event = series.find((row) => row.event_key === key);
+    assert.ok(event, "the synthetic event exists");
+    const occurrences = series.filter((row) => row !== event);
+    const activity = await sql`
+      select id, description, causer_id, properties from activity_log
+      where subject_type = 'Event' and subject_id in ${sql(series.map((row) => row.event_key))}
+      order by id
+    `;
+    return { event, occurrences, activity: [...activity] };
+  }
+
+  const before = await snapshot();
+  assert.equal(fields.title, before.event.title, "the Kit editor renders the original title");
+  assert.equal(before.event.recurrence_frequency, "weekly");
+  assert.equal(before.event.recurrence_count, 2);
+  assert.equal(before.event.recurrence_ends_on?.toISOString().slice(0, 10), "2099-10-08");
+  assert.equal(before.event.recurrence_index, 1);
+  assert.deepEqual(
+    before.occurrences.map(({ recurrence_index, parent_event_id }) => [
+      recurrence_index,
+      parent_event_id,
+    ]),
+    [[2, before.event.id]],
+    "one future occurrence belongs to the event",
+  );
+  await visit(kit, eventPath, 403, { ...post, headers: { ...html, cookie: member } });
+  assert.deepEqual(await snapshot(), before, "a member cannot edit the event or append audit");
+
+  const saved = await visit(kit, eventPath, 303, { ...post, headers: moderator });
+  assert.equal(saved.headers.get("location"), `${eventPath}?saved=1`);
+  const committed = await snapshot();
+  const { updated_at: updatedAt, ...event } = committed.event;
+  const { updated_at: previousUpdate, ...previousEvent } = before.event;
+  assert.ok(updatedAt > previousUpdate, "the save advances the event version");
+  assert.deepEqual(
+    event,
+    { ...previousEvent, title },
+    "the edit preserves schedule and recurrence",
+  );
+  assert.deepEqual(committed.occurrences, before.occurrences, "the edit preserves the occurrence");
+  assert.equal(committed.activity.length, before.activity.length + 1, "one audit row for the edit");
+  assert.deepEqual(committed.activity.slice(0, -1), before.activity);
+  const receipt = committed.activity.at(-1);
+  assert.equal(receipt.causer_id, moderatorId);
+  assert.equal(receipt.description, `updated event ${title}`);
+  assert.deepEqual(receipt.properties.title, { before: before.event.title, after: title });
+
+  const fallback = await visit(off, eventPath, 200, { owned: false, headers: moderator });
+  const current = eventEditFields(fallback.text, eventPath);
+  assert.equal(current.title, title, "Hono renders the committed title in the edit control");
+  assert.match(current.saved_baseline ?? "", /^[0-9a-f]{64}$/);
+  assert.notEqual(current.saved_baseline, baseline, "Hono renders a fresh baseline after the edit");
+
+  const unsavedTitle = "Keep this unsaved event title";
+  const unsavedDescription = "Keep these unsaved event notes";
+  const stale = await visit(off, eventPath, 409, {
+    method: "POST",
+    body: new URLSearchParams({
+      ...fields,
+      title: unsavedTitle,
+      description: unsavedDescription,
+      saved_baseline: baseline,
+    }),
+    owned: false,
+    headers: { ...moderator, cookie: renewedModerator(fallback.headers) },
+  });
+  assert.equal(stale.headers.get("location"), null);
+  assert.match(stale.text, /data-testid="stale-save"/);
+  assert.match(stale.text, /data-event-draft=""/);
+  const retained = eventEditFields(stale.text, eventPath);
+  assert.equal(retained.title, unsavedTitle);
+  assert.equal(retained.description, unsavedDescription);
+  assert.equal(retained.saved_baseline, baseline);
+  assert.deepEqual(await snapshot(), committed, "the stale save leaves the event and audit intact");
+}
+
 export async function assertKitAdminServing({ kit, nativeCreate, off, hono, databaseUrl }) {
+  await assertActivityLogReadParity({ kit, off, databaseUrl });
   const actor = 900000000000000000n + BigInt(`0x${randomBytes(7).toString("hex")}`);
   const moderatorId = String(actor);
   const memberId = String(actor + 1n);
@@ -837,9 +1096,13 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
       ...form,
       body: new URLSearchParams({
         title: "Fixture admin draft",
+        description: "Fixture draft notes\nSecond line & example",
         starts_at: "2099-10-01T12:00",
         ends_at: "2099-10-01T13:00",
         timezone: "UTC",
+        recurrence_frequency: "weekly",
+        recurrence_count: "2",
+        recurrence_ends_on: "2099-10-08",
       }),
     });
     const eventPath = draft.headers.get("location")?.split("?")[0];
@@ -891,11 +1154,23 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
       await sql`select count(*)::int from events where created_by = ${moderatorId}`;
     const [{ count: writes }] =
       await sql`select count(*)::int from activity_log where causer_id = ${moderatorId}`;
-    assert.equal(events, 2, "event create and duplicate each persist once");
-    assert.equal(writes, 6, "six accepted actions each audit once; refusals do not write");
+    assert.equal(events, 3, "the series has two occurrences and duplicate adds one draft");
+    assert.equal(writes, 7, "accepted mutations audit each affected row once");
+
+    await assertAdminDuplicateServing({
+      kit,
+      off,
+      hono,
+      sql,
+      moderatorId,
+      moderator,
+      member,
+      visit,
+    });
 
     // A seeded key makes the parameter route observable next to the static
     // form and exact alias. Both installed modes keep the other forms in Kit.
+    let kitEdit;
     for (const target of [kit, nativeCreate, hono]) {
       const owned = target !== hono;
       const cookie = target === kit ? moderator : await session(sql, moderatorId, true);
@@ -915,6 +1190,7 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
       });
       assert.match(existing.text, /<h1[^>]*>Edit Fixture admin draft<\/h1>/);
       assert.ok(existing.text.includes(`action="${eventPath}"`));
+      assert.ok(existing.text.includes(`action="${eventPath}/duplicate"`));
       const current = renewedModerator(existing.headers);
       const ownedRedirect = target === nativeCreate;
       const alias = `${legacyCreate}?ignored=1&next=%2Felsewhere`;
@@ -952,12 +1228,17 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
         headers: { cookie: renewed },
       });
       assert.equal(legacyEdit.headers.get("location"), eventPath);
+      const latest = renewedModerator(legacyEdit.headers);
       await visit(target, legacyCreate, 413, {
         ...form,
         owned,
         body: "x".repeat(65537),
-        headers: { ...form.headers, cookie: renewedModerator(legacyEdit.headers) },
+        headers: { ...form.headers, cookie: latest },
       });
+      if (target === kit) {
+        kitEdit = existing.text;
+        moderator = latest;
+      }
     }
     console.log("PASS installed Worker admin event route precedence and moderator admission");
 
@@ -980,18 +1261,54 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
       assert.equal(parameter.headers.get("location"), "/auth/discord");
     }
     console.log("PASS installed Worker legacy event-create redirect with Kit ownership off and on");
+    // Draft edits have no Discord mirror; the queue stub serves publish requests only.
+    assert.ok(kitEdit, "the installed Kit editor was reached");
+    await assertEventEditFallback({
+      kit,
+      off,
+      sql,
+      eventPath,
+      editHtml: kitEdit,
+      moderatorId,
+      moderatorCookie: moderator,
+      member,
+    });
 
     await assertAdminPublish({ kit, off, hono, sql, moderatorId, member });
   } finally {
     try {
       // Audit rows are append-only and are isolated by the synthetic actor.
       // The hosted job discards the disposable database at teardown.
-      await sql`delete from featured_contents where created_by = ${moderatorId}`;
-      await sql`delete from events where created_by = ${moderatorId}`;
-      await sql`delete from web_sessions where user_id in (${moderatorId}, ${memberId})`;
+      await sql.begin(async (tx) => {
+        await tx`delete from featured_contents where created_by = ${moderatorId}`;
+        await tx`delete from events where created_by = ${moderatorId}`;
+        await tx`delete from web_session_grace where user_id in (${moderatorId}, ${memberId})`;
+        await tx`delete from web_sessions where user_id in (${moderatorId}, ${memberId})`;
+        const [remaining] = await tx`select
+          exists(select 1 from events where created_by = ${moderatorId}) as events,
+          exists(select 1 from web_sessions where user_id in (${moderatorId}, ${memberId})) as sessions,
+          exists(select 1 from web_session_grace where user_id in (${moderatorId}, ${memberId})) as grace`;
+        assert.deepEqual(remaining, { events: false, sessions: false, grace: false });
+      });
     } finally {
       await sql.end({ timeout: 1 });
     }
   }
+  console.log(
+    "PASS installed event edit and Hono stale retry preserve one audit row; fixtures cleaned up",
+  );
   console.log("PASS Kit admin ownership, isolated bearers, and native form parity");
+}
+
+export async function assertInstalledJoinAttemptDetail({ worker, scratch, databaseUrl, start }) {
+  const { assertJoinAttemptDetailParity, startJoinAttemptDetailFixture } = await import(
+    "./kit-admin-join-attempt-detail.mjs"
+  );
+  const target = await startJoinAttemptDetailFixture({ worker, scratch, start });
+  const sql = postgres(databaseUrl, { max: 1 });
+  try {
+    await assertJoinAttemptDetailParity({ worker: target, sql, visit, session, renewedModerator });
+  } finally {
+    await sql.end({ timeout: 1 });
+  }
 }
