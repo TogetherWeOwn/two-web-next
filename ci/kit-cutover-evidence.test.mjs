@@ -35,7 +35,9 @@ const hono = "11111111-1111-1111-1111-111111111111";
 const kit = "22222222-2222-2222-2222-222222222222";
 const identity = { sourceSha, runId: "21", runAttempt: "3", digest };
 const inputs = await sourceInputs();
-const ledgerJournal = inputs.journal;
+// Keep the offline rehearsal usable after the repository adds later migrations.
+const cutoverEnd = inputs.journal.findIndex(({ tag }) => tag === "1038_announcement-send-claims");
+const ledgerJournal = inputs.journal.slice(0, cutoverEnd + 1);
 
 test("packaging refuses installed Kit asset drift after parity", async (t) => {
   const scratch = await mkdtemp(join(tmpdir(), "cutover-packaging-test-"));
