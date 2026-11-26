@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -34,19 +35,23 @@ const ledgerJournal = [
 
 const inputs = await sourceInputs();
 
+async function writePacketFixture(dir) {
+  for (const profile of ["hono", "kit"]) {
+    await mkdir(join(dir, profile, "modules"), { recursive: true });
+    await mkdir(join(dir, profile, "assets"));
+    await writeFile(join(dir, profile, "assets", ".assetsignore"), "fixture");
+  }
+  await writeFile(join(dir, "hono/modules/worker.js"), "pure Hono");
+  await writeFile(join(dir, "kit/modules/_worker.js"), "facade");
+  await writeFile(join(dir, "kit/modules/kit-adapter.js"), "Kit adapter");
+  const context = { sourceSha, runId: identity.runId, runAttempt: identity.runAttempt };
+  return { ...context, digest: await writeManifest(dir, context, inputs) };
+}
+
 test("cutover packet refuses wrong bytes, package identity, or source config", async (t) => {
   const scratch = await mkdtemp(join(tmpdir(), "cutover-packet-test-"));
   t.after(() => rm(scratch, { recursive: true, force: true }));
-  for (const profile of ["hono", "kit"]) {
-    await mkdir(join(scratch, profile, "modules"), { recursive: true });
-    await mkdir(join(scratch, profile, "assets"));
-    await writeFile(join(scratch, profile, "assets", ".assetsignore"), "fixture");
-  }
-  await writeFile(join(scratch, "hono/modules/worker.js"), "pure Hono");
-  await writeFile(join(scratch, "kit/modules/_worker.js"), "facade");
-  await writeFile(join(scratch, "kit/modules/kit-adapter.js"), "Kit adapter");
-  const context = { sourceSha, runId: identity.runId, runAttempt: identity.runAttempt };
-  const pin = { ...context, digest: await writeManifest(scratch, context, inputs) };
+  const pin = await writePacketFixture(scratch);
   await verifyPackage(scratch, pin, inputs);
   await assert.rejects(verifyPackage(scratch, { ...pin, digest }, inputs), /manifest digest/);
   for (const [field, value] of [
@@ -77,6 +82,42 @@ test("cutover packet refuses wrong bytes, package identity, or source config", a
   await writeFile(join(scratch, "kit/modules/kit-adapter.js"), "Kit adapter");
   await writeFile(join(scratch, "hono/assets/.assetsignore"), "changed Hono asset control file");
   await assert.rejects(verifyPackage(scratch, pin, inputs), /hono bytes mismatch/);
+});
+
+test("isolated qualification refuses changed packet bytes and preserves earlier proof", async (t) => {
+  const scratch = await mkdtemp(join(tmpdir(), "cutover-handoff-test-"));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const packet = join(scratch, "kit-cutover-packet");
+  const proofPath = join(scratch, "proof.json");
+  const earlierProof = Buffer.from('{"fixture":"earlier isolated proof"}\n');
+  const pin = await writePacketFixture(packet);
+  await verifyPackage(packet, pin, inputs);
+  await writeFile(proofPath, earlierProof);
+  await writeFile(join(packet, "kit/modules/kit-adapter.js"), "Kit ADAPTER");
+
+  const result = spawnSync(process.execPath, ["ci/kit-cutover-staging.mjs", packet, proofPath], {
+    // Pass only the dispatch identity. The subprocess receives no service credentials.
+    env: {
+      GITHUB_ACTIONS: "true",
+      RUNNER_ENVIRONMENT: "github-hosted",
+      GITHUB_REF: "refs/heads/main",
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+      GITHUB_SHA: pin.sourceSha,
+      GITHUB_RUN_ID: pin.runId,
+      GITHUB_RUN_ATTEMPT: pin.runAttempt,
+      RUNNER_TEMP: scratch,
+      CUTOVER_PACKET_DIGEST: pin.digest,
+      CUTOVER_PROFILE: "ember",
+    },
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  assert.ifError(result.error);
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /AssertionError \[ERR_ASSERTION\]: cutover kit bytes mismatch/);
+  assert.equal(result.stdout, "");
+  assert.deepEqual(await readFile(proofPath), earlierProof);
+  assert.deepEqual((await readdir(scratch)).sort(), ["kit-cutover-packet", "proof.json"]);
 });
 
 test("cutover ledger admits exactly 1033 or 1037 and exact version readiness", () => {
@@ -159,6 +200,41 @@ test("isolated cutover repeats readiness and smoke when rollback is still propag
   ]);
 });
 
+test("isolated cutover refuses six stale readiness observations at the 1037 rollback target", async () => {
+  const origin = "https://cutover.example.invalid";
+  const prefixes = ledgerPrefixes(ledgerJournal);
+  const stale = {
+    db: "ok",
+    pending_migrations: 0,
+    migration_ledger: prefixes["1037"],
+    revision: { version_id: kit, commit: sourceSha },
+  };
+  const calls = [];
+  await assert.rejects(
+    verifyServed(origin, prefixes, identity, hono, "1037", "hono", {
+      probeReady: async (url, ledger, expected) => {
+        calls.push(["readiness", url, ledger, expected]);
+        return verifyReady(200, stale, ledger, expected);
+      },
+      probeRoutes: async (_origin, { onRoute }) => {
+        calls.push(["smoke"]);
+        onRoute("/", 0);
+        return true;
+      },
+      wait: async (ms) => {
+        calls.push(["wait", ms]);
+      },
+    }),
+    { message: "staging failed exact version and ledger verification" },
+  );
+  const expected = { version: hono, commit: sourceSha, state: "1037" };
+  const readiness = ["readiness", origin, prefixes, expected];
+  assert.deepEqual(calls, [
+    ...Array.from({ length: 5 }, () => [readiness, ["wait", 10_000]]).flat(),
+    readiness,
+  ]);
+});
+
 test("isolated cutover refuses persistent smoke failures after six attempts", async () => {
   const calls = [];
   await assert.rejects(
@@ -190,6 +266,34 @@ test("isolated cutover refuses persistent smoke failures after six attempts", as
     "readiness",
     "smoke",
   ]);
+});
+
+test("isolated cutover refuses successful smoke with no route checks", async () => {
+  const calls = [];
+  await assert.rejects(
+    verifyServed(
+      "https://cutover.example.invalid",
+      ledgerPrefixes(ledgerJournal),
+      identity,
+      hono,
+      "1037",
+      "hono",
+      {
+        probeReady: async () => {
+          calls.push("readiness");
+        },
+        probeRoutes: async () => {
+          calls.push("smoke");
+          return true;
+        },
+        wait: async () => {
+          calls.push("wait");
+        },
+      },
+    ),
+    { message: "isolated route smoke ran no checks" },
+  );
+  assert.deepEqual(calls, ["readiness", "smoke"]);
 });
 
 test("isolated cutover proof requires both exact versions and six healthy transitions", () => {

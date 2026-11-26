@@ -836,10 +836,10 @@ describe("e2e scope gate", () => {
     expect(trigger).toMatch(/(^|\n)  schedule:\n/);
   });
 
-  it("stays on standard hosted runners and skips only the smoke, never a required check", () => {
-    // browser-smoke is pinned to ubuntu-24.04 for visual-regression font
-    // stability (docs/visual-regression.md); still GitHub-hosted Linux.
-    expect(smoke).toMatch(/\n    runs-on: ubuntu-(latest|24\.04)\n/);
+  it("keeps the scope and required verdict on standard hosted runners", () => {
+    const verdict = e2e.split("\n  e2e-ok:\n")[1] ?? "";
+    expect(scopeJob).toMatch(/^ {4}runs-on: ubuntu-latest$/m);
+    expect(verdict).toMatch(/^ {4}runs-on: ubuntu-latest$/m);
     // browser-smoke is not a required check: CONTRIBUTING names exactly
     // ci-ok, gitleaks, e2e-ok and pr-lint, so a docs-only or test-only skip
     // never blocks a merge.
