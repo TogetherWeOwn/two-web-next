@@ -8,7 +8,11 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { first, preRollback, soakEnv, trustedReads } from "../test/fixtures/staging-soak-http.mjs";
 import { verifyOrdinaryLedger } from "./check-production-secrets.mjs";
-import { productionUploadConfig, verifyReady, verifyStagingProof } from "./kit-cutover-evidence.mjs";
+import {
+  productionUploadConfig,
+  verifyReady,
+  verifyStagingProof,
+} from "./kit-cutover-evidence.mjs";
 import {
   selection,
   undoMessage,
