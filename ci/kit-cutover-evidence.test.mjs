@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { registerHooks } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -845,6 +846,107 @@ test("isolated database admission fixes the host, database, owner, and run scope
     login: "two_web_cutover_21_3_runtime",
   });
   assert.throws(() => fixtureNames("21", "03"));
+});
+
+test("isolated fixture setup preserves the setup error and refuses a failed control close", async (t) => {
+  const fixtureModule = new URL("./kit-cutover-database.mjs?close-test", import.meta.url).href;
+  const postgresModule = `data:text/javascript,${encodeURIComponent(`
+    export const clients = new Map();
+    export default function postgres(url) {
+      const name = new URL(url).pathname;
+      if (!clients.has(name)) throw new Error("Unexpected fixture connection");
+      return clients.get(name)();
+    }
+  `)}`;
+  const { clients } = await import(postgresModule);
+  const hooks = registerHooks({
+    resolve(specifier, context, nextResolve) {
+      if (specifier === "postgres" && context.parentURL === fixtureModule) {
+        return { url: postgresModule, shortCircuit: true };
+      }
+      return nextResolve(specifier, context);
+    },
+  });
+  const { createFixture, fixtureDatabase, fixtureNames } = await import(fixtureModule).finally(() =>
+    hooks.deregister(),
+  );
+  const host = "ep-fixture.us-east-2.aws.neon.tech";
+  const url = fixtureDatabase(
+    `postgresql://two_web_cutover_owner:synthetic@${host}/two_web_cutover`,
+    host,
+  );
+  const names = fixtureNames("21", "3");
+  const setupError = new Error("synthetic setup failure");
+  const closeError = new Error("synthetic close failure");
+  const controlSetup = ["control open", "ownership", "freshness", "claim", "revoke", "create"];
+  const allocation = [...controlSetup, "revoke", "login", "grant", "control close"];
+
+  for (const [scenario, stopAt, failedClose, expectedError, expectedCalls] of [
+    [
+      "control operation and close fail",
+      "control",
+      "control",
+      setupError,
+      [...controlSetup, "control close"],
+    ],
+    [
+      "owner operation and close fail",
+      "owner",
+      "owner",
+      setupError,
+      [...allocation, "owner open", "owner setup", "owner close"],
+    ],
+    ["control close alone fails", null, "control", closeError, allocation],
+  ]) {
+    await t.test(scenario, async () => {
+      const calls = [];
+      function connect(client) {
+        calls.push(`${client} open`);
+        async function execute([sql]) {
+          if (sql.startsWith("SELECT current_user")) {
+            calls.push("ownership");
+            return [{ owned: true }];
+          }
+          if (sql.startsWith("SELECT")) {
+            calls.push("freshness");
+            return [{ db: false, login: false }];
+          }
+          const operation = {
+            "REVOKE CONNECT ON DATABASE two_web_cutover FROM PUBLIC": "revoke",
+            "REVOKE CONNECT ON DATABASE": "revoke",
+            "CREATE DATABASE": "create",
+            "CREATE ROLE": "login",
+            "GRANT CONNECT ON DATABASE": "grant",
+          }[sql.trim()];
+          assert.ok(operation, "unexpected fixture operation");
+          calls.push(operation);
+          if (stopAt === "control" && operation === "create") throw setupError;
+        }
+        return Object.assign((query) => (typeof query === "string" ? query : execute(query)), {
+          unsafe: (query) => ({
+            async simple() {
+              assert.equal(client, "owner");
+              assert.ok(query);
+              calls.push("owner setup");
+              if (stopAt === "owner") throw setupError;
+            },
+          }),
+          async end(options) {
+            assert.deepEqual(options, { timeout: 0 });
+            calls.push(`${client} close`);
+            if (failedClose === client) throw closeError;
+          },
+        });
+      }
+      clients.set(url.pathname, () => connect("control"));
+      clients.set(`/${names.db}`, () => connect("owner"));
+      const claim = async () => {
+        calls.push("claim");
+      };
+      await assert.rejects(createFixture(url, names, claim), (error) => error === expectedError);
+      assert.deepEqual(calls, expectedCalls);
+    });
+  }
 });
 
 test("Ember fixture requires the exact 1033 starting prefix before recording 1037 proof", async (t) => {
