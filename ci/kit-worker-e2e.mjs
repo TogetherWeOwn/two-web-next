@@ -12,14 +12,21 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 import { STAGING_STATIC_DOCUMENT_READY } from "../src/kit-staging-static.ts";
+import { prepareAdminDuplicateProbe } from "./fixtures/kit-admin-duplicate.mjs";
 import {
+  assertInstalledJoinAttemptDetail,
   assertKitAdminServing,
   assertKitAttendanceDisabled,
   assertMixedAdminAuthRollback,
   prepareAdminFixture,
   prepareAdminPublishFixture,
 } from "./fixtures/kit-admin-serving.mjs";
+import {
+  assertKitAdminRsvpControls,
+  prepareAdminRsvpFixture,
+} from "./fixtures/kit-admin-rsvp-controls.mjs";
 import { assertEventReadsParity } from "./fixtures/kit-event-reads-parity.mjs";
+import { assertEventCreateFormParity } from "./fixtures/kit-event-create-form-parity.mjs";
 import { assertResponseContracts } from "./fixtures/kit-response-contracts.mjs";
 import { assertStaticFeedParity } from "./fixtures/kit-static-feed-parity.mjs";
 import { expectedMarkerFor, kitHomeHeadingText } from "./kit-parity-gates.mjs";
@@ -120,7 +127,8 @@ const args = process.argv.slice(2);
 // The existing hosted Chromium lane opts in with --public-voice-browser.
 // Manual cutover qualification does not install Chromium or run this lane.
 const installedBrowser = args[0] === "--installed-output" && args[1] === "--public-voice-browser";
-if (installedBrowser) args.splice(1, 1);
+const installedAdminRsvp = args[0] === "--installed-output" && args[1] === "--moderator-rsvp-only";
+if (installedBrowser || installedAdminRsvp) args.splice(1, 1);
 const { worker, assets } = await workerOutput(args);
 const scratch = await mkdtemp(
   join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "kit-worker-e2e-"),
@@ -221,10 +229,30 @@ async function stopWorker(worker) {
   await Promise.race([worker.closed, delay(5_000, undefined, { ref: false })]);
 }
 
-// Buffer Worker output and print it only on failure: --log-level error keeps
-// success quiet while a red check still shows the cause.
-let failed = false;
-try {
+async function runAdminRsvpControls() {
+  const rsvpKitEntry = join(scratch, "kit-admin-rsvp.mjs");
+  const rsvpHonoEntry = join(scratch, "hono-admin-rsvp.mjs");
+  const secret = FIXTURE_SECRETS.SESSION_SECRET;
+  await prepareAdminRsvpFixture(worker, rsvpKitEntry);
+  await prepareAdminRsvpFixture(join(repo, "src/worker.ts"), rsvpHonoEntry);
+  const [rsvpKit, rsvpHono] = await Promise.all([
+    startWorker("kit-rsvp-controls", rsvpKitEntry, assets, secret),
+    startWorker("hono-rsvp-controls", rsvpHonoEntry, join(repo, "public"), secret),
+  ]);
+  await Promise.all(
+    [rsvpKit, rsvpHono].map((instance) =>
+      listen(instance.child, instance.origin, () => instance.log),
+    ),
+  );
+  await assertKitAdminRsvpControls({
+    on: { name: "kit admin on", origin: rsvpKit.origin },
+    off: { name: "kit admin off", origin: rsvpKit.origin },
+    hono: rsvpHono,
+    databaseUrl,
+  });
+}
+
+async function runWorkerParity() {
   if (installedBrowser) {
     // Run the cutover proof before the broader parity suite starts its Workers.
     const secret = FIXTURE_SECRETS.SESSION_SECRET;
@@ -315,6 +343,28 @@ export default {
     listen(kit.child, kit.origin, () => kit.log),
     listen(hono.child, hono.origin, () => hono.log),
   ]);
+
+  if (args.length) {
+    const { assertMemberBoardRollback } = await import("./fixtures/kit-member-board-rollback.mjs");
+    const secret = FIXTURE_SECRETS.SESSION_SECRET;
+    await assertMemberBoardRollback({
+      databaseUrl,
+      scratch,
+      secret,
+      worker,
+      startKit: async (entry, vars) => {
+        const instance = await startWorker(
+          "kit-member-board-rollback",
+          entry,
+          assets,
+          secret,
+          vars,
+        );
+        await listen(instance.child, instance.origin, () => instance.log);
+        return instance;
+      },
+    });
+  }
 
   if (args.length) {
     const { assertHotzoneSignalParity } = await import("./fixtures/kit-hotzone-signal-parity.mjs");
@@ -910,22 +960,26 @@ export default {
   }
 
   const secret = FIXTURE_SECRETS.SESSION_SECRET;
+  async function startAdminProbe(name, source, directory, vars) {
+    if (!args.length) return startWorker(name, source, directory, secret, vars);
+    const entry = join(scratch, `${name}-duplicate-probe.mjs`);
+    await prepareAdminDuplicateProbe(source, entry);
+    return startWorker(name, entry, directory, secret, vars);
+  }
   const honoEntry = join(repo, "src/worker.ts");
-  const honoWithSession = await startWorker(
+  const honoWithSession = await startAdminProbe(
     "hono-session",
     args.length
       ? await prepareAdminPublishFixture(honoEntry, join(scratch, "hono-publish.mjs"))
       : honoEntry,
     join(repo, "public"),
-    secret,
   );
-  const kitWithSession = await startWorker(
+  const kitWithSession = await startAdminProbe(
     "kit-session",
     args.length
       ? await prepareAdminPublishFixture(worker, join(scratch, "kit-off-publish.mjs"))
       : worker,
     assets,
-    secret,
   );
   await Promise.all(
     [honoWithSession, kitWithSession].map((instance) =>
@@ -962,7 +1016,7 @@ export default {
     const entry = join(scratch, "kit-admin.mjs");
     const vars = await prepareAdminFixture(worker, entry);
     const publishEntry = await prepareAdminPublishFixture(entry, join(scratch, "kit-publish.mjs"));
-    const admin = await startWorker("kit-admin", publishEntry, assets, secret, vars);
+    const admin = await startAdminProbe("kit-admin", publishEntry, assets, vars);
     const nativeCreate = await startWorker("kit-admin-native-create", entry, assets, secret, {
       ...vars,
       KIT_PARITY_FIXTURE_ADMIN_EVENT_CREATE_REDIRECT: "true",
@@ -979,6 +1033,24 @@ export default {
       hono: honoWithSession,
       databaseUrl,
     });
+
+    await assertInstalledJoinAttemptDetail({
+      worker,
+      scratch,
+      databaseUrl,
+      start: async (main, vars) => {
+        const instance = await startWorker(
+          "kit-admin-join-attempt-detail",
+          main,
+          assets,
+          secret,
+          vars,
+        );
+        await listen(instance.child, instance.origin, () => instance.log);
+        return { name: instance.name, origin: instance.origin };
+      },
+    });
+    await runAdminRsvpControls();
 
     async function observeDataRedirect(worker, path) {
       const response = await fetch(`${worker.origin}${path}`, { redirect: "manual" });
@@ -1183,6 +1255,12 @@ export default {
     }),
   ]);
   await assertResponseContracts({ hono: honoWithSession, off: kitWithSession, on: eventWritesOn });
+  await assertEventCreateFormParity({
+    hono: honoWithSession,
+    off: kitWithSession,
+    on: eventWritesOn,
+    databaseUrl,
+  });
   await assertEventReadsParity({
     hono: honoWithSession,
     unset: kitWithSession,
@@ -1343,6 +1421,14 @@ export default machineParityWorker(inner, ${JSON.stringify(probePath)}, ${name =
       },
     });
   }
+}
+
+// Buffer Worker output and print it only on failure so both proof modes show
+// the error and close every Worker they started.
+let failed = false;
+try {
+  if (installedAdminRsvp) await runAdminRsvpControls();
+  else await runWorkerParity();
 } catch (error) {
   failed = true;
   throw error;

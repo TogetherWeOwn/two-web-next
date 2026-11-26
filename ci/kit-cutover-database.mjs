@@ -99,10 +99,15 @@ export async function removeFixture(url, names) {
   }
 }
 
-export async function advanceFixture(owner, expected, runtimeLogin) {
+export async function advanceFixture(owner, expected, runtimeLogin, expectedStartLength) {
   const migrations = readMigrationFiles({ migrationsFolder: "drizzle" });
   const applied =
     await owner`SELECT created_at::text, hash FROM drizzle.__drizzle_migrations ORDER BY created_at, id`;
+  assert.equal(
+    applied.length,
+    expectedStartLength,
+    "synthetic ledger has an unexpected starting prefix",
+  );
   for (const [index, row] of applied.entries()) {
     assert.equal(Number(row.created_at), migrations[index]?.folderMillis);
     assert.equal(row.hash, migrations[index]?.hash);

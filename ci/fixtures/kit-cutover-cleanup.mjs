@@ -117,10 +117,11 @@ for (const failure of ["validation", "recording"]) {
         logins.add(names.login);
         return { owner };
       },
-      async advance(connection, ledger, login) {
+      async advance(connection, ledger, login, startingLength) {
         assert.equal(connection, owner);
         assert.equal(ledger, prefixes["1033"]);
         assert.equal(login, names.login);
+        assert.equal(startingLength, 0);
       },
       async deploy(_dir, scratchPath, proof) {
         scratch = scratchPath;

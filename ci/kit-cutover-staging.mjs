@@ -239,17 +239,35 @@ async function deployPacket(dir, scratch, proof, origin, inputs, api, credential
   }
 }
 
-async function exercise(proof, prefixes, owner, names, origin, dir, secrets) {
+export async function exercise(
+  proof,
+  prefixes,
+  owner,
+  names,
+  origin,
+  dir,
+  secrets,
+  {
+    profile = cutoverProfile,
+    runWrangler = wrangler,
+    serve = verifyServed,
+    ready = readReady,
+    wait = delay,
+  } = {},
+) {
+  const admin = profile === "admin";
+  const ember = profile === "ember";
+  const baseline = admin ? "ember" : "hono";
   const { identity, kit, checks } = proof;
   const fallback = proof[baseline];
   const config = join(dir, admin ? "kit/wrangler.ember.json" : "hono/wrangler.json");
-  const run = (...args) => wrangler(admin ? "kit" : "hono", [...args, "--config", config]);
+  const run = (...args) => runWrangler(admin ? "kit" : "hono", [...args, "--config", config]);
   const deployments = () => JSON.parse(run("deployments", "list", "--json"));
   const capture = async (state, step, version) => {
     assert.equal(liveVersion(deployments()), version);
     let renderer = admin || (ember && step === "kit") ? "kit" : "hono";
     if (admin && step === "kit") renderer = "admin";
-    const routes = await verifyServed(origin, prefixes, identity, version, state, renderer);
+    const routes = await serve(origin, prefixes, identity, version, state, renderer);
     proof.routeCount ??= routes;
     assert.equal(routes, proof.routeCount, "staged smoke route coverage changed");
     checks.push({ state, step, version, status: 200, pending: 0, smoke: "passed" });
@@ -257,15 +275,17 @@ async function exercise(proof, prefixes, owner, names, origin, dir, secrets) {
     if (admin) await assertStagedAdminServing({ origin, owner, secrets, enabled: step === "kit" });
   };
   for (const state of admin ? ["1037"] : LEDGER_STATES) {
-    if (!admin && state === "1037") await advanceFixture(owner, prefixes[state], names.login);
+    if (!admin && state === "1037") {
+      await advanceFixture(owner, prefixes[state], names.login, prefixes[1033].length);
+    }
     await capture(state, baseline, fallback);
     assert.equal(liveVersion(deployments()), fallback);
     run("versions", "deploy", `${kit}@100%`, "--yes");
     try {
       await capture(state, "kit", kit);
       for (let i = 0; i < 3; i++) {
-        await delay(20_000);
-        await readReady(origin, prefixes, { version: kit, commit: identity.sourceSha, state });
+        await wait(20_000);
+        await ready(origin, prefixes, { version: kit, commit: identity.sourceSha, state });
         proof.kitReadinessSamples += 1;
       }
     } finally {
@@ -331,7 +351,7 @@ export async function rehearseIsolatedCutover(
       writeFile(claim, worker, { flag: "wx", mode: 0o600 }),
     );
     owner = fixture.owner;
-    await advance(owner, prefixes[admin ? "1037" : "1033"], names.login);
+    await advance(owner, prefixes[admin ? "1037" : "1033"], names.login, 0);
     const secrets = {
       runtimeUrl: fixture.runtimeUrl,
       SESSION_SECRET: randomUUID(),

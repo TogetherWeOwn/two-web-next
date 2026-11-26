@@ -11,12 +11,23 @@ export const KIT_ADMIN_OPS_ROUTES = ["GET", "POST", "PUT", "PATCH", "DELETE", "O
   (method) => ({ method, path: "/admin/ops-overrides", enabled: true, reads: "public" as const }),
 );
 
+const rsvpFormPaths = [
+  ["/admin/events/:key/rsvp-pause", "/admin/events/[key]/rsvp-pause"],
+  ["/admin/events/:key/rsvp-reopen", "/admin/events/[key]/rsvp-reopen"],
+] as const;
+
+export function isKitAdminRsvpForm(path: string | undefined): boolean {
+  return rsvpFormPaths.some(([pattern]) => pattern === path);
+}
+
 const formPaths = [
   ["/admin/events", "/admin/events"],
   ["/admin/featured", "/admin/featured"],
   ["/admin/events/:key", "/admin/events/[key]"],
   ["/admin/featured/:id", "/admin/featured/[id]"],
-  ...["publish", "cancel", "duplicate", "rsvp-pause", "rsvp-reopen"].map(
+  ...rsvpFormPaths,
+  ["/admin/events/:key/duplicate", "/admin/[...action]"],
+  ...["publish", "cancel"].map(
     (action) => [`/admin/events/:key/${action}`, "/admin/[...action]"] as const,
   ),
   ...["delete", "unpublish"].map(

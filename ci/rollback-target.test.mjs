@@ -1388,7 +1388,7 @@ function journal(tags) {
   ).toString("base64");
 }
 
-function stubRepo({ target, previous, sql, up, drill, seen = {} }) {
+function stubRepo({ target, previous, sql, up, seen = {} }) {
   return async (url) => {
     const parsed = new URL(url);
     if (parsed.pathname === "/up") {
@@ -1406,11 +1406,6 @@ function stubRepo({ target, previous, sql, up, drill, seen = {} }) {
       seen.sql = [...(seen.sql ?? []), decodeURIComponent(tag)];
       if (!(tag in sql)) return { ok: false, status: 404 };
       return { ok: true, text: async () => sql[tag] };
-    }
-    if (parsed.pathname.endsWith("/workflows/staging-rollback-drill.yml/runs")) {
-      assert.equal(parsed.searchParams.get("branch"), "main");
-      if (drill === 404) return { ok: false, status: 404 };
-      return { ok: true, json: async () => ({ workflow_runs: drill }) };
     }
     assert.fail(`unexpected path ${parsed.pathname}`);
   };
@@ -1495,23 +1490,89 @@ test("rollback target retries an unreadable /up before refusing", async () => {
 });
 
 const drillRun = (id, conclusion) => ({ id, conclusion, status: "completed" });
-function drill(runs) {
+function drill(body, status = 200) {
   return assertRollbackDrillGreen({
     repository: "fixture/repo",
     token: "fixture-only",
-    fetchImpl: stubRepo({ drill: runs }),
+    fetchImpl: async (url) => {
+      const endpoint = new URL(url);
+      assert.equal(endpoint.origin, "https://api.github.com");
+      assert.equal(
+        endpoint.pathname,
+        "/repos/fixture/repo/actions/workflows/staging-rollback-drill.yml/runs",
+      );
+      assert.deepEqual(Object.fromEntries(endpoint.searchParams), {
+        branch: "main",
+        status: "completed",
+        per_page: "20",
+      });
+      return {
+        ok: status === 200,
+        status,
+        json: async () => {
+          assert.equal(status, 200, "only a successful lookup reads the body");
+          return body;
+        },
+      };
+    },
   });
 }
 
-test("a red latest staging rollback drill holds promotion; none yet does not", async () => {
-  assert.equal(await drill(404), null);
-  assert.equal(await drill([]), null);
-  assert.equal(await drill([drillRun(2, "success"), drillRun(1, "failure")]), 2);
-  // Cancelled and skipped runs prove nothing either way.
-  assert.equal(await drill([drillRun(3, "cancelled"), drillRun(2, "success")]), 2);
+test("staging rollback drill lookup refuses malformed history", async () => {
+  for (const [label, body] of [
+    ["missing list", {}],
+    ["null list", { workflow_runs: null }],
+    ["object list", { workflow_runs: {} }],
+    ["null envelope", null],
+    ["array envelope", []],
+  ]) {
+    await assert.rejects(
+      drill(body),
+      /Malformed rollback drill response: expected workflow_runs array/,
+      label,
+    );
+  }
+  for (const [label, run] of [
+    ["null row", null],
+    ["missing ID", { conclusion: "success" }],
+    ["string ID", drillRun("3", "success")],
+    ["zero ID", drillRun(0, "success")],
+    ["negative ID", drillRun(-1, "success")],
+    ["fractional ID", drillRun(1.5, "success")],
+    ["unsafe ID", drillRun(Number.MAX_SAFE_INTEGER + 1, "success")],
+    ["cancelled row without ID", { conclusion: "cancelled" }],
+    ["skipped row without ID", { conclusion: "skipped" }],
+  ]) {
+    await assert.rejects(
+      drill({ workflow_runs: [drillRun(2, "success"), run] }),
+      /Malformed rollback drill response: invalid run ID/,
+      label,
+    );
+  }
+});
+
+test("staging rollback drill uses the latest decisive run and permits empty history", async () => {
+  assert.equal(await drill(null, 404), null);
+  await assert.rejects(drill(null, 503), /Rollback drill lookup failed \(HTTP 503\)/);
+  assert.equal(await drill({ workflow_runs: [] }), null);
+  assert.equal(
+    await drill({ workflow_runs: [drillRun(Number.MAX_SAFE_INTEGER, "success")] }),
+    Number.MAX_SAFE_INTEGER,
+  );
+  const cancelled = drillRun(3, "cancelled");
+  const skipped = drillRun(4, "skipped");
+  assert.equal(await drill({ workflow_runs: [cancelled, skipped] }), null);
+  assert.equal(
+    await drill({
+      workflow_runs: [skipped, drillRun(2, "success"), cancelled, drillRun(1, "failure")],
+    }),
+    2,
+  );
   for (const conclusion of ["failure", "timed_out", "action_required"]) {
     await assert.rejects(
-      drill([drillRun(1, "success"), drillRun(2, conclusion)]),
+      drill({
+        workflow_runs: [drillRun(1, "success"), skipped, drillRun(2, conclusion), cancelled],
+      }),
       new RegExp(`run 2\\) concluded ${conclusion}`),
     );
   }
