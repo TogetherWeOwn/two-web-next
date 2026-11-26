@@ -32,15 +32,10 @@ const {
   REPO,
   RUN,
   ATTEMPT,
-  DIGEST,
   artifactName,
 } = require("./release-promotion-proof.fixture.cjs");
 
-function published(
-  result,
-  sha,
-  { attempt = ATTEMPT, artifactId = 800, artifactDigest = DIGEST } = {},
-) {
+function published(result, sha, { attempt = ATTEMPT, artifactId = 800 } = {}) {
   assert.equal(result.error, undefined, String(result.error));
   assert.equal(result.signal, null, result.stderr);
   assert.equal(result.status, 0, result.stderr);
@@ -58,7 +53,7 @@ function published(
     jobs: ["deploy-production"],
     artifactId,
     artifactName: artifactName(sha, attempt),
-    artifactDigest,
+    artifactDigest: result.archiveDigests[artifactId],
   });
 }
 
@@ -377,7 +372,6 @@ test("CalVer plans keep the original repair identity and distinguish a later att
     ...f.state.artifacts[0],
     id: 801,
     name: artifactName(f.sha, laterAttempt),
-    digest: `sha256:${"5".repeat(64)}`,
   };
   f.state.previousAttempts[ATTEMPT] = { run: producer, jobs: f.state.jobs };
   f.state.latestAttempt = laterAttempt;
@@ -401,8 +395,8 @@ test("CalVer plans keep the original repair identity and distinguish a later att
   published(later, f.sha, {
     attempt: laterAttempt,
     artifactId: laterArtifact.id,
-    artifactDigest: laterArtifact.digest,
   });
+  assert.notEqual(later.archiveDigests[laterArtifact.id], original.archiveDigests[800]);
 });
 
 test("a selected older deployed SHA need not equal the producer workflow checkout SHA", (t) => {
@@ -423,8 +417,24 @@ test("discovery skips promotions of other commits and finds this SHA's receipt",
 
 test("an artifact without a digest is not usable releaser evidence", (t) => {
   const f = fixture(t);
-  delete f.state.artifacts[0].digest;
-  refused(f, f.run(), f.git("show-ref", "--tags"));
+  refused(f, f.run({ artifactDigest: null }), f.git("show-ref", "--tags"));
+});
+
+test("refuses a promotion proof ZIP that disagrees with its artifact digest", (t) => {
+  const f = fixture(t);
+  const matching = f.run();
+  published(matching, f.sha);
+  const matchingDigest = matching.archiveDigests[800];
+  const last = matchingDigest.endsWith("0") ? "1" : "0";
+  const artifactDigest = `${matchingDigest.slice(0, -1)}${last}`;
+  const tags = f.git("show-ref", "--tags");
+  const result = f.run({ artifactDigest });
+  assert.equal(result.archiveDigests[800], matchingDigest, "only the metadata changed");
+  refused(f, result, tags);
+  assert.equal(result.output, "");
+  assert.match(result.stderr, /artifact archive digest mismatch/);
+  const zipRoute = `repos/${REPO}/actions/artifacts/800/zip`;
+  assert.equal(result.calls.filter((args) => args.includes(zipRoute)).length, 1);
 });
 
 // A receipt is not trusted merely because JSON claims it came from this job.
