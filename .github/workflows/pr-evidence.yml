@@ -1,7 +1,8 @@
+# guards: required:ci-ok (publishes exact-head evidence required in PR Verification)
 name: pr-evidence
 on:
   pull_request_target:
-    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft, edited]
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
   workflow_run:
     workflows: [ci, e2e, pr-gates, pr-size, "PR standards (required entry point)"]
     types: [completed]
@@ -12,7 +13,7 @@ permissions: {}
 concurrency:
   group: >-
     ${{ github.event_name == 'pull_request_target' && github.base_ref == 'main' &&
-        format('pr-evidence-direct-{0}', github.event.number) ||
+        format('pr-evidence-direct-{0}', github.event.pull_request.number) ||
         github.event_name == 'workflow_run' &&
         contains(fromJSON('["pull_request","pull_request_review"]'), github.event.workflow_run.event) &&
         format('pr-evidence-completed-{0}-{1}', github.event.workflow_run.head_repository.id, github.event.workflow_run.head_sha) ||

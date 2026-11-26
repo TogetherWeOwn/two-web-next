@@ -142,9 +142,10 @@ class EvidenceTest(unittest.TestCase):
         self.assertIn("| pending |", self.publish())
 
         self.records(run_attempt=2)
-        # Deliver the final completion first, then lagging completions and a PR edit.
-        events = [completion(run_attempt=2), completion(id=100, conclusion="cancelled"),
-                  completion(event="pull_request_review"), {"number": 42, "action": "edited"}]
+        # A completed PR gate can refresh all evidence, including after a metadata edit.
+        events = [completion(path=".github/workflows/pr-gates.yml"), completion(run_attempt=2),
+                  completion(id=100, conclusion="cancelled"), completion(event="pull_request_review"),
+                  {"number": 42, "action": "ready_for_review"}]
         for event in events:
             self.assertEqual(route(self.api, event), [42])
             self.assertRegex(self.publish(), r"\| ci-ok \| \[success\].*runs/101/attempts/2\).*\| success \|")
@@ -170,9 +171,13 @@ class EvidenceTest(unittest.TestCase):
     def test_workflow_keeps_refresh_cancellation_separate_from_the_writer_lock(self):
         workflow = Path(__file__).resolve().parents[1] / ".github/workflows/pr-evidence.yml"
         triggers, jobs = workflow.read_text().split("\njobs:\n", 1)
+        self.assertRegex(triggers, r"(?m)^# guards: required:ci-ok\b")
+        self.assertRegex(triggers, r"(?m)^  pull_request_target:\n"
+                         r"    types: \[opened, reopened, synchronize, ready_for_review, converted_to_draft\]$")
         self.assertRegex(triggers, r"(?m)^  workflow_run:\n    workflows: [^\n]+\n    types: \[completed\]$")
+        self.assertRegex(triggers, r"(?m)^    workflows: \[[^\n]*\bpr-gates\b")
         self.assertIn("\nconcurrency:\n", triggers)
-        self.assertIn("format('pr-evidence-direct-{0}', github.event.number)", triggers)
+        self.assertIn("format('pr-evidence-direct-{0}', github.event.pull_request.number)", triggers)
         self.assertIn("format('pr-evidence-completed-{0}-{1}', github.event.workflow_run.head_repository.id, "
                       "github.event.workflow_run.head_sha)", triggers)
         self.assertIn("\n  cancel-in-progress: true\n", triggers)
