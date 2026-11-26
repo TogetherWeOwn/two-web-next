@@ -1389,7 +1389,7 @@ function journal(tags) {
 }
 
 function stubRepo({ target, previous, sql, up, seen = {} }) {
-  return async (url) => {
+  return async (url, options) => {
     const parsed = new URL(url);
     if (parsed.pathname === "/up") {
       seen.up = (seen.up ?? 0) + 1;
@@ -1403,9 +1403,11 @@ function stubRepo({ target, previous, sql, up, seen = {} }) {
     const tag = parsed.pathname.match(/\/contents\/drizzle\/([^/]+)\.sql$/)?.[1];
     if (tag) {
       assert.equal(parsed.searchParams.get("ref"), TARGET);
+      assert.equal(options.headers.Accept, "application/vnd.github.raw+json");
+      assert.equal(options.redirect, "error");
       seen.sql = [...(seen.sql ?? []), decodeURIComponent(tag)];
       if (!(tag in sql)) return { ok: false, status: 404 };
-      return { ok: true, text: async () => sql[tag] };
+      return sql[tag] instanceof Response ? sql[tag] : new Response(sql[tag]);
     }
     assert.fail(`unexpected path ${parsed.pathname}`);
   };
@@ -1427,6 +1429,67 @@ test("compatibility reads only the migrations the target adds since the rollback
   });
   assert.deepEqual(result, { added: ["1001_b", "1002_c"], unsafe: ["1002_c"] });
   assert.deepEqual(seen.sql, ["1001_b", "1002_c"]);
+});
+
+test("compatibility cancels an oversized later migration and refuses the whole scan", async () => {
+  const chunk = new TextEncoder().encode(`-- ${"é".repeat(16 * 1024)}\n`);
+  let pulls = 0;
+  let cancelled = false;
+  const body = new ReadableStream(
+    {
+      pull(controller) {
+        pulls += 1;
+        if (pulls <= 2) controller.enqueue(chunk);
+        else controller.close();
+      },
+      cancel() {
+        cancelled = true;
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const seen = {};
+  await assert.rejects(
+    rollbackCompatibility({
+      repository: "fixture/repo",
+      targetSha: TARGET,
+      previousSha: PREVIOUS,
+      token: "fixture-only",
+      fetchImpl: stubRepo({
+        target: ["1000_a", "1001_b", "1002_c", "1003_d"],
+        previous: ["1000_a"],
+        sql: {
+          "1001_b": "SELECT 1;",
+          "1002_c": new Response(body, { headers: { "content-length": "10" } }),
+          "1003_d": 'DROP TABLE "z";',
+        },
+        seen,
+      }),
+    }),
+    /Migration 1002_c lookup failed: raw SQL exceeds 65536 bytes/,
+  );
+  assert.deepEqual(seen.sql, ["1001_b", "1002_c"]);
+  assert.equal(pulls, 2);
+  assert.equal(cancelled, true);
+});
+
+test("compatibility refuses a migration with an invalid UTF-8 tail", async () => {
+  const prefix = new TextEncoder().encode("SELECT 1; -- ");
+  const body = new Uint8Array([...prefix, 0xc3]);
+  await assert.rejects(
+    rollbackCompatibility({
+      repository: "fixture/repo",
+      targetSha: TARGET,
+      previousSha: PREVIOUS,
+      token: "fixture-only",
+      fetchImpl: stubRepo({
+        target: ["1000_a", "1001_b"],
+        previous: ["1000_a"],
+        sql: { "1001_b": new Response(body) },
+      }),
+    }),
+    /Migration 1001_b lookup failed: invalid raw SQL body/,
+  );
 });
 
 test("an unreadable migration file fails closed", async () => {
