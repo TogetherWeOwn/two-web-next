@@ -220,7 +220,6 @@ export async function runPreflight(env = process.env) {
     onnotice: () => {},
   });
   const rows = {};
-  let committed = false;
   try {
     await client.unsafe("BEGIN READ ONLY");
     try {
@@ -230,7 +229,6 @@ export async function runPreflight(env = process.env) {
         rows[query.id] = await client.unsafe(query.sql);
       }
       await client.unsafe("COMMIT");
-      committed = true;
     } catch (error) {
       try {
         await client.unsafe("ROLLBACK");
@@ -239,14 +237,15 @@ export async function runPreflight(env = process.env) {
       }
       throw error;
     }
-  } finally {
+  } catch (error) {
     try {
       await client.end({ timeout: 5 });
-    } catch (error) {
-      if (committed) throw error;
+    } catch {
       // As with rollback, cleanup is best-effort once the run has failed.
     }
+    throw error;
   }
+  await client.end({ timeout: 5 });
   const expectedSet = new Set(EXPECTED_SEQUENCES);
   const output = {
     table_owners: rows.table_owners,
