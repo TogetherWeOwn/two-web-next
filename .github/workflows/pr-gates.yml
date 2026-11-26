@@ -1,3 +1,5 @@
+# guards: release: exact-main commit lint and full-history scan (required on PRs: pr-lint, gitleaks)
+# guards: metadata-edit: pr-lint
 name: pr-gates
 
 # Lightweight PR gates: PR-title lint + full-history secret scan in ONE
