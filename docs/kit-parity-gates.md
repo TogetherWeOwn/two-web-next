@@ -272,6 +272,14 @@ take no exceptions.
 | --- | --- | --- |
 <!-- route-parity-exceptions:end -->
 
+### Installed Worker teardown evidence
+
+On pull requests and ordinary manual dispatches, the installed live socket
+and fan-out proof has its own job, XFS mount, and loopback Postgres service.
+Read its Worker and mount cleanup along with its Postgres stop and runner
+container teardown. The browser and route assertions run in the main
+installed proof. Cutover qualification runs the full installed proof there.
+
 ### All-off production configuration replay
 
 [XFS qualification](../.github/workflows/xfs-qualification.yml) replays the exact head and production origin on pure Hono and the installed Kit facade, using local assets, disposable Postgres and outbound stubs.

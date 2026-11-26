@@ -36,7 +36,11 @@ const {
   artifactName,
 } = require("./release-promotion-proof.fixture.cjs");
 
-function published(result, sha) {
+function published(
+  result,
+  sha,
+  { attempt = ATTEMPT, artifactId = 800, artifactDigest = DIGEST } = {},
+) {
   assert.equal(result.error, undefined, String(result.error));
   assert.equal(result.signal, null, result.stderr);
   assert.equal(result.status, 0, result.stderr);
@@ -46,15 +50,15 @@ function published(result, sha) {
   assert.equal(input.sha, sha, "the request targets the exact promoted commit");
   assert.equal(input.channel, "stable");
   assert.equal(input.policy, "production-promotion");
-  assert.equal(input.operation, `production-${RUN}-${ATTEMPT}`);
+  assert.equal(input.operation, `production-${RUN}-${attempt}`);
   assert.deepEqual(input.evidence, {
     runId: RUN,
-    attempt: ATTEMPT,
+    attempt,
     workflow: ".github/workflows/deploy-production.yml",
     jobs: ["deploy-production"],
-    artifactId: 800,
-    artifactName: artifactName(sha),
-    artifactDigest: DIGEST,
+    artifactId,
+    artifactName: artifactName(sha, attempt),
+    artifactDigest,
   });
 }
 
@@ -356,6 +360,49 @@ test("ordinary workflow-call publication works while its producing workflow is s
   f.state.runs[0].status = "in_progress";
   f.state.runs[0].conclusion = null;
   published(f.run({ workflowCall: true }), f.sha);
+});
+
+test("CalVer plans keep the original repair identity and distinguish a later attempt", (t) => {
+  const f = fixture(t);
+  const [producer] = f.state.runs;
+  producer.status = "in_progress";
+  producer.conclusion = null;
+  const original = f.run({ workflowCall: true });
+  published(original, f.sha);
+
+  producer.status = "completed";
+  producer.conclusion = "failure";
+  const laterAttempt = ATTEMPT + 1;
+  const laterArtifact = {
+    ...f.state.artifacts[0],
+    id: 801,
+    name: artifactName(f.sha, laterAttempt),
+    digest: `sha256:${"5".repeat(64)}`,
+  };
+  f.state.previousAttempts[ATTEMPT] = { run: producer, jobs: f.state.jobs };
+  f.state.latestAttempt = laterAttempt;
+  f.state.runs[0] = { ...producer, run_attempt: laterAttempt };
+  f.state.jobs = f.state.jobs.map((job) => ({
+    ...job,
+    id: job.id + 10,
+    run_attempt: laterAttempt,
+  }));
+  f.state.additionalReceipts[laterArtifact.id] = {
+    ...f.state.receipt,
+    run_attempt: String(laterAttempt),
+  };
+  // Both artifacts remain on the same run. A repair can still select the older one.
+  f.state.artifacts.unshift(laterArtifact);
+  const repair = f.run();
+  published(repair, f.sha);
+  assert.deepEqual(repair.request, original.request);
+
+  const later = f.run({ extraEnv: { PROMOTION_RUN_ATTEMPT: String(laterAttempt) } });
+  published(later, f.sha, {
+    attempt: laterAttempt,
+    artifactId: laterArtifact.id,
+    artifactDigest: laterArtifact.digest,
+  });
 });
 
 test("a selected older deployed SHA need not equal the producer workflow checkout SHA", (t) => {
