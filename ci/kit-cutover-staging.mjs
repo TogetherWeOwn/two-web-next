@@ -197,7 +197,7 @@ async function cleanup({ claim, worker, names }, api, database) {
   try {
     if ((await api(`${target}/settings`)) !== null) {
       await api(target, "DELETE");
-      assert.equal(await api(`${target}/settings`), null, "isolated Worker cleanup failed");
+      assert.ok((await api(`${target}/settings`)) === null, "isolated Worker cleanup failed");
     }
   } finally {
     await removeFixture(database, names);
@@ -331,7 +331,7 @@ async function qualify(dir, proofPath, ctx) {
   const subdomain = (await api("subdomain"))?.subdomain;
   assert.match(subdomain ?? "", /^[a-z0-9][a-z0-9-]{0,62}$/);
   const origin = `https://${worker}.${subdomain}.workers.dev`;
-  assert.equal(await api(`scripts/${worker}/settings`), null, "isolated script already exists");
+  assert.ok((await api(`scripts/${worker}/settings`)) === null, "isolated script already exists");
   const scratch = await mkdtemp(join(process.env.RUNNER_TEMP, "kit-cutover-staging-"));
   const proof = {
     schema: 1,
