@@ -21,7 +21,9 @@
 # Area verdicts (`app`, `worker`, `db`, `full`) let heavy jobs run only when
 # their inputs changed. `full` forces every area on: dependency manifests and
 # lockfiles, `.github/**`, shared build and tooling config, and this script
-# itself. Unknown paths fail closed to `full`. `draft` mirrors the PR draft
+# itself. Unknown paths fail closed to `full`. `isolated` identifies the
+# standalone CI tools with dedicated fixtures and no application consumers.
+# `draft` mirrors the PR draft
 # flag from the caller (never inferred here): drafts skip heavy jobs while the
 # aggregator still reports.
 #
@@ -36,6 +38,14 @@ set -euo pipefail
 
 files=$1
 expected=$2
+
+listed=0
+if [[ "$expected" =~ ^[1-9][0-9]{0,3}$ ]] && [ -s "$files" ] &&
+  awk -F '\t' 'NF != 2 || $1 == "" || seen[$1]++ || ($1 $2) ~ /[[:cntrl:]]/ { exit 1 }' "$files"; then
+  listed=$(wc -l < "$files")
+fi
+complete=false
+if [ "$listed" != 0 ] && [ "$listed" -eq "$expected" ]; then complete=true; fi
 
 # Pure path verdict for the browser/staging smoke, computed over EVERY changed
 # path (either side of a rename) with no early exit: true unless a path can
@@ -72,8 +82,7 @@ is_e2e_imported_helper() {
 }
 skip_e2e=false
 if [ -s "$files" ]; then
-  listed_e2e=$(wc -l < "$files")
-  if [ "$listed_e2e" -ge "$expected" ]; then
+  if [ "$complete" = true ]; then
     skip_e2e=true
     while IFS=$'\t' read -r name previous || [ -n "$name" ]; do
       # A rename counts both names: moving a journey into test/ does not stop
@@ -105,12 +114,18 @@ app=false
 worker=false
 db=false
 full=false
+isolated=false
 if [ -s "$files" ]; then
-  listed_areas=$(wc -l < "$files")
-  if [ "$listed_areas" -ge "$expected" ]; then
+  if [ "$complete" = true ]; then
+    isolated=true
     while IFS=$'\t' read -r name previous || [ -n "$name" ]; do
       # A rename counts both names: moving code into docs/ is not a docs change.
       for path in "$name" ${previous:+"$previous"}; do
+        case "$path" in
+          ci/join-state-evidence-source.mjs|ci/join-state-evidence-source.test.mjs|\
+          ci/kit-css-evidence.mjs|ci/kit-css-evidence.test.mjs) continue ;;
+          *) isolated=false ;;
+        esac
         case "$path" in
           # Full-run triggers: dependency manifests and lockfiles, shared
           # build and tooling config, CI itself, and this filter.
@@ -143,7 +158,8 @@ if [ -s "$files" ]; then
             ;;
           # App: everything the served worker, its assets, the test suites
           # and the browser journeys observe.
-          src/*|assets/*|public/*|content/*|bin/*|ci/*|test/*|tier0/*|e2e/*|spike/*)
+          src/*|ci/*) full=true; app=true ;;
+          assets/*|public/*|content/*|bin/*|test/*|tier0/*|e2e/*|spike/*)
             app=true
             ;;
           # Prose: area-neutral here; the docs_only verdict below decides.
@@ -160,6 +176,8 @@ if [ -s "$files" ]; then
 else
   full=true
 fi
+
+if [ "${PR_SUITE_SCOPE:-false}" = true ] && [ "$isolated" = true ]; then skip_e2e=true; fi
 
 draft=false
 if [ "${DRAFT:-}" = true ]; then
@@ -178,10 +196,7 @@ not_docs() {
   exit 0
 }
 
-[ -s "$files" ] || not_docs "no changed-file list"
-listed=$(wc -l < "$files")
-# The files API stops at 3000 entries; a truncated list proves nothing.
-[ "$listed" -ge "$expected" ] || not_docs "listed $listed of $expected changed files"
+[ "$complete" = true ] || not_docs "incomplete or ambiguous changed-file list"
 
 patterns=()
 while IFS=$'\t' read -r name previous || [ -n "$name" ]; do

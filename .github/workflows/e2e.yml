@@ -55,6 +55,11 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  pr-admission:
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.id == github.event.pull_request.base.repo.id
+    permissions: { actions: read, contents: read, pull-requests: read }
+    uses: ./.github/workflows/pr-ci-admission.yml
+
   # Cheap change-scope gate (mirrors ci.yml): a PR that only touches prose
   # (`docs/**`, root `*.md`) that no gate, test or build reads, or only the
   # `test/` unit tree the journeys never execute, fast-passes the browser
@@ -63,6 +68,8 @@ jobs:
   # every other path resolve to skip_e2e=false and run the full smoke.
   scope:
     name: scope
+    needs: pr-admission
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.draft == true || github.event.pull_request.head.repo.id != github.event.pull_request.base.repo.id || needs.pr-admission.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -72,6 +79,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: github.event_name == 'pull_request'
         with:
+          fetch-depth: 2
           persist-credentials: false
       # Token boundary (mirrors ci.yml): this is the only step that holds
       # GH_TOKEN, and it runs no repository code. It fetches the changed-file
@@ -83,12 +91,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate \
-            --jq '.[] | "\(.filename)\t\(.previous_filename // "")"' > "$RUNNER_TEMP/pr-files.tsv"
+          if [ "$(git show -s --format=%P HEAD)" = "$BASE_SHA $HEAD_SHA" ]; then
+            git diff --no-ext-diff --no-textconv --name-status -M "$BASE_SHA" HEAD |
+              awk -F'\t' '{if ($1 ~ /^R/) print $3 "\t" $2; else print $2 "\t"}' > "$RUNNER_TEMP/pr-files.tsv"
+          else
+            : > "$RUNNER_TEMP/pr-files.tsv"
+          fi
           mkdir -p "$RUNNER_TEMP/trusted-scope"
           for script in ci/change-scope.sh ci/e2e-test-helpers.mjs; do
             gh api "repos/$REPO/contents/$script?ref=$BASE_SHA" \
@@ -102,6 +114,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+          SAME_REPO: ${{ github.event.pull_request.head.repo.id == github.event.pull_request.base.repo.id }}
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" != pull_request ]; then
@@ -109,7 +122,7 @@ jobs:
             echo "skip_e2e=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          bash "$RUNNER_TEMP/trusted-scope/change-scope.sh" "$RUNNER_TEMP/pr-files.tsv" "$CHANGED_FILES" > "$RUNNER_TEMP/scope-verdict.txt"
+          PR_SUITE_SCOPE=true bash "$RUNNER_TEMP/trusted-scope/change-scope.sh" "$RUNNER_TEMP/pr-files.tsv" "$CHANGED_FILES" > "$RUNNER_TEMP/scope-verdict.txt"
           keys="docs_only skip_e2e app worker db full draft"
           for key in $keys; do
             count=$(grep -c "^$key=" "$RUNNER_TEMP/scope-verdict.txt") || count=0
@@ -140,13 +153,19 @@ jobs:
                 *) docs_only=false ;;
               esac
               case "$path" in
-                docs/*|tier0/*|test/*) ;;
+                docs/*|tier0/*|test/*|ci/join-state-evidence-source.mjs|ci/join-state-evidence-source.test.mjs|\
+                ci/kit-css-evidence.mjs|ci/kit-css-evidence.test.mjs) ;;
                 */*) skip_e2e=false ;;
                 *.md) ;;
                 *) skip_e2e=false ;;
               esac
             done
           done < "$RUNNER_TEMP/pr-files.tsv"
+          if [ "${SAME_REPO:-true}" = false ] || [ ! -s "$RUNNER_TEMP/pr-files.tsv" ] ||
+             [ "$(wc -l < "$RUNNER_TEMP/pr-files.tsv")" != "$CHANGED_FILES" ]; then
+            docs_only=false
+            skip_e2e=false
+          fi
           if [ "$docs_only" != "$verdict_docs_only" ] || [ "$skip_e2e" != "$verdict_skip_e2e" ]; then
             echo "::warning::scope verdict disagreed with the changed-file list; publishing the conservative verdict."
           fi
@@ -164,7 +183,7 @@ jobs:
     name: browser-smoke
     needs: scope
     # Drafts skip the 25-minute smoke; undrafting re-runs via ready_for_review.
-    if: needs.scope.outputs.skip_e2e != 'true' && github.event.pull_request.draft != true
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.skip_e2e != 'true' && github.event.pull_request.draft != true }}
     # The merge queue is disabled. Revisit this route before enabling it:
     # merge_group can include fork changes without pull_request provenance.
     # Map the spending guard's ubuntu-latest cutoff to the baseline image.
