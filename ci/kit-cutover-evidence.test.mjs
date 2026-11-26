@@ -64,6 +64,34 @@ import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 
 const { env } = process;
+const nativeReceipt = env.WRANGLER_OUTPUT_FILE_PATH;
+const { fstatSync, readFileSync, readSync } = fs;
+let receiptStat;
+let bytesRead = 0;
+let receiptGrew = false;
+const isReceipt = (stat) => receiptStat && stat.dev === receiptStat.dev && stat.ino === receiptStat.ino;
+fs.fstatSync = (fd) => {
+  const stat = fstatSync(fd);
+  if (!receiptGrew && env.FIXTURE_RECEIPT_GROWS === "true" && isReceipt(stat)) {
+    fs.appendFileSync(nativeReceipt, " ".repeat(4096));
+    receiptGrew = true;
+  }
+  return stat;
+};
+fs.readSync = (fd, ...args) => {
+  const count = readSync(fd, ...args);
+  if (isReceipt(fstatSync(fd))) bytesRead += count;
+  return count;
+};
+// A readFileSync regression can bypass the exported readSync entirely.
+fs.readFileSync = (file, ...args) => {
+  const isNative = typeof file === "number" ? isReceipt(fstatSync(file)) : file === nativeReceipt;
+  const countedBefore = bytesRead;
+  const content = readFileSync(file, ...args);
+  if (isNative && bytesRead === countedBefore) bytesRead += Buffer.byteLength(content);
+  return content;
+};
+process.on("exit", () => fs.writeFileSync(env.FIXTURE_BYTES_READ, String(bytesRead)));
 globalThis.fetch = async (url) => {
   assert.equal(url.href, "https://togetherweown.com/up");
   return Response.json(JSON.parse(env.FIXTURE_READINESS));
@@ -81,21 +109,11 @@ childProcess.execFileSync = (tool, args, options) => {
   assert.deepEqual(args.slice(0, 3), ["versions", "upload", "--config"]);
   const config = JSON.parse(fs.readFileSync(args[3], "utf8"));
   assert.equal(config.vars.KIT_ROUTE_EMBER_PAGES, "true");
-  assert.equal(options.env.WRANGLER_OUTPUT_FILE_PATH, env.WRANGLER_OUTPUT_FILE_PATH);
-  fs.copyFileSync(env.FIXTURE_RECEIPT, options.env.WRANGLER_OUTPUT_FILE_PATH);
+  assert.equal(options.env.WRANGLER_OUTPUT_FILE_PATH, nativeReceipt);
+  fs.copyFileSync(env.FIXTURE_RECEIPT, nativeReceipt);
+  receiptStat = fs.statSync(nativeReceipt);
   return "";
 };
-if (env.FIXTURE_RECEIPT_GROWS === "true") {
-  const fstat = fs.fstatSync;
-  fs.fstatSync = (fd) => {
-    const stat = fstat(fd);
-    const receipt = fs.statSync(env.WRANGLER_OUTPUT_FILE_PATH);
-    if (stat.dev === receipt.dev && stat.ino === receipt.ino) {
-      fs.appendFileSync(env.WRANGLER_OUTPUT_FILE_PATH, " ");
-    }
-    return stat;
-  };
-}
 syncBuiltinESMExports();
 `,
   );
@@ -109,7 +127,8 @@ syncBuiltinESMExports();
       ...overrides,
     });
   const valid = `${JSON.stringify({ type: "version-upload-start" })}\r\n${upload()}\r\n`;
-  const atLimit = valid.padEnd(1024 * 1024);
+  const limit = 1024 * 1024;
+  const atLimit = valid.padEnd(limit);
   const invalidUtf8 = Buffer.concat([
     Buffer.from(`${valid}{"message":"`),
     Buffer.from([0xff]),
@@ -129,13 +148,19 @@ syncBuiltinESMExports();
     },
   });
   const cases = [
-    { name: "normal", raw: valid },
-    { name: "at the byte limit", raw: atLimit },
-    { name: "over the byte limit", raw: `${atLimit} `, error: /Wrangler output too large/ },
+    { name: "normal", raw: valid, bytesRead: Buffer.byteLength(valid) },
+    { name: "at the byte limit", raw: atLimit, bytesRead: limit },
+    {
+      name: "over the byte limit",
+      raw: `${atLimit} `,
+      bytesRead: 0,
+      error: /Wrangler output too large/,
+    },
     {
       name: "grows past the byte limit",
       raw: atLimit,
       grows: true,
+      bytesRead: limit + 1,
       error: /Wrangler output too large/,
     },
     {
@@ -163,11 +188,12 @@ syncBuiltinESMExports();
       error: /Worker Version ID/,
     },
   ];
-  for (const [index, { name, raw, error, grows }] of cases.entries()) {
+  for (const [index, { name, raw, error, grows, bytesRead }] of cases.entries()) {
     await t.test(name, async () => {
       const directory = join(scratch, `case-${index}`);
       const receipt = join(directory, "fixture.jsonl");
       const output = join(directory, "github-output");
+      const readCount = join(directory, "receipt-bytes-read");
       // verifyPackage requires the top-level packet inventory to remain exact.
       const artifact = join(directory, "artifact");
       await cp(packet, artifact, { recursive: true });
@@ -203,6 +229,7 @@ syncBuiltinESMExports();
             FIXTURE_UNDO: undo,
             FIXTURE_RECEIPT: receipt,
             FIXTURE_RECEIPT_GROWS: String(Boolean(grows)),
+            FIXTURE_BYTES_READ: readCount,
           },
         },
       );
@@ -217,6 +244,8 @@ syncBuiltinESMExports();
         assert.equal(result.status, 0, result.stderr);
         assert.equal(await readFile(output, "utf8"), `version_id=${kit}\n`);
       }
+      if (bytesRead !== undefined)
+        assert.equal(await readFile(readCount, "utf8"), String(bytesRead));
     });
   }
 });
