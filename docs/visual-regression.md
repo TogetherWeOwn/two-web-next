@@ -43,11 +43,11 @@ Each baseline exists at both widths (`<name>-desktop.png`, `<name>-mobile.png`).
   grows with page height, so a vanished primary button still passes. CI never
   rewrites an existing baseline (`updateSnapshots: "missing"` only creates
   absent ones), and the job fails while any generated baseline is uncommitted.
-- **Runner images:** The opt-in Blacksmith runner uses Ubuntu 24.04. The
-  GitHub-hosted fallback follows `ubuntu-latest`, which can change across
-  runs. Body text uses system fonts, so run the existing visual checks when
-  either image or Playwright changes. Review any intentional rendering changes
-  in the failure artifact before accepting baselines.
+- **Runner images:** The opt-in Blacksmith runner and the GitHub-hosted
+  fallback both use Ubuntu 24.04. Body text uses system fonts, so run the
+  existing visual checks when either image or Playwright changes. Review any
+  intentional rendering changes in the failure artifact before accepting
+  baselines.
 
 ## Evidence lookup
 

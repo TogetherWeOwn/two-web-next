@@ -1277,7 +1277,8 @@ test("only browser-smoke opts into the 2-vCPU runner with a fork fallback", asyn
     "browser-smoke":
       "${{ (github.event_name != 'pull_request' || " +
       "github.event.pull_request.head.repo.full_name == github.repository) && " +
-      "vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}",
+      "vars.CI_BLACKSMITH_2VCPU != 'ubuntu-latest' && " +
+      "vars.CI_BLACKSMITH_2VCPU || 'ubuntu-24.04' }}",
     "e2e-ok": "ubuntu-latest",
   });
 });

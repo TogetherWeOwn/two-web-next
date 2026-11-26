@@ -45,7 +45,8 @@ const pinnedHostedJobs = new Map([
 const browserSmokeRunner =
   "${{ (github.event_name != 'pull_request' || " +
   "github.event.pull_request.head.repo.full_name == github.repository) && " +
-  "vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}";
+  "vars.CI_BLACKSMITH_2VCPU != 'ubuntu-latest' && " +
+  "vars.CI_BLACKSMITH_2VCPU || 'ubuntu-24.04' }}";
 const localCall = /^\.\/\.github\/workflows\/([\w.-]+\.ya?ml)$/;
 const frozenLocalCall =
   /^TogetherWeOwn\/two-web-next\/\.github\/workflows\/([\w.-]+\.ya?ml)@([0-9a-f]{40})$/;

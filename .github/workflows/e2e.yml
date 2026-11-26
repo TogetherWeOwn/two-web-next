@@ -2,7 +2,7 @@ name: e2e
 
 # Browser smoke for the critical journeys (docs/critical-journeys.md).
 # Only browser-smoke opts in to the organization's 2-vCPU runner. Fork PRs
-# and runs without the opt-in use GitHub-hosted ubuntu-latest. Each smoke job
+# and runs without the opt-in use GitHub-hosted Ubuntu 24.04. Each smoke job
 # gets a disposable Postgres service. The guard in e2e/ci-only.mjs permits
 # only that target, never staging or production. Browsers run here in CI
 # only, never on the controller.
@@ -167,9 +167,8 @@ jobs:
     if: needs.scope.outputs.skip_e2e != 'true' && github.event.pull_request.draft != true
     # The merge queue is disabled. Revisit this route before enabling it:
     # merge_group can include fork changes without pull_request provenance.
-    # The fallback follows GitHub's ubuntu-latest image. Verify runner image
-    # changes against the existing baselines (docs/visual-regression.md).
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}
+    # Map the spending guard's ubuntu-latest cutoff to the baseline image.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_BLACKSMITH_2VCPU != 'ubuntu-latest' && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-24.04' }}
     timeout-minutes: 25
     services:
       postgres:
