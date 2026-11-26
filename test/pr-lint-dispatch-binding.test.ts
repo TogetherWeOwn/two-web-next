@@ -265,14 +265,19 @@ describe("PR lint dispatch binding (hermetic workflow/API fixtures)", () => {
     ["invalid queued title", "fix(ci): use the latest title", 0],
     ["fix(ci): valid queued title", "invalid latest title", 1],
   ])(
-    "lints the latest same-head edit when the event carried %s",
+    "lints current metadata on a same-head retarget when the event carried %s",
     (queuedTitle, liveTitle, status) => {
-      const fixture = pullRequest();
+      const fixture = pullRequest(true);
+      const newBase = { ...fixture.live.base, ref: "strict-base", sha: "f".repeat(40) };
       fixture.checkoutSha = headSha;
       fixture.checkedSha = headSha;
+      fixture.workflowSha = "e".repeat(40);
+      fixture.waiverBaseSha = newBase.sha;
+      fixture.event.pull_request!.base = newBase;
+      fixture.live.base = newBase;
       Object.assign(fixture.event, {
         action: "edited",
-        changes: { title: { from: "earlier title" } },
+        changes: { base: { ref: { from: "main" }, sha: { from: baseSha } } },
       });
       fixture.event.pull_request!.title = queuedTitle;
       fixture.live.title = liveTitle;
@@ -280,31 +285,11 @@ describe("PR lint dispatch binding (hermetic workflow/API fixtures)", () => {
       const result = runWorkflow(fixture);
       expect(result.status, result.stdout + result.stderr).toBe(status);
       expect(JSON.parse(result.output).title).toBe(liveTitle);
+      expect(
+        result.stdout.includes("PR floor-waiver trailers are visible to merge-queue validation"),
+      ).toBe(status === 0);
     },
   );
-
-  it("relints live metadata on a base retarget without changing the submitted checkout", () => {
-    const fixture = pullRequest(true);
-    const newBase = { ...fixture.live.base, ref: "strict-base", sha: "f".repeat(40) };
-    fixture.checkoutSha = headSha;
-    fixture.checkedSha = headSha;
-    fixture.workflowSha = "e".repeat(40);
-    fixture.waiverBaseSha = newBase.sha;
-    fixture.event.pull_request!.base = newBase;
-    fixture.live.base = newBase;
-    fixture.live.title = "fix(ci): preserve lint after retarget";
-    Object.assign(fixture.event, {
-      action: "edited",
-      changes: { base: { ref: { from: "main" }, sha: { from: baseSha } } },
-    });
-
-    const result = runWorkflow(fixture);
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(JSON.parse(result.output).title).toBe(fixture.live.title);
-    expect(result.stdout).toContain(
-      "PR floor-waiver trailers are visible to merge-queue validation",
-    );
-  });
 
   describe.each(["workflow_dispatch", "pull_request"])("queue-visible waivers (%s)", (event) => {
     const fixtureForEvent = () => (event === "workflow_dispatch" ? dispatch() : pullRequest(true));
