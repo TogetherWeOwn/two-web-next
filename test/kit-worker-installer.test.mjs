@@ -389,10 +389,11 @@ export async function render() {
     'import { render } from "./../server.js"; export default { fetch: render };',
   );
 
-  const detached = scratch();
-  const companion = join(detached, COMPANION_NAME);
+  const detached = mkdtempSync(join(tmpdir(), "kit-cutover-companion-"));
+  dirs.push(detached);
+  const companion = join(detached, "standalone.mjs");
   writeFileSync(companion, await bundleCutoverAdapter(adapter));
-  const emitted = parse(read(detached, COMPANION_NAME), { sourceType: "module" });
+  const emitted = parse(readFileSync(companion, "utf8"), { sourceType: "module" });
   const specifiers = [];
   traverseFast(emitted, (node) => {
     if (
