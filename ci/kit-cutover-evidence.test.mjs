@@ -136,7 +136,19 @@ test("isolated cutover cleanup CLI reports each failure and keeps the claim for 
   const claim = join(scratch, "kit-cutover-claimed.json");
   const preload = `
     import assert from "node:assert/strict";
-    import { registerHooks } from "node:module";
+    import fs from "node:fs/promises";
+    import { registerHooks, syncBuiltinESMExports } from "node:module";
+    import { join } from "node:path";
+    const claimOperation = process.env.FAKE_CLAIM_OPERATION;
+    if (claimOperation) {
+      const claimPath = join(process.env.RUNNER_TEMP, "kit-cutover-claimed.json");
+      const original = fs[claimOperation];
+      fs[claimOperation] = async (path, ...args) => {
+        if (path === claimPath) throw Object.assign(new Error("raw claim I/O detail"), { code: "EIO" });
+        return original(path, ...args);
+      };
+      syncBuiltinESMExports();
+    }
     let deleted = process.env.FAKE_WORKER === "absent";
     globalThis.fetch = async (url, { method }) => {
       const target = "https://api.cloudflare.com/client/v4/accounts/${"a".repeat(32)}/workers/scripts/${worker}";
@@ -183,7 +195,7 @@ test("isolated cutover cleanup CLI reports each failure and keeps the claim for 
       },
     });
   `;
-  function run(workerMode, databaseMode) {
+  function run(workerMode, databaseMode, claimOperation = "") {
     const result = spawnSync(
       process.execPath,
       [
@@ -213,11 +225,12 @@ test("isolated cutover cleanup CLI reports each failure and keeps the claim for 
               : `postgresql://two_web_cutover_owner:fixture@${dbHost}/two_web_cutover`,
           FAKE_WORKER: workerMode,
           FAKE_DATABASE: databaseMode,
+          FAKE_CLAIM_OPERATION: claimOperation,
         },
       },
     );
     assert.ifError(result.error);
-    assert.doesNotMatch(result.stdout + result.stderr, /raw Worker detail|raw database detail/);
+    assert.doesNotMatch(result.stdout + result.stderr, /raw (Worker|database|claim I\/O) detail/);
     return result;
   }
 
@@ -272,6 +285,22 @@ test("isolated cutover cleanup CLI reports each failure and keeps the claim for 
     assert.ok(!result.stderr.includes(foreignMarker));
     assert.equal(await readFile(claim, "utf8"), foreignMarker);
   });
+  for (const [operation, diagnostic, calls] of [
+    ["readFile", "read", []],
+    ["rm", "clear", [...workerCleanup, ...databaseCleanup]],
+  ]) {
+    await t.test(`claim ${diagnostic} failure preserves the claim`, async () => {
+      await writeFile(claim, worker);
+      const result = run("ok", "ok", operation);
+      assert.equal(result.status, 1, result.stderr);
+      assert.equal(result.stdout.trim(), calls.join("\n"));
+      assert.equal(
+        result.stderr.split("\n").find((line) => line.startsWith("Error: ")),
+        `Error: Could not ${diagnostic} isolated cleanup claim`,
+      );
+      assert.equal(await readFile(claim, "utf8"), worker);
+    });
+  }
 });
 
 async function writePacketFixture(dir, extraNames = []) {
