@@ -37,14 +37,13 @@ function trackWorker(name, child, origin, port, workers) {
   }
   child.on("message", (message) => {
     if (typeof message !== "string") return;
-    let ready;
     try {
-      ready = JSON.parse(message);
+      const ready = JSON.parse(message);
+      if (ready?.event === "DEV_SERVER_READY" && ready.ip === loopback && ready.port === port) {
+        worker.bound = true;
+      }
     } catch {
       return; // Ignore non-Wrangler IPC messages.
-    }
-    if (ready?.event === "DEV_SERVER_READY" && ready.ip === loopback && ready.port === port) {
-      worker.bound = true;
     }
   });
   return worker;
@@ -110,7 +109,7 @@ export async function startLoopbackWorker(
   }
 }
 
-export async function waitForHttpReady(worker, deadline, signal) {
+async function waitForHttpReady(worker, deadline, signal) {
   const { child, origin } = worker;
   const exited = () => child.exitCode !== null || child.signalCode !== null;
   let lastStatus = "no response";

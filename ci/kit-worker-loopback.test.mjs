@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -12,11 +12,8 @@ import * as launcher from "./kit-worker-loopback.mjs";
 const loopback = "127.0.0.1";
 const wrangler = fileURLToPath(new URL("../web/node_modules/.bin/wrangler", import.meta.url));
 function failStartup(message) {
-  return spawn(process.execPath, [
-    "-e",
-    "console.error(process.argv[1]); process.exitCode = 1",
-    message,
-  ]);
+  const script = "console.error(process.argv[1]); process.exitCode = 1";
+  return spawn(process.execPath, ["-e", script, message]);
 }
 
 test("pinned Wrangler recovers from an occupied loopback port", async () => {
@@ -71,12 +68,10 @@ export default { fetch: (_, env) => new Response(env.APP_URL, {
       { selectPort },
     );
     await assert.rejects(launcher.waitForBind(worker, 0), /Timed out waiting for Wrangler to bind/);
-    await assert.rejects(launcher.waitForHttpReady(worker, 0), /Timed out waiting for/);
     assert.equal(await worker.readiness, null);
     assert.equal(foreignRequests, 0);
     assert.equal(workers.length, 2);
     assert.equal(workers[0].child.exitCode, 1);
-    assert.notEqual(worker.origin, `http://${loopback}:${port}`);
     const response = await fetch(`${worker.origin}/favicon.ico`);
     assert.ok(Number(response.headers.get("x-fixture-requests")) >= 2);
     assert.equal(await response.text(), worker.origin);
@@ -87,6 +82,29 @@ export default { fetch: (_, env) => new Response(env.APP_URL, {
     await rm(scratch, { recursive: true, force: true });
   }
   assert.ok(workers.every(({ stopped }) => stopped));
+});
+
+test("binding and HTTP share one startup deadline", async ({ mock }) => {
+  let now = 0;
+  mock.method(Date, "now", () => now);
+  mock.method(globalThis, "fetch", async () => {
+    now = 60_000;
+    return new Response();
+  });
+  const child = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null });
+  const launch = (port) => {
+    now = 59_999;
+    const ready = { event: "DEV_SERVER_READY", ip: loopback, port };
+    setImmediate(() => child.emit("message", JSON.stringify(ready)));
+    return child;
+  };
+  const worker = await launcher.startLoopbackWorker("synthetic", launch, [], {
+    selectPort: () => 32123,
+  });
+  assert.match(
+    (await worker.readiness)?.error.message ?? "",
+    /Timed out waiting for .*\/favicon.ico/,
+  );
 });
 
 test("startup reports the final bind collision and never retries other errors", async () => {

@@ -62,11 +62,8 @@ async function listen(child, origin, getLog) {
   const { readiness } = workers.find((worker) => worker.child === child);
   const failure = await readiness;
   if (failure) throw failure.error;
-  if (child.exitCode !== null || child.signalCode !== null) {
-    throw new Error(
-      `Wrangler dev at ${origin} exited after readiness. Worker output:\n${tail(getLog())}`,
-    );
-  }
+  if (child.exitCode === null && child.signalCode === null) return;
+  throw new Error(`Wrangler exited after readiness at ${origin}:\n${tail(getLog())}`);
 }
 
 requireDisposableDatabase(databaseUrl);
@@ -267,10 +264,8 @@ export default {
   assert.equal(textResult.status, 204, "static text and vanity parity probes");
   console.log("PASS Kit static text and vanity redirects with exact route and method boundaries");
 
-  const [kit, hono] = await Promise.all([
-    startWorker("kit", worker, assets, undefined, undefined, args.length > 0),
-    startWorker("hono", join(repo, "src/worker.ts"), join(repo, "public")),
-  ]);
+  const kit = await startWorker("kit", worker, assets, undefined, undefined, args.length > 0);
+  const hono = await startWorker("hono", join(repo, "src/worker.ts"), join(repo, "public"));
   const origin = kit.origin;
   await Promise.all([
     listen(kit.child, kit.origin, () => kit.log),
