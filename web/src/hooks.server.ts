@@ -5,6 +5,7 @@ import { env } from "cloudflare:workers";
 import { KIT_SOURCE_EVIDENCE_ROUTES } from "../../src/admin/kit-source-evidence-route";
 import { refuseSourceEvidenceOrigin } from "../../src/admin/source-evidence";
 import { KIT_EVENT_MARKDOWN_ROUTES } from "../../src/ai-friendly/kit-event-markdown-routes";
+import { renderNotFoundDocument } from "../../src/error-pages";
 import { recordBoardView, recordQueuedBoardView } from "../../src/hotzones/board-log";
 import { KIT_HOTZONE_SIGNAL_ROUTE } from "../../src/hotzones/kit-signal-route";
 import { prepareKitHomePanels } from "../../src/kit-home-panels";
@@ -13,6 +14,7 @@ import { KIT_SEO_ROUTES } from "../../src/kit-seo-routes";
 import { KIT_STATIC_TEXT_ROUTES } from "../../src/static-public";
 import { kitAccessSink } from "../../src/kit-access-sink";
 import { preserveHonoDataResponse } from "../../src/kit-worker-facade";
+import { cachedNotFoundSuggestions } from "../../src/not-found-suggestions";
 import {
   kitAdminRenewalFor,
   kitAuthStatusCookieFor,
@@ -79,6 +81,10 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
     kitRouteHome: env.KIT_ROUTE_HOME,
     kitRouteJoin: env.KIT_ROUTE_JOIN,
     kitRouteEmberPages: env.KIT_ROUTE_EMBER_PAGES,
+    membersNotFound: {
+      flag: env.KIT_ROUTE_MEMBERS_NOT_FOUND,
+      render: async (path) => renderNotFoundDocument(await cachedNotFoundSuggestions(env, path)),
+    },
     // End Kit's action before it starts another layout or page load. The
     // dispatcher returns the controller's native HTTP response in its place.
     admin: { env, completeForm: () => redirect(303, "/admin") },
