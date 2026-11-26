@@ -1562,7 +1562,12 @@ test("Ember fixture requires the exact 1033 starting prefix before recording 103
           runWrangler: (profile, [command, subcommand, target]) => {
             assert.equal(profile, "hono");
             if (command === "deployments" && subcommand === "list") {
-              return JSON.stringify([{ versions: [{ version_id: live, percentage: 100 }] }]);
+              return JSON.stringify([
+                {
+                  created_on: "2026-11-01T06:00:00.123456Z",
+                  versions: [{ version_id: live, percentage: 100 }],
+                },
+              ]);
             }
             if (command === "versions" && subcommand === "deploy") {
               assert.equal(target, `${kit}@100%`);
