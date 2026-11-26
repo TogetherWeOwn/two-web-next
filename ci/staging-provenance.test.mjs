@@ -263,10 +263,10 @@ test("staging E2E reservation receipt requires the independently verified comple
     refusedBinding,
   );
   const calls = admission.canAdmitStagingOperation.mock.calls;
-  assert.deepEqual(calls.map((call) => call.arguments[1].verifiedOwnerId), [
-    reservationRead.verifiedOwnerId,
-    after.verifiedOwnerId,
-  ]);
+  assert.deepEqual(
+    calls.map((call) => call.arguments[1].verifiedOwnerId),
+    [reservationRead.verifiedOwnerId, after.verifiedOwnerId],
+  );
 });
 
 test("staging E2E reservation receipt refuses equal or reversed run boundaries", () => {
