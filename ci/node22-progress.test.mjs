@@ -186,7 +186,7 @@ test("workflow retains the exact suite, scope gate, hosted runner, timeout and r
   );
   assert.match(
     job,
-    /if: \$\{\{ !cancelled\(\) && needs\.scope\.result == 'success' && needs\.scope\.outputs\.docs_only != 'true' && needs\.scope\.outputs\.draft != 'true' \}\}/,
+    /if: \$\{\{ !cancelled\(\) && needs\.scope\.result == 'success' && needs\.scope\.outputs\.docs_only != 'true' && needs\.scope\.outputs\.draft != 'true' && needs\.scope\.outputs\.isolated != 'true' \}\}/,
   );
   assert.doesNotMatch(step, /continue-on-error|timeout-minutes/);
   assert.match(job, /timeout-minutes: 45\n/);

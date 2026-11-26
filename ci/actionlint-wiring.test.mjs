@@ -22,7 +22,11 @@ test("original workflow lint and native queue smoke remain blocking", () => {
   const job = (id) => ci.split(`\n  ${id}:\n`)[1]?.split(/\n  [a-z][a-z-]*:\n/)[0] ?? "";
   assert.match(build, /"\$work\/actionlint" -shellcheck= -pyflakes=\s*$/);
   const smoke = job("queue-syntax-smoke");
-  assert.match(smoke, /needs: scope/);
+  assert.match(smoke, /^    needs: scope$/m);
+  assert.deepEqual(smoke.match(/^    if:.*$/gm), [
+    "    if: ${{ !cancelled() && needs.scope.result == 'success' }}",
+  ]);
+  assert.equal(smoke.match(/\bif:/g)?.length, 1);
   assert.match(
     smoke,
     /group: queue-syntax-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/,
@@ -32,7 +36,7 @@ test("original workflow lint and native queue smoke remain blocking", () => {
   assert.match(smoke, /runs-on: ubuntu-latest/);
   assert.match(smoke, /timeout-minutes: 2/);
   assert.match(smoke, /- run: "true"/);
-  assert.doesNotMatch(smoke, /if:|uses:|secrets\.|environment:|continue-on-error:/);
+  assert.doesNotMatch(smoke, /uses:|secrets\.|environment:|continue-on-error:/);
   assert.match(job("ci-ok"), /needs:[\s\S]*queue-syntax-smoke/);
   assert.match(job("ci-ok"), /QUEUE_SMOKE_RESULT: \$\{\{ needs\.queue-syntax-smoke\.result \}\}/);
   assert.match(job("ci-ok"), /run: test "\$QUEUE_SMOKE_RESULT" = success/);

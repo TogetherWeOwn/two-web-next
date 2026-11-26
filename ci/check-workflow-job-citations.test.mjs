@@ -166,7 +166,10 @@ test("docs-links requires the fixtures and the citation check on PRs and merge g
     readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"),
   );
   const docs = jobs["docs-links"];
-  assert.deepEqual([docs.if, docs["continue-on-error"]], [undefined, undefined]);
+  assert.deepEqual(
+    [docs.needs, docs.if, docs["continue-on-error"]],
+    ["scope", "${{ !cancelled() && needs.scope.result == 'success' }}", undefined],
+  );
   assert.ok(jobs["ci-ok"].needs.includes("docs-links"));
   const depth = "${{ github.event_name == 'merge_group' && '0' || '2' }}";
   assert.equal(docs.steps[0].with["fetch-depth"], depth);
