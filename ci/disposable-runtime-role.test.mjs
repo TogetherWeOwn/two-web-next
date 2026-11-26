@@ -110,10 +110,32 @@ test("installed XFS commands reject duplicate socket launches and missing teardo
   const launch = "Launching loopback kit-live Worker";
   const mounts = "Fixture mounts and backing file removed";
   const workers = "PASS loopback Workers and scratch cleaned up";
+  const upgrade =
+    "PASS Kit live socket upgrade, guest resync, frame limits, expiry, and revocation";
+  const fanout =
+    "PASS installed Kit expired and failed post-pull authorization closes without a frame";
   for (const [label, command, split, lines, fixtureStatus, expected] of [
     ["split route", routeProof, true, [mounts], 0, 0],
     ["duplicate socket launch", routeProof, true, [launch, mounts], 0, 1],
     ["unsplit route", routeProof, false, [launch, mounts], 0, 0],
+    ["failed split route with cleanup", routeProof, true, [mounts], 42, 42],
+    ["successful socket proof", socketProof, true, [upgrade, fanout, workers, mounts], 0, 0],
+    [
+      "successful socket run without upgrade proof",
+      socketProof,
+      true,
+      [fanout, workers, mounts],
+      0,
+      1,
+    ],
+    [
+      "successful socket run without fan-out proof",
+      socketProof,
+      true,
+      [upgrade, workers, mounts],
+      0,
+      1,
+    ],
     ["failed socket proof with cleanup", socketProof, true, [workers, mounts], 42, 42],
     ["failed socket proof without Worker cleanup", socketProof, true, [mounts], 42, 1],
     ["failed socket proof without mount cleanup", socketProof, true, [workers], 42, 1],

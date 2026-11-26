@@ -309,6 +309,7 @@ jobs:
           result=0
           bash ci/xfs-qualification-fixture.sh bash ci/kit-worker-installed-output.sh --live-socket-only \
             | tee "$RUNNER_TEMP/kit-live-socket.log" || result=$?
+          # Check teardown even when a socket assertion fails.
           grep -Fx 'Fixture mounts and backing file removed' "$RUNNER_TEMP/kit-live-socket.log"
           grep -Fx 'PASS loopback Workers and scratch cleaned up' "$RUNNER_TEMP/kit-live-socket.log"
           if (( result == 0 )); then
