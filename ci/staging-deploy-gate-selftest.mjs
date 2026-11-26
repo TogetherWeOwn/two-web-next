@@ -1071,3 +1071,65 @@ test("staging refuses a newer split deployment and ambiguous or malformed timest
     );
   }
 });
+
+function recordStagingReads(calls, overrides) {
+  const read = stagingReads();
+  return async (url, options) => {
+    const host = new URL(url).hostname;
+    calls.push(host);
+    const response = await read(url, options);
+    return overrides[host] ?? response;
+  };
+}
+
+test("staging stops before reading the edge when Cloudflare deployment evidence is unavailable or incomplete", async () => {
+  const deployment = { success: true, result: { deployments: [stagedDeployment] } };
+  for (const [name, response, message] of [
+    [
+      "HTTP failure with a valid envelope",
+      Response.json(deployment, { status: 503 }),
+      "Cannot read Cloudflare deployment state for staging rollout",
+    ],
+    [
+      "unsuccessful envelope with deployment data",
+      Response.json({ ...deployment, success: false }),
+      "Missing active staging deployment",
+    ],
+    [
+      "successful envelope without deployments",
+      Response.json({ success: true, result: {} }),
+      "Missing active staging deployment",
+    ],
+  ]) {
+    const calls = [];
+    const read = recordStagingReads(calls, { "api.cloudflare.com": response });
+    await assert.rejects(requireForwardStaging(stagingGuardEnv, read), { message }, name);
+    assert.deepEqual(calls, ["api.cloudflare.com"], name);
+  }
+});
+
+test("staging refuses incomplete or inconsistent ahead evidence from GitHub", async () => {
+  for (const [name, changes] of [
+    ["missing base commit", { base_commit: undefined }],
+    ["missing behind count", { behind_by: undefined }],
+    ["missing total count", { total_commits: undefined }],
+    ["positive behind count", { behind_by: 1 }],
+    ["zero ahead count", { ahead_by: 0, total_commits: 0 }],
+    ["non-integer ahead count", { ahead_by: 1.5, total_commits: 1.5 }],
+    ["mismatched total count", { total_commits: 3 }],
+  ]) {
+    const calls = [];
+    const response = Response.json({ ...forward, ...changes });
+    const read = recordStagingReads(calls, { "api.github.com": response });
+    await assert.rejects(
+      requireForwardStaging(stagingGuardEnv, read),
+      { message: `Staging rollout refused: ${sha} is not a verified descendant of ${otherSha}` },
+      name,
+    );
+    assert.deepEqual(
+      calls,
+      ["api.cloudflare.com", "next.togetherweown.com", "api.github.com"],
+      name,
+    );
+  }
+});
