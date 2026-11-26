@@ -263,8 +263,8 @@ test("isolated Workers API GET bounds and disposes provider responses", async (t
       },
     });
 
-  await t.test("accepts exactly 1 MiB and cancels one byte over before EOF", async () => {
-    const version = { id: kit };
+  await t.test("accepts exactly 1 MiB of UTF-8 and cancels one byte over before EOF", async () => {
+    const version = { id: kit, annotations: { "workers/tag": "Épreuve" } };
     const json = new TextEncoder().encode(JSON.stringify({ success: true, result: version }));
     const padding = new Uint8Array(1024 * 1024 - json.byteLength).fill(32);
     const readVersion = (...chunks) => {
