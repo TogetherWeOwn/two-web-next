@@ -768,6 +768,34 @@ export async function scriptErrorSample(
   return sumScriptErrors(await response.json());
 }
 
+const STAGING_VERSION_PAGE_MAX_BYTES = 1024 * 1024;
+
+async function readStagingVersionPage(response) {
+  try {
+    const buffer = Buffer.alloc(STAGING_VERSION_PAGE_MAX_BYTES);
+    const reader = response.body.getReader();
+    let bytes = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) return await new Response(buffer.subarray(0, bytes)).json();
+        if (value.byteLength > buffer.length - bytes) {
+          // Refuse immediately even if cancelling the stream takes time.
+          void reader.cancel().catch(() => undefined);
+          break;
+        }
+        buffer.set(value, bytes);
+        bytes += value.byteLength;
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  } catch {
+    throw new Error("Staging versions response is unreadable or invalid JSON");
+  }
+  throw new Error("Staging versions response exceeds the 1 MiB page limit");
+}
+
 // The candidate's staging Worker versions: staging deploys tag each version
 // with the deployed commit (deploy.yml `wrangler deploy --tag <sha>`). Read
 // from the Workers versions API so the job needs no wrangler install. A
@@ -790,7 +818,7 @@ export async function stagingCandidateVersions(
       },
     );
     if (!response.ok) throw new Error(`Staging versions lookup failed (HTTP ${response.status})`);
-    const items = (await response.json())?.result?.items;
+    const items = (await readStagingVersionPage(response))?.result?.items;
     if (!Array.isArray(items)) throw new Error("Staging versions response has no items");
     matches.push(...items.filter((item) => item?.annotations?.["workers/tag"] === sha));
     if (items.length < 100) break;
