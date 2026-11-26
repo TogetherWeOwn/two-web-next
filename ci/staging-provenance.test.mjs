@@ -234,6 +234,25 @@ test("staging E2E reservation receipt binds one snapshot of the receipt", () => 
   assert.deepEqual(bound.e2e, reservedE2e.e2e);
 });
 
+test("staging E2E reservation receipt binds one snapshot of each lease read", () => {
+  const admission = reservationAdmission();
+  const shifting = () => {
+    let reads = 0;
+    return {
+      get record() {
+        return reads++ === 0 ? { ...reservationRecord, ownerId: 99999 } : reservationRecord;
+      },
+      verifiedOwnerId: reservationRecord.ownerId,
+    };
+  };
+  const evidence = { before: shifting(), after: shifting(), admission };
+  assert.throws(() => bindStagingE2eReservation(reservedE2e, evidence), refusedBinding);
+  assert.deepEqual(
+    admission.canAdmitStagingOperation.mock.calls.map(({ arguments: [record] }) => record.ownerId),
+    [99999],
+  );
+});
+
 test("staging E2E reservation receipt refuses expired, changed, or unverified leases", () => {
   const admission = reservationAdmission();
   const bind = (before, after, receipt = reservedE2e) =>

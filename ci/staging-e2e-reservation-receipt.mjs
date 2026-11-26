@@ -23,11 +23,14 @@ function e2eTime(value) {
  */
 export function bindStagingE2eReservation(receipt, evidence) {
   try {
-    const { before, after, admission } = evidence;
+    const { admission } = evidence;
     if (Object.hasOwn(receipt, "reservation")) throw new Error(REFUSED);
-    if (before === null && after === null) return receipt;
+    if (evidence.before === null && evidence.after === null) return receipt;
 
-    // Validate and bind one plain-data copy so later reads cannot diverge.
+    // Validate and bind one plain-data copy of each input so later reads cannot diverge.
+    const snapshot = ({ record, verifiedOwnerId }) => structuredClone({ record, verifiedOwnerId });
+    const before = snapshot(evidence.before);
+    const after = snapshot(evidence.after);
     receipt = structuredClone(receipt);
     const startedAtMs = e2eTime(receipt.e2e.startedAt);
     const completedAtMs = e2eTime(receipt.e2e.completedAt);
