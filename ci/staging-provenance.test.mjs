@@ -253,6 +253,47 @@ test("staging E2E reservation receipt binds one snapshot of each lease read", ()
   );
 });
 
+test("staging E2E reservation receipt reads each evidence field once", () => {
+  const reads = [];
+  const counted = (fields) =>
+    Object.defineProperties(
+      {},
+      Object.fromEntries(
+        Object.entries(fields).map(([key, [label, value]]) => [
+          key,
+          {
+            enumerable: true,
+            get() {
+              reads.push(label);
+              return value();
+            },
+          },
+        ]),
+      ),
+    );
+  const leaseRead = (label) => () =>
+    counted({
+      record: [`${label}.record`, () => reservationRecord],
+      verifiedOwnerId: [`${label}.owner`, () => reservationRead.verifiedOwnerId],
+    });
+  const evidence = counted({
+    before: ["before", leaseRead("before")],
+    after: ["after", leaseRead("after")],
+    admission: ["admission", reservationAdmission],
+  });
+  const bound = bindStagingE2eReservation(reservedE2e, evidence);
+  assert.equal(bound.reservation.ownerId, reservationRecord.ownerId);
+  assert.deepEqual(reads.toSorted(), [
+    "admission",
+    "after",
+    "after.owner",
+    "after.record",
+    "before",
+    "before.owner",
+    "before.record",
+  ]);
+});
+
 test("staging E2E reservation receipt refuses expired, changed, or unverified leases", () => {
   const admission = reservationAdmission();
   const bind = (before, after, receipt = reservedE2e) =>
