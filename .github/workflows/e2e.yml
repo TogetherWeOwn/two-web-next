@@ -1,18 +1,17 @@
 name: e2e
 
 # Browser smoke for the critical journeys (docs/critical-journeys.md).
-# Only browser-smoke opts in to the organization's 2-vCPU runner. Fork PRs
-# and runs without the opt-in use GitHub-hosted Ubuntu 24.04. Each smoke job
-# gets a disposable Postgres service. The guard in e2e/ci-only.mjs permits
+# Scope and verdict use included 2-vCPU capacity on same-repository PRs.
+# Browser smoke also uses that capacity on its existing non-PR events.
+# Browser smoke falls back to GitHub-hosted Ubuntu 24.04 and gets a
+# disposable Postgres service. The guard in e2e/ci-only.mjs permits
 # only that target, never staging or production. Browsers run here in CI
 # only, never on the controller.
 # Docs-only and test-only PRs (ci/change-scope.sh skip_e2e verdict, mirrored
 # from ci.yml) skip the smoke below: prose that no gate, test or build reads,
 # and unit tests the journeys never execute, prove nothing about browser
 # journeys. The pull_request trigger stays unfiltered so this workflow always
-# reports. The required check is the `e2e-ok` aggregator below, not
-# `browser-smoke`: the live required set is `ci-ok`, `gitleaks`, `e2e-ok`,
-# `pr-lint`, `CodeRabbit` and `Devin Review`. A scope-verdict skip passes
+# reports. The `e2e-ok` aggregator is the required check. A scope-verdict skip passes
 # through the aggregator instead of blocking a merge.
 
 on:

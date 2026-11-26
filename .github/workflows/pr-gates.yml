@@ -8,7 +8,8 @@ name: pr-gates
 # equal to the ids: `pr-lint` (ruleset pr-conventions) and `gitleaks` (ruleset
 # protect-main). Keep both names byte-identical or merges block.
 #
-# Runs on standard GitHub-hosted ubuntu-latest runners.
+# Same-repository pull requests use included 2-vCPU capacity when enabled.
+# The GitHub-hosted fallback is ubuntu-latest.
 
 on:
   pull_request:
