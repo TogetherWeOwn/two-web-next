@@ -63,7 +63,11 @@ jobs:
                           continue
                       if identity(associations[0]) != identity(pr):
                           return None
-                      if run["status"] != "completed" or run["conclusion"] == "cancelled":
+                      # The advisory labeler may outlive the size gate. On the first
+                      # attempt there are no earlier job verdicts to confuse with it.
+                      first_size_attempt = workflow == "pr-size" and run["run_attempt"] == 1
+                      if run["conclusion"] == "cancelled" or (
+                              run["status"] != "completed" and not first_size_attempt):
                           return None
                       run_id = run["id"]
                       jobs = collection(api, f"actions/runs/{run_id}/jobs?filter=all", "jobs")

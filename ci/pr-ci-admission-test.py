@@ -41,6 +41,14 @@ class AdmissionTest(TestCase):
         ignored = dict(edit[0], id=31, name="pr-gates ignored edit (scan)", conclusion="skipped")
         edit.append(ignored)
         self.assertEqual(evidence()["gitleaks"], (1, 1, 11))
+        runs[1].update(status="in_progress", conclusion=None)
+        self.assertEqual(evidence()["pr-size-gate / gate"], (2, 1, 20))
+        size["status"] = "queued"
+        self.assertIsNone(evidence())
+        size["status"] = "completed"
+        runs[1]["run_attempt"] = 2
+        self.assertIsNone(evidence())
+        runs[1].update(run_attempt=1, status="completed", conclusion="success")
         runs[0]["run_attempt"] = 2
         rerun = dict(source[1], id=12, run_attempt=2, status="queued")
         source.append(rerun)
