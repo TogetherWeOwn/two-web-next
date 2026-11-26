@@ -192,6 +192,11 @@ export async function notify(env, { fetchImpl = fetch, now = () => new Date() } 
     redirect: "error",
     signal: AbortSignal.timeout(15_000),
   });
+  try {
+    await response.body?.cancel();
+  } catch {
+    // The HTTP status determines the notification outcome even if cleanup fails.
+  }
   if (!response.ok) throw new Error(`deploy-notify webhook answered HTTP ${response.status}`);
   return { sent: true, payload };
 }
