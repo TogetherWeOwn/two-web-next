@@ -10,6 +10,12 @@ import { newEventKey } from "../../src/admin/validation-event-keys.ts";
 import { attr, elements, submittedFields } from "../../test/helpers/kit-edit-controls.ts";
 import { EMBER_CUTOVER_VARS } from "../kit-cutover-evidence.mjs";
 import { FIXTURE_SECRETS, SESSION_COOKIE } from "../parity/fixture.mjs";
+import {
+  parseRenderedPage,
+  renderedAttribute,
+  renderedElements,
+  renderedText,
+} from "../rendered-page.mjs";
 import { assertAdminDuplicateServing } from "./kit-admin-duplicate.mjs";
 
 const editor = "/admin/events/new";
@@ -154,151 +160,139 @@ async function visit(
   return { headers: response.headers, text };
 }
 
-export async function assertFeaturedUnpublishParity({ kit, off, hono, databaseUrl }) {
+async function assertActivityLogReadParity({ kit, off, databaseUrl }) {
+  const path = "/admin/activity-log";
+  const pageSize = 50;
   const actor = 900000000000000000n + BigInt(`0x${randomBytes(7).toString("hex")}`);
   const moderatorId = String(actor);
-  const memberId = String(actor + 1n);
-  const ip = "192.0.2.188";
-  const title = `Fixture featured withdrawal ${moderatorId}`;
+  const subject = `Fixture activity & ${moderatorId}`;
+  const filters = { subject, causer: moderatorId };
   const sql = postgres(databaseUrl, { max: 1 });
-  try {
-    const moderator = await session(sql, moderatorId, true);
-    const member = await session(sql, memberId, false);
-    const [{ id: kitId }, { id: fallbackId }, { id: honoId }] = await sql`
-      insert into featured_contents (title, is_published, created_by, updated_at)
-      values (${title}, true, ${moderatorId}, '2020-01-01'),
-             (${title}, true, ${moderatorId}, '2020-01-01'),
-             (${title}, true, ${moderatorId}, '2020-01-01') returning id
-    `;
-    const featureOff = {
-      ...kit,
-      name: "installed Kit with unpublish ownership off",
-      headers: { ...kit.headers, [unpublishFallback]: "true" },
+  let seededIds = [];
+
+  function row(index) {
+    return {
+      description: `Synthetic activity ${index}`,
+      subject_type: "FixtureActivity",
+      subject_id: subject,
+      causer_id: moderatorId,
+      created_at: new Date(Date.UTC(2000, 0, 1, 0, 0, index === 1 ? 0 : index)),
     };
-    const listPath = "/admin/featured";
-    const action = (id) => `${listPath}/${id}/unpublish`;
-    // Keep the Admin pages on Kit while turning off only the unpublish POST.
-    const list = await visit(featureOff, `${listPath}?q=${encodeURIComponent(title)}`, 200, {
-      headers: { ...html, cookie: moderator },
+  }
+
+  async function readPage(target, href, cookie, owned, page, expectedRows) {
+    const label = `${target.name} activity page ${page}`;
+    const { headers, text } = await visit(target, href, 200, {
+      owned,
+      headers: { ...html, cookie },
     });
-    assert.ok(list.text.includes(`method="post" action="${action(kitId)}"`));
-    assert.ok(list.text.includes(`method="post" action="${action(fallbackId)}"`));
-    const cookie = renewedModerator(list.headers);
-    const form = {
-      method: "POST",
-      headers: { ...html, cookie, "cf-connecting-ip": ip, "x-forwarded-for": ip },
-      body: new URLSearchParams(),
-    };
-
-    async function snapshot(id) {
-      const [row] = await sql`
-        select title, is_published, updated_at::text from featured_contents where id = ${id}
-      `;
-      const receipts = await sql`
-        select id, causer_id, description, properties from activity_log
-        where subject_type = 'FeaturedContent' and subject_id = ${String(id)} order by id
-      `;
-      return { row, receipts: [...receipts] };
-    }
-
-    for (const [target, id] of [
-      [kit, kitId],
-      [featureOff, fallbackId],
-      [hono, honoId],
-    ]) {
-      const owned = target === kit;
-      const path = action(id);
-      const before = await snapshot(id);
-      assert.equal(before.row.is_published, true);
-      assert.deepEqual(before.receipts, []);
-      const denied = await visit(target, path, 403, {
-        ...form,
-        owned,
-        headers: { ...html, cookie: member },
-      });
-      assert.match(denied.text, /You do not have access to this/);
-      assert.equal(denied.headers.getSetCookie().length, 0);
-      const guest = await visit(target, path, 303, {
-        ...form,
-        owned,
-        headers: { ...html, referer: `${target.origin}${listPath}` },
-      });
-      assert.equal(guest.headers.get("location"), "/auth/recover?next=%2Fadmin%2Ffeatured");
-      assert.equal(guest.headers.getSetCookie().length, 1);
-      const wrongMethod = await visit(target, path, 404, {
-        method: "PUT",
-        owned: false,
-        headers: form.headers,
-      });
-      assert.equal(wrongMethod.headers.get("location"), null);
-      await visit(target, path, 403, {
-        ...form,
-        owned,
-        headers: { ...form.headers, origin: "https://fixture-cross-origin.invalid" },
-      });
-      await visit(target, path, 413, { ...form, owned, body: "x".repeat(4097) });
-      assert.deepEqual(
-        await snapshot(id),
-        before,
-        "refused requests leave the row and audit untouched",
-      );
-
-      const saved = await visit(target, path, 303, { ...form, owned });
-      assert.equal(saved.headers.get("location"), listPath);
-      assert.equal(saved.headers.getSetCookie().length, 0);
-      const after = await snapshot(id);
-      assert.equal(after.row.title, title);
-      assert.equal(after.row.is_published, false);
-      assert.notEqual(after.row.updated_at, before.row.updated_at);
-      assert.deepEqual(
-        after.receipts.map(({ id: _id, ...receipt }) => receipt),
-        [
-          {
-            causer_id: moderatorId,
-            description: `unpublished featured content ${title}`,
-            properties: { isPublished: { before: true, after: false } },
-          },
-        ],
-      );
-      const repeated = await visit(target, path, 303, { ...form, owned });
-      assert.equal(repeated.headers.get("location"), listPath);
-      assert.deepEqual(
-        await snapshot(id),
-        after,
-        "stale replay leaves the saved version and audit intact",
-      );
-    }
-
-    const committed = await snapshot(kitId);
-    const fallback = await visit(off, action(kitId), 303, { ...form, owned: false });
-    assert.equal(fallback.headers.get("location"), listPath);
+    const cache = headers.get("cache-control") ?? "";
     assert.deepEqual(
-      await snapshot(kitId),
-      committed,
-      "Hono fallback preserves the Kit mutation and audit",
+      cache
+        .split(",")
+        .map((part) => part.trim().toLowerCase())
+        .sort(),
+      ["no-store", "private"],
+      label,
+    );
+    const doc = parseRenderedPage(text);
+    const table = [...renderedElements(doc, { tag: "table" })].find(
+      (node) => renderedAttribute(node, "data-testid") === "activity-log-table",
+    );
+    assert.ok(table, `${label}: activity table`);
+    const [body] = renderedElements(table, { tag: "tbody" });
+    assert.ok(body, `${label}: activity rows`);
+    const rows = [...renderedElements(body, { tag: "tr" })].map((entry) => {
+      const cells = [...renderedElements(entry, { tag: "td" })];
+      assert.equal(cells.length, 4, label);
+      const [time] = renderedElements(cells[2], { tag: "time" });
+      assert.ok(time, `${label}: activity instant`);
+      return [
+        renderedText(cells[0]).trim(),
+        renderedText(cells[1]).trim(),
+        renderedAttribute(time, "datetime"),
+        renderedText(cells[3]).trim(),
+      ];
+    });
+    assert.deepEqual(
+      rows,
+      expectedRows.map((entry) => [
+        entry.causer_id,
+        entry.description,
+        entry.created_at.toISOString(),
+        `${entry.subject_type} ${entry.subject_id}`,
+      ]),
+      `${label}: exactly the matching activities in newest-first order`,
     );
 
-    await sql`delete from featured_contents where id = ${honoId} and created_by = ${moderatorId}`;
-    const missing = await snapshot(honoId);
-    assert.equal(missing.row, undefined);
-    for (const target of [kit, featureOff, off, hono]) {
-      const refused = await visit(target, action(honoId), 404, { ...form, owned: target === kit });
-      assert.match(refused.text, /Featured content not found/);
-      assert.equal(refused.headers.get("location"), null);
+    const pager = [...renderedElements(doc, { tag: "nav" })].find(
+      (node) => renderedAttribute(node, "aria-label") === "Activity pages",
+    );
+    assert.ok(pager, `${label}: activity pagination`);
+    const [pageLabel] = renderedElements(pager, { tag: "span" });
+    assert.ok(pageLabel, `${label}: page label`);
+    assert.equal(renderedText(pageLabel).trim(), `Page ${page}`, label);
+    const links = [...renderedElements(pager, { tag: "a" })];
+    assert.equal(links.length, 1, `${label}: one direction is available`);
+    const direction = page === 1 ? "next" : "prev";
+    assert.equal(renderedAttribute(links[0], "rel"), direction, label);
+    const destination = new URL(renderedAttribute(links[0], "href"), target.origin);
+    assert.equal(destination.origin, target.origin, label);
+    assert.equal(destination.pathname, path, label);
+    assert.deepEqual(
+      [...destination.searchParams].sort(),
+      Object.entries({ ...filters, page: page === 1 ? "2" : "1" }).sort(),
+      `${label}: ${direction} preserves both filters`,
+    );
+    return { href: destination.pathname + destination.search, cookie: renewedModerator(headers) };
+  }
+
+  try {
+    const matching = Array.from({ length: pageSize + 1 }, (_, index) => row(index));
+    // The oldest two share an instant at the page boundary. Insert the second
+    // one last so its higher ID breaks the tie, and reverse the remaining insert
+    // order to distinguish chronological ordering from ID ordering.
+    const inserts = [
+      matching[0],
+      ...matching.slice(2).reverse(),
+      { ...row(pageSize + 1), subject_id: `Different fixture ${moderatorId}` },
+      { ...row(pageSize + 2), causer_id: String(actor + 1n) },
+      matching[1],
+    ];
+    const inserted = await sql`
+      insert into activity_log ${sql(inserts, "description", "subject_type", "subject_id", "causer_id", "created_at")}
+      returning id
+    `;
+    seededIds = inserted.map(({ id }) => id);
+    const newestFirst = matching.toReversed();
+    const first = `${path}?${new URLSearchParams(filters)}`;
+    for (const [target, owned] of [
+      [kit, true],
+      [off, false],
+    ]) {
+      const cookie = await session(sql, moderatorId, true);
+      const next = await readPage(target, first, cookie, owned, 1, newestFirst.slice(0, pageSize));
+      await readPage(target, next.href, next.cookie, owned, 2, newestFirst.slice(pageSize));
     }
-    assert.deepEqual(await snapshot(honoId), missing, "missing target cannot add an audit row");
   } finally {
     try {
-      // Audit rows are append-only. The hosted job discards the disposable database.
-      await sql`delete from featured_contents where created_by = ${moderatorId}`;
-      await sql`delete from web_sessions where user_id in (${moderatorId}, ${memberId})`;
-      await sql`delete from web_throttle_hits where bucket = ${`admin-write:${ip}`}`;
+      await sql.begin(async (tx) => {
+        await tx`delete from web_session_grace where user_id = ${moderatorId}`;
+        await tx`delete from web_sessions where user_id = ${moderatorId}`;
+        if (seededIds.length) {
+          // The historical synthetic rows qualify for ordinary retention cleanup.
+          // The hosted job discards the new, append-only access receipts with its database.
+          const removed =
+            await tx`delete from activity_log where id in ${tx(seededIds)} returning id`;
+          assert.equal(removed.length, seededIds.length, "synthetic activity rows removed");
+        }
+      });
     } finally {
       await sql.end({ timeout: 1 });
     }
   }
   console.log(
-    "PASS installed Worker featured unpublish admission, write audit, replay, and Hono fallback",
+    "PASS installed Kit and Hono activity log filtering, pagination, private no-store and fixture cleanup",
   );
 }
 
@@ -998,6 +992,7 @@ async function assertEventEditFallback({
 }
 
 export async function assertKitAdminServing({ kit, nativeCreate, off, hono, databaseUrl }) {
+  await assertActivityLogReadParity({ kit, off, databaseUrl });
   const actor = 900000000000000000n + BigInt(`0x${randomBytes(7).toString("hex")}`);
   const moderatorId = String(actor);
   const memberId = String(actor + 1n);
@@ -1327,4 +1322,152 @@ export async function assertInstalledJoinAttemptDetail({ worker, scratch, databa
   } finally {
     await sql.end({ timeout: 1 });
   }
+}
+
+export async function assertFeaturedUnpublishParity({ kit, off, hono, databaseUrl }) {
+  const actor = 900000000000000000n + BigInt(`0x${randomBytes(7).toString("hex")}`);
+  const moderatorId = String(actor);
+  const memberId = String(actor + 1n);
+  const ip = "192.0.2.188";
+  const title = `Fixture featured withdrawal ${moderatorId}`;
+  const sql = postgres(databaseUrl, { max: 1 });
+  try {
+    const moderator = await session(sql, moderatorId, true);
+    const member = await session(sql, memberId, false);
+    const [{ id: kitId }, { id: fallbackId }, { id: honoId }] = await sql`
+      insert into featured_contents (title, is_published, created_by, updated_at)
+      values (${title}, true, ${moderatorId}, '2020-01-01'),
+             (${title}, true, ${moderatorId}, '2020-01-01'),
+             (${title}, true, ${moderatorId}, '2020-01-01') returning id
+    `;
+    const featureOff = {
+      ...kit,
+      name: "installed Kit with unpublish ownership off",
+      headers: { ...kit.headers, [unpublishFallback]: "true" },
+    };
+    const listPath = "/admin/featured";
+    const action = (id) => `${listPath}/${id}/unpublish`;
+    // Keep the Admin pages on Kit while turning off only the unpublish POST.
+    const list = await visit(featureOff, `${listPath}?q=${encodeURIComponent(title)}`, 200, {
+      headers: { ...html, cookie: moderator },
+    });
+    assert.ok(list.text.includes(`method="post" action="${action(kitId)}"`));
+    assert.ok(list.text.includes(`method="post" action="${action(fallbackId)}"`));
+    const cookie = renewedModerator(list.headers);
+    const form = {
+      method: "POST",
+      headers: { ...html, cookie, "cf-connecting-ip": ip, "x-forwarded-for": ip },
+      body: new URLSearchParams(),
+    };
+
+    async function snapshot(id) {
+      const [row] = await sql`
+        select title, is_published, updated_at::text from featured_contents where id = ${id}
+      `;
+      const receipts = await sql`
+        select id, causer_id, description, properties from activity_log
+        where subject_type = 'FeaturedContent' and subject_id = ${String(id)} order by id
+      `;
+      return { row, receipts: [...receipts] };
+    }
+
+    for (const [target, id] of [
+      [kit, kitId],
+      [featureOff, fallbackId],
+      [hono, honoId],
+    ]) {
+      const owned = target === kit;
+      const path = action(id);
+      const before = await snapshot(id);
+      assert.equal(before.row.is_published, true);
+      assert.deepEqual(before.receipts, []);
+      const denied = await visit(target, path, 403, {
+        ...form,
+        owned,
+        headers: { ...html, cookie: member },
+      });
+      assert.match(denied.text, /You do not have access to this/);
+      assert.equal(denied.headers.getSetCookie().length, 0);
+      const guest = await visit(target, path, 303, {
+        ...form,
+        owned,
+        headers: { ...html, referer: `${target.origin}${listPath}` },
+      });
+      assert.equal(guest.headers.get("location"), "/auth/recover?next=%2Fadmin%2Ffeatured");
+      assert.equal(guest.headers.getSetCookie().length, 1);
+      const wrongMethod = await visit(target, path, 404, {
+        method: "PUT",
+        owned: false,
+        headers: form.headers,
+      });
+      assert.equal(wrongMethod.headers.get("location"), null);
+      await visit(target, path, 403, {
+        ...form,
+        owned,
+        headers: { ...form.headers, origin: "https://fixture-cross-origin.invalid" },
+      });
+      await visit(target, path, 413, { ...form, owned, body: "x".repeat(4097) });
+      assert.deepEqual(
+        await snapshot(id),
+        before,
+        "refused requests leave the row and audit untouched",
+      );
+
+      const saved = await visit(target, path, 303, { ...form, owned });
+      assert.equal(saved.headers.get("location"), listPath);
+      assert.equal(saved.headers.getSetCookie().length, 0);
+      const after = await snapshot(id);
+      assert.equal(after.row.title, title);
+      assert.equal(after.row.is_published, false);
+      assert.notEqual(after.row.updated_at, before.row.updated_at);
+      assert.deepEqual(
+        after.receipts.map(({ id: _id, ...receipt }) => receipt),
+        [
+          {
+            causer_id: moderatorId,
+            description: `unpublished featured content ${title}`,
+            properties: { isPublished: { before: true, after: false } },
+          },
+        ],
+      );
+      const repeated = await visit(target, path, 303, { ...form, owned });
+      assert.equal(repeated.headers.get("location"), listPath);
+      assert.deepEqual(
+        await snapshot(id),
+        after,
+        "stale replay leaves the saved version and audit intact",
+      );
+    }
+
+    const committed = await snapshot(kitId);
+    const fallback = await visit(off, action(kitId), 303, { ...form, owned: false });
+    assert.equal(fallback.headers.get("location"), listPath);
+    assert.deepEqual(
+      await snapshot(kitId),
+      committed,
+      "Hono fallback preserves the Kit mutation and audit",
+    );
+
+    await sql`delete from featured_contents where id = ${honoId} and created_by = ${moderatorId}`;
+    const missing = await snapshot(honoId);
+    assert.equal(missing.row, undefined);
+    for (const target of [kit, featureOff, off, hono]) {
+      const refused = await visit(target, action(honoId), 404, { ...form, owned: target === kit });
+      assert.match(refused.text, /Featured content not found/);
+      assert.equal(refused.headers.get("location"), null);
+    }
+    assert.deepEqual(await snapshot(honoId), missing, "missing target cannot add an audit row");
+  } finally {
+    try {
+      // Audit rows are append-only. The hosted job discards the disposable database.
+      await sql`delete from featured_contents where created_by = ${moderatorId}`;
+      await sql`delete from web_sessions where user_id in (${moderatorId}, ${memberId})`;
+      await sql`delete from web_throttle_hits where bucket = ${`admin-write:${ip}`}`;
+    } finally {
+      await sql.end({ timeout: 1 });
+    }
+  }
+  console.log(
+    "PASS installed Worker featured unpublish admission, write audit, replay, and Hono fallback",
+  );
 }
