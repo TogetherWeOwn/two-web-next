@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import { PLANETSCALE_PRODUCTION_BRANCH_ID, PLANETSCALE_PRODUCTION_HOST } from "./db-migrate.mjs";
 import { runRepair } from "./db-permissions-repair.mjs";
+import { runServingIsolation } from "./db-serving-ledger-isolation.mjs";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const workflow = parse(read("../.github/workflows/db-permissions-repair.yml"));
@@ -405,6 +406,54 @@ test("repair readback refuses an unapproved catalog digest in a read-only transa
       ["end", { timeout: 5 }],
     ]);
   }
+});
+
+test("serving isolation refuses duplicate ACL entries in a digest-matched plan", async (t) => {
+  const hash = (value) => createHash("sha256").update(value).digest("hex");
+  const acl = { column: "", grantor: "fixture_owner", grantable: false };
+  const plan = {
+    identity: hash("postgres\0fixture_owner"),
+    version: "00000000-0000-4000-8000-000000000001",
+    artifact: { sourceSha: "a".repeat(40), digest: "b".repeat(64) },
+    before: "c".repeat(64),
+    after: "d".repeat(64),
+    add: [{ ...acl, kind: "table", name: "events", right: "SELECT" }],
+    remove: [{ ...acl, kind: "schema", name: "drizzle", right: "USAGE" }],
+    membership: [],
+  };
+  const reachedConnector = new Error("Reached the synthetic connector");
+  const connect = t.mock.fn(() => {
+    throw reachedConnector;
+  });
+  const fetchImpl = t.mock.fn(() => assert.fail("Unexpected serving read"));
+  const run = (operation, input) => {
+    const raw = JSON.stringify(input);
+    return runServingIsolation(
+      operation,
+      "1033_session-roles-checked-at",
+      {
+        PRODUCTION_DB_ISOLATION_PLAN: raw,
+        PRODUCTION_DB_ISOLATION_PLAN_SHA256: hash(raw),
+        PRODUCTION_DB_ISOLATION_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:synthetic@${PLANETSCALE_PRODUCTION_HOST}/postgres?sslmode=verify-full`,
+      },
+      { connect, fetchImpl },
+    );
+  };
+
+  for (const operation of ["forward", "undo"]) {
+    await assert.rejects(run(operation, plan), (error) => error === reachedConnector);
+    connect.mock.resetCalls();
+    for (const list of ["add", "remove"]) {
+      const duplicate = { ...plan, [list]: [...plan[list], { ...plan[list][0] }] };
+      await assert.rejects(
+        run(operation, duplicate),
+        { code: "ERR_ASSERTION", operator: "strictEqual", actual: 2, expected: 3 },
+        `${operation} with a duplicate ${list} entry`,
+      );
+    }
+    assert.equal(connect.mock.callCount(), 0);
+  }
+  assert.equal(fetchImpl.mock.callCount(), 0);
 });
 
 test("executor dispatch scopes its credential and suppresses subprocess output", () => {
