@@ -1,6 +1,13 @@
 name: deploy
-# The deployed commit, queryable later: workflow_run runs record main's tip as head_sha.
-run-name: deploy ${{ github.event.workflow_run.head_sha || github.sha }}
+# Only an admitted deploy can name a candidate. A run whose only job is
+# skipped can still conclude success and trigger staging E2E.
+# workflow_run records main's tip as head_sha, so name the triggering CI SHA.
+run-name: >-
+  ${{ ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+       (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_repository.full_name == github.repository)) &&
+      format('deploy {0}', github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha) || 'staging deploy not admitted' }}
 
 # Staging deploy after successful full CI on main. Production (togetherweown.com) is only
 # switched at cutover (plan TOG-9671, W16): there is deliberately no prod job here.
@@ -34,6 +41,7 @@ permissions:
 jobs:
   deploy-staging:
     name: deploy-staging
+    # Keep this admission condition aligned with the candidate run-name above.
     if: >-
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' &&
