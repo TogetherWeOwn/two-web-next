@@ -13,10 +13,13 @@ const workflows = readdirSync(dir)
   .map((name) => ({ name, text: readFileSync(join(dir, name), "utf8") }));
 const triggers = (text: string) => text.split(/\non:\n/)[1]?.split(/\n\S/)[0] ?? "";
 const normalized = (expression: string) => expression.replace(/\s+/g, " ").trim();
-const prGatesAdmit = normalized(`(github.event.action != 'edited' ||
+const scanEvents = normalized(`github.event.action != 'edited' ||
   (startsWith(toJSON(github.event.changes.base.ref.from), '"') && github.event.changes.base.ref.from != '' &&
-   startsWith(toJSON(github.event.pull_request.base.ref), '"') && github.event.pull_request.base.ref != ''))`);
-const prGatesCancel = `\${{ github.event_name == 'pull_request' && ${prGatesAdmit} }}`;
+   startsWith(toJSON(github.event.pull_request.base.ref), '"') && github.event.pull_request.base.ref != '')`);
+const prGatesAdmit = `(${scanEvents})`;
+const metadataEdit = "github.event.changes.title != null || github.event.changes.body != null";
+const lintAdmit = `(${scanEvents} || ${metadataEdit})`;
+const prGatesCancel = "${{ github.event_name == 'pull_request' }}";
 const prGates = parse(readFileSync(join(dir, "pr-gates.yml"), "utf8"));
 // ci.yml exempts main from cancellation and gives each push its own slot.
 // A cancelled main run cannot trigger the staging deploy.
@@ -201,17 +204,23 @@ function planPrGates(context: PrGateContext) {
   const admit =
     action !== "edited" ||
     [changes?.base?.ref?.from, pr?.base.ref].every((ref) => typeof ref === "string" && ref !== "");
+  const metadata = changes?.title != null || changes?.body != null;
+  const lint = admit || metadata;
+  const slot = admit
+    ? `source-${pr?.number ?? dispatchNumber ?? sha}`
+    : metadata
+      ? `metadata-${pr?.number}`
+      : `ignored-edit-${runId}`;
   return {
-    title: admit ? "pr-gates" : "pr-gates (ignored metadata edit)",
-    group: `pr-gates-${admit ? (pr?.number ?? dispatchNumber ?? sha) : `ignored-edit-${runId}`}`,
-    cancelActive: admit && eventName === "pull_request",
-    checks: admit ? ["pr-lint", "gitleaks"] : ignoredNames,
-    work: admit
+    group: `pr-gates-${slot}`,
+    cancelActive: eventName === "pull_request",
+    checks: [lint ? "pr-lint" : ignoredNames[0], admit ? "gitleaks" : ignoredNames[1]],
+    work: lint
       ? {
           lintSha: pr?.head.sha ?? sha,
           lintBase: pr?.base,
-          scanSha: sha,
-          scanBase: pr?.base.ref ?? mergeGroupBase,
+          scanSha: admit ? sha : undefined,
+          scanBase: admit ? (pr?.base.ref ?? mergeGroupBase) : undefined,
         }
       : null,
   };
@@ -226,19 +235,16 @@ describe("PR gate event matrix", () => {
     });
     expect(prGates.on.push).toEqual({ branches: ["main"] });
     expect(prGates.on.merge_group).toEqual({ types: ["checks_requested"] });
-    expect(normalized(prGates["run-name"])).toBe(
-      `\${{ ${prGatesAdmit} && 'pr-gates' || 'pr-gates (ignored metadata edit)' }}`,
-    );
     expect(normalized(prGates.concurrency.group)).toBe(
-      `\${{ github.workflow }}-\${{ !${prGatesAdmit} && format('ignored-edit-{0}', github.run_id) || github.event.pull_request.number || inputs.pr_number || github.sha }}`,
+      normalized(`\${{ ${prGatesAdmit} && format('{0}-source-{1}', github.workflow, github.event.pull_request.number || inputs.pr_number || github.sha) ||
+        (${metadataEdit}) && format('{0}-metadata-{1}', github.workflow, github.event.pull_request.number) ||
+        format('{0}-ignored-edit-{1}', github.workflow, github.run_id) }}`),
     );
     expect(normalized(prGates.concurrency["cancel-in-progress"])).toBe(prGatesCancel);
 
     const lint = prGates.jobs["pr-lint"];
-    expect(normalized(lint.name)).toBe(
-      `\${{ ${prGatesAdmit} && 'pr-lint' || '${ignoredNames[0]}' }}`,
-    );
-    expect(normalized(lint.if)).toBe(`\${{ ${prGatesAdmit} }}`);
+    expect(normalized(lint.name)).toBe(`\${{ ${lintAdmit} && 'pr-lint' || '${ignoredNames[0]}' }}`);
+    expect(normalized(lint.if)).toBe(`\${{ ${lintAdmit} }}`);
     expect(lint.env.PR_LINT_CHECKOUT_SHA).toBe(
       "${{ github.event.pull_request.head.sha || github.sha }}",
     );
@@ -274,8 +280,7 @@ describe("PR gate event matrix", () => {
     ["reopen", "reopened", pr, initialMerge],
   ] as const)("%s runs both jobs in the same PR slot", (_case, action, current, sha) => {
     expect(planPrGates({ eventName: "pull_request", action, sha, pr: current })).toEqual({
-      title: "pr-gates",
-      group: "pr-gates-87",
+      group: "pr-gates-source-87",
       cancelActive: true,
       checks: ["pr-lint", "gitleaks"],
       work: {
@@ -296,8 +301,7 @@ describe("PR gate event matrix", () => {
         changes: { ...retarget.changes, title: { from: "prior title" } },
       }),
     ).toEqual({
-      title: "pr-gates",
-      group: "pr-gates-87",
+      group: "pr-gates-source-87",
       cancelActive: true,
       checks: ["pr-lint", "gitleaks"],
       work: {
@@ -310,8 +314,6 @@ describe("PR gate event matrix", () => {
   });
 
   it.each([
-    { title: { from: "prior title" } },
-    { body: { from: null } },
     { base: { sha: { from: pr.base.sha } } },
     { base: { ref: { from: "" } } },
     { base: { ref: { from: true } } },
@@ -319,9 +321,8 @@ describe("PR gate event matrix", () => {
     {},
   ])("leaves the required checks and PR slot alone for %j", (changes) => {
     expect(planPrGates({ ...retarget, pr, changes, sha: initialMerge, runId: 42 })).toEqual({
-      title: "pr-gates (ignored metadata edit)",
       group: "pr-gates-ignored-edit-42",
-      cancelActive: false,
+      cancelActive: true,
       checks: ignoredNames,
       work: null,
     });
@@ -331,31 +332,38 @@ describe("PR gate event matrix", () => {
   });
 
   it.each([
-    ["in_progress", "synchronize"],
-    ["failure", "edited"],
-  ])("keeps a %s scan and a pending %s when body edits arrive", (scan, action) => {
-    const active = planPrGates({
-      eventName: "pull_request",
-      action: "opened",
-      sha: initialMerge,
-      pr,
-    });
-    const waiting = planPrGates({ ...retarget, action });
-    const required = new Map(active.checks.map((name) => [name, scan]));
-    const edits = [44, 45].map((runId) =>
-      planPrGates({ ...retarget, changes: { body: {} }, runId }),
-    );
-    expect(new Set([waiting.group, ...edits.map(({ group }) => group)])).toHaveLength(3);
-    expect(waiting.group).toBe(active.group);
-    expect(waiting.work?.scanSha).toBe(retargetMerge);
-    for (const edit of edits) {
-      expect(edit.cancelActive).toBe(false);
-      expect(edit.work).toBeNull();
-      for (const name of edit.checks) expect(required.has(name)).toBe(false);
-    }
-    expect(required.get("gitleaks")).toBe(scan);
-    expect(PASSING).not.toContain(required.get("gitleaks"));
-  });
+    ["in_progress", "synchronize", { title: { from: "previous title" } }],
+    ["failure", "edited", { body: { from: null } }],
+  ] as const)(
+    "keeps a %s scan and a pending %s while material edits relint",
+    (scan, action, changes) => {
+      const active = planPrGates({
+        eventName: "pull_request",
+        action: "opened",
+        sha: initialMerge,
+        pr,
+      });
+      const waiting = planPrGates({ ...retarget, action });
+      const required = new Map(active.checks.map((name) => [name, scan]));
+      expect(waiting.group).toBe(active.group);
+      expect(waiting.work?.scanSha).toBe(retargetMerge);
+      for (const runId of [44, 45]) {
+        expect(planPrGates({ ...retarget, changes, runId })).toEqual({
+          group: "pr-gates-metadata-87",
+          cancelActive: true,
+          checks: ["pr-lint", ignoredNames[1]],
+          work: {
+            lintSha: pr.head.sha,
+            lintBase: retarget.pr.base,
+            scanSha: undefined,
+            scanBase: undefined,
+          },
+        });
+      }
+      expect(required.get("gitleaks")).toBe(scan);
+      expect(PASSING).not.toContain(required.get("gitleaks"));
+    },
+  );
 
   it.each([
     {
@@ -368,8 +376,7 @@ describe("PR gate event matrix", () => {
     { eventName: "workflow_dispatch", sha: pr.head.sha, dispatchNumber: "87" },
   ])("$eventName keeps its own revision and both jobs", (context) => {
     expect(planPrGates(context)).toEqual({
-      title: "pr-gates",
-      group: `pr-gates-${context.dispatchNumber ?? context.sha}`,
+      group: `pr-gates-source-${context.dispatchNumber ?? context.sha}`,
       cancelActive: false,
       checks: ["pr-lint", "gitleaks"],
       work: {

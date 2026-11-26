@@ -1,16 +1,12 @@
 name: pr-gates
-run-name: >-
-  ${{ (github.event.action != 'edited' ||
-    (startsWith(toJSON(github.event.changes.base.ref.from), '"') && github.event.changes.base.ref.from != '' &&
-     startsWith(toJSON(github.event.pull_request.base.ref), '"') && github.event.pull_request.base.ref != '')) && 'pr-gates' || 'pr-gates (ignored metadata edit)' }}
 
 # Lightweight PR gates: PR-title lint + full-history secret scan in ONE
 # workflow with sequential jobs, so a PR push occupies one runner slot at a
 # time instead of two parallel `pr-lint` + `secret-scan` runs.
 #
 # Required-check names are the job display names: `pr-lint` (pr-conventions)
-# and `gitleaks` (protect-main). A rejected edit publishes only advisory
-# skipped checks. Skipped jobs with required names would count as passing.
+# and `gitleaks` (protect-main). Skipped checks need distinct names because
+# GitHub treats a skipped required check as passing.
 #
 # Same-repository pull requests use included 2-vCPU capacity when enabled.
 # The GitHub-hosted fallback is ubuntu-latest.
@@ -39,18 +35,18 @@ permissions:
 
 # GitHub's edited payload supplies changes.base.ref.from only on a base-ref
 # change. Require string refs and trust the delta, including case-only changes.
-# Give rejected edits a private group because GitHub can replace the pending
-# run in a shared group even with cancel-in-progress disabled.
+# Title/body edits need fresh lint but must never displace a source scan.
+# Distinct prefixes also isolate user-provided dispatch input from edit groups.
 concurrency:
   group: >-
-    ${{ github.workflow }}-${{ !(github.event.action != 'edited' ||
+    ${{ (github.event.action != 'edited' ||
       (startsWith(toJSON(github.event.changes.base.ref.from), '"') && github.event.changes.base.ref.from != '' &&
        startsWith(toJSON(github.event.pull_request.base.ref), '"') && github.event.pull_request.base.ref != '')) &&
-        format('ignored-edit-{0}', github.run_id) || github.event.pull_request.number || inputs.pr_number || github.sha }}
-  cancel-in-progress: >-
-    ${{ github.event_name == 'pull_request' && (github.event.action != 'edited' ||
-      (startsWith(toJSON(github.event.changes.base.ref.from), '"') && github.event.changes.base.ref.from != '' &&
-       startsWith(toJSON(github.event.pull_request.base.ref), '"') && github.event.pull_request.base.ref != '')) }}
+      format('{0}-source-{1}', github.workflow, github.event.pull_request.number || inputs.pr_number || github.sha) ||
+      (github.event.changes.title != null || github.event.changes.body != null) &&
+      format('{0}-metadata-{1}', github.workflow, github.event.pull_request.number) ||
+      format('{0}-ignored-edit-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # This repository is public, so internal card IDs (TOG-1234, PAP-1234) must stay out of PR
@@ -87,11 +83,13 @@ jobs:
     name: >-
       ${{ (github.event.action != 'edited' ||
         (startsWith(toJSON(github.event.changes.base.ref.from), '"') && github.event.changes.base.ref.from != '' &&
-         startsWith(toJSON(github.event.pull_request.base.ref), '"') && github.event.pull_request.base.ref != '')) && 'pr-lint' || 'pr-gates ignored edit (lint)' }}
+         startsWith(toJSON(github.event.pull_request.base.ref), '"') && github.event.pull_request.base.ref != '') ||
+        github.event.changes.title != null || github.event.changes.body != null) && 'pr-lint' || 'pr-gates ignored edit (lint)' }}
     if: >-
       ${{ (github.event.action != 'edited' ||
         (startsWith(toJSON(github.event.changes.base.ref.from), '"') && github.event.changes.base.ref.from != '' &&
-         startsWith(toJSON(github.event.pull_request.base.ref), '"') && github.event.pull_request.base.ref != '')) }}
+         startsWith(toJSON(github.event.pull_request.base.ref), '"') && github.event.pull_request.base.ref != '') ||
+        github.event.changes.title != null || github.event.changes.body != null) }}
     runs-on: >-
       ${{ github.event_name == 'pull_request'
       && github.repository
