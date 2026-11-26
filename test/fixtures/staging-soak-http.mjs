@@ -161,7 +161,7 @@ export function installSoakCliReads({ finalReadUnavailable }) {
           );
         }
         assert.equal(url, "https://api.cloudflare.com/client/v4/graphql");
-        return trackedResponse({
+        const analytics = {
           data: {
             viewer: {
               accounts: [
@@ -176,7 +176,21 @@ export function installSoakCliReads({ finalReadUnavailable }) {
               ],
             },
           },
-        });
+        };
+        return new Response(
+          new ReadableStream(
+            {
+              async pull(controller) {
+                await setImmediate();
+                controller.enqueue(new TextEncoder().encode(JSON.stringify(analytics)));
+                reads.push(url);
+                controller.close();
+              },
+            },
+            { highWaterMark: 0 },
+          ),
+          { headers: { "content-type": "application/json" } },
+        );
       },
     },
     {
