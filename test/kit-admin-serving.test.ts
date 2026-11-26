@@ -9,7 +9,7 @@ import {
   usesKitDefaultAction,
 } from "../src/admin/kit-serving";
 import { STAGING_APP_URL } from "../src/qa";
-import { dispatchHookRequest, ROUTE_MANIFEST } from "../src/route-ownership";
+import { type HookDispatchDeps, dispatchHookRequest, ROUTE_MANIFEST } from "../src/route-ownership";
 import { MODERATOR, env as baseEnv } from "./helpers/member-data";
 
 const loopback = "http://127.0.0.1:8787";
@@ -111,6 +111,15 @@ it("keeps the legacy event-create endpoint behind admin admission when its manif
   expect(resolve).not.toHaveBeenCalled();
 });
 
+it("registers the exact event duplication path on the shared action route", () => {
+  const path = `${events}/seed-calendar-01/duplicate`;
+  const id = "/admin/[...action]";
+  expect(adminFormPath(path, id)).toBe(`${events}/:key/duplicate`);
+  expect(adminFormPath(path, `${events}/[key]`)).toBeUndefined();
+  expect(adminFormPath(`${path}/`, id)).toBeUndefined();
+  expect(adminFormPath(`${events}/seed-calendar-01/duplicate/extra`, id)).toBeUndefined();
+});
+
 it.each(["guest", "unknown", "member", "moderator"] as const)(
   "admits %s via shared session state",
   async (role) => {
@@ -177,4 +186,72 @@ it("opens only exact POST form controllers and keeps shared refusal behavior", a
   ).toBe(404);
   const post = new Request(loopback + events, { method: "POST", body: new URLSearchParams() });
   expect((await fetchKitAdminForm(post, env, actor, id)).status).toBe(503);
+});
+
+it.each(["rsvp-pause", "rsvp-reopen"])("admits only the exact %s POST", async (action) => {
+  const path = `/admin/events/seed-calendar-01/${action}`;
+  const route = { id: `/admin/events/[key]/${action}` };
+  expect(adminFormPath(path, route.id)).toBe(`/admin/events/:key/${action}`);
+  expect(adminFormPath(path, "/admin/[...action]")).toBeUndefined();
+  const actor = { id: MODERATOR.userId, username: MODERATOR.username };
+  const context = (request: Request) => ({ request, url: new URL(request.url), route });
+  const request = (method: string, suffix = "", origin = loopback) =>
+    new Request(`${loopback}${path}${suffix}`, { method, headers: { origin } });
+  const requestId = "0123456789abcdef";
+  expect((await fetchKitAdminForm(request("POST"), env, actor, requestId)).status).toBe(404);
+  expect(
+    (
+      await fetchKitAdminForm(
+        new Request(loopback + events, { method: "POST" }),
+        env,
+        null,
+        requestId,
+      )
+    ).status,
+  ).toBe(404);
+
+  const honoFetch = vi.fn(async () => new Response("fallback"));
+  const resolve = vi.fn<HookDispatchDeps["resolve"]>(({ request, locals }) => {
+    const { requestId } = locals as { requestId: string };
+    return fetchKitAdminForm(request, env, null, requestId);
+  });
+  const sessionFor = vi.fn<NonNullable<HookDispatchDeps["sessionFor"]>>();
+  const deps = {
+    appUrl: loopback,
+    featuredImageHosts: "",
+    honoFetch,
+    resolve,
+    sessionFor,
+    admin: {
+      env: { ...env, KIT_ROUTE_ADMIN: "true" },
+      completeForm: () => {
+        throw new Error("Dedicated RSVP endpoints do not use a page action");
+      },
+    },
+  } satisfies HookDispatchDeps;
+  for (const fallback of [request("GET"), request("POST", "/"), request("POST", "/extra")]) {
+    expect(await (await dispatchHookRequest(context(fallback), deps)).text()).toBe("fallback");
+    expect(honoFetch).toHaveBeenLastCalledWith(fallback);
+  }
+  const off = request("POST");
+  await dispatchHookRequest(context(off), {
+    ...deps,
+    admin: { ...deps.admin, env: { ...env, KIT_ROUTE_ADMIN: "false" } },
+  });
+  expect(honoFetch).toHaveBeenLastCalledWith(off);
+  const cross = await dispatchHookRequest(
+    context(request("POST", "", "https://other.example")),
+    deps,
+  );
+  expect(cross.status).toBe(403);
+  expect(resolve).not.toHaveBeenCalled();
+
+  const guest = await dispatchHookRequest(context(request("POST")), deps);
+  expect(guest.status).toBe(303);
+  expect(guest.headers.get("location")).toBe(
+    "/auth/recover?next=%2Fadmin%2Fevents%2Fseed-calendar-01",
+  );
+  expect(guest.headers.get("x-two-renderer")).toBe("kit");
+  expect(resolve).toHaveBeenCalledOnce();
+  expect(sessionFor).not.toHaveBeenCalled();
 });

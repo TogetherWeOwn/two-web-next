@@ -1,9 +1,70 @@
+# guards: paths
 name: XFS qualification fixture
 
 on:
   pull_request:
-  push:
-    branches: [main]
+    paths:
+      - ".github/workflows/xfs-qualification.yml"
+      - ".github/actions/gradual-promote/**"
+      - ".npmrc"
+      - "package*.json"
+      - "web/.npmrc"
+      - "web/package*.json"
+      - "web/**"
+      - "src/**"
+      - "lib/**"
+      - "assets/**"
+      - "public/**"
+      - "vendor/design-kit/**"
+      - "drizzle.config.ts"
+      - "drizzle/**"
+      - "docs/kit-parity-gates.md"
+      - "docs/web-readiness-projection.sql"
+      - "migrations.lock"
+      - "tsconfig.json"
+      - "wrangler*.jsonc"
+      - "ci/xfs-qualification-fixture*"
+      - "ci/kit-archive-delta.mjs"
+      - "ci/kit-cutover-*"
+      - "ci/kit-live-socket.mjs"
+      - "ci/kit-lock-xfs.test.mjs"
+      - "ci/kit-parity-gates.mjs"
+      - "ci/kit-route-evidence.mjs"
+      - "ci/kit-section-contract.mjs"
+      - "ci/kit-worker-*"
+      - "ci/parity/**"
+      - "ci/fixtures/kit-*"
+      - "ci/disposable-runtime-role.sql"
+      - "ci/build-ember-tokens.mjs"
+      - "ci/build-events-css.mjs"
+      - "ci/build-leaf-css.mjs"
+      - "ci/css-dictionary.mjs"
+      - "ci/db-migrate.mjs"
+      - "ci/execution-receipt-authority.mjs"
+      - "ci/migration-*.mjs"
+      - "ci/operator-constants.mjs"
+      - "ci/production-deploy-gate.mjs"
+      - "ci/rendered-page.mjs"
+      - "ci/resolve-promotion-sha.mjs"
+      - "ci/robots-directives.mjs"
+      - "ci/rollback-target.mjs"
+      - "ci/rsvp-focus-require-executed.mjs"
+      - "ci/staging-*.mjs"
+      - "ci/worker-bundle-evidence.mjs"
+      - "ci/check-production-secrets.mjs"
+      - "ci/wrangler-config.mjs"
+      - "bin/smoke.mjs"
+      - "bin/revision-check.mjs"
+      - "bin/version-check.mjs"
+      - "e2e/discord-stub.ts"
+      - "tail/worker.ts"
+      - "test/fixtures/route-inventory.json"
+      - "test/fixtures/route-kit-map.json"
+      - "test/helpers/fake-agent-ingress-db.ts"
+      - "test/helpers/kit-edit-controls.ts"
+      - "test/helpers/machine-requests.ts"
+      - "test/helpers/throttle-tx-double.ts"
+      - "test/helpers/up.ts"
   workflow_dispatch:
     inputs:
       qualify_cutover:
@@ -15,6 +76,10 @@ on:
         type: choice
         options: [all-off, ember, admin]
         default: all-off
+      moderator_rsvp_only:
+        description: "On a PR branch, run focused moderator RSVP installed parity without cutover qualification"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -63,7 +128,8 @@ jobs:
     timeout-minutes: 15
     env:
       EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-    services:
+      MODERATOR_RSVP_ONLY: ${{ github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main' && !inputs.qualify_cutover && inputs.moderator_rsvp_only }}
+    services: &installed-services
       postgres:
         image: postgres:17@sha256:0d938e975177bef9f1f61f3f9dbcf2e0aa0a139568f66d3415ed8892eb97f6ac # 17.12-trixie
         env:
@@ -76,22 +142,26 @@ jobs:
           --health-cmd "pg_isready -h 127.0.0.1 -U agent_test -d two_web_next"
           --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - &installed-checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0 # The recorder identifies the most recent Hono runtime-input commit.
           persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - &installed-node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           package-manager-cache: false
-      - name: Check the runner's XFS tool and install locked Node tooling
+      - &installed-tooling
+        name: Check the runner's XFS tool and install locked Node tooling
         run: |
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
           sudo mkfs.xfs -V
           npm ci --include=dev --ignore-scripts --no-audit --no-fund
           npm ci --prefix web --include=dev --ignore-scripts --no-audit --no-fund
-      - name: Build stock Kit output
+      - &installed-build
+        name: Build stock Kit output
         run: npm run build --prefix web
       - name: Install Chromium for the installed Kit homepage proof
         if: github.event_name != 'workflow_dispatch'
@@ -114,11 +184,13 @@ jobs:
           path: artifacts/kit-worker-fatal/
           if-no-files-found: error
           retention-days: 14
-      - name: Prepare disposable runtime role
+      - &installed-role
+        name: Prepare disposable runtime role
         env:
           DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/two_web_next
         run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f ci/disposable-runtime-role.sql -f ci/disposable-runtime-role.sql
-      - name: Migrate loopback Postgres and check migration history
+      - &installed-migrate
+        name: Migrate loopback Postgres and check migration history
         env:
           DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/two_web_next
         run: |
@@ -130,15 +202,27 @@ jobs:
         env:
           KIT_WORKER_TEST_DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/two_web_next
           KIT_PUBLIC_VOICE_SCREENSHOTS: ${{ runner.temp }}/kit-public-voice
+          KIT_INSTALLED_LIVE_SOCKET_SEPARATE: &separate-live-proof ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && !inputs.qualify_cutover && !inputs.moderator_rsvp_only) }}
         run: |
           result=0
           proof=()
-          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch ]]; then
+          if [[ "$MODERATOR_RSVP_ONLY" == true ]]; then
+            proof=(--moderator-rsvp-only)
+          elif [[ "$GITHUB_EVENT_NAME" != workflow_dispatch ]]; then
             proof=(--public-voice-browser)
           fi
           bash ci/xfs-qualification-fixture.sh bash ci/kit-worker-installed-output.sh "${proof[@]}" \
             | tee "$RUNNER_TEMP/kit-installed-output.log" || result=$?
           grep -Fx 'Fixture mounts and backing file removed' "$RUNNER_TEMP/kit-installed-output.log"
+          if [[ "${KIT_INSTALLED_LIVE_SOCKET_SEPARATE:-}" == true ]] &&
+            grep -Fxq 'Launching loopback kit-live Worker' "$RUNNER_TEMP/kit-installed-output.log"; then
+            printf '%s\n' 'Route proof launched the dedicated live socket Worker' >&2
+            exit 1
+          fi
+          if [[ "$MODERATOR_RSVP_ONLY" == true ]]; then
+            grep -Fx 'PASS installed moderator RSVP pause and reopen admission, fallback, audit and FIFO parity' "$RUNNER_TEMP/kit-installed-output.log"
+            grep -Fx 'PASS loopback Workers and scratch cleaned up' "$RUNNER_TEMP/kit-installed-output.log"
+          fi
           exit "$result"
       - name: Retain installed Kit public voice screenshots
         if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && steps.installed.outcome != 'skipped' }}
@@ -149,10 +233,12 @@ jobs:
           if-no-files-found: ${{ steps.installed.outcome == 'success' && 'error' || 'warn' }}
           retention-days: 14
       - name: Build the Kit cutover server readiness profile
+        if: env.MODERATOR_RSVP_ONLY != 'true'
         run: npm run build --prefix web
         env:
           TWO_WEB_1033_COMPAT: "true"
       - name: Record all-off production Kit parity
+        if: env.MODERATOR_RSVP_ONLY != 'true'
         id: production-parity
         shell: bash
         env:
@@ -188,7 +274,8 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 30
-      - name: Verify loopback Postgres stopped
+      - &installed-stop-postgres
+        name: Verify loopback Postgres stopped
         if: always()
         shell: bash
         env:
@@ -197,6 +284,40 @@ jobs:
           docker stop "$POSTGRES_CONTAINER"
           test "$(docker inspect --format '{{.State.Running}}' "$POSTGRES_CONTAINER")" = false
           printf '%s\n' 'Disposable Postgres stopped; the runner removes job services at teardown'
+
+  # The socket deadlines consume over three minutes on their own. A separate
+  # job lets both proofs finish tearing down their own fixtures.
+  kit-live-socket-proof:
+    if: *separate-live-proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    services: *installed-services
+    steps:
+      - *installed-checkout
+      - *installed-node
+      - *installed-tooling
+      - *installed-build
+      - *installed-role
+      - *installed-migrate
+      - name: Prove installed live sockets and fan-out
+        shell: bash
+        env:
+          KIT_WORKER_TEST_DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/two_web_next
+        run: |
+          result=0
+          bash ci/xfs-qualification-fixture.sh bash ci/kit-worker-installed-output.sh --live-socket-only \
+            | tee "$RUNNER_TEMP/kit-live-socket.log" || result=$?
+          # Check teardown even when a socket assertion fails.
+          grep -Fx 'Fixture mounts and backing file removed' "$RUNNER_TEMP/kit-live-socket.log"
+          grep -Fx 'PASS loopback Workers and scratch cleaned up' "$RUNNER_TEMP/kit-live-socket.log"
+          if (( result == 0 )); then
+            grep -Fx 'PASS Kit live socket upgrade, guest resync, frame limits, expiry, and revocation' "$RUNNER_TEMP/kit-live-socket.log"
+            grep -Fx 'PASS installed Kit expired and failed post-pull authorization closes without a frame' "$RUNNER_TEMP/kit-live-socket.log"
+          fi
+          exit "$result"
+      - *installed-stop-postgres
 
   isolated-cutover:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.qualify_cutover
