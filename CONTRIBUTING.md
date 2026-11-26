@@ -358,10 +358,8 @@ merge SHA. Use commit-scoped ignore fingerprints to limit an exception to one
 occurrence. A fingerprint scoped to the original commit does not also exempt
 the merge occurrence.
 
-Base retargets rerun both jobs against the new base even on the same head.
-Title and body edits rerun `pr-lint` against current metadata in a separate
-concurrency group. They leave the required `gitleaks` result and queued scans
-in place.
+Base retargets rerun both jobs against the new base. Title and body edits rerun
+`pr-lint` in a separate group, keeping the scan and its required result in place.
 
 On a pull request the job applies the base branch's
 `.gitleaks.toml` and `.gitleaksignore` and ignores inline `gitleaks:allow`

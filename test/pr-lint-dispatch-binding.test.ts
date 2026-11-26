@@ -271,18 +271,16 @@ describe("PR lint dispatch binding (hermetic workflow/API fixtures)", () => {
       const newBase = { ...fixture.live.base, ref: "strict-base", sha: "f".repeat(40) };
       fixture.checkoutSha = headSha;
       fixture.checkedSha = headSha;
-      fixture.workflowSha = "e".repeat(40);
       fixture.waiverBaseSha = newBase.sha;
       fixture.event.pull_request!.base = newBase;
       fixture.live.base = newBase;
-      Object.assign(fixture.event, { action: "edited" });
       fixture.event.pull_request!.title = queuedTitle;
       fixture.live.title = liveTitle;
       for (const changes of [
         { title: { from: "previous title" } },
         { base: { ref: { from: "main" }, sha: { from: baseSha } } },
       ]) {
-        Object.assign(fixture.event, { changes });
+        Object.assign(fixture.event, { action: "edited", changes });
         const result = runWorkflow(fixture);
         expect(result.status, result.stdout + result.stderr).toBe(status);
         expect(JSON.parse(result.output).title).toBe(liveTitle);
