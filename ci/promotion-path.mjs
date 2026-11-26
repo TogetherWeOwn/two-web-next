@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 
 // Direct release workflow inputs and deployed readiness wiring, not ordinary app imports.
 const directPaths = new Set(
-  `ci/promotion-path.mjs
+  `ci/promotion-path.mjs ci/promotion-path-local.mjs
    ci/resolve-promotion-sha.mjs ci/production-deploy-gate.mjs ci/rollback-target.mjs ci/drill-scripts-ref.mjs
    ci/post-deploy-watch.mjs ci/check-production-secrets.mjs
    ci/operator-constants.mjs ci/wrangler-config.mjs ci/worker-bundle-evidence.mjs
@@ -96,19 +96,19 @@ async function ensureLabel(api, label) {
   );
 }
 
-function prPath(number) {
+export async function labelPromotionPath(request, number, summarize, signal) {
+  const budget = signal ?? AbortSignal.timeout(180_000);
   assert.ok(Number.isSafeInteger(number) && number > 0, "Invalid PR number");
-  return `/pulls/${number}`;
-}
-
-export async function classifyPromotionPath(
-  request,
-  number,
-  budget = AbortSignal.timeout(180_000),
-) {
-  const pull = prPath(number);
+  const pull = `/pulls/${number}`;
+  const issueLabels = `/issues/${number}/labels`;
   const api = (method, path, body) => request(method, path, body, budget);
+  const remove = async (value, client = api) => {
+    const name = encodeURIComponent(`promotion-path: ${value}`);
+    const response = await client("DELETE", `${issueLabels}/${name}`);
+    assert.ok(response.ok || response.status === 404, "Cannot remove verdict label");
+  };
   let snapshot;
+  let verdict = "unknown";
   try {
     snapshot = await readPR(api, pull);
     const { head, base, count } = snapshot;
@@ -137,31 +137,7 @@ export async function classifyPromotionPath(
         "PR files differ from pinned comparison",
       );
     }
-    return { snapshot, value: matches ? "yes" : "no" };
-  } catch (error) {
-    return { snapshot, error };
-  }
-}
-
-export async function publishPromotionPath(
-  request,
-  number,
-  { snapshot, value, error: classificationError },
-  summarize,
-  budget = AbortSignal.timeout(90_000),
-) {
-  const pull = prPath(number);
-  const issueLabels = `/issues/${number}/labels`;
-  const api = (method, path, body) => request(method, path, body, budget);
-  const remove = async (value, client = api) => {
-    const name = encodeURIComponent(`promotion-path: ${value}`);
-    const response = await client("DELETE", `${issueLabels}/${name}`);
-    assert.ok(response.ok || response.status === 404, "Cannot remove verdict label");
-  };
-  let verdict = "unknown";
-  try {
-    if (classificationError) throw classificationError;
-    assert.ok(snapshot && (value === "yes" || value === "no"), "Classification did not complete");
+    const value = matches ? "yes" : "no";
     const label = `promotion-path: ${value}`;
     const fresh = async () =>
       assert.ok(
@@ -170,14 +146,14 @@ export async function publishPromotionPath(
       );
     await ensureLabel(api, label);
     await fresh();
-    await remove(value === "yes" ? "no" : "yes");
+    await remove(matches ? "no" : "yes");
     await fresh();
     const applied = await api("POST", issueLabels, { labels: [label] });
     assert.ok(applied.ok, "Cannot apply verdict label");
     await fresh();
     verdict = value;
   } catch (error) {
-    // The per-PR lock covers cleanup as well as publication.
+    // The validated PR number lets serialized runs retire owned verdicts even before a snapshot.
     const outcomes = await Promise.allSettled([remove("no", request), remove("yes", request)]);
     const failures = outcomes.flatMap((r) => (r.status === "rejected" ? [r.reason] : []));
     if (failures.length) throw new AggregateError([error, ...failures], "Label cleanup failed");
@@ -189,27 +165,9 @@ export async function publishPromotionPath(
   }
 }
 
-export async function runPromotionPathStep(
-  mode,
-  api,
-  { CLASSIFICATION, GITHUB_EVENT_PATH, GITHUB_OUTPUT, GITHUB_STEP_SUMMARY },
-) {
-  const { number } = JSON.parse(readFileSync(GITHUB_EVENT_PATH, "utf8"));
-  if (mode === "classify") {
-    const { snapshot, value, error } = await classifyPromotionPath(api, number);
-    appendFileSync(GITHUB_OUTPUT, `classification=${JSON.stringify({ snapshot, value })}\n`);
-    if (error) throw error;
-  } else {
-    assert.equal(mode, "publish", "Expected classify or publish");
-    const classification = JSON.parse(CLASSIFICATION || "{}");
-    await publishPromotionPath(api, number, classification, (summary) =>
-      appendFileSync(GITHUB_STEP_SUMMARY, summary),
-    );
-  }
-}
-
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
-  const { GITHUB_REPOSITORY, GH_TOKEN } = process.env;
+  const { GITHUB_EVENT_PATH, GITHUB_REPOSITORY, GITHUB_STEP_SUMMARY, GH_TOKEN } = process.env;
+  const { number } = JSON.parse(readFileSync(GITHUB_EVENT_PATH, "utf8"));
   const api = (method, path, body, budget) =>
     fetch(`https://api.github.com/repos/${GITHUB_REPOSITORY}${path}`, {
       method,
@@ -223,5 +181,5 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
       redirect: "error",
       signal: AbortSignal.any([AbortSignal.timeout(15_000), ...(budget ? [budget] : [])]),
     });
-  await runPromotionPathStep(process.argv[2], api, process.env);
+  await labelPromotionPath(api, number, (summary) => appendFileSync(GITHUB_STEP_SUMMARY, summary));
 }

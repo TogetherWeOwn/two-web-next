@@ -1,15 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { setImmediate } from "node:timers/promises";
-import {
-  classifyPromotionPath,
-  isPromotionPath,
-  publishPromotionPath,
-  runPromotionPathStep,
-} from "./promotion-path.mjs";
+import { classifyLocalPromotionPath } from "./promotion-path-local.mjs";
+import { isPromotionPath, labelPromotionPath } from "./promotion-path.mjs";
 
 const pull = "/pulls/42";
 const issueLabels = "/issues/42/labels";
@@ -25,13 +22,9 @@ const file = (filename, status = "modified", previous_filename) => ({
 const http = (status = 200) => new Response(null, { status });
 const docs = (length) => Array.from({ length }, (_, i) => file(`docs/${i}.md`));
 const ordinary = docs(101);
-const workflow = readFileSync(
-  new URL("../.github/workflows/promotion-path.yml", import.meta.url),
-  "utf8",
-);
 
 function github(rows, options = {}) {
-  const labels = options.labelState ?? new Set(["unrelated", ...(options.labels ?? [])]);
+  const labels = new Set(["unrelated", ...(options.labels ?? [])]);
   const summary = [];
   const pages = [];
   const writes = [];
@@ -69,21 +62,16 @@ function github(rows, options = {}) {
     }
     if (method === "DELETE" && path.startsWith(`${issueLabels}/`)) {
       const deleted = labels.delete(decodeURIComponent(path.slice(issueLabels.length + 1)));
-      await options.after?.(method, path);
       return http(deleted ? 200 : 404);
     }
     if (method === "POST" && path === issueLabels) {
       for (const label of body.labels) labels.add(label);
-      await options.after?.(method, path);
       return http();
     }
     assert.fail(`Unexpected fixture request: ${method} ${path}`);
   };
-  const classify = (signal) => classifyPromotionPath(api, 42, signal);
-  const publish = (classification, signal) =>
-    publishPromotionPath(api, 42, classification, (entry) => summary.push(entry), signal);
-  const run = async () => publish(await classify(options.signal));
-  return { api, labels, pages, writes, summary, classify, publish, run };
+  const run = () => labelPromotionPath(api, 42, (entry) => summary.push(entry), options.signal);
+  return { labels, pages, writes, summary, run };
 }
 
 test("only promotion surfaces match, including directly called tooling", () => {
@@ -177,186 +165,117 @@ test("ref changes prevent publication, including same-SHA retarget and a race du
   assert.ok(moved.summary[0].includes("verdict **unknown**"));
 });
 
-test("a PR event burst isolates unrelated edits before runner admission", () => {
-  const expression = (block) =>
-    workflow
-      .match(block)?.[1]
-      .trim()
-      .replace(/\s+/g, " ")
-      .match(/^\$\{\{ (.*) \}\}$/)?.[1];
-  const admission =
-    "(github.event.action != 'edited' || (github.event.changes.base.ref.from && github.event.changes.base.ref.from != github.event.pull_request.base.ref))";
-  assert.match(workflow, /^# guards: release: exact-head promotion-path routing evidence$/m);
-  assert.match(workflow, /^    types: \[opened, reopened, synchronize, edited\]$/m);
-  assert.equal(
-    expression(/^  group: >-\n((?:    [^\n]+\n)+)/m),
-    `${admission} && format('promotion-path-refresh-{0}', github.event.pull_request.number) || format('promotion-path-noop-{0}', github.run_id)`,
-  );
-  assert.equal(
-    expression(/^      group: >-\n((?:        [^\n]+\n)+)/m),
-    `${admission} && format('promotion-path-{0}', github.event.pull_request.number) || format('promotion-path-noop-job-{0}', github.run_id)`,
-  );
-  assert.equal(expression(/^    if: >-\n((?:      [^\n]+\n)+)/m), `always() && ${admission}`);
-  assert.deepEqual(
-    [...workflow.matchAll(/^  (\w+):\n/gm)].map(([, key]) => key),
-    ["pull_request_target", "label"],
-  );
-
-  // Model the trusted webhook shape. Actions ignores case in string comparisons.
-  const route = (action, runId, changes, currentRef) => {
-    const from = changes?.base?.ref?.from;
-    const admitted =
-      action !== "edited" || Boolean(from && from.toLowerCase() !== currentRef.toLowerCase());
-    return {
-      admitted,
-      group: admitted ? "promotion-path-refresh-42" : `promotion-path-noop-${runId}`,
-      writerGroup: admitted ? "promotion-path-42" : `promotion-path-noop-job-${runId}`,
-    };
+test("local promotion evidence pins the full three-dot diff and rejects changed identities", (t) => {
+  const scratch = mkdtempSync(join(tmpdir(), "promotion-path-local-"));
+  t.after(() => rmSync(scratch, { force: true, recursive: true }));
+  const git = (...args) =>
+    execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", ...args], {
+      cwd: scratch,
+    });
+  const commit = (subject) => {
+    git("add", "-A");
+    git(
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.com",
+      "commit",
+      "-qm",
+      subject,
+    );
+    return git("rev-parse", "HEAD").toString("utf8").trim();
   };
-  const retarget = { base: { ref: { from: "main" }, sha: { from: base } } };
-  const running = route("synchronize", 1);
-  const pending = route("edited", 2, retarget, "stable");
-  assert.deepEqual(pending, running);
-  assert.ok(pending.admitted);
-  assert.deepEqual(route("opened", 1), running);
-  assert.deepEqual(route("reopened", 1), running);
+  git("init", "-q", "--initial-branch=main");
+  mkdirSync(join(scratch, ".github/workflows"), { recursive: true });
+  mkdirSync(join(scratch, "docs"));
+  writeFileSync(join(scratch, ".github/workflows/old.yml"), "old workflow");
+  writeFileSync(join(scratch, "docs/guide.md"), "guide");
+  const mergeBase = commit("Common history");
+  writeFileSync(join(scratch, ".github/workflows/target.yml"), "target branch only");
+  const targetTip = commit("Advance the target");
+  git("checkout", "-q", "--detach", mergeBase);
+  writeFileSync(join(scratch, "docs/new\tnote.md"), "PR only");
+  const ordinaryHead = commit("Change docs");
+  git("mv", ".github/workflows/old.yml", "docs/archived.md");
+  const removedHead = commit("Rename a protected path out");
+  git("checkout", "-q", "--detach", ordinaryHead);
+  git("mv", "docs/guide.md", ".github/workflows/new.yml");
+  const addedHead = commit("Rename a protected path in");
+  git("checkout", "-q", "main");
 
-  for (const [index, [changes, currentRef]] of [
-    [undefined, "main"],
-    [{ title: { from: "old" }, body: { from: "old" } }, "main"],
-    [{ base: { sha: { from: base } } }, "main"],
-    [{ base: { ref: {} } }, "main"],
-    [{ base: { ref: { from: null } } }, "main"],
-    [{ base: { ref: { from: "" } } }, "main"],
-    [retarget, "main"],
-    [retarget, "Main"],
-  ].entries()) {
-    const runId = index + 3;
-    const ignored = route("edited", runId, changes, currentRef);
-    assert.deepEqual(ignored, {
-      admitted: false,
-      group: `promotion-path-noop-${runId}`,
-      writerGroup: `promotion-path-noop-job-${runId}`,
+  const baseRepo = { full_name: "TogetherWeOwn/two-web-next" };
+  const baseMetadata = { ref: "main", sha: mergeBase, repo: baseRepo };
+  const classify = (head, alter = (_path, value) => value) => {
+    let snapshot = 0;
+    return classifyLocalPromotionPath(42, head, {
+      git,
+      read(path) {
+        if (path === pull) {
+          snapshot++;
+          return alter(
+            path,
+            { number: 42, state: "open", head: { sha: head }, base: baseMetadata },
+            snapshot,
+          );
+        }
+        assert.match(path, /^\/git\/ref\/heads\/(main|Main)$/);
+        const ref = `refs/${path.slice("/git/ref/".length)}`;
+        return alter(path, { ref, object: { type: "commit", sha: targetTip } }, snapshot);
+      },
     });
-    assert.notEqual(ignored.group, running.group);
-    assert.notEqual(ignored.group, pending.group);
-    assert.notEqual(ignored.writerGroup, running.writerGroup);
-    assert.notEqual(ignored.writerGroup, pending.writerGroup);
-    assert.notEqual(ignored.writerGroup, ignored.group);
+  };
+  assert.deepEqual(classify(ordinaryHead), {
+    number: 42,
+    head: ordinaryHead,
+    targetRef: "refs/heads/main",
+    targetTip,
+    reportedBase: mergeBase,
+    mergeBase,
+    classifierHead: targetTip,
+    verdict: "no",
+    matches: [],
+  });
+  for (const [head, match] of [
+    [removedHead, ".github/workflows/old.yml"],
+    [addedHead, ".github/workflows/new.yml"],
+  ]) {
+    const result = classify(head);
+    assert.equal(result.verdict, "yes");
+    assert.deepEqual(result.matches, [match]);
   }
-});
-
-test("a PR event burst cancels superseded reads and drains in-flight label writes", async (t) => {
-  const cancelRunning = /^  cancel-in-progress: true$/m.test(workflow);
-  // Model Actions' per-group running slot and replaceable pending slot. Only
-  // the publication condition stays true when Actions re-evaluates steps.
-  const drainWrites =
-    workflow.includes("      ${{ always() && (github.event.action != 'edited' ||\n") &&
-    workflow.includes(
-      "if: ${{ always() && (steps.classify.outcome == 'success' || steps.classify.outcome == 'failure') }}",
+  for (const base of [
+    { ...baseMetadata, ref: "Main" },
+    { ...baseMetadata, sha: targetTip },
+  ]) {
+    assert.throws(
+      () =>
+        classify(ordinaryHead, (path, value, snapshot) =>
+          path === pull && snapshot === 2 ? { ...value, base } : value,
+        ),
+      /PR or live target changed/,
     );
-  const newestHead = "c".repeat(40);
-  const newestBase = "d".repeat(40);
-  const newest = { head: { sha: newestHead }, base: { sha: newestBase, ref: "stable" } };
-  const scratch = mkdtempSync(join(tmpdir(), "promotion-path-burst-"));
-  t.after(() => rmSync(scratch, { recursive: true, force: true }));
-  const event = join(scratch, "event.json");
-  writeFileSync(event, JSON.stringify({ number: 42 }));
-
-  for (const point of ["read", "delete", "add"]) {
-    const reading = new AbortController();
-    const publishing = new AbortController();
-    const paused = Promise.withResolvers();
-    const resume = Promise.withResolvers();
-    let parked = false;
-    const pause = async () => {
-      if (parked) return;
-      parked = true;
-      paused.resolve();
-      await resume.promise;
-    };
-    let live = {};
-    const first = github(docs(1), {
-      labels: [yes],
-      revision: () => live,
-      async before(method, path) {
-        if (point === "read" && method === "GET" && path.startsWith(`${pull}/files?`))
-          await pause();
-      },
-      async after(method) {
-        if ((point === "delete" && method === "DELETE") || (point === "add" && method === "POST"))
-          await pause();
-      },
-    });
-    const oldRun = (async () => {
-      const classification = await first.classify(reading.signal);
-      if (reading.signal.aborted) return "cancelled";
-      await first.publish(classification, publishing.signal);
-      return "success";
-    })().catch((error) => error.message);
-
-    await Promise.race([paused.promise, oldRun]);
-    assert.ok(parked, `first run reached ${point}`);
-    assert.deepEqual(first.summary, [], `no verdict while paused at ${point}`);
-    if (point === "delete") assert.deepEqual([...first.labels], ["unrelated"]);
-    if (point === "add") assert.deepEqual([...first.labels], ["unrelated", no]);
-
-    // A base edit queues a run. A synchronize event replaces that pending run.
-    live = { base: { sha: base, ref: "stable" } };
-    let pending = github(docs(1), { labelState: first.labels, revision: () => live });
-    const edited = pending;
-    if (cancelRunning) {
-      reading.abort();
-      if (!drainWrites) publishing.abort();
-    }
-    live = newest;
-    pending = github([file(".github/workflows/ci.yml")], {
-      labelState: first.labels,
-      revision: () => live,
-    });
-    resume.resolve();
-
-    const oldConclusion = await oldRun;
-    if (point === "read") {
-      assert.equal(oldConclusion, "cancelled");
-      assert.deepEqual(first.writes, []);
-      assert.deepEqual(first.summary, []);
-    } else {
-      assert.match(oldConclusion, /refs or file count changed/);
-      assert.match(first.summary[0], /verdict \*\*unknown\*\*/);
-      assert.deepEqual([...first.labels], ["unrelated"]);
-    }
-    // Run the same entry point as both workflow steps. Resolve the output name
-    // from the publisher's environment mapping so a wiring change is exercised.
-    const [, environmentName, outputName] =
-      workflow.match(/^          (\w+): \$\{\{ steps\.classify\.outputs\.(\w+) \}\}$/m) ?? [];
-    assert.ok(environmentName && outputName, "publisher reads the classifier step output");
-    const output = join(scratch, `${point}.output`);
-    const summary = join(scratch, `${point}.summary`);
-    await runPromotionPathStep("classify", pending.api, {
-      GITHUB_EVENT_PATH: event,
-      GITHUB_OUTPUT: output,
-    });
-    const value = readFileSync(output, "utf8")
-      .trimEnd()
-      .split("\n")
-      .find((line) => line.startsWith(`${outputName}=`))
-      ?.slice(outputName.length + 1);
-    await runPromotionPathStep("publish", pending.api, {
-      [environmentName]: value,
-      GITHUB_EVENT_PATH: event,
-      GITHUB_STEP_SUMMARY: summary,
-    });
-    assert.deepEqual(edited.pages, []);
-    assert.deepEqual([...pending.labels], ["unrelated", yes]);
-    assert.ok(
-      readFileSync(summary, "utf8").includes(
-        `head \`${newestHead}\` · base \`${newestBase}\` · verdict **yes**`,
+  }
+  assert.throws(
+    () =>
+      classify(ordinaryHead, (path, value, snapshot) =>
+        path !== pull && snapshot === 2
+          ? { ...value, object: { ...value.object, sha: mergeBase } }
+          : value,
       ),
-    );
-  }
-  assert.match(
-    workflow,
-    /^          && format\('promotion-path-\{0\}', github\.event\.pull_request\.number\)\n          \|\| format\('promotion-path-noop-job-\{0\}', github\.run_id\) \}\}\n      cancel-in-progress: false$/m,
+    /PR or live target changed/,
+  );
+  assert.throws(
+    () =>
+      classify(ordinaryHead, (path, value, snapshot) =>
+        path === pull && snapshot === 2 ? { ...value, head: { sha: addedHead } } : value,
+      ),
+    /Open PR identity does not match/,
+  );
+  assert.throws(
+    () =>
+      classify(ordinaryHead, (path, value) =>
+        path !== pull ? { ...value, ref: "refs/heads/Main" } : value,
+      ),
+    /Missing exact-case target ref/,
   );
 });

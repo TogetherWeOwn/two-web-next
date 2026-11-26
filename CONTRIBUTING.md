@@ -114,26 +114,24 @@ Before merge, require:
    pass on the exact PR head. Address every CodeRabbit finding. Complete the
    [reviews for the PR's risk tier](#review-by-risk-tier). Record exact-head
    Actions run/job links, conclusions and review evidence.
-2. **Check promotion-path routing on the exact head.** The author checks the
-   current diff against the successful job summary from the trusted
-   default-branch [`promotion-path` workflow](.github/workflows/promotion-path.yml).
-   Record the PR number, target ref and its live tip SHA, GitHub's reported PR
-   base SHA, the three-dot comparison's merge-base SHA, the head SHA, verdict
-   and Actions job link in the PR. Read the live tip from the target ref; the
-   PR's reported base SHA can lag it. Match the summary's PR number, head SHA
-   and base SHA to the PR fields (`head.sha` and `base.sha`), not to the
-   computed merge base or the `pull_request_target` run's header SHA. The
-   workflow runs from the default branch. The summary does not identify the
-   target ref; do not reuse it after a retarget unless the run is verified for
-   the new target. Use the job summary as evidence for the verdict. Route
-   `promotion-path: yes` through T0 review.
+2. **Check promotion-path routing on the exact head.** Fetch the default
+   branch, current target ref and `refs/pull/<pr-number>/head` from the upstream
+   repository into a full-history clone. With `gh` authenticated, run the
+   read-only classifier from a clean worktree of the trusted upstream default
+   branch using `node ci/promotion-path-local.mjs <pr-number> <full-head-sha>`.
+   The classifier reads PR metadata and the exact-case live target ref before
+   and after checking the local three-dot diff, including both names on
+   renames. Record its trusted revision, PR number, head SHA, target ref and
+   live tip SHA, reported PR base SHA, merge-base SHA and verdict in the PR.
+   Use the live target tip for the comparison because the reported PR base
+   can lag it. Route a `yes` verdict through T0 review.
 
    Even with a classifier `no`, inspect what the diff changes in the live
    target's context. Route to T0 review for new or changed tooling
    or inputs that qualify, select, migrate, deploy or roll back a production
    candidate, whether automatic or manual. This includes changes to what a
    staging check measures. Check workflows, deploy and binding config; the
-   classifier's path list is not exhaustive. If the Actions verdict is
+   classifier's path list is not exhaustive. If the local verdict is
    missing, stale or incomplete, record a direct review of the full three-dot
    diff from the live target tip to the exact head, including both sides of
    renames, to verify `no`. Use T0 review if the diff may affect the promotion
@@ -233,10 +231,10 @@ durable record behind it.
 
 ### Change-gated CI and `ci-ok`
 
-For PRs targeting `main`, add the full comment permalink once in Verification as `Exact-head Actions evidence`.
-The permalink supplements at least one authored Verification item with evidence.
-Match its SHA to the live head and use PR checks for unbound fork runs. [Publisher](.github/workflows/pr-evidence.yml)
-The owner can require `pr-evidence-fixtures` after merge and green runs on `main` and two later PRs.
+In Verification, record the observed outcomes and direct run or job
+links for the required Actions checks on the exact PR head. Use the PR's check
+association to verify the head when an Actions run from a fork lacks that
+binding. Include at least one authored Verification item with evidence.
 
 Heavy CI jobs run only when their inputs changed (TOG-14877 CI standard). The
 `scope` jobs (in `ci.yml` and the workflows that mirror it) fetch the
