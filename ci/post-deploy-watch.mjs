@@ -34,6 +34,7 @@ export const WATCH_DEFAULTS = {
 };
 
 const VERSION_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const MAX_READINESS_BYTES = 16 * 1024;
 
 // One readiness probe: "ok", "superseded" (another version serves) or a
 // miss reason.
@@ -46,7 +47,27 @@ export async function probeReadiness({ origin, versionId, fetchImpl = fetch }) {
       headers: { "cache-control": "no-cache" },
       signal: AbortSignal.timeout(10_000),
     });
-    body = await response.json();
+    if (!response.body) throw new SyntaxError();
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let bytes = 0;
+    let text = "";
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.byteLength;
+        if (bytes > MAX_READINESS_BYTES) {
+          // Cancellation must not delay or replace the miss verdict.
+          void reader.cancel().catch(() => {});
+          return { state: "miss", reason: "oversized /up response" };
+        }
+        text += decoder.decode(value, { stream: true });
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    body = JSON.parse(text + decoder.decode());
   } catch (error) {
     return {
       state: "miss",
