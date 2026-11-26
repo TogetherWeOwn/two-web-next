@@ -170,12 +170,12 @@ test("the probe pins a verified TLS connection and issues only the read-only ide
         };
       });
       assert.equal(actual, expected);
-      assert.deepEqual(calls, [
-        ["begin", "read only"],
+      assert.deepEqual(calls[0], ["begin", "read only"]);
+      assert.deepEqual(calls.slice(1, -1), [
         ...(failAt === "begin" ? [] : [identityRead]),
         ...(expected || failAt === "close" ? [["matched"]] : []),
-        ["end", { timeout: 5 }],
       ]);
+      assert.deepEqual(calls.at(-1), ["end", { timeout: 5 }]);
     });
   }
 });
