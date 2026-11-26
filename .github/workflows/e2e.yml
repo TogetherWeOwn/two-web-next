@@ -70,7 +70,12 @@ jobs:
     name: scope
     needs: pr-admission
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.draft == true || github.event.pull_request.head.repo.id != github.event.pull_request.base.repo.id || needs.pr-admission.result == 'success') }}
-    runs-on: ubuntu-latest
+    runs-on: >-
+      ${{ github.event_name == 'pull_request'
+      && github.repository
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'
+      && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}
     timeout-minutes: 5
     outputs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
@@ -186,8 +191,12 @@ jobs:
     if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.skip_e2e != 'true' && github.event.pull_request.draft != true }}
     # The merge queue is disabled. Revisit this route before enabling it:
     # merge_group can include fork changes without pull_request provenance.
-    # Map the spending guard's ubuntu-latest cutoff to the baseline image.
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_BLACKSMITH_2VCPU != 'ubuntu-latest' && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-24.04' }}
+    # Preserve the Ubuntu 24.04 visual baseline on either provider, including at quota cutoff.
+    runs-on: >-
+      ${{ github.event_name && (github.event_name != 'pull_request'
+      || (github.repository && github.event.pull_request.head.repo.full_name == github.repository))
+      && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'
+      && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-24.04' }}
     timeout-minutes: 25
     services:
       postgres:
@@ -496,7 +505,12 @@ jobs:
     name: e2e-ok
     needs: [scope, browser-smoke]
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: >-
+      ${{ github.event_name == 'pull_request'
+      && github.repository
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'
+      && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}
     timeout-minutes: 2
     steps:
       - name: Verdict
