@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { parse } from "yaml";
 import { main } from "./lighthouse-origin-run.mjs";
 import { navigationMetadata } from "../test/lighthouse-navigation-fixtures.mjs";
 
@@ -1264,7 +1265,20 @@ test("package.json wires the command and its selftest", async () => {
   );
 });
 
-test("the workflow is dispatch-only, hosted, read-only, secret-free and pinned", async () => {
+test("browser-smoke keeps the Ubuntu 24.04 visual baseline on both providers", async () => {
+  const workflow = parse(
+    await readFile(new URL("../.github/workflows/e2e.yml", import.meta.url), "utf8"),
+  );
+  assert.equal(
+    workflow.jobs["browser-smoke"]["runs-on"],
+    "${{ github.event_name && (github.event_name != 'pull_request' " +
+      "|| (github.repository && github.event.pull_request.head.repo.full_name == github.repository)) " +
+      "&& vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404' " +
+      "&& vars.CI_BLACKSMITH_2VCPU || 'ubuntu-24.04' }}",
+  );
+});
+
+test("the watch workflow is dispatch-only, GitHub-hosted, read-only, secret-free and pinned", async () => {
   const text = await readFile(
     new URL("../.github/workflows/watch-lighthouse.yml", import.meta.url),
     "utf8",
@@ -1274,10 +1288,7 @@ test("the workflow is dispatch-only, hosted, read-only, secret-free and pinned",
     .filter((line) => !/^\s*#/.test(line))
     .join("\n");
   assert.match(code, /^on:\n {2}workflow_dispatch:\n/m);
-  assert.doesNotMatch(
-    code,
-    /^ {2}(?:push|pull_request\w*|schedule|workflow_run|repository_dispatch):/m,
-  );
+  assert.deepEqual(Object.keys(parse(text).on), ["workflow_dispatch"]);
   assert.match(code, /^permissions:\n {2}contents: read\n\n/m);
   assert.doesNotMatch(code, /^\s+\w+: write\b/m);
   assert.equal(

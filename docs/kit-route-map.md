@@ -220,9 +220,20 @@ or session access.
 `KIT_ROUTE_PROFILE_WRITES=true` admits PATCH and the default form POST on
 `/members/:user`. The shared host and origin gates precede the body cap, then
 the shared signed session, per-viewer throttle and owner checks. The native
-POST retains the `_method=PATCH` form contract. GET and HEAD use their existing
-owners, including the frozen `/members` and `/members/` 404s. Leave the flag
-unset in deployed configuration until activation is qualified.
+POST retains the `_method=PATCH` form contract. GET and HEAD on `/members/:user`
+stay on Hono. Leave the flag unset in deployed configuration until activation is
+qualified.
+
+### Retired members directory paths
+
+`KIT_ROUTE_MEMBERS_NOT_FOUND=true` lets the Kit Worker return the shared branded
+404 for trusted GET and HEAD on the literal `/members` and `/members/` paths.
+It serves the same private, no-store error for each viewer, with only public
+event suggestions on GET and an empty body on HEAD. The terminal response
+bypasses Kit page loads, session reads and member-data admission. The directory
+stays unmounted. Aliases, Kit data URLs, unsafe methods and `/members/:user`
+retain their current routing and guards. Clearing the binding restores Hono's
+404s. Keep it unset in deployed configuration until separately qualified.
 
 ### Search indexing endpoints
 

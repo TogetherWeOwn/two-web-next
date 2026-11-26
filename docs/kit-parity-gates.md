@@ -74,8 +74,11 @@ only display name and a link to the existing profile for explicitly listed,
 current members. It makes one capped read and requires an audit of fetched
 owners other than the viewer before releasing the response. An empty or
 self-only read needs no audit row. The synthetic SvelteKit build exercises the
-boundary and the existing directory component. The serving Worker fixture checks
-that the scratch route and both retired `/members` forms return 404.
+boundary and the existing directory component. The installed Worker fixture
+checks that the scratch route stays unavailable and both retired `/members`
+forms return the same 404 with the binding unset or enabled. Synthetic sessions
+verify that the neighboring profile still requires membership and an audited
+read to release its contents.
 
 Activation needs a separately authorized, current membership and directory
 eligibility source that applies visibility before a storage-side limit and
@@ -272,6 +275,14 @@ take no exceptions.
 | Vector (`file#vector id`) | Field | Reason |
 | --- | --- | --- |
 <!-- route-parity-exceptions:end -->
+
+### Installed Worker teardown evidence
+
+On pull requests and ordinary manual dispatches, the installed live socket
+and fan-out proof has its own job, XFS mount, and loopback Postgres service.
+Read its Worker and mount cleanup along with its Postgres stop and runner
+container teardown. The browser and route assertions run in the main
+installed proof. Cutover qualification runs the full installed proof there.
 
 ### All-off production configuration replay
 

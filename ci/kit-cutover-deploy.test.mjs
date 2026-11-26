@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { first, preRollback, soakEnv, trustedReads } from "../test/fixtures/staging-soak-http.mjs";
 import { verifyOrdinaryLedger } from "./check-production-secrets.mjs";
-import { verifyReady } from "./kit-cutover-evidence.mjs";
+import { verifyReady, verifyStagingProof } from "./kit-cutover-evidence.mjs";
 import {
   selection,
   undoMessage,
@@ -10,6 +11,10 @@ import {
   verifyProducer,
   verifyUndoVersion,
 } from "./kit-cutover-deploy.mjs";
+import { STAGING_ORIGIN } from "./operator-constants.mjs";
+import { verifyAllocationSoak } from "./production-deploy-gate.mjs";
+import { deploymentTarget } from "./staging-deploy-gate.mjs";
+import { resolveStagingCandidate } from "./staging-provenance.mjs";
 
 const sourceSha = "a".repeat(40);
 const digest = "b".repeat(64);
@@ -129,6 +134,144 @@ test("only exact successful main XFS dispatch metadata can produce a cutover pac
       /attempt metadata/,
     );
   }
+});
+
+test("a newer main tip and a newer staging allocation have different effects on cutover evidence", async () => {
+  const successor = "d".repeat(40);
+  const repository = preRollback.head_repository.full_name;
+  const context = { repository, ref: "refs/heads/main", sha: successor };
+  const ciRun = {
+    ...preRollback,
+    event: "push",
+    path: ".github/workflows/ci.yml",
+  };
+  const trigger = { repository: { full_name: repository }, workflow_run: ciRun };
+  assert.equal(
+    deploymentTarget({
+      ...context,
+      eventName: "workflow_run",
+      event: trigger,
+      checkoutSha: sourceSha,
+    }),
+    sourceSha,
+  );
+  const deployRun = { ...ciRun, head_sha: successor, display_title: `deploy ${sourceSha}` };
+  assert.equal(
+    resolveStagingCandidate({
+      ...context,
+      eventName: "workflow_run",
+      event: { workflow_run: deployRun },
+    }),
+    sourceSha,
+  );
+  assert.equal(resolveStagingCandidate({ ...context, eventName: "workflow_dispatch" }), successor);
+
+  const own = { full_name: "TogetherWeOwn/two-web-next", fork: false, id: 23 };
+  const successorPin = { ...identity, sourceSha: successor, runId: "22" };
+  const readIsolatedRun = async (input) => {
+    const path = new URL(input).pathname;
+    const pin = [identity, successorPin].find(
+      ({ runId, runAttempt }) =>
+        path === `/repos/${own.full_name}/actions/runs/${runId}/attempts/${runAttempt}`,
+    );
+    assert.ok(pin);
+    return Response.json({
+      id: Number(pin.runId),
+      run_attempt: Number(pin.runAttempt),
+      repository: own,
+      head_repository: own,
+      head_sha: pin.sourceSha,
+      head_branch: "main",
+      path: ".github/workflows/xfs-qualification.yml",
+      event: "workflow_dispatch",
+      status: "completed",
+      conclusion: "success",
+    });
+  };
+  await verifyProducer(successorPin, "synthetic", readIsolatedRun);
+  await assert.rejects(
+    verifyProducer({ ...successorPin, sourceSha }, "synthetic", readIsolatedRun),
+    /attempt metadata/,
+  );
+  await verifyProducer(identity, "synthetic", readIsolatedRun);
+  const isolatedHono = "77777777-7777-7777-7777-777777777777";
+  const proof = {
+    identity,
+    schema: 1,
+    worker: `two-web-kit-cutover-proof-${identity.runId}-${identity.runAttempt}`,
+    hono: isolatedHono,
+    kit,
+    configs: { hono: digest, kit: digest },
+    routeCount: 1,
+    bindingCheck: "isolated-and-all-off",
+    kitReadinessSamples: 6,
+    checks: ["1033", "1037"].flatMap((state) =>
+      ["hono", "kit", "undo"].map((step) => ({
+        state,
+        step,
+        version: step === "kit" ? kit : isolatedHono,
+        status: 200,
+        pending: 0,
+        smoke: "passed",
+      })),
+    ),
+  };
+  verifyStagingProof(proof, identity);
+  assert.throws(() => verifyStagingProof(proof, { ...identity, sourceSha: successor }), /identity/);
+
+  const run = { ...preRollback, id: 103, head_sha: successor };
+  const floor = Date.parse(run.updated_at) + 30 * 60 * 1000;
+  const sharedVersion = first.versions[0].version_id;
+  const env = soakEnv({ accountId: "c".repeat(32), token: "synthetic-cloudflare-token" });
+  let analyticsReads = 0;
+  const fetchImpl = async (input, init) => {
+    const url = String(input);
+    if (url === `${STAGING_ORIGIN}/version`) {
+      return Response.json({ sha: sourceSha, deployedAt: "2026-01-01T10:00:00.000Z" });
+    }
+    if (url === `${STAGING_ORIGIN}/up`) {
+      return Response.json(
+        { revision: { commit: sourceSha, version_id: sharedVersion } },
+        { headers: { "x-two-origin": "two-web-next", "cache-control": "no-store" } },
+      );
+    }
+    assert.equal(url, "https://api.cloudflare.com/client/v4/graphql");
+    const { versionId, since, until } = JSON.parse(init.body).variables;
+    assert.equal(versionId, sharedVersion);
+    assert.equal(since, run.run_started_at);
+    assert.equal(Date.parse(until), floor);
+    analyticsReads += 1;
+    const sample = {
+      dimensions: { scriptVersion: sharedVersion },
+      sum: { requests: 250, errors: 0 },
+    };
+    return Response.json({
+      data: { viewer: { accounts: [{ workersInvocationsAdaptive: [sample] }] } },
+    });
+  };
+  const sample = (nowMs, allocations) =>
+    verifyAllocationSoak(env, {
+      now: () => nowMs,
+      fetchImpl: trustedReads({ fetchImpl }, { run, deployments: () => allocations }),
+    });
+
+  // A successor takes 100% after A's E2E passes and one second before A's floor.
+  const replacement = {
+    id: "66666666-6666-6666-6666-666666666666",
+    created_on: new Date(floor - 1000).toISOString(),
+    versions: [{ version_id: "88888888-8888-8888-8888-888888888888", percentage: 100 }],
+  };
+  await assert.rejects(sample(floor, [first, replacement]), /fresh E2E is required/);
+  await assert.rejects(sample(floor - 1, [first]), /has not soaked 30 minutes/);
+  assert.equal(analyticsReads, 0);
+
+  // The same executed E2E and isolated proof pair if only main advances.
+  const receipt = await sample(floor, [first]);
+  assert.equal(receipt.sha, proof.identity.sourceSha);
+  assert.equal(receipt.allocationId, first.id);
+  assert.equal(receipt.e2e.runId, run.id);
+  assert.deepEqual([receipt.sample.requests, receipt.sample.errors], [250, 0]);
+  assert.equal(analyticsReads, 1);
 });
 
 test("only undo preparation may admit confirmed deferred migrations", () => {
