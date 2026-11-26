@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { lstat, readFile, readdir, writeFile } from "node:fs/promises";
+import { lstat, opendir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   assertKitProductionCandidate,
@@ -24,6 +24,8 @@ export const ADMIN_STAGING_CHECKS = ["default-denied", "credential-separation", 
 const maxFileBytes = 32 * 1024 * 1024;
 const maxPacketBytes = 128 * 1024 * 1024;
 const maxReadinessBytes = 16 * 1024;
+// Measured installed profiles contain 54 Hono entries and 147 Kit entries, including directories.
+const maxInventoryEntries = 512;
 const hex = /^[a-f0-9]{64}$/;
 
 export async function sourceInputs(root = ".") {
@@ -69,8 +71,15 @@ export async function inventory(dir) {
   assert.ok((await lstat(dir)).isDirectory(), "cutover package directory is unsafe");
   const files = {};
   let total = 0;
+  let entryCount = 0;
   const walk = async (prefix) => {
-    const entries = await readdir(join(dir, prefix), { withFileTypes: true });
+    const directory = await opendir(join(dir, prefix));
+    const entries = [];
+    for await (const entry of directory) {
+      entryCount += 1;
+      assert.ok(entryCount <= maxInventoryEntries, "cutover package entry count limit");
+      entries.push(entry);
+    }
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name, "en"))) {
       assert.match(entry.name, /^(?!\.{1,2}$)[A-Za-z0-9._-]+$/, "unsafe cutover asset name");
       const key = prefix ? `${prefix}/${entry.name}` : entry.name;
