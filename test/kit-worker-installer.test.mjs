@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse } from "@babel/parser";
+import { traverseFast } from "@babel/types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { bundleCutoverAdapter } from "../ci/kit-cutover-adapter.mjs";
 import { securityHeadersFor } from "../src/headers";
@@ -391,9 +392,21 @@ export async function render() {
   const detached = scratch();
   const companion = join(detached, COMPANION_NAME);
   writeFileSync(companion, await bundleCutoverAdapter(adapter));
-  const { body } = parse(read(detached, COMPANION_NAME), { sourceType: "module" }).program;
-  const imports = body.filter((node) => node.type === "ImportDeclaration");
-  expect(imports.map((node) => node.source.value)).toEqual(["node:buffer"]);
+  const emitted = parse(read(detached, COMPANION_NAME), { sourceType: "module" });
+  const specifiers = [];
+  traverseFast(emitted, (node) => {
+    if (
+      (node.type === "ImportDeclaration" ||
+        node.type === "ImportExpression" ||
+        node.type === "ExportNamedDeclaration" ||
+        node.type === "ExportAllDeclaration") &&
+      node.source
+    ) {
+      expect(node.source.type).toBe("StringLiteral");
+      specifiers.push(node.source.value);
+    }
+  });
+  expect(specifiers).toEqual(["node:buffer"]);
 
   const { default: worker } = await import(/* @vite-ignore */ pathToFileURL(companion).href);
   expect(await (await worker.fetch()).text()).toBe("nested chunk");
