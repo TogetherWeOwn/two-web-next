@@ -38,7 +38,7 @@ concurrency:
 
 jobs:
   pr-admission:
-    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.id == github.event.pull_request.base.repo.id
     permissions: { actions: read, contents: read, pull-requests: read }
     uses: ./.github/workflows/pr-ci-admission.yml
 
@@ -96,7 +96,7 @@ jobs:
   scope:
     name: scope
     needs: pr-admission
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.draft == true || needs.pr-admission.result == 'success') }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.draft == true || github.event.pull_request.head.repo.id != github.event.pull_request.base.repo.id || needs.pr-admission.result == 'success') }}
     runs-on: ubuntu-latest
     # Includes the pinned stock source build and upstream test inventory.
     timeout-minutes: 15
@@ -112,6 +112,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: github.event_name == 'pull_request'
         with:
+          fetch-depth: 2
           persist-credentials: false
       # Token boundary: this is the only step that holds GH_TOKEN, and it runs
       # no repository code. It fetches the changed-file list and the scope
@@ -122,22 +123,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          pr="repos/$REPO/pulls/$PR_NUMBER"
-          current=$(gh api "$pr" --jq '[.base.sha, .head.sha] | join(" ")')
-          gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate --jq '
-            .[] | if .status == "renamed" and (.previous_filename // "") == "" then "invalid row"
-            else [.filename, (.previous_filename // "")] |
-              if any(.[] | explode[]; . < 32 or . == 127) then "invalid row" else join("\t") end
-            end
-          ' > "$RUNNER_TEMP/pr-files.tsv"
-          if [ "$current" != "$BASE_SHA $HEAD_SHA" ] ||
-             [ "$(gh api "$pr" --jq '[.base.sha, .head.sha] | join(" ")')" != "$current" ]; then
-            printf "invalid row\n" > "$RUNNER_TEMP/pr-files.tsv"
+          if [ "$(git show -s --format=%P HEAD)" = "$BASE_SHA $HEAD_SHA" ]; then
+            git diff --no-ext-diff --no-textconv --name-status -M "$BASE_SHA" HEAD |
+              awk -F'\t' '{if ($1 ~ /^R/) print $3 "\t" $2; else print $2 "\t"}' > "$RUNNER_TEMP/pr-files.tsv"
+          else
+            : > "$RUNNER_TEMP/pr-files.tsv"
           fi
           mkdir -p "$RUNNER_TEMP/trusted-scope"
           for script in ci/change-scope.sh ci/e2e-test-helpers.mjs; do
@@ -152,6 +146,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+          SAME_REPO: ${{ github.event.pull_request.head.repo.id == github.event.pull_request.base.repo.id }}
           DRAFT: ${{ github.event.pull_request.draft }}
         run: |
           set -euo pipefail
@@ -170,13 +165,8 @@ jobs:
             } >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          bash "$RUNNER_TEMP/trusted-scope/change-scope.sh" "$RUNNER_TEMP/pr-files.tsv" "$CHANGED_FILES" > "$RUNNER_TEMP/scope-verdict.txt"
+          PR_SUITE_SCOPE=true bash "$RUNNER_TEMP/trusted-scope/change-scope.sh" "$RUNNER_TEMP/pr-files.tsv" "$CHANGED_FILES" > "$RUNNER_TEMP/scope-verdict.txt"
           keys="docs_only skip_e2e app worker db full draft"
-          if grep -q '^isolated=' "$RUNNER_TEMP/scope-verdict.txt"; then
-            keys="$keys isolated"
-          else
-            verdict_isolated=false
-          fi
           for key in $keys; do
             count=$(grep -c "^$key=" "$RUNNER_TEMP/scope-verdict.txt") || count=0
             if [ "$count" != 1 ]; then
@@ -191,25 +181,20 @@ jobs:
             printf -v "verdict_$key" '%s' "$value"
           done
           lines=$(wc -l < "$RUNNER_TEMP/scope-verdict.txt")
-          set -- $keys
-          if [ "$lines" != "$#" ]; then
+          if [ "$lines" != 7 ]; then
             echo "::error::unexpected scope verdict output; failing closed."
             exit 1
           fi
           docs_only=$verdict_docs_only
           full=$verdict_full
-          isolated=$verdict_isolated
+          isolated=$verdict_skip_e2e
           while IFS=$'\t' read -r name previous || [ -n "$name" ]; do
             for path in "$name" ${previous:+"$previous"}; do
               case "$path" in
-                ci/check-migration-*|ci/check-snapshot-chain*|ci/db-migrate*) ;;
                 ci/join-state-evidence-source.mjs|ci/join-state-evidence-source.test.mjs|\
                 ci/kit-css-evidence.mjs|ci/kit-css-evidence.test.mjs) ;;
-                .github/*|src/*|ci/*) full=true ;;
-              esac
-              case "$path" in
-                ci/join-state-evidence-source.mjs|ci/join-state-evidence-source.test.mjs|\
-                ci/kit-css-evidence.mjs|ci/kit-css-evidence.test.mjs) ;;
+                ci/check-migration-*|ci/check-snapshot-chain*|ci/db-migrate*) isolated=false ;;
+                .github/*|src/*|ci/*) full=true; isolated=false ;;
                 *) isolated=false ;;
               esac
               case "$path" in
@@ -220,7 +205,7 @@ jobs:
               esac
             done
           done < "$RUNNER_TEMP/pr-files.tsv"
-          if [ ! -s "$RUNNER_TEMP/pr-files.tsv" ] ||
+          if [ "${SAME_REPO:-true}" = false ] || [ ! -s "$RUNNER_TEMP/pr-files.tsv" ] ||
              [ "$(wc -l < "$RUNNER_TEMP/pr-files.tsv")" != "$CHANGED_FILES" ]; then
             docs_only=false
             isolated=false
@@ -283,6 +268,7 @@ jobs:
   queue-syntax-smoke:
     name: queue-syntax-smoke
     needs: scope
+    if: ${{ !cancelled() && needs.scope.result == 'success' }}
     concurrency:
       group: queue-syntax-${{ github.run_id }}-${{ github.run_attempt }}
       cancel-in-progress: false
@@ -297,6 +283,7 @@ jobs:
   docs-links:
     name: docs-links
     needs: scope
+    if: ${{ !cancelled() && needs.scope.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -347,7 +334,7 @@ jobs:
     # Audit the served surface when it or its inputs changed (app covers
     # test/helpers via the fixtures; db covers the migrations the fixtures
     # run). Drafts skip: undrafting re-runs via ready_for_review.
-    if: needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.db == 'true')
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.db == 'true') }}
     # This workflow uses hosted runners for every event and repository visibility.
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -1549,7 +1536,7 @@ jobs:
     name: bundle-budget
     needs: scope
     # Budgets only observe the served assets (app). Drafts skip.
-    if: needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -1591,7 +1578,7 @@ jobs:
     name: lighthouse
     needs: scope
     # Fixture worker serves the app over fixed routes (app only). Drafts skip.
-    if: needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true') }}
     runs-on: ubuntu-latest
     # A private namespace keeps Wrangler's fixed audit port off the shared host.
     container:

@@ -190,8 +190,23 @@ test("coverage shards preserve serial threads and the merge uses the canonical c
   const staticCheck = job("static-check");
   assert.match(staticCheck, /run: npm run lint && npm run typecheck && npm run e2e:typecheck\n/);
   assert.doesNotMatch(shard + mergeJob + staticCheck, /continue-on-error:/);
-  const gate = 'run: test "$STATIC_RESULT" = success && test "$COVERAGE_RESULT" = success\n';
-  assert(job("ci-ok").includes(gate));
+  const gate = job("ci-ok").match(
+    /name: Require successful static checks and merged coverage[\s\S]*?run: >-\n((?: {10}[^\n]+\n)+)/,
+  )?.[1];
+  assert(gate, "coverage verdict shell must be wired to ci-ok");
+  for (const [ISOLATED, STATIC_RESULT, COVERAGE_RESULT, expected] of [
+    ["false", "success", "success", 0],
+    ["true", "success", "skipped", 0],
+    ["true", "failure", "skipped", 1],
+    ["false", "success", "skipped", 1],
+    ["true", "success", "failure", 1],
+    ["", "success", "skipped", 1],
+  ]) {
+    const result = spawnSync("bash", ["-c", gate.trim().replace(/\n +/g, " ")], {
+      env: { ISOLATED, STATIC_RESULT, COVERAGE_RESULT },
+    });
+    assert.equal(result.status, expected);
+  }
   const config = await readFile(new URL("../vitest.config.ts", import.meta.url), "utf8");
   assert.match(
     config,

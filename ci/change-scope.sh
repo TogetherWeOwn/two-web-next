@@ -177,6 +177,8 @@ else
   full=true
 fi
 
+if [ "${PR_SUITE_SCOPE:-false}" = true ] && [ "$isolated" = true ]; then skip_e2e=true; fi
+
 draft=false
 if [ "${DRAFT:-}" = true ]; then
   draft=true
@@ -191,7 +193,6 @@ not_docs() {
   echo "db=$db"
   echo "full=$full"
   echo "draft=$draft"
-  echo "isolated=$isolated"
   exit 0
 }
 
@@ -227,4 +228,3 @@ echo "worker=$worker"
 echo "db=$db"
 echo "full=$full"
 echo "draft=$draft"
-echo "isolated=$isolated"

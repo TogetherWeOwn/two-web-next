@@ -155,15 +155,13 @@ not fail) unless marked HARD. All of them run on the existing runners only.
 
 ## Pull-request CI selection
 
-Ready PRs require successful lint, secret scan and size jobs from the same
-head and base before CI and browser suites start. If a prerequisite is fixed
-without a push, rerun the failed CI and E2E jobs after it passes.
-The join-state evidence and Kit CSS evidence helpers and their dedicated tests
-can skip the Vitest shards, browser smoke and app performance audits when
-they are the only changed paths. Static checks and both focused fixtures still
-run. Workflow, dependency, shared helper and shared application changes
-select full coverage. Main pushes, nightly runs and exact-SHA runs retain
-their full coverage.
+Ready in-repository PRs require successful same-head lint, secret scan and size
+jobs before CI and browser suites start. After a metadata-only gate fix with the same base,
+rerun failed CI and E2E jobs. Forks run full suites and keep the separate required
+gates because Actions omits their run-to-PR association.
+Standalone join-state evidence and Kit CSS evidence changes skip the Vitest
+shards and browser suites. Static checks and dedicated fixtures still run.
+Shared or uncertain changes, main pushes and nightly runs keep full coverage.
 
 ## Patch coverage CLI
 
