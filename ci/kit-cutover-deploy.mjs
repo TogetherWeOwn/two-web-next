@@ -125,13 +125,12 @@ async function main() {
   const [command, dir, proofPath] = process.argv.slice(2);
   const pin = selection(process.env);
   if (command === "select") {
-    await appendFile(process.env.GITHUB_OUTPUT, `mode=${pin.mode}\n`);
-    if (pin.mode === "ordinary") return;
-    await verifyProducer(pin, process.env.GITHUB_TOKEN);
-    await appendFile(
-      process.env.GITHUB_OUTPUT,
-      `run_id=${pin.runId}\nrun_attempt=${pin.runAttempt}\n`,
-    );
+    let output = `mode=${pin.mode}\n`;
+    if (pin.mode !== "ordinary") {
+      await verifyProducer(pin, process.env.GITHUB_TOKEN);
+      output += `run_id=${pin.runId}\nrun_attempt=${pin.runAttempt}\n`;
+    }
+    await appendFile(process.env.GITHUB_OUTPUT, output);
     return;
   }
   assert.ok(pin.mode !== "ordinary", "cutover command requires an explicit selection");
