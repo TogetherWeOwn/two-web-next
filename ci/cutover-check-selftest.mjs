@@ -7,6 +7,7 @@ import { createServer as createTlsServer } from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { setImmediate } from "node:timers/promises";
 import { promisify } from "node:util";
 import {
   curlRequest,
@@ -19,6 +20,7 @@ import {
   URL_CASES,
   xmlText,
 } from "./cutover-check.mjs";
+import { probeCutoverEventSync } from "./web-readiness-cutover.mjs";
 
 const exec = promisify(execFile);
 const apex = "example.test";
@@ -1088,4 +1090,91 @@ test("CLI rejects unsafe/missing arguments before any network I/O", async () => 
     exec(process.execPath, ["ci/cutover-check.mjs", "--phase", "invalid"]),
     (err) => err.code === 2,
   );
+});
+
+const discordEventId = "1000000000000000042";
+
+function eventSyncFixture(t, { claimSucceeds = true, acknowledged = true } = {}) {
+  const readback = { state: "succeeded", discord_event_id: discordEventId, acknowledged };
+  let completed = false;
+  const runtime = t.mock.fn(async (sql) => {
+    if (sql[0].startsWith("INSERT INTO events ")) return [{ id: 42 }];
+    if (sql[0].startsWith("SELECT a.state, e.discord_event_id,")) {
+      if (!completed) throw new Error("Settlement read before completion finished");
+      return [readback];
+    }
+    throw new Error("Unexpected query in the event-sync probe");
+  });
+  const prepareSync = t.mock.fn(async (eventKey, idempotencyKey) => ({
+    eventKey,
+    idempotencyKey,
+    requestAttempts: 0,
+  }));
+  const claimSync = t.mock.fn(async (attempt) =>
+    claimSucceeds ? { ...attempt, requestAttempts: 1 } : null,
+  );
+  const completeSync = t.mock.fn(async () => {
+    await setImmediate();
+    completed = true;
+  });
+  const servingStore = t.mock.fn(() => ({ prepareSync, claimSync, completeSync }));
+  return { runtime, servingStore, prepareSync, claimSync, completeSync, readback };
+}
+
+test("settles a claimed cutover event and reads back its acknowledged revision", async (t) => {
+  const { runtime, servingStore, prepareSync, claimSync, completeSync } = eventSyncFixture(t);
+
+  await probeCutoverEventSync(servingStore, runtime);
+
+  assert.equal(servingStore.mock.callCount(), 1);
+  assert.deepEqual(servingStore.mock.calls[0].arguments, [runtime]);
+  assert.equal(runtime.mock.callCount(), 2);
+  const [, insertedEventKey] = runtime.mock.calls[0].arguments;
+  assert.equal(prepareSync.mock.callCount(), 1);
+  const [eventKey, idempotencyKey, now] = prepareSync.mock.calls[0].arguments;
+  assert.equal(eventKey, insertedEventKey);
+  assert.equal(typeof idempotencyKey, "string");
+  assert.ok(now instanceof Date);
+  const prepared = await prepareSync.mock.calls[0].result;
+  assert.equal(claimSync.mock.callCount(), 1);
+  assert.deepEqual(claimSync.mock.calls[0].arguments, [prepared, now]);
+  const claimed = await claimSync.mock.calls[0].result;
+  assert.equal(completeSync.mock.callCount(), 1);
+  assert.deepEqual(completeSync.mock.calls[0].arguments, [claimed, discordEventId]);
+  const [readQuery, ...readParameters] = runtime.mock.calls[1].arguments;
+  assert.match(readQuery[0], /^SELECT a\.state, e\.discord_event_id,/);
+  assert.deepEqual(readParameters, [idempotencyKey]);
+});
+
+test("rejects an unclaimed cutover event before completing it or reading settlement", async (t) => {
+  const { runtime, servingStore, claimSync, completeSync } = eventSyncFixture(t, {
+    claimSucceeds: false,
+  });
+
+  await assert.rejects(probeCutoverEventSync(servingStore, runtime), {
+    code: "ERR_ASSERTION",
+    actual: undefined,
+    expected: 1,
+  });
+
+  assert.equal(claimSync.mock.callCount(), 1);
+  assert.equal(completeSync.mock.callCount(), 0, "an unclaimed event reached completion");
+  assert.equal(runtime.mock.callCount(), 1);
+});
+
+test("rejects a successful cutover readback with the expected event ID and an unacknowledged revision", async (t) => {
+  const { runtime, servingStore, claimSync, completeSync, readback } = eventSyncFixture(t, {
+    acknowledged: false,
+  });
+
+  await assert.rejects(probeCutoverEventSync(servingStore, runtime), {
+    code: "ERR_ASSERTION",
+    actual: readback,
+    expected: { ...readback, acknowledged: true },
+  });
+
+  const claimed = await claimSync.mock.calls[0].result;
+  assert.equal(completeSync.mock.callCount(), 1);
+  assert.deepEqual(completeSync.mock.calls[0].arguments, [claimed, discordEventId]);
+  assert.equal(runtime.mock.callCount(), 2);
 });

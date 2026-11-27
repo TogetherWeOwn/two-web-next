@@ -31,6 +31,7 @@ import { newRequestId, safeRequestId, writeHttpRequestLog } from "./request-log"
 import { setReleaseMetadata } from "./release-tag";
 import { withStreamedBody } from "./html-stream";
 import { applySingleValidator } from "./http/conditional";
+import { brandedNotFoundFallback } from "./http/not-found";
 import { PRODUCTION_APEX } from "./http/robots";
 import { EVENTS_CALENDAR_ISLAND } from "./islands/contracts-calendar";
 import { KIT_HOTZONE_SIGNAL_ROUTE } from "./hotzones/kit-signal-route";
@@ -53,6 +54,8 @@ import {
   isKitAdminRsvpForm,
   kitAdminAdmission,
   KIT_ADMIN_OPS_ROUTES,
+  KIT_QUEUE_PREVIEW_ID,
+  KIT_QUEUE_PREVIEW_ROUTE,
   privateAdminResponse,
   usesKitDefaultAction,
 } from "./admin/kit-serving";
@@ -245,8 +248,8 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   },
   { method: "GET", path: "/auth/recover", enabled: true, reads: "public" },
   // Profile reads: one Svelte view/model behind both Hono handlers. Native
-  // rendering stays off until edit parity reviews enablement; write siblings
-  // and the retired /members directory have no entries and stay Hono-owned.
+  // rendering stays off until edit parity reviews enablement. The retired
+  // directory's terminal 404s are handled separately from these reads.
   {
     method: "GET",
     path: "/profile",
@@ -735,6 +738,10 @@ export interface HookDispatchDeps {
   kitRouteHome?: string;
   kitRouteJoin?: string;
   kitRouteEmberPages?: string;
+  membersNotFound?: {
+    flag: string | undefined;
+    render: (path: string) => Promise<string>;
+  };
   featuredImageHosts?: string;
   honoFetch: (request: Request) => Promise<Response>;
   resolve: (event: HookEventLike, opts?: KitResolveOptions) => Promise<Response>;
@@ -1127,20 +1134,52 @@ async function dispatchOwnedRequest(
   if (!isTrustedHost(deps.appUrl, [event.request.headers.get("host"), event.url.host])) {
     return deps.honoFetch(event.request);
   }
-  const admin = deps.admin;
+  const members = deps.membersNotFound;
   if (
+    members?.flag === "true" &&
+    !event.isDataRequest &&
+    (event.request.method === "GET" || event.request.method === "HEAD")
+  ) {
+    const url = new URL(event.request.url);
+    const path = url.pathname;
+    // Read the original literal path before Kit can normalize it or run loads.
+    if ((path === "/members" || path === "/members/") && isTrustedHost(deps.appUrl, [url.host])) {
+      const started = performance.now();
+      const requestId = safeRequestId(event.request.headers.get("cf-ray")) ?? newRequestId();
+      setReleaseMetadata(deps.versionMetadata);
+      const response = await brandedNotFoundFallback(event.request, () => members.render(path));
+      const result = await finishKitResponse(response, event, deps, requestId);
+      writeHttpRequestLog(event.request, requestId, path, result.status, started);
+      return result;
+    }
+  }
+  const admin = deps.admin;
+  const queuePreview =
     admin &&
+    event.request.method === "GET" &&
+    event.route?.id === KIT_QUEUE_PREVIEW_ID &&
     admitsKitAdmin(
       event.request,
       event.url,
       event.isDataRequest,
       deps.appUrl,
-      admin.env.KIT_ROUTE_ADMIN,
-      deps.kitRouteEmberPages === "true" &&
-        (deps.appUrl === PRODUCTION_APP_URL || ISOLATED_CUTOVER_ORIGIN.test(deps.appUrl)),
-    )
+      admin.env.KIT_ROUTE_ADMIN_QUEUE_PREVIEW,
+    ) &&
+    decideRoute(event.request, [KIT_QUEUE_PREVIEW_ROUTE], event.url);
+  if (
+    admin &&
+    (queuePreview ||
+      admitsKitAdmin(
+        event.request,
+        event.url,
+        event.isDataRequest,
+        deps.appUrl,
+        admin.env.KIT_ROUTE_ADMIN,
+        deps.kitRouteEmberPages === "true" &&
+          (deps.appUrl === PRODUCTION_APP_URL || ISOLATED_CUTOVER_ORIGIN.test(deps.appUrl)),
+      ))
   ) {
-    const response = await dispatchKitAdminRequest(event, deps, admin);
+    const response = await dispatchKitAdminRequest(event, deps, admin, queuePreview || undefined);
     if (response) return response;
   }
   return dispatchFromManifest(
@@ -1199,6 +1238,7 @@ async function dispatchKitAdminRequest(
   event: HookEventLike,
   deps: HookDispatchDeps,
   { env, completeForm }: NonNullable<HookDispatchDeps["admin"]>,
+  queuePreview?: OwnedRoute,
 ): Promise<Response | null> {
   const { request, url } = event;
   const operator = familyRouteFor(event, ROUTE_MANIFEST, [
@@ -1217,10 +1257,17 @@ async function dispatchKitAdminRequest(
     fixtureRequest(request, deps.appUrl);
   const page = decideRoute(request, fixture ? KIT_ADMIN_FIXTURE_READS : KIT_ADMIN_READS, url);
   const read = page && routeId === page.path.replace(/:(\w+)/g, "[$1]") ? page : undefined;
-  const route = operator?.route.path ?? (formPath || read?.path);
+  const route = queuePreview?.path ?? operator?.route.path ?? (formPath || read?.path);
   // Keep fixture-only reconciliation in its manifest and pass the other
   // unowned routes to their existing Hono guards.
   if (!route) return null;
+  if (
+    formPath === "/admin/featured/:id/delete" &&
+    (env.KIT_PARITY_FIXTURE_ADMIN_FEATURED_DELETE !== "true" ||
+      !fixtureRequest(request, deps.appUrl))
+  ) {
+    return null;
+  }
 
   const started = performance.now();
   const requestId = safeRequestId(request.headers.get("cf-ray")) ?? newRequestId();
@@ -1241,6 +1288,10 @@ async function dispatchKitAdminRequest(
   };
   const originRefused = await sameOrigin(context, async () => {});
   if (originRefused) return finish(originRefused);
+  if (queuePreview) {
+    event.locals = { ...(event.locals as object), requestId };
+    return finish(await deps.resolve(event));
+  }
   if (operator) return finish(await deps.resolve(event));
   if (isKitAdminRsvpForm(formPath)) {
     // The endpoint delegates moderator admission and the write to Hono.

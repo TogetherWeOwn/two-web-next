@@ -12,6 +12,7 @@ on:
       - "ci/db-migrate.mjs"
       - "ci/db-readiness-projection.mjs"
       - "ci/db-serving-ledger-isolation.mjs"
+      - "ci/db-serving-ledger-isolation-cli.mjs"
       - "ci/fixtures/web-serving-isolation.mjs"
       - "ci/migration-runtime-rights.mjs"
       - "ci/production-deploy-gate.mjs"

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   copyFileSync,
@@ -12,6 +13,7 @@ import {
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { readMigrationFiles } from "drizzle-orm/migrator";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { build } from "esbuild";
@@ -23,6 +25,7 @@ import {
 import { runRepair } from "./db-permissions-repair.mjs";
 import { runReadinessProjection } from "./db-readiness-projection.mjs";
 import { runExecutorAuthority } from "./db-repair-executor.mjs";
+import { planServingIsolation, runServingIsolation } from "./db-serving-ledger-isolation.mjs";
 import {
   bootstrap,
   fixtureCluster,
@@ -47,7 +50,9 @@ import {
   setPassword,
   webRoles,
 } from "./fixtures/db-restore-replay/seed.mjs";
+import { servingIsolationFixture } from "./fixtures/db-restore-replay/serving-isolation-connector.mjs";
 import { assertServingPostcheckRollback } from "./fixtures/db-restore-replay/serving-postcheck-case.mjs";
+import { assertServingLedgerRelationLock } from "./fixtures/db-restore-replay/serving-relation-lock-case.mjs";
 import {
   prepareServingIsolation,
   probeServingLedger,
@@ -55,6 +60,7 @@ import {
 } from "./fixtures/web-serving-isolation.mjs";
 import { assertRuntimeDefaultAcl } from "./migration-runtime-rights.mjs";
 import { readLedgerState } from "./production-deploy-gate.mjs";
+import { addedAfter1033, publicServingRights } from "./web-readiness-scoped-acl.mjs";
 
 const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
 const hash = (input) => createHash("sha256").update(input).digest("hex");
@@ -290,6 +296,95 @@ const expansion = [
 ];
 const expandedEnd = expansion.at(-1);
 
+test("recovered serving isolation proof is bound to its serving principal", async () => {
+  const otherLogin = "fixture_other_serving";
+  const version = "97ff7cb6-896b-4a53-9130-ee4f3f31d278";
+  const artifact = { sourceSha: "b".repeat(40), digest: "c".repeat(64) };
+  const objects = publicServingRights
+    .filter(({ name }) => !addedAfter1033.has(name))
+    .map(({ kind, name, column }) => ({ kind, name, column, owner: migrator, direct: [] }));
+  const owners = [...new Map(objects.map((row) => [JSON.stringify(row), row])).values()];
+  const { entries } = JSON.parse(read("../drizzle/meta/_journal.json"));
+  const prefixLength = entries.findIndex(({ tag }) => tag === originalEnd) + 1;
+  assert.ok(prefixLength > 0);
+  const ledger = readMigrationFiles({
+    migrationsFolder: fileURLToPath(new URL("../drizzle", import.meta.url)),
+  })
+    .slice(0, prefixLength)
+    .map(({ hash, folderMillis }) => ({ hash, created_at: folderMillis }));
+  const catalog = { owners, ledger, executor: migrator };
+  const fixture = servingIsolationFixture(catalog);
+  const capture = (login) =>
+    planServingIsolation(fixture.tx, identity(migrator), version, artifact, login);
+  const original = await capture(app);
+  const recovered = await capture(otherLogin);
+  assert.equal(recovered.before, original.before);
+  assert.equal(recovered.after, original.after);
+  assert.equal(recovered.version, original.version);
+
+  const environment = (plan) => {
+    const raw = JSON.stringify(plan);
+    return {
+      PRODUCTION_DB_ISOLATION_PLAN: raw,
+      PRODUCTION_DB_ISOLATION_PLAN_SHA256: hash(raw),
+      PRODUCTION_DB_ISOLATION_DATABASE_URL: planUrl,
+    };
+  };
+  const preload = fileURLToPath(
+    new URL("./fixtures/db-restore-replay/serving-isolation-preload.mjs", import.meta.url),
+  );
+  const cli = (plan, expectedStatus) => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        preload,
+        fileURLToPath(new URL("./db-serving-ledger-isolation-cli.mjs", import.meta.url)),
+        "readback",
+        originalEnd,
+      ],
+      {
+        env: {
+          ...environment(plan),
+          FIXTURE_SERVING_ISOLATION_CATALOG: JSON.stringify(catalog),
+        },
+        encoding: "utf8",
+        timeout: 10_000,
+      },
+    );
+    assert.ifError(result.error);
+    assert.equal(result.status, expectedStatus);
+    assert.equal(result.stdout, "");
+    assert.equal(result.stderr, "");
+  };
+  cli(original, 10);
+  cli(recovered, 1);
+  const legacy = { ...original };
+  delete legacy.servingRole;
+  cli(legacy, 1);
+
+  const connect = () => fixture;
+  const fetchImpl = () => assert.fail("Traffic must stay offline");
+  assert.equal(
+    await runServingIsolation("readback", originalEnd, environment(recovered), {
+      login: otherLogin,
+      connect,
+      fetchImpl,
+    }),
+    "before",
+  );
+  for (const operation of ["readback", "forward", "undo"]) {
+    await assert.rejects(
+      runServingIsolation(operation, originalEnd, environment(original), {
+        login: otherLogin,
+        connect: () => assert.fail("Cross-principal reuse reached the database connector"),
+        fetchImpl,
+      }),
+      { message: "Serving isolation plan belongs to a different serving role" },
+    );
+  }
+});
+
 function writeWebSlice(directory, originalLength) {
   const journal = JSON.parse(read("../drizzle/meta/_journal.json"));
   const entries = journal.entries.slice(0, originalLength + expansion.length);
@@ -381,6 +476,7 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
     ],
   });
   const { databaseReadiness } = await import(pathToFileURL(outfile).href);
+  const isolationQueries = [];
   const {
     run: isolate,
     version,
@@ -391,7 +487,19 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
       login: app,
       database: "postgres",
       migrationRole: migrator,
-      connect: connectMigrator,
+      connect() {
+        const client = connectMigrator();
+        isolationQueries.length = 0;
+        client.options.debug = (_id, statement, parameters) => {
+          isolationQueries.push({
+            statement,
+            advisoryKey: statement.startsWith("select pg_try_advisory_xact_lock(")
+              ? Number(parameters[0])
+              : undefined,
+          });
+        };
+        return client;
+      },
       firstEnd: originalEnd,
       timestamps: base.timestamps,
     }),
@@ -425,6 +533,18 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
       await botReads(fresh);
       return webReadiness;
     });
+
+  await t.test("competing ledger relation lock refuses isolation before ACL changes", () =>
+    assertServingLedgerRelationLock({
+      admin: restore.admin,
+      isolate,
+      isolationQueries,
+      async fingerprint() {
+        const { digest, state } = await inspect(fresh);
+        return { catalog: digest, ledger: state.ledger };
+      },
+    }),
+  );
 
   const { state: baseline } = await inspect(fresh);
   assert.equal(baseline.migrator_ready, true);
@@ -616,13 +736,23 @@ test("PostgreSQL 18 branch replay preserves repair and Bot scope with alternate 
     t.diagnostic("Snapshot writer held through the repair lock timeout. PRE and ledger matched.");
 
     phase = "forward, exact undo and revoke";
+    const provisionedRoles = await readRestore();
+    // The repair snapshot excludes this unrelated customer membership.
+    assert.deepEqual(
+      provisionedRoles.edges.filter(
+        ([role, member]) => role === "pg_monitor" && member === customer,
+      ),
+      [["pg_monitor", customer, bootstrap, true, true, true]],
+    );
     assert.equal(await repair("readback"), "before");
     assert.equal(await repair("forward"), "committed");
     assert.equal(await repair("readback"), "after");
+    assert.deepEqual(await readRestore(), provisionedRoles);
     await webReads(fresh, true);
     await botReads(connect);
     assert.equal(await repair("undo"), "committed");
     assert.equal(await repair("readback"), "before");
+    assert.deepEqual(await readRestore(), provisionedRoles);
     await runAuthority(connect, "revoke");
     assert.deepEqual(await inspect(connect), unprovisioned);
     assert.deepEqual(await readRestore(), replayed);

@@ -183,12 +183,16 @@ async function main() {
   console.info(`Uploaded staged ${pin.mode} version ${uploaded}, manifest ${pin.digest}`);
 }
 
-async function verifyOperatorDenial(origin) {
-  const response = await fetch(new URL("/admin/ops-overrides", origin), {
+export async function verifyOperatorDenial(origin, fetchImpl = fetch) {
+  const response = await fetchImpl(new URL("/admin/ops-overrides", origin), {
     redirect: "manual",
     signal: AbortSignal.timeout(10_000),
   });
-  await response.body?.cancel();
+  try {
+    await response.body?.cancel();
+  } catch {
+    console.warn("Could not cancel the unused operator denial response body");
+  }
   assert.ok([401, 404].includes(response.status), "operator route admits anonymous traffic");
   assert.equal(response.headers.get("x-two-renderer"), "kit");
   assert.equal(response.headers.get("referrer-policy"), "no-referrer");

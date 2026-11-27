@@ -29,6 +29,7 @@ import {
   destructiveStatements,
   liveVersion,
   previousVersion,
+  readLiveRevision,
   rollbackAction,
   rollbackCompatibility,
   rollbackEnvironment,
@@ -1388,12 +1389,12 @@ function journal(tags) {
   ).toString("base64");
 }
 
-function stubRepo({ target, previous, sql, up, drill, seen = {} }) {
+function stubRepo({ target, previous, sql, up, seen = {} }) {
   return async (url) => {
     const parsed = new URL(url);
     if (parsed.pathname === "/up") {
       seen.up = (seen.up ?? 0) + 1;
-      return { ok: true, json: async () => up };
+      return Response.json(up);
     }
     if (parsed.pathname.endsWith("/contents/drizzle/meta/_journal.json")) {
       const ref = parsed.searchParams.get("ref");
@@ -1406,11 +1407,6 @@ function stubRepo({ target, previous, sql, up, drill, seen = {} }) {
       seen.sql = [...(seen.sql ?? []), decodeURIComponent(tag)];
       if (!(tag in sql)) return { ok: false, status: 404 };
       return { ok: true, text: async () => sql[tag] };
-    }
-    if (parsed.pathname.endsWith("/workflows/staging-rollback-drill.yml/runs")) {
-      assert.equal(parsed.searchParams.get("branch"), "main");
-      if (drill === 404) return { ok: false, status: 404 };
-      return { ok: true, json: async () => ({ workflow_runs: drill }) };
     }
     assert.fail(`unexpected path ${parsed.pathname}`);
   };
@@ -1448,10 +1444,12 @@ test("an unreadable migration file fails closed", async () => {
 });
 
 const upOk = { revision: { version_id: V1, commit: PREVIOUS } };
+const UP_ORIGIN = "https://serving.example";
+const UP_LIMIT = 16 * 1024;
 function target(overrides = {}, sql = { "1001_b": "SELECT 1;" }) {
   const { up = upOk, ...rest } = overrides;
   return checkRollbackTarget({
-    origin: "https://togetherweown.com",
+    origin: UP_ORIGIN,
     repository: "fixture/repo",
     targetSha: TARGET,
     token: "fixture-only",
@@ -1463,6 +1461,152 @@ function target(overrides = {}, sql = { "1001_b": "SELECT 1;" }) {
 
 test("rollback target is the version /up names, with its commit, when no migration breaks it", async () => {
   assert.deepEqual(await target(), { versionId: V1, commit: PREVIOUS, added: ["1001_b"] });
+});
+
+test("rollback /up preserves the exact healthy and deferred revision", async () => {
+  for (const [status, pending] of [
+    [200, 0],
+    [503, 1],
+  ]) {
+    const body = {
+      ...upOk,
+      status: pending ? "degraded" : "healthy",
+      db: "ok",
+      pending_migrations: pending,
+    };
+    const raw = JSON.stringify(body);
+    const stub = stubRepo({ target: [], previous: [] });
+    const result = await target({
+      fetchImpl: async (url, options) => {
+        if (String(url) !== `${UP_ORIGIN}/up`) return stub(url);
+        assert.equal(options.redirect, "manual");
+        assert.deepEqual(options.headers, { "cache-control": "no-cache" });
+        assert.ok(options.signal instanceof AbortSignal);
+        return new Response(raw.padEnd(UP_LIMIT), { status });
+      },
+    });
+    assert.deepEqual(result, { versionId: V1, commit: PREVIOUS, added: [] });
+  }
+});
+
+test("rollback /up refuses empty and malformed bodies without echoing input", async () => {
+  for (const [body, message] of [
+    [null, "Missing /up response body"],
+    ["", "Invalid /up JSON"],
+    ['{"revision": private-fixture-text}', "Invalid /up JSON"],
+  ]) {
+    await assert.rejects(
+      readLiveRevision({ origin: UP_ORIGIN, fetchImpl: async () => new Response(body) }),
+      { message },
+    );
+  }
+});
+
+test("rollback /up cancels a stalled stream when the request deadline expires", async (t) => {
+  const controller = new AbortController();
+  const timeout = new DOMException("Synthetic request deadline", "TimeoutError");
+  t.mock.method(AbortSignal, "timeout", (ms) => {
+    assert.equal(ms, 10_000);
+    return controller.signal;
+  });
+  let reads = 0;
+  let cancelled = false;
+  const body = new ReadableStream(
+    {
+      pull(stream) {
+        reads += 1;
+        if (reads === 1) stream.enqueue(Buffer.from(JSON.stringify(upOk)));
+        else controller.abort(timeout);
+      },
+      cancel() {
+        cancelled = true;
+        return Promise.reject(new Error("Synthetic disposal failure"));
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  await assert.rejects(
+    readLiveRevision({
+      origin: UP_ORIGIN,
+      fetchImpl: async (_url, { signal }) => {
+        assert.equal(signal, controller.signal);
+        return new Response(body);
+      },
+    }),
+    { name: "TimeoutError", message: timeout.message },
+  );
+  assert.equal(reads, 2);
+  assert.ok(cancelled);
+  assert.equal(body.locked, false);
+});
+
+test("rollback /up cancels oversized streams and refuses after the existing retries", async () => {
+  const raw = JSON.stringify(upOk);
+  const delays = [];
+  const streams = [];
+  let cancellations = 0;
+  await assert.rejects(
+    target({
+      fetchImpl: async (url) => {
+        assert.equal(String(url), `${UP_ORIGIN}/up`, "must refuse before checking migrations");
+        const chunks = [Buffer.from(raw.padEnd(UP_LIMIT)), Buffer.from(" ")];
+        const body = new ReadableStream(
+          {
+            pull(controller) {
+              if (chunks.length) controller.enqueue(chunks.shift());
+              else controller.close();
+            },
+            cancel() {
+              cancellations += 1;
+              return new Promise(() => {});
+            },
+          },
+          { highWaterMark: 0 },
+        );
+        streams.push(body);
+        return new Response(body);
+      },
+      sleep: async (ms) => delays.push(ms),
+    }),
+    /No valid rollback target: \/up did not report the live version ID and commit after 3 reads/,
+  );
+  assert.equal(streams.length, 3);
+  assert.equal(cancellations, 3);
+  assert.ok(streams.every((body) => !body.locked));
+  assert.deepEqual(delays, [2000, 2000]);
+});
+
+test("rollback /up CLI leaves no pin when every revision response is oversized", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "rollback-up-pin-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const output = join(dir, "out");
+  writeFileSync(output, "");
+  const result = spawnSync(
+    process.execPath,
+    ["--import", "./ci/test-fetch-stub.mjs", "ci/rollback-target.mjs", "--check-target"],
+    {
+      encoding: "utf8",
+      timeout: 10_000,
+      env: {
+        GITHUB_OUTPUT: output,
+        GITHUB_REPOSITORY: "fixture/repo",
+        DEPLOY_SHA: TARGET,
+        GITHUB_TOKEN: "fixture-only",
+        FETCH_STUB_JSON: JSON.stringify([
+          { match: "/up", status: 503, body: { ...upOk, padding: " ".repeat(UP_LIMIT) } },
+          {
+            match: "/contents/drizzle/meta/_journal.json",
+            body: { encoding: "base64", content: journal([]) },
+          },
+        ]),
+      },
+    },
+  );
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /No valid rollback target: \/up did not report.*after 3 reads/);
+  assert.equal(readFileSync(output, "utf8"), "");
 });
 
 test("no valid rollback target refuses promotion", async () => {
@@ -1495,23 +1639,89 @@ test("rollback target retries an unreadable /up before refusing", async () => {
 });
 
 const drillRun = (id, conclusion) => ({ id, conclusion, status: "completed" });
-function drill(runs) {
+function drill(body, status = 200) {
   return assertRollbackDrillGreen({
     repository: "fixture/repo",
     token: "fixture-only",
-    fetchImpl: stubRepo({ drill: runs }),
+    fetchImpl: async (url) => {
+      const endpoint = new URL(url);
+      assert.equal(endpoint.origin, "https://api.github.com");
+      assert.equal(
+        endpoint.pathname,
+        "/repos/fixture/repo/actions/workflows/staging-rollback-drill.yml/runs",
+      );
+      assert.deepEqual(Object.fromEntries(endpoint.searchParams), {
+        branch: "main",
+        status: "completed",
+        per_page: "20",
+      });
+      return {
+        ok: status === 200,
+        status,
+        json: async () => {
+          assert.equal(status, 200, "only a successful lookup reads the body");
+          return body;
+        },
+      };
+    },
   });
 }
 
-test("a red latest staging rollback drill holds promotion; none yet does not", async () => {
-  assert.equal(await drill(404), null);
-  assert.equal(await drill([]), null);
-  assert.equal(await drill([drillRun(2, "success"), drillRun(1, "failure")]), 2);
-  // Cancelled and skipped runs prove nothing either way.
-  assert.equal(await drill([drillRun(3, "cancelled"), drillRun(2, "success")]), 2);
+test("staging rollback drill lookup refuses malformed history", async () => {
+  for (const [label, body] of [
+    ["missing list", {}],
+    ["null list", { workflow_runs: null }],
+    ["object list", { workflow_runs: {} }],
+    ["null envelope", null],
+    ["array envelope", []],
+  ]) {
+    await assert.rejects(
+      drill(body),
+      /Malformed rollback drill response: expected workflow_runs array/,
+      label,
+    );
+  }
+  for (const [label, run] of [
+    ["null row", null],
+    ["missing ID", { conclusion: "success" }],
+    ["string ID", drillRun("3", "success")],
+    ["zero ID", drillRun(0, "success")],
+    ["negative ID", drillRun(-1, "success")],
+    ["fractional ID", drillRun(1.5, "success")],
+    ["unsafe ID", drillRun(Number.MAX_SAFE_INTEGER + 1, "success")],
+    ["cancelled row without ID", { conclusion: "cancelled" }],
+    ["skipped row without ID", { conclusion: "skipped" }],
+  ]) {
+    await assert.rejects(
+      drill({ workflow_runs: [drillRun(2, "success"), run] }),
+      /Malformed rollback drill response: invalid run ID/,
+      label,
+    );
+  }
+});
+
+test("staging rollback drill uses the latest decisive run and permits empty history", async () => {
+  assert.equal(await drill(null, 404), null);
+  await assert.rejects(drill(null, 503), /Rollback drill lookup failed \(HTTP 503\)/);
+  assert.equal(await drill({ workflow_runs: [] }), null);
+  assert.equal(
+    await drill({ workflow_runs: [drillRun(Number.MAX_SAFE_INTEGER, "success")] }),
+    Number.MAX_SAFE_INTEGER,
+  );
+  const cancelled = drillRun(3, "cancelled");
+  const skipped = drillRun(4, "skipped");
+  assert.equal(await drill({ workflow_runs: [cancelled, skipped] }), null);
+  assert.equal(
+    await drill({
+      workflow_runs: [skipped, drillRun(2, "success"), cancelled, drillRun(1, "failure")],
+    }),
+    2,
+  );
   for (const conclusion of ["failure", "timed_out", "action_required"]) {
     await assert.rejects(
-      drill([drillRun(1, "success"), drillRun(2, conclusion)]),
+      drill({
+        workflow_runs: [drillRun(1, "success"), skipped, drillRun(2, conclusion), cancelled],
+      }),
       new RegExp(`run 2\\) concluded ${conclusion}`),
     );
   }
