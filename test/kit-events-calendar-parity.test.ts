@@ -148,9 +148,18 @@ describe("Kit calendar island mount parity", () => {
       EVENTS_SEARCH_TESTID,
       EVENTS_LOADING_TESTID,
     ];
+    // Refresh reads the returned live regions and search fields at document scope.
     for (const testId of stableIds) {
-      expect(byTestId(nodes, testId)).toBeDefined();
+      const matches = document.filter((node) => attr(node, "data-testid") === testId);
+      expect(matches, testId).toHaveLength(1);
+      expect(nodes).toContain(matches[0]);
     }
+    const gameFields = document.filter(
+      (node) => node.tagName === "select" && attr(node, "name") === "game",
+    );
+    expect(gameFields).toHaveLength(1);
+    expect(nodes).toContain(gameFields[0]);
+    expect(inSwapZone(gameFields[0]!)).toBe(false);
     const stableNodes = nodes.filter(
       (node) =>
         stableIds.some((id) => attr(node, "data-testid") === id) ||
