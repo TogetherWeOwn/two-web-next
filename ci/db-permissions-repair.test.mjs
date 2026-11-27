@@ -472,6 +472,96 @@ test("serving isolation refuses duplicate ACL entries in a digest-matched plan",
   assert.equal(fetchImpl.mock.callCount(), 0);
 });
 
+test("executor rolls back a grant or revoke when the post-write membership query fails", async () => {
+  const hash = (value) => createHash("sha256").update(value).digest("hex");
+  const executor = "repair_executor";
+  const provisioner = "repair_provisioner";
+  const identity = { database: "postgres", authenticated: provisioner, effective: provisioner };
+  const refusal = new Error("Synthetic post-write membership query failure");
+
+  for (const [operation, wanted, write] of [
+    [
+      "provision",
+      true,
+      "grant two_web_migrate to ? with admin false, inherit true, set true granted by current_user",
+    ],
+    ["revoke", false, "revoke two_web_migrate from ? granted by current_user restrict"],
+  ]) {
+    const plan = JSON.stringify({
+      operation,
+      executor,
+      identity: hash(`postgres\0${provisioner}`),
+    });
+    const env = {
+      PRODUCTION_DB_EXECUTOR_PLAN: plan,
+      PRODUCTION_DB_EXECUTOR_PLAN_SHA256: hash(plan),
+      PRODUCTION_DB_EXECUTOR_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:synthetic@${PLANETSCALE_PRODUCTION_HOST}/postgres?sslmode=verify-full`,
+    };
+
+    for (const failPostWrite of [true, false]) {
+      const before = !wanted;
+      let committed = before;
+      const membershipReads = [];
+      const lifecycle = [];
+      const attempt = runExecutorAuthority(operation, env, () => ({
+        async begin(_isolation, run) {
+          let pending = committed;
+          // Publish changes only when the transaction callback resolves.
+          await run((strings, ...values) => {
+            if (typeof strings === "string") {
+              assert.equal(strings, executor);
+              return strings;
+            }
+            const sql = strings.join("?").trim().replace(/\s+/g, " ");
+            if (sql.startsWith("set local ")) return [];
+            if (sql.startsWith("select pg_catalog.current_database()")) return [identity];
+            if (sql.startsWith("select pg_try_advisory_xact_lock(")) return [{ acquired: true }];
+            assert.deepEqual(values, [executor]);
+            if (sql === write) {
+              // postgres.js executes the write when its query is awaited.
+              return {
+                then(resolve) {
+                  lifecycle.push("write");
+                  pending = wanted;
+                  resolve([]);
+                },
+              };
+            }
+            assert.match(sql, /^select p\.oid::text as provisioner,/);
+            membershipReads.push(pending);
+            if (failPostWrite && pending === wanted) return Promise.reject(refusal);
+            return [
+              {
+                authorized: true,
+                provisioner: "123",
+                member: pending,
+                inherits: pending,
+                can_set: pending,
+                edges: pending ? [["123", false, true, true]] : [],
+              },
+            ];
+          });
+          committed = pending;
+          lifecycle.push("commit");
+        },
+        async end(options) {
+          assert.deepEqual(options, { timeout: 5 });
+          lifecycle.push("close");
+        },
+      }));
+
+      if (failPostWrite) await assert.rejects(attempt, (error) => error === refusal);
+      else await attempt;
+      assert.deepEqual(membershipReads, [before, wanted]);
+      assert.equal(committed, failPostWrite ? before : wanted);
+      assert.deepEqual(
+        lifecycle,
+        failPostWrite ? ["write", "close"] : ["write", "commit", "close"],
+      );
+    }
+  }
+});
+
 test("executor dispatch scopes its credential and suppresses subprocess output", () => {
   const workflow = parse(read("../.github/workflows/db-repair-executor.yml"));
   const { preflight, authority } = workflow.jobs;
