@@ -23,6 +23,7 @@ import {
   documentElements,
   element,
   elements,
+  fallbackText,
   parseRenderedPage,
   renderedAttribute,
   responseValues,
@@ -47,14 +48,11 @@ function renderRefusal(props: RsvpRefusalModel) {
 
 function guestChrome(html: string) {
   const page = parseRenderedPage(html, { scriptingEnabled: false });
-  const fallbackCopy = documentElements(page, "noscript").map((node) =>
-    node.childNodes.map(text).join(""),
-  );
   return {
     accountNav: documentElements(page, "nav").some(
       (nav) => renderedAttribute(nav, "aria-label") === "Account",
     ),
-    guestCaption: [text(page), ...responseValues(page, html), ...fallbackCopy].some((value) =>
+    guestCaption: [text(page), fallbackText(page), ...responseValues(page, html)].some((value) =>
       value.includes("Welcome, guest"),
     ),
     joinLink: documentElements(page, "a").some((link) =>
@@ -181,5 +179,10 @@ describe("Kit RSVP refusal presentation", () => {
     const html = `<body><noscript><nav aria-label="Account">Welcome, <!---->guest
       <a href="/join/discord">Join</a></nav></noscript></body>`;
     expect(guestChrome(html)).toEqual({ accountNav: true, guestCaption: true, joinLink: true });
+  });
+
+  it("detects a standalone no-script guest caption split across nodes", () => {
+    const html = "<body><noscript>Welcome, <strong>guest</strong></noscript></body>";
+    expect(guestChrome(html)).toEqual({ accountNav: false, guestCaption: true, joinLink: false });
   });
 });

@@ -23,6 +23,7 @@ import {
   documentElements,
   element,
   elements,
+  fallbackText,
   parseRenderedPage,
   renderedAttribute,
   responseValues,
@@ -245,7 +246,8 @@ afterAll(() => {
 
 describe("Kit member board render", () => {
   it("serves member chrome (Signed in, viewer name, Sign out), never guest chrome", () => {
-    const page = parseRenderedPage(renderPage(baseData()));
+    const html = renderPage(baseData());
+    const page = parseRenderedPage(html);
     const account = element(page, "nav", { "aria-label": "Account" });
     const signOut = elements(account, "form", { method: "post", action: "/logout" }).find(
       (form) => elements(form, "span", { class: "account-caption" }).length > 0,
@@ -254,8 +256,13 @@ describe("Kit member board render", () => {
     expect(text(element(signOut, "span", { class: "account-caption" }))).toBe("Signed in");
     expect(text(element(signOut, "span", { class: "who" }))).toBe("Vic");
     expect(text(element(signOut, "button", { type: "submit" }))).toBe("Sign out");
-    expect(text(page)).not.toMatch(/Welcome, guest|Sign in with Discord/);
-    expect(elements(account, "a", { "aria-label": "Sign in with Discord" })).toEqual([]);
+    const guestCopy = /Welcome, guest|Sign in with Discord/;
+    expect(text(page)).not.toMatch(guestCopy);
+    const noScriptPage = parseRenderedPage(html, { scriptingEnabled: false });
+    expect(fallbackText(noScriptPage)).not.toMatch(guestCopy);
+    expect(
+      documentElements(noScriptPage, "a").map((link) => renderedAttribute(link, "aria-label")),
+    ).not.toContain("Sign in with Discord");
     // The viewer's own row is marked from the server-side isViewer flag.
     const viewerRow = element(page, "tr", { "aria-current": "true" });
     expect(text(element(viewerRow, "th", { scope: "row" }))).toBe("Vic");

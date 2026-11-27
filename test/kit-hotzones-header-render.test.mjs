@@ -12,6 +12,7 @@ import {
   documentElements,
   element,
   elements,
+  fallbackText,
   parseRenderedPage,
   renderedAttribute,
   text,
@@ -128,23 +129,35 @@ for (const renderer of ["Hono", "Kit"]) {
       expect(text(discord)).toBe("Open Discord");
       expect(elements(header, "a", { href: "/discord" })).toHaveLength(1);
       expect(text(header)).not.toContain("Sign in with Discord");
+      const noScriptHeader = element(
+        parseRenderedPage(html, { scriptingEnabled: false }),
+        "header",
+      );
+      expect(fallbackText(noScriptHeader)).not.toContain("Sign in with Discord");
       expect(
-        elements(header, "a").map((link) => renderedAttribute(link, "href")),
+        documentElements(noScriptHeader, "a").map((link) => renderedAttribute(link, "href")),
       ).not.toContainEqual(expect.stringContaining("/join/discord"));
     });
   });
 }
 
 it("queries visible header actions across hydration comments", () => {
-  const page = parseRenderedPage(`
+  const html = `
     <header>
       <div hidden><a href="/discord">Hidden action</a></div>
       <template><a href="/discord">Template action</a></template>
       <!-- <a href="/discord">Comment action</a> -->
+      <noscript><a href="/join/discord">Sign in with <strong>Discord</strong></a></noscript>
       <a href='/discord' class='action'><!--[-->Open Dis<!---->cord<!--]--></a>
     </header>
-  `);
+  `;
+  const page = parseRenderedPage(html);
   const header = element(page, "header");
   expect(text(element(header, "a", { href: "/discord" }))).toBe("Open Discord");
   expect(text(header)).toBe("Open Discord");
+  const fallback = element(parseRenderedPage(html, { scriptingEnabled: false }), "header");
+  expect(fallbackText(fallback)).toBe("Sign in with Discord");
+  expect(documentElements(fallback, "a").map((link) => renderedAttribute(link, "href"))).toContain(
+    "/join/discord",
+  );
 });

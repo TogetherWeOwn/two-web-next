@@ -23,10 +23,12 @@ export function element(root, tag, attributes = {}) {
   return matches[0];
 }
 
+function normalizeText(value) {
+  return value.replace(/[ \t\n\r\f]+/g, " ").trim();
+}
+
 export function text(node) {
-  return renderedText(node)
-    .replace(/[ \t\n\r\f]+/g, " ")
-    .trim();
+  return normalizeText(renderedText(node));
 }
 
 export function rowCells(row) {
@@ -46,6 +48,14 @@ function* documentNodes(node) {
 
 export function documentElements(root, tag) {
   return [...documentNodes(root)].filter((node) => node.tagName === tag);
+}
+
+// The root must come from a parse with scripting disabled.
+export function fallbackText(root) {
+  const segments = documentElements(root, "noscript").map((node) =>
+    node.childNodes.map(renderedText).join(""),
+  );
+  return normalizeText(segments.join(" "));
 }
 
 export function childText(element) {
