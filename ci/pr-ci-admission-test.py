@@ -3,6 +3,7 @@ from copy import deepcopy
 from pathlib import Path
 from textwrap import dedent
 from unittest import TestCase, main
+from unittest.mock import patch
 
 yaml = Path(".github/workflows/pr-ci-admission.yml").read_text()
 scope = {"__name__": "admission_fixture"}
@@ -10,9 +11,35 @@ exec(dedent(yaml.split("<<'PYTHON'\n")[1].rsplit("          PYTHON", 1)[0]), sco
 
 
 class AdmissionTest(TestCase):
-    def test_current_jobs_and_refusals(self):
+    def test_queued_admission_allows_main_to_advance(self):
         head = {"sha": "a" * 40, "ref": "topic", "repo": {"id": 1}}
-        pr = {"number": 4, "head": head, "base": dict(head, sha="b" * 40, ref="main")}
+        event = {"number": 4, "head": head, "base": {"sha": "b" * 40, "ref": "main", "repo": {"id": 2}},
+                 "state": "open", "draft": False}
+        live = deepcopy(event)
+        live["base"]["sha"] = "c" * 40
+
+        self.assertEqual(scope["current_identity"](live), scope["current_identity"](event))
+        self.assertNotEqual(live["base"]["sha"], event["base"]["sha"])
+        scope["verify_current"](lambda path: live, event)
+
+    def test_current_binding_rejects_mismatched_head_or_base_identity(self):
+        head = {"sha": "a" * 40, "ref": "topic", "repo": {"id": 1}}
+        event = {"number": 4, "head": head, "base": {"sha": "b" * 40, "ref": "main", "repo": {"id": 2}},
+                 "state": "open", "draft": False}
+
+        for field, value in (("head", {**head, "sha": "c" * 40}),
+                             ("base", {**event["base"], "ref": "release"}),
+                             ("base", {**event["base"], "repo": {"id": 3}})):
+            with self.subTest(field=field, value=value):
+                candidate = deepcopy(event)
+                candidate[field] = value
+                self.assertNotEqual(scope["current_identity"](candidate), scope["current_identity"](event))
+                with self.assertRaisesRegex(ValueError, "head, base, or readiness changed"):
+                    scope["verify_current"](lambda path, candidate=candidate: candidate, event)
+
+    def actions_fixture(self):
+        head = {"sha": "a" * 40, "ref": "topic", "repo": {"id": 1}}
+        pr = {"number": 4, "head": head, "base": {"sha": "b" * 40, "ref": "main", "repo": {"id": 2}}}
         runs, jobs = [], {}
 
         def add(workflow, *names):
@@ -33,6 +60,47 @@ class AdmissionTest(TestCase):
             rows = jobs[int(path.split("/")[2])]
             return {"total_count": len(rows), "jobs": rows}
 
+        return pr, runs, add, api
+
+    def test_evidence_allows_main_to_advance_after_runs(self):
+        pr, _, add, api = self.actions_fixture()
+        add("pr-gates", "pr-lint", "gitleaks")
+        add("pr-size", "pr-size-gate / gate")
+
+        pr["base"]["sha"] = "c" * 40
+        self.assertEqual(scope["evidence"](api, pr), {
+            "pr-lint": (1, 1, 10),
+            "gitleaks": (1, 1, 11),
+            "pr-size-gate / gate": (2, 1, 20),
+        })
+
+    def test_evidence_rejects_mismatched_run_association(self):
+        pr, runs, add, api = self.actions_fixture()
+        add("pr-gates", "pr-lint", "gitleaks")
+        add("pr-size", "pr-size-gate / gate")
+        pr["base"]["sha"] = "c" * 40
+
+        for run in runs:
+            association = run["pull_requests"][0]
+            for path, value in (
+                (("number",), 5),
+                (("head", "sha"), "d" * 40),
+                (("head", "ref"), "other-topic"),
+                (("head", "repo", "id"), 3),
+                (("base", "ref"), "release"),
+                (("base", "repo", "id"), 4),
+            ):
+                with self.subTest(workflow=run["path"], field=".".join(path)):
+                    candidate = deepcopy(association)
+                    field = candidate
+                    for key in path[:-1]:
+                        field = field[key]
+                    field[path[-1]] = value
+                    with patch.dict(run, pull_requests=[candidate]):
+                        self.assertIsNone(scope["evidence"](api, pr))
+
+    def test_current_jobs_and_refusals(self):
+        pr, runs, add, api = self.actions_fixture()
         evidence = lambda: scope["evidence"](api, pr)
         source = add("pr-gates", "pr-lint", "gitleaks")
         size = add("pr-size", "pr-size-gate / gate")[0]
@@ -57,7 +125,6 @@ class AdmissionTest(TestCase):
         self.assertIsNone(evidence())
         rerun["status"] = "completed"
         self.assertEqual(evidence()["gitleaks"], (1, 2, 12))
-        self.assertIsNone(scope["evidence"](api, dict(pr, base=dict(pr["base"], sha="c" * 40))))
         for job, field, error in [(size, "conclusion", "concluded failure"), (rerun, "head_sha", "identity mismatch")]:
             with self.subTest(field=field), self.assertRaisesRegex(ValueError, error):
                 job[field], before = "failure", job[field]

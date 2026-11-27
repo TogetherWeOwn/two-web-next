@@ -144,13 +144,13 @@ export default {
   return entry;
 }
 
-function renewedModerator(headers) {
+export function renewedModerator(headers) {
   const cookie = headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`));
   assert.ok(cookie, "the response refreshes the shared moderator bearer");
   return cookie.split(";", 1)[0];
 }
 
-async function session(sql, userId, moderator, secret = FIXTURE_SECRETS.SESSION_SECRET) {
+export async function session(sql, userId, moderator, secret = FIXTURE_SECRETS.SESSION_SECRET) {
   const token = `two_${randomBytes(32).toString("base64url")}`;
   const hash = createHash("sha256").update(token).digest("hex");
   await sql`
@@ -166,7 +166,7 @@ async function session(sql, userId, moderator, secret = FIXTURE_SECRETS.SESSION_
   return cookie.split(";", 1)[0];
 }
 
-async function visit(
+export async function visit(
   worker,
   path,
   status,
@@ -1190,7 +1190,11 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
       operatorAuth,
     });
     form.headers.cookie = moderator;
-    await visit(kit, `${featuredPath}/delete`, 303, { ...form, body: new URLSearchParams() });
+    await visit(kit, `${featuredPath}/delete`, 303, {
+      ...form,
+      owned: false,
+      body: new URLSearchParams(),
+    });
     const [{ count: events }] =
       await sql`select count(*)::int from events where created_by = ${moderatorId}`;
     const [{ count: writes }] =

@@ -22,6 +22,7 @@ const A = "a".repeat(40);
 const B = "b".repeat(40);
 const C = "c".repeat(40);
 const repository = "example/site";
+const provenanceScript = fileURLToPath(new URL("./staging-provenance.mjs", import.meta.url));
 const deployedAt = "2026-11-01T10:00:00.000Z";
 const now = Date.parse("2026-11-01T11:00:00.000Z");
 const run = {
@@ -214,7 +215,7 @@ test("manual qualification uses the exact main dispatch revision, not a deploy t
   );
 });
 
-test("a smoke skip is proof only on the exact successful deploy attempt", async () => {
+function deploySmokeFixture() {
   const trigger = {
     ...run,
     id: 55,
@@ -237,6 +238,11 @@ test("a smoke skip is proof only on the exact successful deploy attempt", async 
     conclusion: "success",
     steps: [proof],
   };
+  return { trigger, proof, job };
+}
+
+test("a smoke skip is proof only on the exact successful deploy attempt", async () => {
+  const { trigger, proof, job } = deploySmokeFixture();
   const check = (changes = {}) =>
     deploySmokeWasScoped(trigger, repository, async (url, options) => {
       assert.equal(new URL(url).pathname, "/repos/example/site/actions/runs/55/attempts/2/jobs");
@@ -247,14 +253,37 @@ test("a smoke skip is proof only on the exact successful deploy attempt", async 
 
   assert.equal(await check(), true);
   for (const changes of [
+    { name: undefined },
     { run_id: 56 },
     { run_attempt: 1 },
     { head_sha: A },
     { status: "in_progress" },
+    { conclusion: "failure" },
+    { steps: undefined },
     { steps: [] },
     { steps: [proof, proof] },
   ]) {
-    assert.equal(await check(changes), false);
+    assert.equal(await check(changes), false, "invalid deploy job metadata must run full E2E");
+  }
+  for (const conclusion of ["skipped", "failure"]) {
+    assert.equal(
+      await check({ steps: [{ ...proof, conclusion }] }),
+      false,
+      `a ${conclusion} smoke marker must run full E2E`,
+    );
+  }
+  for (const [scenario, payload] of [
+    ["missing job count", { jobs: [job] }],
+    ["missing job", { total_count: 0, jobs: [] }],
+    ["multiple jobs reported", { total_count: 2, jobs: [job] }],
+    ["multiple jobs returned", { total_count: 1, jobs: [job, job] }],
+    ["malformed jobs collection", { total_count: 1, jobs: job }],
+  ]) {
+    assert.equal(
+      await deploySmokeWasScoped(trigger, repository, async () => Response.json(payload)),
+      false,
+      `${scenario} must run full E2E`,
+    );
   }
   assert.equal(
     await deploySmokeWasScoped(
@@ -263,6 +292,19 @@ test("a smoke skip is proof only on the exact successful deploy attempt", async 
       async () => new Response(null, { status: 403 }),
     ),
     false,
+    "an HTTP refusal must run full E2E",
+  );
+  assert.equal(
+    await deploySmokeWasScoped(trigger, repository, async () => new Response("{")),
+    false,
+    "invalid JSON must run full E2E",
+  );
+  assert.equal(
+    await deploySmokeWasScoped(trigger, repository, async () => {
+      throw new TypeError("synthetic fetch refusal");
+    }),
+    false,
+    "a rejected metadata request must run full E2E",
   );
 });
 
@@ -306,15 +348,7 @@ test("identity evidence files retain only validated SHA and timestamp, never res
     for (const phase of ["before", "after"]) {
       const output = execFileSync(
         process.execPath,
-        [
-          "--import",
-          mock,
-          new URL("./staging-provenance.mjs", import.meta.url).pathname,
-          "observe",
-          A,
-          phase,
-          "staging-identity/critical",
-        ],
+        ["--import", mock, provenanceScript, "observe", A, phase, "staging-identity/critical"],
         { cwd: directory, encoding: "utf8", timeout: 10_000 },
       );
       assert.ok(!output.includes(canary), "response data must not reach diagnostics");
@@ -550,6 +584,13 @@ test("scope never skips candidate helpers using a later revision's import invent
     const script = block[2].replace(/^          /gm, "");
     assert.doesNotMatch(script, /\$\{\{/);
     assert.match(script, /\[ "\$EVENT_NAME" = workflow_dispatch \]/);
+    const readOutput = (path) =>
+      Object.fromEntries(
+        readFileSync(join(directory, path), "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => line.split("=")),
+      );
     const evaluate = (head, trusted, event = "workflow_run", scope = "true", command = script) => {
       write("output", "");
       execFileSync("bash", ["-c", command], {
@@ -567,12 +608,7 @@ test("scope never skips candidate helpers using a later revision's import invent
         },
         timeout: 10_000,
       });
-      return Object.fromEntries(
-        readFileSync(join(directory, "output"), "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => line.split("=")),
-      );
+      return readOutput("output");
     };
     // C removed A's import. C's inventory alone would wrongly skip A's helper change.
     assert.equal(evaluate(deployed, workflowSha).skip_e2e, "false");
@@ -587,6 +623,43 @@ test("scope never skips candidate helpers using a later revision's import invent
     assert.equal(evaluate(prose, prose, "workflow_run", "false").skip_e2e, "false");
     assert.equal(evaluate(prose, prose, "workflow_dispatch").skip_e2e, "false");
     assert.equal(evaluate(base, base).skip_e2e, "false");
+
+    const { trigger, job } = deploySmokeFixture();
+    write(
+      "event.json",
+      JSON.stringify({ workflow_run: { ...trigger, display_title: `deploy ${prose}` } }),
+    );
+    write(
+      "fetch.mjs",
+      'import { readFileSync } from "node:fs";\nconst text = readFileSync(new URL("./jobs.json", import.meta.url), "utf8");\nglobalThis.fetch = async () => new Response(text);\n',
+    );
+    for (const [steps, expected] of [
+      [job.steps, "true"],
+      [[], "false"],
+    ]) {
+      write("jobs.json", JSON.stringify({ total_count: 1, jobs: [{ ...job, steps }] }));
+      write("candidate-output", "");
+      execFileSync(
+        process.execPath,
+        ["--import", join(directory, "fetch.mjs"), provenanceScript, "candidate"],
+        {
+          cwd: directory,
+          env: {
+            GITHUB_EVENT_NAME: "workflow_run",
+            GITHUB_EVENT_PATH: join(directory, "event.json"),
+            GITHUB_OUTPUT: join(directory, "candidate-output"),
+            GITHUB_REPOSITORY: repository,
+            GITHUB_SHA: prose,
+          },
+          timeout: 10_000,
+        },
+      );
+      const result = readOutput("candidate-output");
+      assert.deepEqual(result, { sha: prose, deploy_smoke_scoped: expected });
+      const scope = evaluate(result.sha, prose, "workflow_run", result.deploy_smoke_scoped);
+      assert.equal(scope.docs_only, expected);
+      assert.equal(scope.skip_e2e, expected);
+    }
 
     const deploy = readFileSync(
       new URL("../.github/workflows/deploy.yml", import.meta.url),
@@ -792,4 +865,122 @@ test("staging reservation rejects malformed records and overlong lifetimes even 
     assert.equal(canAdmitStagingOperation(record, e2e), false);
     assert.equal(canAdmitStagingOperation(record, { ...mutation, nowMs: expiresAtMs + 2 }), false);
   }
+});
+test("exact-attempt jobs streaming preserves proof and falls back to full smoke on size or read failure", async (t) => {
+  const trigger = {
+    ...run,
+    id: 55,
+    run_attempt: 2,
+    status: "completed",
+    event: "workflow_run",
+    path: ".github/workflows/deploy.yml",
+  };
+  const payload = JSON.stringify({
+    total_count: 1,
+    jobs: [
+      {
+        name: "deploy-staging",
+        run_id: trigger.id,
+        run_attempt: trigger.run_attempt,
+        head_sha: trigger.head_sha,
+        status: "completed",
+        conclusion: "success",
+        steps: [
+          {
+            name: "Record adjacent staging smoke skip",
+            status: "completed",
+            conclusion: "success",
+          },
+        ],
+      },
+    ],
+  });
+  const encoder = new TextEncoder();
+  const budget = 64 * 1024;
+  const atLimit = encoder.encode(payload.padEnd(budget));
+  const check = (body) => deploySmokeWasScoped(trigger, repository, async () => new Response(body));
+  const workflow = readFileSync(
+    new URL("../.github/workflows/e2e-staging.yml", import.meta.url),
+    "utf8",
+  );
+  const scope = workflow.match(
+    /DEPLOY_SMOKE_SCOPED: [^\n]+\n        run: \|\n((?: {10}[^\n]*\n)+)/,
+  );
+  assert.ok(scope);
+  const directory = mkdtempSync(join(tmpdir(), "staging-jobs-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const output = join(directory, "scope-output");
+  const assertFullSmoke = (scoped) => {
+    assert.equal(scoped, false);
+    writeFileSync(output, "");
+    execFileSync("bash", ["-c", scope[1]], {
+      cwd: directory,
+      env: {
+        EVENT_NAME: "workflow_run",
+        HEAD_SHA: B,
+        WORKFLOW_SHA: B,
+        DEPLOY_SMOKE_SCOPED: String(scoped),
+        GITHUB_OUTPUT: output,
+      },
+      timeout: 10_000,
+    });
+    assert.equal(readFileSync(output, "utf8"), "docs_only=false\nskip_e2e=false\n");
+  };
+
+  const bounded = new ReadableStream({
+    start(controller) {
+      controller.enqueue(atLimit.subarray(0, 64));
+      controller.enqueue(atLimit.subarray(64));
+      controller.close();
+    },
+  });
+  assert.equal(await check(bounded), true);
+
+  for (const cancelTransport of [
+    () => new Promise(() => {}),
+    () => Promise.reject(new Error("synthetic cancellation refusal")),
+  ]) {
+    let pulls = 0;
+    let cancelled = false;
+    const oversized = new ReadableStream(
+      {
+        pull(controller) {
+          pulls++;
+          if (pulls === 1) controller.enqueue(atLimit);
+          else if (pulls === 2) controller.enqueue(encoder.encode(" "));
+          else controller.close();
+        },
+        cancel() {
+          cancelled = true;
+          return cancelTransport();
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    // The synthetic stream runs in microtasks. A pending verdict at the next
+    // event-loop turn means the reader waited for the stalled cancellation.
+    const overflowVerdict = await Promise.race([
+      check(oversized),
+      new Promise((resolve) => setImmediate(() => resolve("cancellation stalled the verdict"))),
+    ]);
+    assertFullSmoke(overflowVerdict);
+    assert.equal(pulls, 2);
+    assert.equal(cancelled, true);
+    assert.equal(oversized.locked, false);
+  }
+
+  const interrupted = new ReadableStream(
+    {
+      start(controller) {
+        controller.enqueue(encoder.encode(payload));
+      },
+      pull(controller) {
+        controller.error(new Error("synthetic interruption after proof bytes"));
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  assertFullSmoke(await check(interrupted));
+  assert.equal(interrupted.locked, false);
+  assertFullSmoke(await check(new Uint8Array()));
 });

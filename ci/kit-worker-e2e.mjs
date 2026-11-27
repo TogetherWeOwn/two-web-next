@@ -4,7 +4,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { createServer } from "node:net";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -13,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 import { STAGING_STATIC_DOCUMENT_READY } from "../src/kit-staging-static.ts";
 import { prepareAdminDuplicateProbe } from "./fixtures/kit-admin-duplicate.mjs";
+import { assertAdminEventRosterParity } from "./fixtures/kit-admin-event-roster.mjs";
 import {
   assertFeaturedUnpublishParity,
   assertInstalledJoinAttemptDetail,
@@ -28,8 +28,10 @@ import {
 } from "./fixtures/kit-admin-rsvp-controls.mjs";
 import { assertEventReadsParity } from "./fixtures/kit-event-reads-parity.mjs";
 import { assertEventCreateFormParity } from "./fixtures/kit-event-create-form-parity.mjs";
+import { assertFeaturedDeleteParity } from "./fixtures/kit-featured-delete-parity.mjs";
 import { assertResponseContracts } from "./fixtures/kit-response-contracts.mjs";
 import { assertStaticFeedParity } from "./fixtures/kit-static-feed-parity.mjs";
+import { startLoopbackWorker, tail } from "./kit-worker-loopback.mjs";
 import { expectedMarkerFor, kitHomeHeadingText } from "./kit-parity-gates.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
 import { FIXTURE_SECRETS } from "./parity/fixture.mjs";
@@ -65,62 +67,12 @@ function requireDisposableDatabase(value) {
   }
 }
 
-function tail(value, limit = 4000) {
-  return value.length > limit ? `…${value.slice(-limit)}` : value;
-}
-
-function listen(child, origin, getLog, timeoutMs = 60_000) {
-  const started = Date.now();
-  let lastStatus = "no response";
-  return new Promise((resolveReady, reject) => {
-    const attempt = async () => {
-      if (child.exitCode !== null) {
-        reject(
-          new Error(
-            `Wrangler dev exited before ready (exit ${child.exitCode}). Worker output:\n${tail(getLog())}`,
-          ),
-        );
-        return;
-      }
-      try {
-        const response = await fetch(`${origin}/favicon.ico`, {
-          redirect: "manual",
-          signal: AbortSignal.timeout(1_000),
-        });
-        lastStatus = `HTTP ${response.status}`;
-        await response.body?.cancel();
-        if (response.ok) {
-          resolveReady();
-          return;
-        }
-      } catch {
-        // Wrangler has not bound its local listener yet.
-      }
-      if (Date.now() - started >= timeoutMs) {
-        reject(
-          new Error(
-            `Timed out waiting for ${origin}/favicon.ico (${lastStatus}). Worker output:\n${tail(getLog())}`,
-          ),
-        );
-        return;
-      }
-      setTimeout(attempt, 250);
-    };
-    void attempt();
-  });
-}
-
-async function unusedPort() {
-  const server = createServer();
-  await new Promise((resolveListen, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolveListen);
-  });
-  const { port } = server.address();
-  await new Promise((resolveClose, reject) =>
-    server.close((error) => (error ? reject(error) : resolveClose())),
-  );
-  return port;
+async function listen(child, origin, getLog) {
+  const { readiness } = workers.find((worker) => worker.child === child);
+  const failure = await readiness;
+  if (failure) throw failure.error;
+  if (child.exitCode === null && child.signalCode === null) return;
+  throw new Error(`Wrangler exited after readiness at ${origin}:\n${tail(getLog())}`);
 }
 
 requireDisposableDatabase(databaseUrl);
@@ -138,13 +90,34 @@ const scratch = await mkdtemp(
 );
 const wrangler = join(web, "node_modules/.bin/wrangler");
 const workers = [];
+const starting = new Set();
+const startup = new AbortController();
 
 // Start one loopback Worker. The generated Kit Worker and the direct Hono
 // Worker (src/worker.ts, the same app Kit's catch-all forwards to) share the
 // fixture database and vars within each pair.
-async function startWorker(name, main, assetsDirectory, sessionSecret, vars, liveHub = false) {
-  const port = await unusedPort();
-  const origin = `http://127.0.0.1:${port}`;
+function startWorker(name, main, assetsDirectory, sessionSecret, vars, liveHub = false) {
+  const bound = startLoopbackWorker(
+    name,
+    (port, origin) =>
+      launchWorker(name, main, assetsDirectory, sessionSecret, vars, liveHub, port, origin),
+    workers,
+    { signal: startup.signal },
+  ).finally(() => starting.delete(bound));
+  starting.add(bound);
+  return bound;
+}
+
+async function launchWorker(
+  name,
+  main,
+  assetsDirectory,
+  sessionSecret,
+  vars,
+  liveHub,
+  port,
+  origin,
+) {
   const config = join(scratch, `${name}.wrangler.jsonc`);
   const configBody = {
     name: `two-web-${name}-ci-fixture`,
@@ -174,8 +147,9 @@ async function startWorker(name, main, assetsDirectory, sessionSecret, vars, liv
     },
   };
   await writeFile(config, JSON.stringify(configBody));
+  startup.signal.throwIfAborted();
   if (args.length) console.log(`Launching loopback ${name} Worker`);
-  const child = spawn(
+  return spawn(
     wrangler,
     [
       "dev",
@@ -201,26 +175,9 @@ async function startWorker(name, main, assetsDirectory, sessionSecret, vars, liv
         CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: "false",
         CLOUDFLARE_INCLUDE_PROCESS_ENV: "false",
       },
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
     },
   );
-  const worker = { name, child, origin, log: "", stopped: false };
-  worker.closed = new Promise((done) => {
-    child.once("close", () => {
-      worker.stopped = true;
-      done();
-    });
-  });
-  workers.push(worker);
-  child.on("error", (error) => {
-    worker.log += `\n${error.message}`;
-  });
-  for (const stream of [child.stdout, child.stderr]) {
-    stream?.on("data", (data) => {
-      worker.log += data.toString();
-    });
-  }
-  return worker;
 }
 
 async function stopWorker(worker) {
@@ -553,7 +510,7 @@ export default agentEventsFixtureWorker(inner, ${JSON.stringify(agentProbePath)}
       },
     });
     const { assertKitSourceEvidence } = await import("./fixtures/kit-source-evidence.mjs");
-    const evidenceWorkers = [];
+    const firstEvidenceWorker = workers.length;
     try {
       await assertKitSourceEvidence({
         worker,
@@ -568,12 +525,12 @@ export default agentEventsFixtureWorker(inner, ${JSON.stringify(agentProbePath)}
             FIXTURE_SECRETS.SESSION_SECRET,
             vars,
           );
-          evidenceWorkers.push(instance);
           await listen(instance.child, instance.origin, () => instance.log);
           return instance;
         },
       });
     } finally {
+      const evidenceWorkers = workers.slice(firstEvidenceWorker);
       await Promise.all(evidenceWorkers.map(stopWorker));
       assert.ok(
         evidenceWorkers.every(({ stopped }) => stopped),
@@ -1035,11 +992,12 @@ export default {
     const entry = join(scratch, "kit-admin.mjs");
     const vars = await prepareAdminFixture(worker, entry);
     const publishEntry = await prepareAdminPublishFixture(entry, join(scratch, "kit-publish.mjs"));
-    const admin = await startAdminProbe("kit-admin", publishEntry, assets, vars);
-    const nativeCreate = await startWorker("kit-admin-native-create", entry, assets, secret, {
+    const adminStart = startAdminProbe("kit-admin", publishEntry, assets, vars);
+    const createStart = startWorker("kit-admin-native-create", entry, assets, secret, {
       ...vars,
       KIT_PARITY_FIXTURE_ADMIN_EVENT_CREATE_REDIRECT: "true",
     });
+    const [admin, nativeCreate] = await Promise.all([adminStart, createStart]);
     await Promise.all(
       [admin, nativeCreate].map((instance) =>
         listen(instance.child, instance.origin, () => instance.log),
@@ -1051,6 +1009,7 @@ export default {
       hono: honoWithSession,
       databaseUrl,
     });
+    await assertAdminEventRosterParity({ kit: admin, fallback: kitWithSession, databaseUrl });
     await assertKitAdminServing({
       kit: admin,
       nativeCreate,
@@ -1058,6 +1017,12 @@ export default {
       hono: honoWithSession,
       databaseUrl,
     });
+    const deleteFixture = await startWorker("kit-featured-delete", worker, assets, secret, {
+      KIT_ROUTE_ADMIN: "true",
+      KIT_PARITY_FIXTURE_ADMIN_FEATURED_DELETE: "true",
+    });
+    await listen(deleteFixture.child, deleteFixture.origin, () => deleteFixture.log);
+    await assertFeaturedDeleteParity({ kit: deleteFixture, off: admin, databaseUrl });
 
     await assertInstalledJoinAttemptDetail({
       worker,
@@ -1459,6 +1424,9 @@ try {
   failed = true;
   throw error;
 } finally {
+  // A parallel startup may still be preparing or retrying after its sibling fails.
+  startup.abort();
+  await Promise.allSettled(starting);
   await Promise.all(workers.map(stopWorker));
   // Print after the children close so their output has flushed.
   if (failed) {
