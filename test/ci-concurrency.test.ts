@@ -12,23 +12,12 @@ const workflows = readdirSync(dir)
   .filter((name) => name.endsWith(".yml"))
   .map((name) => ({ name, text: readFileSync(join(dir, name), "utf8") }));
 const triggers = (text: string) => text.split(/\non:\n/)[1]?.split(/\n\S/)[0] ?? "";
-const normalized = (expression: string) => expression.replace(/\s+/g, " ").trim();
-const scanEvents = normalized(`github.event.action != 'edited' ||
-  (startsWith(toJSON(github.event.changes.base.ref.from), '"') && github.event.changes.base.ref.from != '' &&
-   startsWith(toJSON(github.event.pull_request.base.ref), '"') && github.event.pull_request.base.ref != '')`);
-const prGatesAdmit = `(${scanEvents})`;
-const metadataEdit = "github.event.changes.title != null || github.event.changes.body != null";
-const lintAdmit = `(${scanEvents} || ${metadataEdit})`;
-const prGatesCancel = "${{ github.event_name == 'pull_request' }}";
-const prGates = parse(readFileSync(join(dir, "pr-gates.yml"), "utf8"));
 // ci.yml exempts main from cancellation and gives each push its own slot.
 // A cancelled main run cannot trigger the staging deploy.
-const cancels = ({ name, text }: (typeof workflows)[number]) =>
-  name === "pr-gates.yml"
-    ? normalized(prGates.concurrency["cancel-in-progress"]) === prGatesCancel
-    : /\nconcurrency:\n  group: [^\n]+\n  cancel-in-progress: (true|\$\{\{ github\.ref != 'refs\/heads\/main' && github\.event_name != 'merge_group' \}\}|\$\{\{ github\.event_name == 'pull_request' \}\})\n/.test(
-        text,
-      );
+const cancels = (text: string) =>
+  /\nconcurrency:\n  group: [^\n]+\n  cancel-in-progress: (true|\$\{\{ github\.ref != 'refs\/heads\/main' && github\.event_name != 'merge_group' \}\}|\$\{\{ github\.event_name == 'pull_request' \}\})\n/.test(
+    text,
+  );
 // A bare `cancel-in-progress: true` on a workflow that also runs on push to main
 // is only safe when its group is per SHA (main pushes then never share a group).
 const pushesMain = (text: string) => /(^|\n)  push:\n    branches: \[main\]/.test(triggers(text));
@@ -40,10 +29,37 @@ const groupPerSha = (text: string) =>
 const SCHEDULE_SHARES_MAIN_GROUP = new Set<string>();
 
 describe("workflow concurrency", () => {
+  it("keeps metadata edits in their own lane and verifies, rather than reruns, the source scan", () => {
+    const workflow = parse(readFileSync(join(dir, "pr-gates.yml"), "utf8"));
+    const meta = "github.event.action == 'edited' && !github.event.changes.base";
+    expect(workflow.concurrency.group).toBe(
+      `\${{ github.workflow }}-\${{ ${meta} && 'metadata' || 'source' }}-\${{ github.event.pull_request.number || inputs.pr_number || github.sha }}`,
+    );
+    expect(workflow.on.pull_request.types).toEqual([
+      "opened",
+      "edited",
+      "synchronize",
+      "reopened",
+      "ready_for_review",
+    ]);
+    const scan = workflow.jobs.gitleaks;
+    expect(scan.name).toBe("gitleaks");
+    expect(scan.env.REUSE_SCAN).toBe(`\${{ ${meta} }}`);
+    expect(scan.steps.map((step: { if?: string }) => step.if)).toEqual([
+      "env.REUSE_SCAN == 'true'",
+      "env.REUSE_SCAN == 'true'",
+      "env.REUSE_SCAN != 'true'",
+      "env.REUSE_SCAN != 'true'",
+      "env.REUSE_SCAN != 'true'",
+      "env.REUSE_SCAN != 'true'",
+    ]);
+    expect(scan.steps[1].run).toBe("python3 .github/scripts/verify-pr-source-scan.py");
+  });
+
   it("cancels superseded runs of every pull_request workflow", () => {
     const pr = workflows.filter(({ text }) => /(^|\n)  pull_request:/.test(triggers(text)));
     expect(pr.length).toBeGreaterThan(2);
-    expect(pr.filter((workflow) => !cancels(workflow)).map(({ name }) => name)).toEqual([]);
+    expect(pr.filter(({ text }) => !cancels(text)).map(({ name }) => name)).toEqual([]);
   });
 
   it("cancels only on pull_request events when a workflow has other triggers", () => {
@@ -63,12 +79,11 @@ describe("workflow concurrency", () => {
     const pr = workflows.filter(({ text }) => /(^|\n)  pull_request:/.test(triggers(text)));
     expect(
       pr
-        .filter(({ name, text }) =>
-          name === "pr-gates.yml"
-            ? !prGates.concurrency.group.includes("github.event.pull_request.number")
-            : !/\nconcurrency:\n  group: [^\n]*github\.event\.pull_request\.number[^\n]*\n/.test(
-                text,
-              ),
+        .filter(
+          ({ text }) =>
+            !/\nconcurrency:\n  group: [^\n]*github\.event\.pull_request\.number[^\n]*\n/.test(
+              text,
+            ),
         )
         .map(({ name }) => name),
     ).toEqual([]);
@@ -159,180 +174,6 @@ const conditionHolds = (condition: string, runCancelled: boolean) => {
 type Results = { scope: string; downstream: string };
 const ciText = readFileSync(join(dir, "ci.yml"), "utf8");
 const e2eText = readFileSync(join(dir, "e2e.yml"), "utf8");
-type PrGateContext = {
-  eventName: string;
-  action?: string;
-  sha: string;
-  runId?: number;
-  pr?: { number: number; head: { sha: string }; base: { ref: unknown } };
-  changes?: {
-    base?: { ref?: { from?: unknown }; sha?: { from: string } };
-    title?: object;
-    body?: object;
-  };
-  mergeGroupBase?: string;
-  dispatchNumber?: string;
-};
-
-const pr = {
-  number: 87,
-  draft: false,
-  head: { sha: "a".repeat(40) },
-  base: { ref: "main", sha: "b".repeat(40) },
-};
-const initialMerge = "c".repeat(40);
-const retargetMerge = "d".repeat(40);
-const newHead = "e".repeat(40);
-const retarget = {
-  eventName: "pull_request",
-  action: "edited",
-  sha: retargetMerge,
-  pr: { ...pr, base: { ref: "release", sha: "f".repeat(40) } },
-  changes: { base: { ref: { from: pr.base.ref }, sha: { from: pr.base.sha } } },
-};
-const caseOnlyPR = { ...retarget.pr, base: { ...retarget.pr.base, ref: "Main" } };
-const combinedEdit = { ...retarget.changes, title: { from: "prior title" } };
-const ignoredNames = ["pr-gates ignored edit (lint)", "pr-gates ignored edit (scan)"];
-
-function planPrGates(context: PrGateContext) {
-  const { eventName, action, sha, runId, pr, changes, mergeGroupBase, dispatchNumber } = context;
-  const admit =
-    action !== "edited" ||
-    [changes?.base?.ref?.from, pr?.base.ref].every((ref) => typeof ref === "string" && ref !== "");
-  const metadata = changes?.title != null || changes?.body != null;
-  const lint = admit || metadata;
-  const slot = admit
-    ? `source-${pr?.number ?? dispatchNumber ?? sha}`
-    : metadata
-      ? `metadata-${pr?.number}`
-      : `ignored-edit-${runId}`;
-  return {
-    group: `pr-gates-${slot}`,
-    cancelActive: eventName === "pull_request",
-    checks: [lint ? "pr-lint" : ignoredNames[0], admit ? "gitleaks" : ignoredNames[1]],
-    lintSha: lint ? (pr?.head.sha ?? sha) : null,
-    scan: admit ? { sha, base: pr?.base.ref ?? mergeGroupBase } : null,
-  };
-}
-
-describe("PR gate event matrix", () => {
-  it("pins both check names, runner conditions, and revision inputs to the workflow", () => {
-    expect(prGates.name).toBe("pr-gates");
-    expect(Object.keys(prGates.jobs)).toEqual(["pr-lint", "gitleaks"]);
-    expect(prGates.on.pull_request).toEqual({
-      types: ["opened", "edited", "synchronize", "reopened", "ready_for_review"],
-    });
-    expect(prGates.on.push).toEqual({ branches: ["main"] });
-    expect(prGates.on.merge_group).toEqual({ types: ["checks_requested"] });
-    expect(normalized(prGates.concurrency.group)).toBe(
-      normalized(`\${{ ${prGatesAdmit} && format('{0}-source-{1}', github.workflow, github.event.pull_request.number || inputs.pr_number || github.sha) ||
-        (${metadataEdit}) && format('{0}-metadata-{1}', github.workflow, github.event.pull_request.number) ||
-        format('{0}-ignored-edit-{1}', github.workflow, github.run_id) }}`),
-    );
-
-    const lint = prGates.jobs["pr-lint"];
-    expect(normalized(lint.name)).toBe(`\${{ ${lintAdmit} && 'pr-lint' || '${ignoredNames[0]}' }}`);
-    expect(normalized(lint.if)).toBe(`\${{ ${lintAdmit} }}`);
-    expect(lint.env.PR_LINT_CHECKOUT_SHA).toBe(
-      "${{ github.event.pull_request.head.sha || github.sha }}",
-    );
-    expect(lint.steps[0].with.ref).toBe("${{ env.PR_LINT_CHECKOUT_SHA }}");
-    const ratchet = lint.steps.find(
-      (step: { name?: string }) => step.name === "Ratchet tracked internal references",
-    );
-    expect(ratchet.env.BASE_SHA).toBe("${{ github.event.pull_request.base.sha }}");
-    expect(ratchet.env.BASE_REF).toBe("${{ github.base_ref }}");
-
-    const scan = prGates.jobs.gitleaks;
-    expect(normalized(scan.name)).toBe(
-      `\${{ ${prGatesAdmit} && 'gitleaks' || '${ignoredNames[1]}' }}`,
-    );
-    expect(scan.needs).toBe("pr-lint");
-    expect(normalized(scan.if)).toBe(`\${{ !cancelled() && ${prGatesAdmit} }}`);
-    expect(scan.steps[0].with).toEqual({ "fetch-depth": 0, "persist-credentials": false });
-    expect(scan.steps.at(-1).env.BASE_REF).toBe(
-      "${{ github.base_ref || github.event.merge_group.base_ref }}",
-    );
-  });
-
-  it.each([
-    ["draft opened", "opened", { ...pr, draft: true }, initialMerge, undefined],
-    ["ready on the same head", "ready_for_review", pr, initialMerge, undefined],
-    ["source update", "synchronize", { ...pr, head: { sha: newHead } }, "new-merge", undefined],
-    ["reopen", "reopened", pr, initialMerge, undefined],
-    ["retarget with title edit", "edited", retarget.pr, retargetMerge, combinedEdit],
-    ["case-only retarget", "edited", caseOnlyPR, retargetMerge, retarget.changes],
-  ] as const)("%s runs both jobs in the same PR slot", (_case, action, current, sha, changes) => {
-    expect(planPrGates({ eventName: "pull_request", action, sha, pr: current, changes })).toEqual({
-      group: "pr-gates-source-87",
-      cancelActive: true,
-      checks: ["pr-lint", "gitleaks"],
-      lintSha: current.head.sha,
-      scan: { sha, base: current.base.ref },
-    });
-  });
-
-  it.each([
-    { base: { sha: { from: pr.base.sha } } },
-    { base: { ref: { from: "" } } },
-    { base: { ref: { from: true } } },
-    { base: { ref: { from: ["main"] } } },
-    {},
-  ])("leaves the required checks and PR slot alone for %j", (changes) => {
-    expect(planPrGates({ ...retarget, pr, changes, sha: initialMerge, runId: 42 })).toEqual({
-      group: "pr-gates-ignored-edit-42",
-      cancelActive: true,
-      checks: ignoredNames,
-      lintSha: null,
-      scan: null,
-    });
-    expect(
-      planPrGates({ ...retarget, pr: { ...pr, base: { ...pr.base, ref: null } }, runId: 43 }).scan,
-    ).toBeNull();
-  });
-
-  it.each([
-    ["synchronize", { title: { from: "previous title" } }],
-    ["edited", { body: { from: null } }],
-  ] as const)(
-    "compares an active and pending %s source group with material edit lint",
-    (action, changes) => {
-      const active = planPrGates({ ...retarget, action: "opened", sha: initialMerge, pr });
-      const waiting = planPrGates({ ...retarget, action });
-      expect(waiting.group).toBe(active.group);
-      expect(waiting.scan?.sha).toBe(retargetMerge);
-      for (const runId of [44, 45]) {
-        expect(planPrGates({ ...retarget, changes, runId })).toEqual({
-          group: "pr-gates-metadata-87",
-          cancelActive: true,
-          checks: ["pr-lint", ignoredNames[1]],
-          lintSha: pr.head.sha,
-          scan: null,
-        });
-      }
-    },
-  );
-
-  it.each([
-    {
-      eventName: "merge_group",
-      action: "checks_requested",
-      sha: "queue-sha",
-      mergeGroupBase: "refs/heads/main",
-    },
-    { eventName: "push", sha: "main-push-sha" },
-    { eventName: "workflow_dispatch", sha: pr.head.sha, dispatchNumber: "87" },
-  ])("$eventName keeps its own revision and both jobs", (context) => {
-    expect(planPrGates(context)).toEqual({
-      group: `pr-gates-source-${context.dispatchNumber ?? context.sha}`,
-      cancelActive: false,
-      checks: ["pr-lint", "gitleaks"],
-      lintSha: context.sha,
-      scan: { sha: context.sha, base: context.mergeGroupBase },
-    });
-  });
-});
-
 const gates = [
   {
     gate: "check",
@@ -414,7 +255,7 @@ describe("merge queue validation", () => {
     }
     expect(lint).toContain("if: github.event_name == 'merge_group'");
     expect(lint).toContain("pr-lint passes for merge_group");
-    expect(normalized(prGates.jobs.gitleaks.if)).toBe(`\${{ !cancelled() && ${prGatesAdmit} }}`);
+    expect(jobBlock(text, "gitleaks")).toContain("if: ${{ !cancelled() }}");
   });
 
   it("runs full CI and browser smoke without PR API context", () => {

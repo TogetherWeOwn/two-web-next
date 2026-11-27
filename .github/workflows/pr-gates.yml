@@ -6,7 +6,7 @@ name: pr-gates
 # workflow with sequential jobs, so a PR push occupies one runner slot at a
 # time instead of two parallel `pr-lint` + `secret-scan` runs.
 #
-# Required jobs use `pr-lint` and `gitleaks`. GitHub treats skipped required checks as passing.
+# Metadata runs publish both required checks and verify the source scan result.
 #
 # Same-repository pull requests use included 2-vCPU capacity when enabled.
 # The GitHub-hosted fallback is ubuntu-latest.
@@ -35,14 +35,7 @@ permissions:
 
 # Keep source updates, metadata edits, and user-provided dispatch input isolated.
 concurrency:
-  group: >-
-    ${{ (github.event.action != 'edited' ||
-      (startsWith(toJSON(github.event.changes.base.ref.from), '"') && github.event.changes.base.ref.from != '' &&
-       startsWith(toJSON(github.event.pull_request.base.ref), '"') && github.event.pull_request.base.ref != '')) &&
-      format('{0}-source-{1}', github.workflow, github.event.pull_request.number || inputs.pr_number || github.sha) ||
-      (github.event.changes.title != null || github.event.changes.body != null) &&
-      format('{0}-metadata-{1}', github.workflow, github.event.pull_request.number) ||
-      format('{0}-ignored-edit-{1}', github.workflow, github.run_id) }}
+  group: ${{ github.workflow }}-${{ github.event.action == 'edited' && !github.event.changes.base && 'metadata' || 'source' }}-${{ github.event.pull_request.number || inputs.pr_number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -77,17 +70,8 @@ jobs:
   #     (for example a merge call that passes its own commit_title).
   #
   pr-lint:
-    name: >-
-      ${{ (github.event.action != 'edited' ||
-        (startsWith(toJSON(github.event.changes.base.ref.from), '"') && github.event.changes.base.ref.from != '' &&
-         startsWith(toJSON(github.event.pull_request.base.ref), '"') && github.event.pull_request.base.ref != '') ||
-        github.event.changes.title != null || github.event.changes.body != null) && 'pr-lint' || 'pr-gates ignored edit (lint)' }}
-    if: >-
-      ${{ (github.event.action != 'edited' ||
-        (startsWith(toJSON(github.event.changes.base.ref.from), '"') && github.event.changes.base.ref.from != '' &&
-         startsWith(toJSON(github.event.pull_request.base.ref), '"') && github.event.pull_request.base.ref != '') ||
-        github.event.changes.title != null || github.event.changes.body != null) }}
-    # Admission uses the metadata-only runner label even if lint never starts.
+    name: pr-lint
+    # The source scan verifier recognizes this metadata-only label before lint starts.
     runs-on: >-
       ${{ github.event.action == 'edited' && !github.event.changes.base && 'ubuntu-24.04' ||
       github.event_name == 'pull_request'
@@ -342,24 +326,35 @@ jobs:
   # Sequential after pr-lint: one runner slot at a time. Runs even
   # when pr-lint fails, so a non-conventional push to main is still scanned.
   gitleaks:
-    name: >-
-      ${{ (github.event.action != 'edited' ||
-        (startsWith(toJSON(github.event.changes.base.ref.from), '"') && github.event.changes.base.ref.from != '' &&
-         startsWith(toJSON(github.event.pull_request.base.ref), '"') && github.event.pull_request.base.ref != '')) && 'gitleaks' || 'pr-gates ignored edit (scan)' }}
+    name: gitleaks
     needs: pr-lint
-    if: >-
-      ${{ !cancelled() && (github.event.action != 'edited' ||
-        (startsWith(toJSON(github.event.changes.base.ref.from), '"') && github.event.changes.base.ref.from != '' &&
-         startsWith(toJSON(github.event.pull_request.base.ref), '"') && github.event.pull_request.base.ref != '')) }}
+    if: ${{ !cancelled() }}
+    permissions: { actions: read, contents: read, pull-requests: read }
     runs-on: >-
-      ${{ github.event_name == 'pull_request'
+      ${{ github.event.action == 'edited' && !github.event.changes.base && 'ubuntu-24.04' ||
+      github.event_name == 'pull_request'
       && github.repository
       && github.event.pull_request.head.repo.full_name == github.repository
       && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'
       && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}
     timeout-minutes: 10
+    env:
+      REUSE_SCAN: ${{ github.event.action == 'edited' && !github.event.changes.base }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.REUSE_SCAN == 'true'
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Verify the latest source scan
+        if: env.REUSE_SCAN == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/verify-pr-source-scan.py
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.REUSE_SCAN != 'true'
         with:
           # Full history: a secret added and then removed in an earlier commit
           # on the same branch is still a leak, and a shallow clone hides it.
@@ -367,6 +362,7 @@ jobs:
           persist-credentials: false
 
       - name: Install gitleaks
+        if: env.REUSE_SCAN != 'true'
         env:
           GITLEAKS_VERSION: 8.30.1
           # SHA-256 of gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz, copied from
@@ -388,11 +384,13 @@ jobs:
       # Offline proof that a PR cannot silence its own scan (synthetic token,
       # throwaway repos, no network); see .github/scripts/gitleaks-scan.sh.
       - name: Self-test the PR scan policy
+        if: env.REUSE_SCAN != 'true'
         env:
           GITLEAKS_BIN: ${{ runner.temp }}/gitleaks
         run: bash .github/scripts/test-gitleaks-scan.sh
 
       - name: Scan the full history
+        if: env.REUSE_SCAN != 'true'
         env:
           GITLEAKS_BIN: ${{ runner.temp }}/gitleaks
           EVENT_NAME: ${{ github.event_name }}

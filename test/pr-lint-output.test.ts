@@ -570,8 +570,7 @@ describe("unchanged convention policy and workflow gates", () => {
     expect(resolve.run).toBe("python3 ci/pr-lint-output.py resolve");
     expect(readFileSync(helper, "utf8")).toContain('with_name("resolve-pr-metadata.py")');
     expect(resolve.text).toContain("          PR_NUMBER: ${{ inputs.pr_number }}\n");
-    const lintJob = workflow.split("\n  pr-lint:\n")[1]?.split("\n  gitleaks:\n")[0];
-    expect(lintJob).toContain("&& 'pr-lint' || 'pr-gates ignored edit (lint)' }}");
+    expect(workflow).toContain("    name: pr-lint\n");
     expect(
       workflow.match(/^      && vars\.CI_BLACKSMITH_2VCPU \|\| 'ubuntu-latest' }}$/gm),
     ).toHaveLength(2);

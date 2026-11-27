@@ -87,11 +87,8 @@ describe("required checks always report", () => {
   it.each(required)(
     "%s is one job in a workflow with an unfiltered pull_request trigger",
     (context) => {
-      const owners = workflows.filter(
-        ({ name, text }) =>
-          new RegExp(`\\n    name: ${context}\\n`).test(text) ||
-          (name === "pr-gates.yml" &&
-            job(text, context).includes(`&& '${context}' || 'pr-gates ignored edit (`)),
+      const owners = workflows.filter(({ text }) =>
+        new RegExp(`\\n    name: ${context}\\n`).test(text),
       );
       expect(owners.map(({ name }) => name)).toHaveLength(1);
       const text = owners[0]?.text ?? "";
@@ -129,7 +126,7 @@ describe("required checks always report", () => {
 
   it("gitleaks scans even when pr-lint failed", () => {
     const gitleaks = job(readFileSync(join(dir, "pr-gates.yml"), "utf8"), "gitleaks");
-    expect(gitleaks).toMatch(/\n    if: >-\n      \$\{\{ !cancelled\(\) && /);
+    expect(gitleaks).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
   });
 
   it("ci-ok aggregates the gated jobs", () => {

@@ -2,6 +2,7 @@
 import re
 from copy import deepcopy
 from pathlib import Path
+from runpy import run_path
 from textwrap import dedent
 from unittest import TestCase, main
 from unittest.mock import patch
@@ -9,6 +10,7 @@ from unittest.mock import patch
 yaml = Path(".github/workflows/pr-ci-admission.yml").read_text()
 scope = {"__name__": "admission_fixture"}
 exec(dedent(yaml.split("<<'PYTHON'\n")[1].rsplit("          PYTHON", 1)[0]), scope)
+source_scan = run_path(".github/scripts/verify-pr-source-scan.py")["source_scan"]
 
 
 class AdmissionConcurrencyTest(TestCase):
@@ -118,6 +120,33 @@ class AdmissionTest(TestCase):
             "pr-size-gate / gate": (2, 1, 20),
         })
 
+    def test_metadata_checks_use_the_latest_source_scan(self):
+        pr, runs, add, api = self.actions_fixture()
+        steps = [{"name": "Scan the full history", "conclusion": "success"}]
+        add("pr-gates", "pr-lint", "gitleaks")[1]["steps"] = steps
+        add("pr-gates", "pr-lint")[0]["labels"] = ["ubuntu-24.04"]
+        runs[-1]["conclusion"] = "cancelled"
+        current = add("pr-gates", "pr-lint", "gitleaks")[0]["run_id"]
+        pr["base"]["sha"] = "c" * 40
+        self.assertEqual(source_scan(api, pr, current), (11, "synthetic"))
+
+        newer = add("pr-gates", "pr-lint", "gitleaks")[1]
+        for reason in ("failure", "skipped", "cancelled", "success"):
+            with self.subTest(reason=reason), patch.dict(newer, conclusion=reason, steps=[]):
+                with self.assertRaisesRegex(ValueError, "latest source scan did not pass"):
+                    source_scan(api, pr, current)
+        with patch.dict(runs[-1], status="queued", conclusion=None):
+            self.assertIsNone(source_scan(api, pr, current))
+        with patch.dict(runs[-1], conclusion="cancelled"):
+            with self.assertRaisesRegex(ValueError, "latest source run did not finish"):
+                source_scan(api, pr, current)
+
+        pr["base"]["ref"] = "release"
+        self.assertIsNone(source_scan(api, pr, current))
+        retarget = add("pr-gates", "pr-lint", "gitleaks")[1]
+        retarget["steps"] = steps
+        self.assertEqual(source_scan(api, pr, current), (51, "synthetic"))
+
     def test_evidence_rejects_mismatched_run_association(self):
         pr, runs, add, api = self.actions_fixture()
         add("pr-gates", "pr-lint", "gitleaks")
@@ -150,17 +179,9 @@ class AdmissionTest(TestCase):
         size = add("pr-size", "pr-size-gate / gate")[0]
         edit = add("pr-gates", "pr-lint")
         self.assertIsNone(evidence())
-        ignored = dict(edit[0], id=31, name="pr-gates ignored edit (scan)", conclusion="skipped", runner_id=None)
+        ignored = dict(edit[0], id=31, name="pr-gates ignored edit (scan)", conclusion="skipped")
         edit.append(ignored)
         self.assertEqual(evidence()["gitleaks"], (1, 1, 11))
-        scan_yaml = Path(".github/workflows/pr-gates.yml").read_text().split("\n  gitleaks:\n")[1]
-        ignored["name"] = scan_yaml.split("name: >-\n")[1].split("\n    needs:")[0].strip()[3:-2].strip()
-        self.assertEqual(evidence()["gitleaks"], (1, 1, 11))
-        for key, invalid, valid in [("conclusion", "success", "skipped"), ("runner_id", 1, None)]:
-            ignored[key] = invalid
-            with self.assertRaisesRegex(ValueError, "Invalid advisory job"):
-                evidence()
-            ignored[key] = valid
         runs[1].update(status="in_progress", conclusion=None)
         self.assertEqual(evidence()["pr-size-gate / gate"], (2, 1, 20))
         size["status"] = "queued"
@@ -184,28 +205,6 @@ class AdmissionTest(TestCase):
                     evidence()
                 finally:
                     job[field] = before
-        runs[2]["conclusion"] = edit[0]["conclusion"] = "cancelled"
-        self.assertIsNone(evidence())
-        newer = add("pr-gates", "pr-lint")
-        newer.append(dict(ignored, id=41, run_id=4))
-        self.assertIsNone(evidence(), "a cancelled run's raw scan name cannot establish its scope")
-        edit[0]["labels"] = ["ubuntu-24.04"]
-        ignored["conclusion"] = "cancelled"
-        self.assertEqual(evidence()["pr-lint"], (4, 1, 40))
-        self.assertEqual(evidence()["gitleaks"], (1, 2, 12))
-        runs[0]["conclusion"] = "cancelled"
-        self.assertIsNone(evidence())
-        runs[0]["conclusion"] = "success"
-        ignored["name"] = "gitleaks"
-        self.assertIsNone(evidence())
-        edit.pop()
-        runs[2]["display_title"] = "pr-gates metadata lint"
-        edit[0]["labels"] = ["ubuntu-latest"]
-        self.assertIsNone(evidence(), "an unproven cancelled source run still blocks")
-        edit[0]["labels"] = ["ubuntu-24.04"]
-        with patch.dict(edit[0], run_attempt=2):
-            self.assertIsNone(evidence(), "a different attempt cannot prove metadata scope")
-        self.assertEqual(evidence()["gitleaks"], (1, 2, 12))
 
 
 if __name__ == "__main__":
