@@ -311,21 +311,26 @@ test("cutover select publishes only verified producer outputs", async (t) => {
   };
 
   const fetchStub = `data:text/javascript,${encodeURIComponent(`
-    globalThis.fetch = async () => {
-      const json = process.env.SYNTHETIC_CUTOVER_PRODUCER;
-      if (!json) throw new Error("unexpected producer lookup");
-      return new Response(json, { headers: { "content-type": "application/json" } });
+    globalThis.fetch = async (input) => {
+      const { attempt, jobs } = JSON.parse(process.env.SYNTHETIC_CUTOVER_PRODUCER);
+      const { pathname, search } = new URL(input);
+      const attemptPath = "/repos/TogetherWeOwn/two-web-next/actions/runs/21/attempts/3";
+      if (attempt && pathname === attemptPath && !search) return Response.json(attempt);
+      if (jobs && pathname === attemptPath + "/jobs" && search === "?per_page=100&page=1") {
+        return Response.json(jobs);
+      }
+      throw new Error("unexpected producer lookup");
     };
   `)}`;
 
-  function select(name, env, metadata) {
+  function select(name, env, responses = {}) {
     const path = join(dir, name);
     writeFileSync(path, priorOutput);
     const result = spawnSync(process.execPath, ["--import", fetchStub, script, "select"], {
       env: {
         ...env,
         GITHUB_OUTPUT: path,
-        SYNTHETIC_CUTOVER_PRODUCER: metadata ? JSON.stringify(metadata) : "",
+        SYNTHETIC_CUTOVER_PRODUCER: JSON.stringify(responses),
       },
       encoding: "utf8",
       timeout: 10_000,
@@ -336,14 +341,17 @@ test("cutover select publishes only verified producer outputs", async (t) => {
 
   await t.test("refused Ember producer preserves the existing output", () => {
     const rejected = { ...producer, run_attempt: 2 };
-    const result = select("refused", ember, rejected);
+    const result = select("refused", ember, { attempt: rejected });
     assert.equal(result.status, 1, result.stderr);
     assert.match(result.stderr, /inconsistent GitHub attempt metadata/);
     assert.equal(result.output, priorOutput);
   });
 
   await t.test("verified Ember producer publishes mode, run and attempt", () => {
-    const result = select("verified", ember, producer);
+    const result = select("verified", ember, {
+      attempt: producer,
+      jobs: { total_count: 1, jobs: [completedCutoverJob(identity)] },
+    });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.output, `${priorOutput}mode=ember\nrun_id=21\nrun_attempt=3\n`);
   });
