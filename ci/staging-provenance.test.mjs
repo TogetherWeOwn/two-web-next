@@ -866,3 +866,121 @@ test("staging reservation rejects malformed records and overlong lifetimes even 
     assert.equal(canAdmitStagingOperation(record, { ...mutation, nowMs: expiresAtMs + 2 }), false);
   }
 });
+test("exact-attempt jobs streaming preserves proof and falls back to full smoke on size or read failure", async (t) => {
+  const trigger = {
+    ...run,
+    id: 55,
+    run_attempt: 2,
+    status: "completed",
+    event: "workflow_run",
+    path: ".github/workflows/deploy.yml",
+  };
+  const payload = JSON.stringify({
+    total_count: 1,
+    jobs: [
+      {
+        name: "deploy-staging",
+        run_id: trigger.id,
+        run_attempt: trigger.run_attempt,
+        head_sha: trigger.head_sha,
+        status: "completed",
+        conclusion: "success",
+        steps: [
+          {
+            name: "Record adjacent staging smoke skip",
+            status: "completed",
+            conclusion: "success",
+          },
+        ],
+      },
+    ],
+  });
+  const encoder = new TextEncoder();
+  const budget = 64 * 1024;
+  const atLimit = encoder.encode(payload.padEnd(budget));
+  const check = (body) => deploySmokeWasScoped(trigger, repository, async () => new Response(body));
+  const workflow = readFileSync(
+    new URL("../.github/workflows/e2e-staging.yml", import.meta.url),
+    "utf8",
+  );
+  const scope = workflow.match(
+    /DEPLOY_SMOKE_SCOPED: [^\n]+\n        run: \|\n((?: {10}[^\n]*\n)+)/,
+  );
+  assert.ok(scope);
+  const directory = mkdtempSync(join(tmpdir(), "staging-jobs-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const output = join(directory, "scope-output");
+  const assertFullSmoke = (scoped) => {
+    assert.equal(scoped, false);
+    writeFileSync(output, "");
+    execFileSync("bash", ["-c", scope[1]], {
+      cwd: directory,
+      env: {
+        EVENT_NAME: "workflow_run",
+        HEAD_SHA: B,
+        WORKFLOW_SHA: B,
+        DEPLOY_SMOKE_SCOPED: String(scoped),
+        GITHUB_OUTPUT: output,
+      },
+      timeout: 10_000,
+    });
+    assert.equal(readFileSync(output, "utf8"), "docs_only=false\nskip_e2e=false\n");
+  };
+
+  const bounded = new ReadableStream({
+    start(controller) {
+      controller.enqueue(atLimit.subarray(0, 64));
+      controller.enqueue(atLimit.subarray(64));
+      controller.close();
+    },
+  });
+  assert.equal(await check(bounded), true);
+
+  for (const cancelTransport of [
+    () => new Promise(() => {}),
+    () => Promise.reject(new Error("synthetic cancellation refusal")),
+  ]) {
+    let pulls = 0;
+    let cancelled = false;
+    const oversized = new ReadableStream(
+      {
+        pull(controller) {
+          pulls++;
+          if (pulls === 1) controller.enqueue(atLimit);
+          else if (pulls === 2) controller.enqueue(encoder.encode(" "));
+          else controller.close();
+        },
+        cancel() {
+          cancelled = true;
+          return cancelTransport();
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    // The synthetic stream runs in microtasks. A pending verdict at the next
+    // event-loop turn means the reader waited for the stalled cancellation.
+    const overflowVerdict = await Promise.race([
+      check(oversized),
+      new Promise((resolve) => setImmediate(() => resolve("cancellation stalled the verdict"))),
+    ]);
+    assertFullSmoke(overflowVerdict);
+    assert.equal(pulls, 2);
+    assert.equal(cancelled, true);
+    assert.equal(oversized.locked, false);
+  }
+
+  const interrupted = new ReadableStream(
+    {
+      start(controller) {
+        controller.enqueue(encoder.encode(payload));
+      },
+      pull(controller) {
+        controller.error(new Error("synthetic interruption after proof bytes"));
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  assertFullSmoke(await check(interrupted));
+  assert.equal(interrupted.locked, false);
+  assertFullSmoke(await check(new Uint8Array()));
+});
