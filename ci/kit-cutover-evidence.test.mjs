@@ -1144,6 +1144,75 @@ test("Ember cutover configuration opts in only the Ember documents", () => {
   });
 });
 
+test("all-off Hono fallback retains session settings and restores Hono route ownership", () => {
+  const name = "cutover-fixture-production";
+  const appUrl = "https://cutover.example.invalid";
+  const databaseId = "1".repeat(32);
+  const hyperdrive = [{ binding: "DB", id: databaseId }];
+  const assets = { binding: "ASSETS", run_worker_first: true };
+  const shared = { name, workers_dev: false, preview_urls: false, hyperdrive };
+  const fallbackInputs = {
+    root: {
+      name: "cutover-fixture-staging",
+      vars: { APP_URL: "https://staging.example.invalid" },
+      hyperdrive: [{ binding: "DB", id: "2".repeat(32) }],
+      assets,
+      keep_vars: true,
+      env: {
+        production: {
+          ...shared,
+          vars: { APP_URL: appUrl },
+          routes: [{ pattern: new URL(appUrl).hostname, custom_domain: true }],
+        },
+      },
+    },
+    kit: {
+      ...shared,
+      assets,
+      keep_vars: true,
+      vars: {
+        APP_URL: appUrl,
+        KIT_ROUTE_ARCHIVE: "false",
+        KIT_ROUTE_STATIC: "false",
+        KIT_ROUTE_EVENTS: "false",
+        KIT_ROUTE_HOME: "false",
+        KIT_ROUTE_JOIN: "false",
+        KIT_ROUTE_EMBER_PAGES: "false",
+        KIT_ROUTE_ADMIN: "false",
+      },
+    },
+  };
+
+  const ember = productionUploadConfig("kit", fallbackInputs, "ember");
+  const fallback = productionUploadConfig("hono", fallbackInputs, "all-off");
+
+  assert.equal(ember.main, "modules/_worker.js");
+  assert.equal(fallback.main, "modules/worker.js");
+  assert.deepEqual(
+    Object.entries(ember.vars).filter(
+      ([key, value]) => key.startsWith("KIT_ROUTE_") && value !== "false",
+    ),
+    [["KIT_ROUTE_EMBER_PAGES", "true"]],
+  );
+  assert.equal(
+    Object.keys(fallback.vars).some((key) => key.startsWith("KIT_ROUTE_")),
+    false,
+  );
+  for (const config of [ember, fallback]) {
+    assert.equal(config.name, name);
+    assert.equal(config.vars.APP_URL, appUrl);
+    assert.deepEqual(config.hyperdrive, [{ binding: "DB", id: databaseId }]);
+    assert.equal(config.keep_vars, true);
+    assert.equal(Object.hasOwn(config.vars, "SESSION_SECRET"), false);
+    assert.equal(config.workers_dev, false);
+    assert.equal(config.preview_urls, false);
+    assert.equal(Object.hasOwn(config, "routes"), false);
+    assert.equal(Object.hasOwn(config, "route"), false);
+    assert.equal(config.assets.binding, "ASSETS");
+    assert.equal(config.assets.run_worker_first, true);
+  }
+});
+
 test("isolated database admission fixes the host, database, owner, and run scope", async () => {
   const { fixtureDatabase, fixtureNames } = await import("./kit-cutover-database.mjs");
   const host = "ep-fixture.us-east-2.aws.neon.tech";
