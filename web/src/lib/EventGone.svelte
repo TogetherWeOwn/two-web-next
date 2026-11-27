@@ -72,7 +72,7 @@ let { model }: { model: EventGoneModel } = $props();
           <ul class="facts" role="list" aria-labelledby="event-cancelled-alternatives-heading" data-testid="event-cancelled-alternatives">
             {#each model.related as alternative (alternative.key)}
               <li class="card">
-                <a href="/e/{alternative.key}" data-testid="event-cancelled-alternative">{alternative.title}</a>
+                <a class="alternative-link" href="/e/{alternative.key}" data-testid="event-cancelled-alternative">{alternative.title}</a>
                 <p>
                   <time datetime={alternative.datetime}>{alternative.whenText}</time>
                   {#if alternative.location} · {alternative.location}{/if}
@@ -89,6 +89,8 @@ let { model }: { model: EventGoneModel } = $props();
 </Shell>
 
 <style>
+  .alternative-link { scroll-margin-block: calc(var(--focus-width) + var(--focus-offset)); }
+
   .event-tag {
     display: inline-flex;
     align-items: center;

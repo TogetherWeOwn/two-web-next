@@ -946,6 +946,49 @@ async function memberHtml(): Promise<string> {
 describe("Kit detail presentation", () => {
   afterEach(() => vi.useRealTimers());
 
+  it("keeps suggestion links native with their scoped scroll clearance", async () => {
+    const { renderDetail, renderGone } = await buildKitEventDetailBundle();
+    const { outcome: detail } = await resolve(
+      KEY,
+      fakeStore(),
+      GUEST,
+      null,
+      "",
+      new Date("2029-12-31"),
+    );
+    const { outcome: gone } = await resolve(
+      KEY,
+      fakeStore({ event: { ...row({ status: "cancelled" }), goingCount: 3, goingOccupancy: 3 } }),
+    );
+    if (detail.kind !== "ok" || gone.kind !== "gone") throw new Error("Expected event fixtures");
+
+    const documents = [
+      [
+        renderDetail(detail.model as unknown as Record<string, unknown>),
+        [
+          ["event-related-link", `/e/${RELATED[0]!.eventKey}`, "discovery-link"],
+          ["event-related-join", `/join?next=${encodeURIComponent(`/e/${KEY}`)}`, "discovery-link"],
+        ],
+      ],
+      [
+        renderGone(gone.model as unknown as Record<string, unknown>),
+        [["event-cancelled-alternative", `/e/${RELATED[0]!.eventKey}`, "alternative-link"]],
+      ],
+    ] as const;
+    for (const [html, expected] of documents) {
+      const nodes = elements(parse(html));
+      for (const [id, href, selector] of expected) {
+        const matches = nodes.filter((node) => attr(node, "data-testid") === id);
+        expect(matches).toHaveLength(1);
+        const link = matches[0]!;
+        expect(link.tagName).toBe("a");
+        expect(attr(link, "href")).toBe(href);
+        expect(attr(link, "tabindex")).toBeUndefined();
+        expect(attr(link, "class")?.split(/\s+/)).toContain(selector);
+      }
+    }
+  });
+
   it("renders identical Kit HTML at different wall times with an explicit display snapshot", async () => {
     const { renderDetail } = await buildKitEventDetailBundle();
     const html: string[] = [];
