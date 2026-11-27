@@ -1,13 +1,14 @@
 // ast-grep reports every match. Use added Git lines as the baseline so existing
 // assertions need no suppressions and a newly copied assertion still fails.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { normalize } from "node:path";
+import { matchesGlob, normalize } from "node:path";
+import { parse } from "yaml";
 import { parseDiff } from "../ci/patch-coverage.mjs";
 
 const rule = "no-raw-html-assertion";
 const git = (...args) =>
-  execFileSync("git", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  execFileSync("git", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: "pipe" });
 
 function baseRef() {
   if (process.env.GITHUB_ACTIONS !== "true") return "origin/main";
@@ -18,6 +19,42 @@ function baseRef() {
   return sha;
 }
 
+function scan(paths) {
+  if (paths.length === 0) return [];
+  const result = spawnSync(
+    "npx",
+    [
+      "-y",
+      "--package",
+      "@ast-grep/cli@0.50.0",
+      "ast-grep",
+      "scan",
+      "--json=compact",
+      "--inspect",
+      "entity",
+      "--filter",
+      `^${rule}$`,
+      "--",
+      ...paths,
+    ],
+    { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+  );
+  // The pinned CLI can exit zero after a walker error or a skipped read.
+  const files = /^sg: summary\|file: scannedFileCount=(\d+),skippedFileCount=0$/m;
+  const rules = /^sg: summary\|rule: effectiveRuleCount=1,skippedRuleCount=\d+$/m;
+  const applied = result.stderr.match(/: language=TypeScript,appliedRuleCount=1$/gm);
+  if (
+    result.status !== 0 ||
+    Number(files.exec(result.stderr)?.[1]) !== paths.length ||
+    applied?.length !== paths.length ||
+    !rules.test(result.stderr) ||
+    /^ERROR:/m.test(result.stderr)
+  )
+    throw new Error("Incomplete ast-grep scan");
+  return JSON.parse(result.stdout);
+}
+
+let stage = "read the Git baseline";
 try {
   const base = git("merge-base", baseRef(), "HEAD").trim();
   const added = parseDiff(
@@ -26,6 +63,7 @@ try {
       "--no-ext-diff",
       "--no-textconv",
       "--no-color",
+      "--text",
       "--src-prefix=a/",
       "--dst-prefix=b/",
       "--find-renames",
@@ -35,27 +73,18 @@ try {
     ),
   );
   const untracked = new Set(git("ls-files", "--others", "--exclude-standard", "-z").split("\0"));
-  const output = execFileSync(
-    "npx",
-    [
-      "-y",
-      "--package",
-      "@ast-grep/cli@0.50.0",
-      "ast-grep",
-      "scan",
-      "--json=compact",
-      "--filter",
-      `^${rule}$`,
-    ],
-    { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+  stage = "scan every added file in scope";
+  const { files: scopes, message } = parse(readFileSync(`sg-rules/${rule}.yml`, "utf8"));
+  const changed = [...added].filter(([, lines]) => lines.size > 0).map(([path]) => path);
+  const paths = [...new Set([...changed, ...untracked])].filter((path) =>
+    scopes.some((scope) => matchesGlob(path, scope)),
   );
 
   let violations = 0;
   for (const {
     file,
     range: { start, end },
-    message,
-  } of JSON.parse(output)) {
+  } of scan(paths)) {
     const path = normalize(file);
     const lines = added.get(path);
     // ast-grep lines are zero-based and the end position is exclusive.
@@ -63,12 +92,13 @@ try {
     let line = start.line + 1;
     while (line <= lastLine && !untracked.has(path) && !lines?.has(line)) line++;
     if (line > lastLine) continue;
-    console.error(`${path}:${line}: ${message} (${rule})`);
+    const display = path.replace(/\p{C}/gu, (char) => `\\u{${char.codePointAt(0).toString(16)}}`);
+    console.error(`${display}:${line}: ${message} (${rule})`);
     violations++;
   }
   if (violations > 0) process.exitCode = 1;
   else console.log(`${rule}: no findings on added lines`);
-} catch (error) {
-  console.error(`${rule}: ${error.message}`);
+} catch {
+  console.error(`${rule}: could not ${stage}`);
   process.exitCode = 2;
 }

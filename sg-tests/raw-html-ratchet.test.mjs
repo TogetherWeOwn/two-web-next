@@ -65,6 +65,7 @@ test("the added-line gate grandfathers existing assertions and checks scoped add
   write("ci/new-parity.mjs", 'if (!body.includes("<p>")) throw new Error("missing copy");\n');
   write("e2e/parity/check.spec.ts", raw);
   write("e2e/kit-parity/auth-boundaries.spec.ts", raw);
+  write("test/control\u007f-probe.mjs", raw);
   git("add", "bin/new-probe.mjs", "ci/new-parity.mjs");
   const rejected = check();
   assert.equal(rejected.status, 1, rejected.stderr);
@@ -74,9 +75,11 @@ test("the added-line gate grandfathers existing assertions and checks scoped add
     "ci/new-parity.mjs:1",
     "e2e/parity/check.spec.ts:1",
     "e2e/kit-parity/auth-boundaries.spec.ts:1",
+    "test/control\\u{7f}-probe.mjs:1",
   ])
     assert.ok(rejected.stderr.includes(location), rejected.stderr);
   assert.doesNotMatch(rejected.stderr, /site-smoke\.test\.ts:2|parityish\.test|probe-sizes/);
+  assert.ok(!rejected.stderr.includes("\u007f"));
 
   // The local fallback would grandfather everything once the remote ref catches up.
   git("add", ".");
@@ -94,4 +97,12 @@ test("the added-line gate grandfathers existing assertions and checks scoped add
     assert.match(hosted.stderr, /site-smoke\.test\.ts:4:/);
     assert.doesNotMatch(hosted.stderr, /site-smoke\.test\.ts:2:/);
   }
+
+  write("test/unreadable-probe.test.ts", Buffer.from([255]));
+  const incomplete = check();
+  assert.equal(incomplete.status, 2, incomplete.stderr);
+  assert.equal(
+    incomplete.stderr,
+    "no-raw-html-assertion: could not scan every added file in scope\n",
+  );
 });
