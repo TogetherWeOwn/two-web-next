@@ -7,7 +7,10 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { setImmediate } from "node:timers/promises";
 import { assertEventDetailRollback } from "./fixtures/kit-event-detail-rollback.mjs";
-import { assertEventMarkdownParity } from "./fixtures/kit-event-markdown-parity.mjs";
+import {
+  assertEventMarkdownParity,
+  withEventMarkdownDatabaseCleanup,
+} from "./fixtures/kit-event-markdown-parity.mjs";
 import { cleanUpWorkers, withWorkerCleanup } from "./fixtures/kit-worker-lifecycle.mjs";
 import { startLoopbackWorker } from "./kit-worker-loopback.mjs";
 
@@ -31,16 +34,12 @@ async function fixture(t) {
   const scratch = await mkdtemp(join(tmpdir(), "kit-event-detail-phases-"));
   t.after(() => rm(scratch, { recursive: true, force: true }));
   const markers = [];
-  const stderr = [];
   const workers = [];
   const signals = [];
   const phasesAtClose = [];
   const output = { main: join(scratch, "fake-entry"), assets: join(scratch, "fake-assets") };
   t.mock.method(console, "log", (line) => markers.push(line));
-  t.mock.method(process.stderr, "write", (line) => {
-    stderr.push(line);
-    return true;
-  });
+  const stderr = t.mock.method(process.stderr, "write", () => true);
 
   function startWorker(name, _entry, _assets, _vars, reportPhase) {
     const { promise: closed, resolve } = Promise.withResolvers();
@@ -101,7 +100,7 @@ async function fixture(t) {
       [kitName, "stop start"],
     ]);
     await assert.rejects(stat(scratch), { code: "ENOENT" });
-    assert.deepEqual(stderr, []);
+    assert.equal(stderr.mock.callCount(), 0);
   }
 
   return { run, startWorker, phases, markers, assertCleanup };
@@ -235,9 +234,12 @@ test("the Markdown fixture preserves a proof error through database teardown", a
     (error) => error === proofError,
   );
   assert.equal(sql.mock.callCount(), 2);
-  assert.equal(sql.end.mock.callCount(), 1);
+  const message = "Event Markdown fixture database cleanup failed";
+  const cleanupOnly = withEventMarkdownDatabaseCleanup(async () => {}, sql, "synthetic", []);
+  await assert.rejects(cleanupOnly, { message });
+  assert.equal(sql.end.mock.callCount(), 2);
   const diagnostics = report.mock.calls.map((call) => call.arguments);
-  assert.deepEqual(diagnostics, [["Event Markdown fixture database cleanup failed"]]);
+  assert.deepEqual(diagnostics, [[message]]);
 });
 
 test("a bind timeout marks only the final attempt and redacts all Worker output", async (t) => {
@@ -282,13 +284,11 @@ test("a bind timeout marks only the final attempt and redacts all Worker output"
   await cleanUpWorkers(workers, scratch, true);
   assert.equal(workers[0].child.kill.mock.callCount(), 0);
   assert.equal(workers[1].child.kill.mock.callCount(), 1);
-  assert.deepEqual(
-    reportPhase.mock.calls.map((call) => call.arguments),
-    [
-      ["stop", "start"],
-      ["stop", "complete"],
-    ],
-  );
+  const stopMarkers = reportPhase.mock.calls.map((call) => call.arguments);
+  assert.deepEqual(stopMarkers, [
+    ["stop", "start"],
+    ["stop", "complete"],
+  ]);
   assert.equal(stderr.mock.callCount(), 0);
   await assert.rejects(stat(scratch), { code: "ENOENT" });
 });

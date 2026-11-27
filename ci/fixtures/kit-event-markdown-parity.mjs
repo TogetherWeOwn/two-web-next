@@ -28,7 +28,7 @@ const wireHeaders = [
   "x-content-type-options",
 ];
 
-function withEventMarkdownDatabaseCleanup(run, sql, sessionHash, buckets) {
+export function withEventMarkdownDatabaseCleanup(run, sql, sessionHash, buckets) {
   const failureMessage = "Event Markdown fixture database cleanup failed";
   return withFixtureCleanup(
     run,
