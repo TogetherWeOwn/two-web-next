@@ -188,8 +188,15 @@ qualifies through the [production release gate](../CONTRIBUTING.md#production-re
 ### Admin serving
 
 `KIT_ROUTE_ADMIN=true` enables moderator pages, native admin form POSTs, and
-the operator overrides endpoint on canonical staging or HTTP loopback. The
-operator endpoint uses its bearer independently of the moderator cookie. The
+the operator overrides endpoint on canonical staging or HTTP loopback.
+
+Featured deletion (`POST /admin/featured/:id/delete`) stays on Hono even
+with Admin ownership enabled. The installed Worker fixture can opt in on its
+configured HTTP loopback origin with `KIT_PARITY_FIXTURE_ADMIN_FEATURED_DELETE=true`.
+Both paths use the same moderator-only Hono action, including its list redirect,
+missing-item response and transactional deletion audit.
+
+The operator endpoint uses its bearer independently of the moderator cookie. The
 existing Hono guard serves legacy redirects and other unowned admin paths.
 The exact `GET /admin/events/create` endpoint also has a disabled manifest
 entry. When enabled within the admin dispatcher, it requires a moderator and
@@ -201,6 +208,10 @@ The event editor's `POST /admin/events/:key/duplicate` has an exact dispatcher
 entry gated by `KIT_ROUTE_ADMIN`. With that flag enabled, Kit invokes the
 shared moderator copy-to-draft controller and returns its redirect or source
 validation response. Hono handles the same POST by default.
+
+The `POST /admin/events/:key/rsvp-pause` and `POST /admin/events/:key/rsvp-reopen`
+endpoints use the shared Hono moderator guard and transition controller. With
+Admin ownership off, the Hono app serves both POSTs directly.
 
 ### Security disclosure endpoint
 
@@ -216,9 +227,20 @@ or session access.
 `KIT_ROUTE_PROFILE_WRITES=true` admits PATCH and the default form POST on
 `/members/:user`. The shared host and origin gates precede the body cap, then
 the shared signed session, per-viewer throttle and owner checks. The native
-POST retains the `_method=PATCH` form contract. GET and HEAD use their existing
-owners, including the frozen `/members` and `/members/` 404s. Leave the flag
-unset in deployed configuration until activation is qualified.
+POST retains the `_method=PATCH` form contract. GET and HEAD on `/members/:user`
+stay on Hono. Leave the flag unset in deployed configuration until activation is
+qualified.
+
+### Retired members directory paths
+
+`KIT_ROUTE_MEMBERS_NOT_FOUND=true` lets the Kit Worker return the shared branded
+404 for trusted GET and HEAD on the literal `/members` and `/members/` paths.
+It serves the same private, no-store error for each viewer, with only public
+event suggestions on GET and an empty body on HEAD. The terminal response
+bypasses Kit page loads, session reads and member-data admission. The directory
+stays unmounted. Aliases, Kit data URLs, unsafe methods and `/members/:user`
+retain their current routing and guards. Clearing the binding restores Hono's
+404s. Keep it unset in deployed configuration until separately qualified.
 
 ### Search indexing endpoints
 

@@ -5,7 +5,7 @@ const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
 const docs = workflow.split("\n  docs-links:\n")[1]?.split(/\n  [\w-]+:\n/)[0] ?? "";
 
 describe("timeout ledger CI wiring", () => {
-  it("runs the selftest and gate in the always-selected docs job", () => {
+  it("runs the selftest and gate in the docs job after successful scope", () => {
     expect(docs).toContain("node-version: 24");
     expect(docs).toContain("npm ci --include=dev --ignore-scripts --no-audit --no-fund");
     const step = docs
@@ -14,7 +14,9 @@ describe("timeout ledger CI wiring", () => {
     expect(step).toBeDefined();
     expect(step).toContain("run: npm run ledger:timeouts:selftest && npm run ledger:timeouts");
     expect(step).not.toMatch(/\bif:|continue-on-error:/);
-    expect(docs).not.toMatch(/^    if:/m);
+    expect(docs.match(/^    if:.*$/gm)).toEqual([
+      "    if: ${{ !cancelled() && needs.scope.result == 'success' }}",
+    ]);
     expect(docs.indexOf("npm ci")).toBeLessThan(docs.indexOf("npm run ledger:timeouts:selftest"));
   });
 

@@ -42,6 +42,8 @@ function fixture() {
       total_count: 2,
       jobs: ["a11y", "check"].map((name) => ({
         name,
+        run_id: run.id,
+        run_attempt: run.run_attempt,
         head_sha: sha,
         status: "completed",
         conclusion: "success",
@@ -50,6 +52,70 @@ function fixture() {
     current: structuredClone(run),
   };
 }
+
+const ciEvidencePaths = ["/workflows/ci.yml/runs", "/runs/42/jobs", "/runs/42"];
+
+test("bounded CI admission accepts a successful exact attempt", async () => {
+  const seen = [];
+  const evidence = Object.values(fixture());
+  const admitted = await requireSuccessfulCi(context("workflow_run"), {
+    token: "offline-stub",
+    fetchImpl: async (url) => {
+      seen.push(new URL(url).pathname);
+      return Response.json(evidence[seen.length - 1]);
+    },
+  });
+
+  assert.deepEqual(admitted, { sha, runId: run.id, runAttempt: run.run_attempt });
+  assert.deepEqual(
+    seen,
+    ciEvidencePaths.map((path) => `/repos/${repository}/actions${path}`),
+  );
+});
+
+test("bounded CI admission refuses and cancels oversized evidence at every read", async () => {
+  const evidence = Object.values(fixture());
+  for (const [overLimit, path] of ciEvidencePaths.entries()) {
+    let cancelled = false;
+    let requests = 0;
+    let pulls = 0;
+    const prefix = new TextEncoder().encode(JSON.stringify(evidence[overLimit]));
+    const padding = new Uint8Array(1024 * 1024).fill(32);
+    const body = new ReadableStream(
+      {
+        pull(controller) {
+          pulls++;
+          if (pulls === 1) controller.enqueue(prefix);
+          else if (pulls === 2) controller.enqueue(padding);
+          else controller.close();
+        },
+        cancel() {
+          cancelled = true;
+          // A source can stall during cleanup. The refusal must still settle.
+          return new Promise(() => {});
+        },
+      },
+      { highWaterMark: 0 },
+    );
+
+    await assert.rejects(
+      requireSuccessfulCi(context("workflow_run"), {
+        token: "offline-stub",
+        fetchImpl: async (url) => {
+          const index = requests++;
+          assert.ok(new URL(url).pathname.endsWith(ciEvidencePaths[index]));
+          return index === overLimit ? new Response(body) : Response.json(evidence[index]);
+        },
+      }),
+      /GitHub metadata response exceeds the byte limit/,
+      path,
+    );
+    assert.equal(requests, overLimit + 1, path);
+    assert.equal(pulls, 2, path);
+    assert.equal(cancelled, true, path);
+    assert.equal(body.locked, false, path);
+  }
+});
 
 const workflow = readFileSync(join(root, ".github/workflows/deploy.yml"), "utf8");
 function stepBlock(name) {
@@ -155,10 +221,8 @@ function executeStaging(ctx, evidence, changes = {}, routeFamily = "hono") {
           data = evidence.jobs;
         } else if (parsed.pathname.endsWith("/runs/42")) data = evidence.current;
         else throw new Error("Unexpected API path");
-        return { ok: !evidence.httpError, status: evidence.httpError ?? 200, json: async () => {
-          if (evidence.invalidJson) throw new Error("Invalid JSON");
-          return data;
-        }};
+        const status = evidence.httpError ?? 200;
+        return evidence.invalidJson ? new Response("{", { status }) : Response.json(data, { status });
       };
     `,
     );
@@ -606,12 +670,60 @@ for (const eventName of ["workflow_run", "workflow_dispatch"]) {
   });
 }
 
+test("a successful prior CI attempt cannot supply jobs for the selected attempt", () => {
+  const ctx = context("workflow_run");
+  const evidence = fixture();
+  ctx.event.workflow_run.run_attempt = 2;
+  evidence.runs.workflow_runs[0].run_attempt = 2;
+  evidence.current.run_attempt = 2;
+  for (const job of evidence.jobs.jobs) job.run_attempt = 2;
+
+  // A later workflow definition SHA still deploys the CI source when its jobs match.
+  const accepted = executeStaging(ctx, evidence);
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.deepEqual(accepted.calls, mutationCalls);
+  assert.match(
+    accepted.stdout,
+    new RegExp(`Staging gate passed: ${sha}, full CI run 42, attempt 2`),
+  );
+
+  const check = evidence.jobs.jobs[1];
+  for (const mismatch of [{ run_attempt: 1 }, { run_id: 43 }, { run_attempt: undefined }]) {
+    evidence.jobs.jobs[1] = { ...check, ...mismatch };
+    const refused = executeStaging(ctx, evidence);
+    assert.equal(refused.status, 1, refused.stdout);
+    assert.deepEqual(refused.calls, []);
+    assert.match(refused.stderr, /CI job run or attempt mismatch/);
+  }
+});
+
 const mutationCalls = [
   "wrangler queues create two-sync-event",
   "wrangler queues create two-internal-action",
   "wrangler deploy --config tail/wrangler.jsonc",
   `wrangler deploy --config web/wrangler.staging.jsonc --tag ${sha} --var KIT_ROUTE_ARCHIVE:false --var KIT_ROUTE_STATIC:false --var KIT_ROUTE_EVENTS:false --var KIT_ROUTE_HOME:false --var KIT_ROUTE_JOIN:false`,
 ];
+
+test("truncated CI jobs after preparation stop staging before the first queue", () => {
+  const ctx = context("workflow_run");
+  const complete = fixture();
+  const truncated = structuredClone(complete);
+  truncated.jobs.total_count = truncated.jobs.jobs.length + 1;
+
+  const refused = executeStaging(ctx, complete, { afterPreparation: truncated });
+  assert.equal(refused.status, 1, refused.stderr);
+  assert.equal(
+    refused.stdout.trim(),
+    `Staging gate passed: ${sha}, full CI run ${run.id}, attempt ${run.run_attempt}`,
+  );
+  assert.match(refused.stderr, /^Staging gate refused: Incomplete CI job evidence$/m);
+  assert.deepEqual(refused.calls, []);
+
+  const accepted = executeStaging(ctx, complete, { afterPreparation: complete });
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.deepEqual(accepted.calls, mutationCalls);
+});
+
 for (const [family, archiveFlag, staticFlag, eventsFlag, homeFlag, joinFlag] of [
   ["archive", "true", "false", "false", "false", "false"],
   ["archive-static", "true", "true", "false", "false", "false"],
@@ -701,13 +813,13 @@ test("real Git accepts only the current checkout despite a container owner misma
       join(dir, "fetch.mjs"),
       `
       const evidence = ${JSON.stringify(evidence)};
-      globalThis.fetch = async (url) => ({ ok: true, json: async () => {
+      globalThis.fetch = async (url) => {
         const path = new URL(url).pathname;
-        if (path.endsWith("/workflows/ci.yml/runs")) return evidence.runs;
-        if (path.endsWith("/runs/42/jobs")) return evidence.jobs;
-        if (path.endsWith("/runs/42")) return evidence.current;
+        if (path.endsWith("/workflows/ci.yml/runs")) return Response.json(evidence.runs);
+        if (path.endsWith("/runs/42/jobs")) return Response.json(evidence.jobs);
+        if (path.endsWith("/runs/42")) return Response.json(evidence.current);
         throw new Error("Unexpected API path");
-      }});
+      };
     `,
     );
     const result = spawnSync(process.execPath, [join(root, "ci/staging-deploy-gate.mjs")], {
@@ -787,6 +899,20 @@ test("trigger identity is pinned, main-only and never taken from PR or fork evid
     mutate(automatic);
     assert.throws(() => deploymentTarget(automatic));
   }
+});
+
+test("automatic staging refuses a different CI run ID on the final read", () => {
+  const ctx = context("workflow_run");
+  const evidence = fixture();
+  const accepted = executeStaging(ctx, evidence);
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.deepEqual(accepted.calls, mutationCalls);
+
+  evidence.current.id = run.id + 1;
+  const refused = executeStaging(ctx, evidence);
+  assert.equal(refused.status, 1, refused.stderr);
+  assert.deepEqual(refused.calls, []);
+  assert.match(refused.stderr, /^Staging gate refused: CI changed while checking evidence$/m);
 });
 
 test("a stale automatic run ID/attempt or missing token refuses before Cloudflare", async () => {

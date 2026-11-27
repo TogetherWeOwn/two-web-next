@@ -4,6 +4,9 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { first, preRollback, soakEnv, trustedReads } from "../test/fixtures/staging-soak-http.mjs";
+import soakFixture from "../test/fixtures/staging-soak-receipt.json" with { type: "json" };
+import { STAGING_ORIGIN } from "./operator-constants.mjs";
 import {
   PASSIVE_LEDGER_MAX_BYTES,
   SOAK_ERROR_RATE_FLOOR,
@@ -20,6 +23,7 @@ import {
   stagingCandidateVersions,
   stagingSoakSample,
   sumScriptErrors,
+  verifyAllocationSoak,
 } from "./production-deploy-gate.mjs";
 
 const SHA = "a".repeat(40);
@@ -314,7 +318,85 @@ test("regression check refuses an elevated staging soak error rate and a missing
   );
 });
 
-function versionsApi(pages) {
+test("the regression gate refuses a recorded staging soak with elevated errors", async () => {
+  const { sha, workerVersion, deployedAt, floorAt } = soakFixture.receipt;
+  const nowMs = Date.parse(floorAt);
+  const env = soakEnv({ accountId: ACCOUNT, token: "fixture-only" });
+  const capture = (errors) =>
+    verifyAllocationSoak(env, {
+      now: () => nowMs,
+      fetchImpl: trustedReads(
+        {
+          fetchImpl: async (input, init) => {
+            const url = String(input);
+            if (url === `${STAGING_ORIGIN}/version`) return Response.json({ sha, deployedAt });
+            if (url === `${STAGING_ORIGIN}/up`) {
+              return Response.json(
+                { revision: { commit: sha, version_id: workerVersion } },
+                { headers: { "x-two-origin": "two-web-next", "cache-control": "no-store" } },
+              );
+            }
+            assert.equal(url, "https://api.cloudflare.com/client/v4/graphql");
+            assert.deepEqual(JSON.parse(init.body).variables, {
+              accountTag: ACCOUNT,
+              scriptName: "two-web-next",
+              versionId: workerVersion,
+              since: preRollback.run_started_at,
+              until: floorAt,
+            });
+            const row = {
+              dimensions: { scriptVersion: workerVersion },
+              sum: { requests: 100, errors },
+            };
+            return Response.json({
+              data: { viewer: { accounts: [{ workersInvocationsAdaptive: [row] }] } },
+            });
+          },
+        },
+        { deployments: () => [first], run: preRollback },
+      ),
+    });
+  const qualify = ({ sample }) =>
+    checkRegression(
+      regressionEnv(green, {
+        STAGING_SOAK_REQUESTS: String(sample.requests),
+        STAGING_SOAK_ERRORS: String(sample.errors),
+      }),
+      {
+        readJson: (path) => structuredClone(green[path]),
+        fetchImpl: analytics(10_000, 100),
+        nowMs,
+      },
+    );
+
+  const elevated = await capture(2);
+  await assert.rejects(qualify(elevated), /staging error rate 0\.0200 exceeds the limit 0\.0150/);
+  const clean = await capture(0);
+  const result = await qualify(clean);
+  assert.equal(result.verdict, "pass");
+  assert.deepEqual(result.staging, { requests: 100, errors: 0 });
+
+  assert.deepEqual(elevated, {
+    schema: "staging-soak/2",
+    sha,
+    allocationId: first.id,
+    allocationStartedAt: "2026-01-01T10:01:00.123456000Z",
+    workerVersion,
+    e2e: {
+      runId: preRollback.id,
+      startedAt: preRollback.run_started_at,
+      completedAt: preRollback.updated_at,
+    },
+    deployedAt,
+    e2eCompletedAt: "2026-01-01T10:09:00.000Z",
+    floorAt,
+    status: "sampled",
+    sample: { observedAt: floorAt, workerVersion, requests: 100, errors: 2 },
+  });
+  assert.deepEqual(clean, { ...elevated, sample: { ...elevated.sample, errors: 0 } });
+});
+
+function versionsApi(pages, seen = []) {
   return async (url, init) => {
     const parsed = new URL(url);
     assert.equal(
@@ -322,8 +404,11 @@ function versionsApi(pages) {
       `/client/v4/accounts/${ACCOUNT}/workers/scripts/two-web-next/versions`,
     );
     assert.equal(init.headers.authorization, "Bearer fixture-only");
-    const items = pages[Number(parsed.searchParams.get("page")) - 1] ?? [];
-    return { ok: true, json: async () => ({ result: { items } }) };
+    assert.equal(parsed.searchParams.get("per_page"), "100");
+    const page = Number(parsed.searchParams.get("page"));
+    seen.push(page);
+    const items = pages[page - 1] ?? [];
+    return items instanceof Response ? items : Response.json({ result: { items } });
   };
 }
 const version = (id, tag, created_on = "2026-11-01T10:00:00Z") => ({
@@ -624,6 +709,10 @@ test("deploy-production runs the regression check before the deploy job", () => 
   assert.match(regression, /needs: \[preflight, staging-soak\]/);
   assert.match(job("preflight", "staging-soak"), /INPUT_SHA: \$\{\{ inputs\.sha \}\}/);
   assert.match(
+    job("staging-soak", "regression"),
+    /\n {6}errors: \$\{\{ steps\.soak\.outputs\.errors \}\}\n/,
+  );
+  assert.match(
     regression,
     /STAGING_E2E_RUN_ID: \$\{\{ needs\.staging-soak\.outputs\.e2e_run_id \}\}/,
   );
@@ -668,6 +757,7 @@ test("deploy-production runs the regression check before the deploy job", () => 
     regression,
     /STAGING_SOAK_REQUESTS: \$\{\{ needs\.staging-soak\.outputs\.requests \}\}/,
   );
+  assert.match(regression, /STAGING_SOAK_ERRORS: \$\{\{ needs\.staging-soak\.outputs\.errors \}\}/);
   // The gate runs from the tip, the checkers from the candidate.
   assert.match(regression, /ref: \$\{\{ needs\.preflight\.outputs\.sha \}\}/);
   assert.match(regression, /ref: \$\{\{ github\.sha \}\}\n {10}path: gate-tip\n/);
@@ -880,20 +970,31 @@ test("a passive ledger zip exactly at the size limit is accepted", async () => {
   assert.deepEqual(result, { runId: 9, artifactId: 77 });
 });
 
-test("staging soak sample sums every tagged version over one window", async () => {
+test("legacy staging soak requires complete bounded history across pages", async () => {
   const older = "00000000-0000-4000-8000-000000000000";
+  const nonmatch = "22222222-2222-4222-8222-222222222222";
   const seen = [];
-  const versions = versionsApi([
-    [version(VERSION, SHA, "2026-11-01T11:00:00Z"), version(older, SHA, "2026-11-01T10:00:00Z")],
-  ]);
+  const seenPages = [];
+  const firstPage = [
+    version(VERSION, SHA, "2026-11-01T11:00:00Z"),
+    ...Array.from({ length: 99 }, () => version(nonmatch, `${SHA}-preview`)),
+  ];
+  const lastPage = JSON.stringify({ result: { items: [version(older, SHA)] }, padding: "é" });
+  const pageLimit = 1024 * 1024;
+  const atLimit = lastPage.padEnd(lastPage.length + pageLimit - Buffer.byteLength(lastPage));
   const sums = analytics(500, 2, seen);
-  const sample = await stagingSoakSample(
-    { CLOUDFLARE_ACCOUNT_ID: ACCOUNT, CLOUDFLARE_API_TOKEN: "fixture-only", DEPLOY_SHA: SHA },
-    {
-      fetchImpl: (url, init) => (url.includes("/graphql") ? sums(url, init) : versions(url, init)),
-      nowMs: Date.parse("2026-11-01T12:00:00Z"),
-    },
-  );
+  const readSoak = (last) => {
+    const versions = versionsApi([firstPage, last], seenPages);
+    return stagingSoakSample(
+      { CLOUDFLARE_ACCOUNT_ID: ACCOUNT, CLOUDFLARE_API_TOKEN: "fixture-only", DEPLOY_SHA: SHA },
+      {
+        fetchImpl: (url, init) =>
+          url.includes("/graphql") ? sums(url, init) : versions(url, init),
+        nowMs: Date.parse("2026-11-01T12:00:00Z"),
+      },
+    );
+  };
+  const sample = await readSoak(new Response(atLimit));
   // Each invocation belongs to exactly one version, so one window per version
   // never double-counts: 500 requests and 2 errors on each of the two.
   assert.deepEqual(sample, {
@@ -907,4 +1008,46 @@ test("staging soak sample sums every tagged version over one window", async () =
     [older, VERSION],
   );
   assert.equal(seen[0].datetime_geq, "2026-11-01T10:00:00.000Z");
+  assert.deepEqual(seenPages, [1, 2]);
+
+  let pulls = 0;
+  let cancelled = false;
+  const oversized = new Response(
+    new ReadableStream(
+      {
+        pull(controller) {
+          pulls += 1;
+          if (pulls === 1) controller.enqueue(Buffer.from(atLimit));
+          else if (pulls === 2) controller.enqueue(Buffer.from(" "));
+          else controller.close();
+        },
+        cancel() {
+          cancelled = true;
+        },
+      },
+      { highWaterMark: 0 },
+    ),
+    { headers: { "content-length": String(pageLimit) } },
+  );
+  for (const [response, message] of [
+    [oversized, "Staging versions response exceeds the 1 MiB page limit"],
+    [new Response(), "Staging versions response is unreadable or invalid JSON"],
+    [new Response(""), "Staging versions response is unreadable or invalid JSON"],
+    [
+      new Response("fixture-only malformed JSON"),
+      "Staging versions response is unreadable or invalid JSON",
+    ],
+    [
+      Response.json({ result: { items: "fixture-only invalid items" } }),
+      "Staging versions response has no items",
+    ],
+  ]) {
+    seen.length = 0;
+    seenPages.length = 0;
+    await assert.rejects(readSoak(response), { message });
+    assert.deepEqual(seenPages, [1, 2]);
+    assert.deepEqual(seen, []);
+  }
+  assert.equal(pulls, 2);
+  assert.equal(cancelled, true);
 });

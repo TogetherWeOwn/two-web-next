@@ -154,6 +154,8 @@ function ciEvidence() {
       total_count: 2,
       jobs: ["a11y", "check"].map((name) => ({
         name,
+        run_id: run.id,
+        run_attempt: run.run_attempt,
         head_sha: dispatchSha,
         status: "completed",
         conclusion: "success",
@@ -185,13 +187,13 @@ function stubProductionApi(evidence, seen = {}) {
       assert.equal(parsed.searchParams.get("head_sha"), dispatchSha);
       assert.equal(parsed.searchParams.get("branch"), "main");
       assert.equal(parsed.searchParams.get("event"), "push");
-      return { ok: true, json: async () => evidence.runs };
+      return Response.json(evidence.runs);
     }
     if (parsed.pathname.endsWith("/runs/42/jobs")) {
-      return { ok: true, json: async () => evidence.jobs };
+      return Response.json(evidence.jobs);
     }
     if (parsed.pathname.endsWith("/runs/42")) {
-      return { ok: true, json: async () => evidence.current };
+      return Response.json(evidence.current);
     }
     assert.fail(`unexpected production gate API path ${parsed.pathname}`);
   };
@@ -203,7 +205,9 @@ function checkGreen(evidence, seen = {}, env = greenEnv, options = { checkoutSha
 
 test("allows only an enabled main dispatch with verified protection and green exact-SHA CI", async () => {
   const seen = {};
-  const evidence = await checkGreen(ciEvidence(), seen);
+  const firstAttempt = ciEvidence();
+  delete firstAttempt.jobs.jobs[0].run_attempt;
+  const evidence = await checkGreen(firstAttempt, seen);
   assert.deepEqual(evidence, { sha: dispatchSha, runId: 42, runAttempt: 1 });
   assert.equal(seen.environment, 1);
   assert.equal(seen.ci, 3);
@@ -2260,9 +2264,8 @@ test("ledger state requires a current database and the applied set", () => {
 
 test("live ledger read fails closed with a ledger reason on transport errors", async () => {
   const applied = await readLiveProductionLedger({
-    fetchImpl: async () => ({
-      json: async () => ({ db: "ok", pending_migrations: 0, migration_ledger: [40, 41, 42] }),
-    }),
+    fetchImpl: async () =>
+      Response.json({ db: "ok", pending_migrations: 0, migration_ledger: [40, 41, 42] }),
   });
   assert.deepEqual(applied, [40, 41, 42]);
   await assert.rejects(
@@ -2275,12 +2278,30 @@ test("live ledger read fails closed with a ledger reason on transport errors", a
   );
   await assert.rejects(
     readLiveProductionLedger({
-      fetchImpl: async () => ({
-        json: async () => ({ db: "error", pending_migrations: null, migration_ledger: null }),
-      }),
+      fetchImpl: async () =>
+        Response.json({ db: "error", pending_migrations: null, migration_ledger: null }),
     }),
     /ledger/i,
   );
+});
+
+test("live ledger read rejects non-2xx responses before reading the body", async (t) => {
+  for (const status of [302, 503]) {
+    await t.test(`HTTP ${status}`, async () => {
+      const response = Response.json(
+        { db: "ok", pending_migrations: 0, migration_ledger: [40, 41, 42] },
+        { status, statusText: "Untrusted status text" },
+      );
+      await assert.rejects(
+        readLiveProductionLedger({
+          origin: "https://stub.invalid",
+          fetchImpl: async () => response,
+        }),
+        { message: `production ledger read failed (HTTP ${status})` },
+      );
+      assert.equal(response.bodyUsed, false);
+    });
+  }
 });
 
 test("pending migrations stop the promotion with a migrator-blocked error (CLI)", () => {

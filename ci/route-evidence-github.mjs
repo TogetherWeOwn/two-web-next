@@ -1,8 +1,9 @@
+import { readGitHubMetadataJson } from "./github-metadata-json.mjs";
+
 // This client is for GitHub metadata only. Artifact bytes need a separate,
 // bounded download path and must never provide a URL to this client.
 const endpoint =
   /^(?:\/actions\/workflows\/ci\.yml|\/actions\/runs\/[1-9]\d*(?:\/attempts\/[1-9]\d*(?:\/jobs\?per_page=100&page=(?:[1-9]|10))?)?|\/actions\/artifacts\/[1-9]\d*|\/pulls\/[1-9]\d*)$/;
-const maxBytes = 1024 * 1024;
 
 export function createRouteEvidenceRequest(repository, token, fetchImpl = fetch) {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) || typeof token !== "string" || !token)
@@ -23,17 +24,8 @@ export function createRouteEvidenceRequest(repository, token, fetchImpl = fetch)
         redirect: "error",
         signal: controller.signal,
       });
-      if (!response.ok || !response.body) throw new Error("bad response");
-      const bytes = Buffer.alloc(maxBytes);
-      let size = 0;
-      for await (const chunk of response.body) {
-        if (!(chunk instanceof Uint8Array) || chunk.length === 0 || size + chunk.length > maxBytes)
-          throw new Error("invalid response body");
-        bytes.set(chunk, size);
-        size += chunk.length;
-      }
-      if (!size) throw new Error("empty response");
-      return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, size)));
+      if (!response.ok) throw new Error("bad response");
+      return await readGitHubMetadataJson(response.body);
     } catch {
       controller.abort();
       throw new Error("route evidence refused: GitHub metadata unavailable");

@@ -100,6 +100,8 @@ export type Env = AgentEventsEnv & {
   KIT_PARITY_FIXTURE_EVENT_DETAIL?: string;
   // Loopback Kit parity fixture only; the shipped join entry stays disabled.
   KIT_PARITY_FIXTURE_JOIN?: string;
+  // Loopback installed Worker fixture only; admits the shared featured delete form.
+  KIT_PARITY_FIXTURE_ADMIN_FEATURED_DELETE?: string;
   // Loopback Kit parity fixture only; serves GET /admin for dashboard captures.
   KIT_PARITY_FIXTURE_ADMIN_DASHBOARD?: string;
   // Loopback Kit parity fixture only; serves the synthetic attendance record.
@@ -117,6 +119,8 @@ export type Env = AgentEventsEnv & {
   KIT_ROUTE_HOME?: string;
   KIT_ROUTE_JOIN?: string;
   KIT_ROUTE_EMBER_PAGES?: string;
+  // Only the literal string "true" serves the retired directory 404s in Kit.
+  KIT_ROUTE_MEMBERS_NOT_FOUND?: string;
   DISCORD_LIVE_SOCKET_ENABLED?: string;
   // Browser auth endpoints. Only the literal string "true" opts in.
   KIT_ROUTE_AUTH?: string;

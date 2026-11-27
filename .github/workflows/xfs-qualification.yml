@@ -76,6 +76,10 @@ on:
         type: choice
         options: [all-off, ember, admin]
         default: all-off
+      moderator_rsvp_only:
+        description: "On a PR branch, run focused moderator RSVP installed parity without cutover qualification"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -124,6 +128,7 @@ jobs:
     timeout-minutes: 15
     env:
       EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      MODERATOR_RSVP_ONLY: ${{ github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main' && !inputs.qualify_cutover && inputs.moderator_rsvp_only }}
     services:
       postgres:
         image: postgres:17@sha256:0d938e975177bef9f1f61f3f9dbcf2e0aa0a139568f66d3415ed8892eb97f6ac # 17.12-trixie
@@ -152,6 +157,9 @@ jobs:
           sudo mkfs.xfs -V
           npm ci --include=dev --ignore-scripts --no-audit --no-fund
           npm ci --prefix web --include=dev --ignore-scripts --no-audit --no-fund
+      - name: Prove pinned Wrangler bind collision recovery
+        timeout-minutes: 2
+        run: node --test --test-timeout=90000 ci/kit-worker-loopback.test.mjs
       - name: Build stock Kit output
         run: npm run build --prefix web
       - name: Install Chromium for the installed Kit homepage proof
@@ -191,29 +199,35 @@ jobs:
         env:
           KIT_WORKER_TEST_DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/two_web_next
           KIT_PUBLIC_VOICE_SCREENSHOTS: ${{ runner.temp }}/kit-public-voice
+          KIT_INSTALLED_LIVE_SOCKET_SEPARATE: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && !inputs.qualify_cutover && !inputs.moderator_rsvp_only) }}
         run: |
           result=0
           proof=()
-          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch ]]; then
+          if [[ "$MODERATOR_RSVP_ONLY" == true ]]; then
+            proof=(--moderator-rsvp-only)
+          elif [[ "$GITHUB_EVENT_NAME" != workflow_dispatch ]]; then
             proof=(--public-voice-browser)
           fi
           bash ci/xfs-qualification-fixture.sh bash ci/kit-worker-installed-output.sh "${proof[@]}" \
             | tee "$RUNNER_TEMP/kit-installed-output.log" || result=$?
           grep -Fx 'Fixture mounts and backing file removed' "$RUNNER_TEMP/kit-installed-output.log"
+          if [[ "${KIT_INSTALLED_LIVE_SOCKET_SEPARATE:-}" == true ]] &&
+            grep -Fxq 'Launching loopback kit-live Worker' "$RUNNER_TEMP/kit-installed-output.log"; then
+            printf '%s\n' 'Route proof launched the dedicated live socket Worker' >&2
+            exit 1
+          fi
+          if [[ "$MODERATOR_RSVP_ONLY" == true ]]; then
+            grep -Fx 'PASS installed moderator RSVP pause and reopen admission, fallback, audit and FIFO parity' "$RUNNER_TEMP/kit-installed-output.log"
+            grep -Fx 'PASS loopback Workers and scratch cleaned up' "$RUNNER_TEMP/kit-installed-output.log"
+          fi
           exit "$result"
-      - name: Retain installed Kit public voice screenshots
-        if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && steps.installed.outcome != 'skipped' }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: kit-public-voice-${{ env.EXPECTED_HEAD_SHA }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/kit-public-voice/
-          if-no-files-found: ${{ steps.installed.outcome == 'success' && 'error' || 'warn' }}
-          retention-days: 14
       - name: Build the Kit cutover server readiness profile
+        if: env.MODERATOR_RSVP_ONLY != 'true'
         run: npm run build --prefix web
         env:
           TWO_WEB_1033_COMPAT: "true"
       - name: Record all-off production Kit parity
+        if: env.MODERATOR_RSVP_ONLY != 'true'
         id: production-parity
         shell: bash
         env:
@@ -249,6 +263,89 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 30
+      - name: Verify loopback Postgres stopped
+        if: always()
+        shell: bash
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker stop "$POSTGRES_CONTAINER"
+          test "$(docker inspect --format '{{.State.Running}}' "$POSTGRES_CONTAINER")" = false
+          printf '%s\n' 'Disposable Postgres stopped; the runner removes job services at teardown'
+      # Keep browser artifact I/O off the path to parity and service teardown.
+      - name: Retain installed Kit public voice screenshots
+        if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && steps.installed.outcome != 'skipped' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-public-voice-${{ env.EXPECTED_HEAD_SHA }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/kit-public-voice/
+          if-no-files-found: ${{ steps.installed.outcome == 'success' && 'error' || 'warn' }}
+          retention-days: 14
+
+  # The socket deadlines consume over three minutes on their own. A separate
+  # job lets both proofs finish tearing down their own fixtures.
+  kit-live-socket-proof:
+    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && !inputs.qualify_cutover && !inputs.moderator_rsvp_only) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    services:
+      postgres:
+        image: postgres:17@sha256:0d938e975177bef9f1f61f3f9dbcf2e0aa0a139568f66d3415ed8892eb97f6ac # 17.12-trixie
+        env:
+          POSTGRES_USER: agent_test
+          POSTGRES_DB: two_web_next
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 127.0.0.1::5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U agent_test -d two_web_next"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Check the runner's XFS tool and install locked Node tooling
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+          sudo mkfs.xfs -V
+          npm ci --include=dev --ignore-scripts --no-audit --no-fund
+          npm ci --prefix web --include=dev --ignore-scripts --no-audit --no-fund
+      - name: Build stock Kit output
+        run: npm run build --prefix web
+      - name: Prepare disposable runtime role
+        env:
+          DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/two_web_next
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f ci/disposable-runtime-role.sql -f ci/disposable-runtime-role.sql
+      - name: Migrate loopback Postgres and check migration history
+        env:
+          DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/two_web_next
+        run: |
+          npm run db:migrate
+          npm run db:check
+      - name: Prove installed live sockets and fan-out
+        shell: bash
+        env:
+          KIT_WORKER_TEST_DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/two_web_next
+        run: |
+          result=0
+          bash ci/xfs-qualification-fixture.sh bash ci/kit-worker-installed-output.sh --live-socket-only \
+            | tee "$RUNNER_TEMP/kit-live-socket.log" || result=$?
+          # Check teardown even when a socket assertion fails.
+          grep -Fx 'Fixture mounts and backing file removed' "$RUNNER_TEMP/kit-live-socket.log"
+          grep -Fx 'PASS loopback Workers and scratch cleaned up' "$RUNNER_TEMP/kit-live-socket.log"
+          if (( result == 0 )); then
+            grep -Fx 'PASS Kit live socket upgrade, guest resync, frame limits, expiry, and revocation' "$RUNNER_TEMP/kit-live-socket.log"
+            grep -Fx 'PASS installed Kit expired and failed post-pull authorization closes without a frame' "$RUNNER_TEMP/kit-live-socket.log"
+          fi
+          exit "$result"
       - name: Verify loopback Postgres stopped
         if: always()
         shell: bash
