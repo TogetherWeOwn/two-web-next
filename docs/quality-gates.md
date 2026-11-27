@@ -19,12 +19,10 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   `src/http/`, including hidden directories. The guard runs before ast-grep
   and does not depend on any HTTP import rules.
 - **Rendered HTML assertions (HARD on added lines):** `npm run scan:fetch-await`
-  checks inline markup assertions and queries on response bodies in JavaScript
-  and TypeScript smoke, probe, and parity tooling. Existing matches stay in
-  the Git baseline. Prefer the [shared DOM queries](../ci/rendered-page.mjs)
-  or a Playwright locator. Use raw-body absence assertions for leak checks.
-  MIME types, XML-specific tags, and markup passed to fixture builders are
-  outside the rule's scope.
+  checks inline markup queries in JavaScript and TypeScript smoke, probe, and
+  parity tooling. Use the [shared DOM queries](../ci/rendered-page.mjs) or a
+  Playwright locator. The Git baseline preserves existing assertions. Raw-body
+  leak checks, MIME types, XML-specific tags, and fixture inputs stay valid.
 - **Byte-limit comparisons (HARD):** The same scan rejects direct
   `byteLength` comparisons in authored JavaScript and TypeScript under
   `src/`, `web/src/` and `assets/`. Use [the shared length helpers](../src/http/length-limit.ts)

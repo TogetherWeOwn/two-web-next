@@ -41,16 +41,16 @@ function scan(paths) {
     encoding: "utf8",
     maxBuffer: 16 * 1024 * 1024,
   });
-  // The pinned CLI can exit zero after a walker error or a skipped read.
-  const files = /^sg: summary\|file: scannedFileCount=(\d+),skippedFileCount=0$/m;
-  const rules = /^sg: summary\|rule: effectiveRuleCount=1,skippedRuleCount=\d+$/m;
-  const applied = result.stderr.match(/: language=TypeScript,appliedRuleCount=1$/gm);
+  // Read the final summary and require one exact trace record per input.
+  const trace = result.stderr?.split("\n") ?? [];
+  const summary = trace.findLast((line) => line.startsWith("sg: summary|file:"));
+  const applied = new Set(trace);
+  const traceKey = (path) => `sg: entity|file|${path}: language=TypeScript,appliedRuleCount=1`;
   if (
     result.status !== 0 ||
-    Number(files.exec(result.stderr)?.[1]) !== paths.length ||
-    applied?.length !== paths.length ||
-    !rules.test(result.stderr) ||
-    /^ERROR:/m.test(result.stderr)
+    summary !== `sg: summary|file: scannedFileCount=${paths.length},skippedFileCount=0` ||
+    paths.some((path) => !applied.has(traceKey(path))) ||
+    trace.some((line) => line.startsWith("ERROR:"))
   )
     throw new Error("Incomplete ast-grep scan");
   return JSON.parse(result.stdout);

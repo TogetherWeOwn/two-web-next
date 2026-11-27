@@ -53,17 +53,15 @@ test("the added-line gate grandfathers existing assertions and checks scoped add
 
   write("test/site-smoke.test.ts", helper + baseline + raw);
   write("bin/new-probe.mjs", "assert.match(body, /<main\\b/);\n");
-  write("ci/new-parity.mjs", 'if (!body.includes("<p>")) throw new Error("missing copy");\n');
   write("e2e/parity/check.spec.ts", raw);
   write("e2e/kit-parity/auth-boundaries.spec.ts", raw);
   write("test/control\u007f-probe.mjs", raw);
-  git("add", "bin/new-probe.mjs", "ci/new-parity.mjs");
+  git("add", "bin/new-probe.mjs", "e2e/parity/check.spec.ts");
   const rejected = check();
   assert.equal(rejected.status, 1, rejected.stderr);
   for (const location of [
     "test/site-smoke.test.ts:4",
     "bin/new-probe.mjs:1",
-    "ci/new-parity.mjs:1",
     "e2e/parity/check.spec.ts:1",
     "e2e/kit-parity/auth-boundaries.spec.ts:1",
     "test/control\\u{7f}-probe.mjs:1",
@@ -94,6 +92,10 @@ test("the added-line gate grandfathers existing assertions and checks scoped add
   assert.equal(suppressed.status, 1, suppressed.stderr);
   assert.equal(suppressed.stderr, "test/skip-probe.ts: ast-grep suppression is forbidden\n");
   write("test/skip-probe.ts", Buffer.from([255]));
+  const traceName =
+    "test/probe\rsg: summary|file: scannedFileCount=2,skippedFileCount=0" +
+    "\rsg: entity|file|forged: language=TypeScript,appliedRuleCount=1\rnew-probe.ts";
+  write(traceName, helper);
   const incomplete = check();
   assert.equal(incomplete.status, 2, incomplete.stderr);
   assert.equal(incomplete.stderr, "no-raw-html-assertion: could not scan scoped additions\n");
