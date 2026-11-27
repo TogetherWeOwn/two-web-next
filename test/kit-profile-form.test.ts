@@ -10,9 +10,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
 import { parseFragment } from "parse5";
-import { beforeAll, describe, expect, it } from "vitest";
+import { assert, beforeAll, describe, expect, it } from "vitest";
 import type { MemberView } from "../src/profiles/store";
-import { attr, elements } from "./helpers/kit-edit-controls";
+import { attr, elements, textOf } from "./helpers/kit-edit-controls";
 
 const APP_URL = "https://next.example.test";
 
@@ -96,45 +96,58 @@ export function renderView(props) {
   rmSync(scratch, { recursive: true, force: true });
 }, 120000);
 
+function byAttr(nodes: ReturnType<typeof elements>, name: string, value: string) {
+  return nodes.find((el) => attr(el, name) === value);
+}
+
+const parseView = (html: string) => elements(parseFragment(html));
+
 describe("Kit profile view: 422 re-render keeps the Hono form contract", () => {
   it("renders no error chrome without errors", () => {
-    const html = renderView(baseProps());
-    expect(html).not.toContain('data-testid="profile-error"');
-    expect(html).not.toContain("profile-bio-error");
+    const nodes = parseView(renderView(baseProps()));
+    expect(byAttr(nodes, "data-testid", "profile-error")).toBeUndefined();
+    expect(byAttr(nodes, "id", "profile-bio-error")).toBeUndefined();
+    const bio = byAttr(nodes, "id", "profile-bio");
+    assert(bio?.tagName === "textarea");
+    expect(attr(bio, "aria-describedby")).toBe("profile-bio-hint profile-bio-count");
   });
 
   it("renders the error summary with field links and per-field errors with aria wiring", () => {
+    const errors = {
+      bio: "Keep your bio to 1000 characters or fewer.",
+      games: "Add no more than 20 games.",
+      timezone: "Choose a valid IANA timezone, e.g. Europe/London.",
+    };
     const html = renderView(
       baseProps({
-        errors: {
-          bio: "Keep your bio to 1000 characters or fewer.",
-          games: "Add no more than 20 games.",
-          timezone: "Choose a valid IANA timezone, e.g. Europe/London.",
-        },
+        errors,
         values: { bio: "x", games_text: "a", timezone: "y", leaderboard_opt_out: false },
       }),
     );
     // Summary alert with links into the controls (server `games` maps to games_text).
-    expect(html).toContain('data-testid="profile-error"');
-    expect(html).toContain('role="alert"');
-    expect(html).toContain('href="#profile-bio"');
-    expect(html).toContain('href="#profile-games-text"');
-    expect(html).toContain('href="#profile-timezone"');
+    const nodes = parseView(html);
+    const summary = byAttr(nodes, "data-testid", "profile-error");
+    assert(summary);
+    expect(attr(summary, "role")).toBe("alert");
+    const links = elements(summary).filter((el) => el.tagName === "a");
     // Field errors beside the controls, wired for assistive tech. Timezone
     // keeps its help text associated alongside the error; Bio and Games keep
     // their composition hint and count nodes associated alongside the error.
-    for (const field of ["profile-bio", "profile-games-text", "profile-timezone"]) {
-      expect(html).toContain(`id="${field}-error"`);
-      expect(html).toContain('aria-invalid="true"');
-      expect(html).toContain(
+    for (const [name, message] of Object.entries(errors)) {
+      const field = `profile-${name === "games" ? "games-text" : name}`;
+      const link = byAttr(links, "href", `#${field}`);
+      const control = byAttr(nodes, "id", field);
+      const error = byAttr(nodes, "id", `${field}-error`);
+      assert(link && control && error);
+      expect(textOf(link)).toBe(message);
+      expect(attr(control, "aria-invalid")).toBe("true");
+      expect(attr(control, "aria-describedby")).toBe(
         field === "profile-timezone"
-          ? `aria-describedby="profile-timezone-help ${field}-error"`
-          : `aria-describedby="${field}-hint ${field}-count ${field}-error"`,
+          ? `profile-timezone-help ${field}-error`
+          : `${field}-hint ${field}-count ${field}-error`,
       );
+      expect(textOf(error)).toBe(message);
     }
-    // Composition hint copy stays visible alongside the field errors.
-    expect(html).toContain("Keep your bio to 1000 characters or fewer.");
-    expect(html).toContain("Add no more than 20 games.");
   });
 
   it("keeps unknown error keys global with no fabricated control link", () => {
@@ -146,11 +159,12 @@ describe("Kit profile view: 422 re-render keeps the Hono form contract", () => {
         values: { bio: "", games_text: "", timezone: "", leaderboard_opt_out: false },
       }),
     );
-    expect(html).toContain('data-testid="profile-error"');
-    expect(html).toContain(
+    const summary = byAttr(parseView(html), "data-testid", "profile-error");
+    assert(summary);
+    expect(textOf(summary).trim()).toBe(
       "Only your bio, games, timezone and leaderboard setting can be changed.",
     );
-    expect(html).not.toContain('href="#profile-bio"');
+    expect(elements(summary).some((el) => el.tagName === "a")).toBe(false);
   });
 
   it("preserves the submitted values instead of the stored member record", () => {
@@ -167,13 +181,22 @@ describe("Kit profile view: 422 re-render keeps the Hono form contract", () => {
     );
     // The draft lands in the controls; the read-only section above still
     // shows the stored record until the save succeeds (same as the Hono page).
-    expect(html).toMatch(
-      /<textarea id="profile-bio" name="bio" rows="4" aria-describedby="profile-bio-hint profile-bio-count"(?: class="svelte-[\w-]+")?>draft bio<\/textarea>/,
-    );
-    expect(html).toMatch(
-      /<textarea id="profile-games-text" name="games_text" rows="4" aria-describedby="profile-games-text-hint profile-games-text-count"(?: class="svelte-[\w-]+")?>draft game<\/textarea>/,
-    );
-    expect(html).toContain('value="Mars/Olympus"');
+    const nodes = parseView(html);
+    for (const [field, name, value] of [
+      ["profile-bio", "bio", "draft bio"],
+      ["profile-games-text", "games_text", "draft game"],
+    ] as const) {
+      const textarea = byAttr(nodes, "id", field);
+      assert(textarea);
+      expect(textarea.tagName).toBe("textarea");
+      expect(attr(textarea, "name")).toBe(name);
+      expect(attr(textarea, "rows")).toBe("4");
+      expect(attr(textarea, "aria-describedby")).toBe(`${field}-hint ${field}-count`);
+      expect(textOf(textarea)).toBe(value);
+    }
+    const timezone = byAttr(nodes, "id", "profile-timezone");
+    assert(timezone?.tagName === "input");
+    expect(attr(timezone, "value")).toBe("Mars/Olympus");
   });
 
   it("renders the leaderboard switch with the submitted choice preserved", () => {
@@ -183,38 +206,43 @@ describe("Kit profile view: 422 re-render keeps the Hono form contract", () => {
         values: { bio: "", games_text: "", timezone: "", leaderboard_opt_out: true },
       }),
     );
-    expect(checked).toContain('name="leaderboard_opt_out"');
-    expect(checked).toContain('id="profile-leaderboard-opt-out"');
-    expect(checked).toMatch(/type="checkbox"[^>]*checked|checked[^>]*type="checkbox"/);
-
     const unchecked = renderView(baseProps());
-    expect(unchecked).toContain('name="leaderboard_opt_out"');
-    expect(unchecked).not.toMatch(/type="checkbox"[^>]*checked|checked[^>]*type="checkbox"/);
+    for (const [html, expected] of [
+      [checked, true],
+      [unchecked, false],
+    ] as const) {
+      const checkbox = byAttr(parseView(html), "id", "profile-leaderboard-opt-out");
+      assert(checkbox?.tagName === "input");
+      expect(attr(checkbox, "name")).toBe("leaderboard_opt_out");
+      expect(attr(checkbox, "type")).toBe("checkbox");
+      expect(attr(checkbox, "checked") !== undefined).toBe(expected);
+    }
   });
 
   it("groups privacy within the native edit form and binds the consequence alongside errors", () => {
     const html = renderView(baseProps({ errors: { leaderboard_opt_out: "Choose hide or show." } }));
-    const privacy = html.match(
-      /<section[^>]*aria-labelledby="profile-privacy-heading"[^>]*>.*?<\/section>/s,
-    )?.[0];
-    const identityActions = elements(parseFragment(html)).find(
-      (el) => attr(el, "data-testid") === "profile-identity-actions",
-    );
+    const nodes = parseView(html);
+    const identityActions = byAttr(nodes, "data-testid", "profile-identity-actions");
     expect(
       identityActions?.childNodes.some(
         (node) =>
           "tagName" in node && node.tagName === "a" && attr(node, "href") === "#edit-heading",
       ),
     ).toBe(true);
-    expect(html.match(/<form[^>]*data-testid="profile-form"[^>]*>.*?<\/form>/s)?.[0]).toContain(
-      privacy,
+    const form = byAttr(nodes, "data-testid", "profile-form");
+    assert(form?.tagName === "form");
+    const privacy = byAttr(elements(form), "aria-labelledby", "profile-privacy-heading");
+    assert(privacy?.tagName === "section");
+    const section = elements(privacy);
+    const heading = byAttr(section, "id", "profile-privacy-heading");
+    const checkbox = byAttr(section, "id", "profile-leaderboard-opt-out");
+    const help = byAttr(section, "id", "profile-leaderboard-privacy-help");
+    assert(heading?.tagName === "h3" && checkbox && help);
+    expect(textOf(heading)).toBe("Privacy");
+    expect(attr(checkbox, "aria-describedby")).toBe(
+      "profile-leaderboard-privacy-help profile-leaderboard-opt-out-error",
     );
-    expect(privacy).toMatch(/<h3 id="profile-privacy-heading"[^>]*>Privacy<\/h3>/);
-    expect(privacy).toContain(
-      'aria-describedby="profile-leaderboard-privacy-help profile-leaderboard-opt-out-error"',
-    );
-    expect(privacy).toContain('id="profile-leaderboard-privacy-help"');
-    expect(privacy).toContain(
+    expect(textOf(help)).toContain(
       "After you save, hiding removes you from every member leaderboard and its counts.",
     );
   });
@@ -222,49 +250,64 @@ describe("Kit profile view: 422 re-render keeps the Hono form contract", () => {
   it.each([false, true])(
     "keeps edit and privacy off another member’s profile (moderator: %s)",
     (isModerator) => {
-      const html = renderView(baseProps({ isOwner: false, isModerator }));
-      expect(html).not.toContain('href="#edit-heading"');
-      expect(html).not.toContain('id="profile-privacy-heading"');
-      expect(html).not.toContain('name="leaderboard_opt_out"');
+      const nodes = parseView(renderView(baseProps({ isOwner: false, isModerator })));
+      expect(byAttr(nodes, "href", "#edit-heading")).toBeUndefined();
+      expect(byAttr(nodes, "id", "profile-privacy-heading")).toBeUndefined();
+      expect(byAttr(nodes, "name", "leaderboard_opt_out")).toBeUndefined();
     },
   );
 
   it("carries the island binding contract so the binder owns pending/cancel/focus", () => {
     const html = renderView(baseProps());
+    const nodes = parseView(html);
     // Mount point the member-profile.js binder queries, keyed to this member.
-    expect(html).toContain('data-island="member-profile"');
-    expect(html).toContain(`data-member-id="${MEMBER.id}"`);
+    const editor = byAttr(nodes, "data-testid", "profile-edit");
+    assert(editor);
+    expect(attr(editor, "data-island")).toBe("member-profile");
+    expect(attr(editor, "data-member-id")).toBe(MEMBER.id);
     // Unchanged write contract: no-JS posts the PATCH override to Hono, the
     // binder PATCHes JSON to the same route when script runs.
-    expect(html).toContain(`action="/members/${MEMBER.id}"`);
-    expect(html).toContain('name="_method" value="PATCH"');
+    const form = byAttr(elements(editor), "data-testid", "profile-form");
+    assert(form?.tagName === "form");
+    expect(attr(form, "action")).toBe(`/members/${MEMBER.id}`);
+    const fields = elements(form);
+    const method = byAttr(fields, "name", "_method");
+    assert(method?.tagName === "input");
+    expect(attr(method, "value")).toBe("PATCH");
     // Writable fields plus the spam-trap pair the admission gate requires.
     for (const name of ["bio", "games_text", "timezone", "website", "formOpenedAt"]) {
-      expect(html).toContain(`name="${name}"`);
+      expect(byAttr(fields, "name", name)).toBeDefined();
     }
     // Controls the binder and the lifecycle tests address by testid.
-    for (const testid of ["profile-edit", "profile-form", "profile-save", "profile-cancel"]) {
-      expect(html).toContain(`data-testid="${testid}"`);
+    for (const testid of ["profile-save", "profile-cancel"]) {
+      expect(byAttr(fields, "data-testid", testid)).toBeDefined();
     }
   });
 
   it("escapes hostile error and value text instead of interpreting it", () => {
+    const hostileError = "<script>alert(1)</script>";
+    const hostileBio = "</textarea><img src=x onerror=alert(1)>";
     const html = renderView(
       baseProps({
-        errors: { bio: "<script>alert(1)</script>" },
+        errors: { bio: hostileError },
         values: {
-          bio: "<img src=x onerror=alert(1)>",
+          bio: hostileBio,
           games_text: "",
           timezone: "",
           leaderboard_opt_out: false,
         },
       }),
     );
-    expect(html).not.toContain("<script>alert(1)</script>");
-    expect(html).not.toContain("<img src=x");
-    // Svelte text interpolation escapes `<` (leaving `>` literal, which is
-    // still inert markup): hostile strings stay text, never elements.
-    expect(html).toContain("&lt;script>alert(1)&lt;/script>");
-    expect(html).toContain("&lt;img src=x onerror=alert(1)>");
+    const nodes = parseView(html);
+    const summary = byAttr(nodes, "data-testid", "profile-error");
+    const error = byAttr(nodes, "id", "profile-bio-error");
+    const bio = byAttr(nodes, "id", "profile-bio");
+    assert(summary && error && bio?.tagName === "textarea");
+    expect(textOf(summary).trim()).toBe(hostileError);
+    expect(textOf(error)).toBe(hostileError);
+    expect(textOf(bio)).toBe(hostileBio);
+    const scripts = nodes.filter((el) => el.tagName === "script");
+    expect(scripts.map(textOf)).not.toContain("alert(1)");
+    expect(byAttr(nodes, "src", "x")).toBeUndefined();
   });
 });
