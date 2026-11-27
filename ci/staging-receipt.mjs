@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { readUpJson } from "../bin/revision-check.mjs";
 import { PROMOTION_SOAK_MS } from "./resolve-promotion-sha.mjs";
 import {
   isSha,
@@ -63,7 +64,7 @@ async function readStagingUp(fetchImpl) {
     void response.body?.cancel().catch(() => undefined);
     throw new Error("Unexpected /up response status");
   }
-  const body = await response.json();
+  const body = await readUpJson(response);
   return { revision: body?.revision, readiness: upReadiness(status, body) };
 }
 
