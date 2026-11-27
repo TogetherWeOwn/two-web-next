@@ -154,8 +154,9 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   every documented section exists in the file.
 - **Raw byte-length comparisons (HARD):** Use the shared predicates in
   `src/http/length-limit.ts` for byte limits. The scan covers authored
-  application code, Node `.mjs` and `.js` scripts, and JavaScript and
-  TypeScript `<script>` blocks in `web/src/**/*.svelte`. The Node tooling
+  application code, Node `.mjs` and `.js` scripts, and `<script>` bodies in
+  `web/src/**/*.svelte`. The TypeScript grammar parses Svelte scripts
+  regardless of their `lang` attribute. The Node tooling
   ratchet and the attendee-path check compare exact expressions and counts
   per file against the tested base commit. Removed comparisons fall out of
   the baseline when merged. `npm run scan:fetch-await` includes tracked

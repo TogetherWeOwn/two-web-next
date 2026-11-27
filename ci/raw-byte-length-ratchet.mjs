@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const config = fileURLToPath(new URL("../sgconfig.yml", import.meta.url));
-const rules = "^no-raw-byte-length-comparison(-svelte-js|-tsx)?$";
+const rules = "^no-raw-byte-length-comparison(-tsx)?$";
 const maxBuffer = 8 * 1024 * 1024;
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, maxBuffer });
 const appSource = /^(?:src|web\/src|assets)\//;
@@ -60,10 +60,18 @@ function scan(files, read) {
   }
 }
 
-export function scanByteLengthComparisons(cwd) {
+export function scanByteLengthComparisons(cwd, allowUnstagedDeletions = true) {
   const paths = git(cwd, "ls-files", "--cached", "--others", "--exclude-standard", "-z");
   assert.ok(isUtf8(paths), "Git returned non-UTF-8 paths");
-  const files = [...new Set(paths.toString("utf8").split("\0").filter(inScope))];
+  const removals = git(cwd, "ls-files", "--deleted", "-z");
+  assert.ok(
+    allowUnstagedDeletions || !removals.length,
+    "The CI checkout has missing tracked files",
+  );
+  const deleted = new Set(removals.toString("utf8").split("\0"));
+  const files = [...new Set(paths.toString("utf8").split("\0"))].filter(
+    (file) => inScope(file) && !deleted.has(file),
+  );
   return scan(files, (file) => {
     const path = join(cwd, file);
     assert.ok(lstatSync(path).isFile(), `${file}: expected a regular source file`);
@@ -142,7 +150,8 @@ function comparisonBase(cwd) {
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
   const cwd = process.cwd();
   const base = comparisonBase(cwd);
-  const added = addedByteLengthComparisons(cwd, base, scanByteLengthComparisons(cwd));
+  const findings = scanByteLengthComparisons(cwd, process.env.GITHUB_ACTIONS !== "true");
+  const added = addedByteLengthComparisons(cwd, base, findings);
   for (const { file, text, line } of added) {
     console.error(
       `${file}:${line}: Use the shared byte-limit helpers for ${JSON.stringify(text)}.`,

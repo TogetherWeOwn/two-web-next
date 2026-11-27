@@ -6,6 +6,7 @@ import {
   cpSync,
   mkdirSync,
   mkdtempSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -26,10 +27,12 @@ function checkByteLengthRuleCoverage() {
     const nodePath = "ci/unsafe.mjs";
     const jsPath = "web/scripts/unsafe.js";
     const sveltePath = "web/src/unsafe.svelte";
+    const cleanPath = "ci/clean.mjs";
     writeFileSync(join(directory, nodePath), unsafe);
+    writeFileSync(join(directory, cleanPath), "exceedsByteLimit(left.byteLength, max);\n");
     const git = (...args) => execFileSync("git", args, { cwd: directory });
     git("init", "--quiet");
-    git("add", "--", nodePath);
+    git("add", "--", nodePath, cleanPath);
     git("config", "user.name", "Fixture");
     git("config", "user.email", "fixture@example.org");
     git("-c", "core.hooksPath=/dev/null", "commit", "-qm", "Fixture", "--no-gpg-sign");
@@ -37,10 +40,7 @@ function checkByteLengthRuleCoverage() {
     writeFileSync(join(directory, ".gitignore"), `${nodePath}\n`);
     writeFileSync(join(directory, nodePath), `${unsafe}// ast-grep-ignore\n${unsafe}`);
     writeFileSync(join(directory, jsPath), unsafe);
-    writeFileSync(
-      join(directory, "ci/clean.mjs"),
-      "if (exceedsByteLimit(left.byteLength, max)) reject();\n",
-    );
+    renameSync(join(directory, cleanPath), join(directory, "ci/renamed.mjs"));
     writeFileSync(join(directory, "public/generated.js"), unsafe);
     writeFileSync(
       join(directory, sveltePath),
@@ -55,6 +55,10 @@ function checkByteLengthRuleCoverage() {
     writeFileSync(
       join(directory, "web/src/clean.svelte"),
       `<script>let total = left.byteLength;</script>\n<p>left.byteLength &gt; max</p>\n`,
+    );
+    writeFileSync(
+      join(directory, "web/src/fallback.svelte"),
+      `<script lang="legacy">${unsafe}</script>\n`,
     );
 
     for (const file of ["src/probe.tsx", "src/probe.jsx"]) {
@@ -79,7 +83,7 @@ function checkByteLengthRuleCoverage() {
     const lint = spawnSync("npm", ["run", "scan:fetch-await"], {
       cwd: directory,
       encoding: "utf8",
-      env: { ...process.env, GITHUB_EVENT_PATH: event },
+      env: { ...process.env, GITHUB_EVENT_PATH: event, GITHUB_ACTIONS: "" },
     });
     assert.equal(lint.status, 1, lint.error?.message ?? lint.stderr);
     assert.deepEqual(lint.stderr.match(/^.+:\d+(?=: Use the shared byte-limit helpers for )/gm), [
@@ -87,9 +91,11 @@ function checkByteLengthRuleCoverage() {
       "src/probe.jsx:2",
       "src/probe.tsx:2",
       `${jsPath}:1`,
+      "web/src/fallback.svelte:1",
       `${sveltePath}:2`,
       `${sveltePath}:6`,
     ]);
+    assert.throws(() => scanByteLengthComparisons(directory, false), /missing tracked files/);
     writeFileSync(join(directory, "ci/non-utf8.mjs"), Buffer.from([0xff]));
     assert.throws(() => scanByteLengthComparisons(directory), /ci\/non-utf8\.mjs: invalid UTF-8/);
     writeFileSync(

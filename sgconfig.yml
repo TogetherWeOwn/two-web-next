@@ -15,7 +15,7 @@ testConfigs:
   - testDir: sg-tests
 languageGlobs:
   # ast-grep's language globs match basenames, not paths.
-  # HTML injects JavaScript or TypeScript for script blocks based on lang.
+  # The HTML grammar exposes Svelte script bodies as raw text.
   Html:
     - "*.svelte"
   tsx:
@@ -26,3 +26,13 @@ languageGlobs:
     - "**/*.cjs"
     - "**/*.mjs"
     - "**/*.js"
+languageInjections:
+  # Svelte can execute scripts with unknown lang values as JavaScript.
+  # Parse every script body with the TypeScript grammar used for Node scripts.
+  - hostLanguage: Html
+    injected: ts
+    rule:
+      kind: raw_text
+      pattern: $CONTENT
+      inside:
+        kind: script_element

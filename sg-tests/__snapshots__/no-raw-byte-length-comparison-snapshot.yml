@@ -335,3 +335,21 @@ snapshots:
         style: secondary
         start: 4
         end: 41
+  const fits = $derived(new TextEncoder().encode(text).byteLength <= max);:
+    labels:
+      - source: new TextEncoder().encode(text).byteLength
+        style: primary
+        start: 22
+        end: 63
+      - source: byteLength
+        style: secondary
+        start: 53
+        end: 63
+      - source: <=
+        style: secondary
+        start: 64
+        end: 66
+      - source: new TextEncoder().encode(text).byteLength <= max
+        style: secondary
+        start: 22
+        end: 70

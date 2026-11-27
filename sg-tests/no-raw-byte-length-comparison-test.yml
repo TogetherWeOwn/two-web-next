@@ -12,8 +12,10 @@ valid:
   - 'if (((bytes.byteLength + 1) ? "a" : "b") === status) report();'
   - if (rows.length > MAX_ROWS) refuse();
   - if (exceedsByteLimit(Buffer.byteLength(text, "utf8"), max)) reject();
+  - const fits = $derived(fitsUtf8ByteLimit(text, max));
 invalid:
   - if (Buffer.byteLength(text, "utf8") > max) reject();
+  - const fits = $derived(new TextEncoder().encode(text).byteLength <= max);
   - |
     function authReturnHref() {
       const fits = (href: string) => new TextEncoder().encode(href).byteLength <= maxBytes;
