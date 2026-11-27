@@ -83,9 +83,9 @@ export async function packageCutover(dir, repo, installed, identity, context) {
     throw error;
   }
 
-  await appendFile(process.env.GITHUB_OUTPUT, `digest=${digest}\n`);
   await appendFile(
     process.env.GITHUB_STEP_SUMMARY,
     `Cutover packet manifest SHA-256: \`${digest}\`\n`,
   );
+  await appendFile(process.env.GITHUB_OUTPUT, `digest=${digest}\n`);
 }
