@@ -2,145 +2,145 @@ id: no-raw-html-assertion
 snapshots:
   assert(/<form\b/.test(html));:
     labels:
-    - source: /<form\b/.test(html)
-      style: primary
-      start: 7
-      end: 27
-    - source: assert(/<form\b/.test(html))
-      style: secondary
-      start: 0
-      end: 28
-    - source: (/<form\b/.test(html))
-      style: secondary
-      start: 6
-      end: 28
+      - source: /<form\b/.test(html)
+        style: primary
+        start: 7
+        end: 27
+      - source: assert(/<form\b/.test(html))
+        style: secondary
+        start: 0
+        end: 28
+      - source: (/<form\b/.test(html))
+        style: secondary
+        start: 6
+        end: 28
   assert.equal(response.text, '<p role="status">Ready</p>');:
     labels:
-    - source: assert.equal(response.text, '<p role="status">Ready</p>')
-      style: primary
-      start: 0
-      end: 57
+      - source: assert.equal(response.text, '<p role="status">Ready</p>')
+        style: primary
+        start: 0
+        end: 57
   assert.match(rendered.body, /data-testid="recovery-retry"/, label);:
     labels:
-    - source: assert.match(rendered.body, /data-testid="recovery-retry"/, label)
-      style: primary
-      start: 0
-      end: 66
+      - source: assert.match(rendered.body, /data-testid="recovery-retry"/, label)
+        style: primary
+        start: 0
+        end: 66
   assert.ok(answer.body.includes(`<h1>${signal} hot zone</h1>`), answer.label);:
     labels:
-    - source: answer.body.includes(`<h1>${signal} hot zone</h1>`)
-      style: primary
-      start: 10
-      end: 61
-    - source: assert.ok(answer.body.includes(`<h1>${signal} hot zone</h1>`), answer.label)
-      style: secondary
-      start: 0
-      end: 76
-    - source: (answer.body.includes(`<h1>${signal} hot zone</h1>`), answer.label)
-      style: secondary
-      start: 9
-      end: 76
+      - source: answer.body.includes(`<h1>${signal} hot zone</h1>`)
+        style: primary
+        start: 10
+        end: 61
+      - source: assert.ok(answer.body.includes(`<h1>${signal} hot zone</h1>`), answer.label)
+        style: secondary
+        start: 0
+        end: 76
+      - source: (answer.body.includes(`<h1>${signal} hot zone</h1>`), answer.label)
+        style: secondary
+        start: 9
+        end: 76
   const hasTable = /<table[\s>]/.test(html);:
     labels:
-    - source: /<table[\s>]/.test(html)
-      style: primary
-      start: 17
-      end: 41
-    - source: hasTable = /<table[\s>]/.test(html)
-      style: secondary
-      start: 6
-      end: 41
+      - source: /<table[\s>]/.test(html)
+        style: primary
+        start: 17
+        end: 41
+      - source: hasTable = /<table[\s>]/.test(html)
+        style: secondary
+        start: 6
+        end: 41
   const hasWidget = body.includes('data-testid="join-widget-load"');:
     labels:
-    - source: body.includes('data-testid="join-widget-load"')
-      style: primary
-      start: 18
-      end: 65
-    - source: hasWidget = body.includes('data-testid="join-widget-load"')
-      style: secondary
-      start: 6
-      end: 65
+      - source: body.includes('data-testid="join-widget-load"')
+        style: primary
+        start: 18
+        end: 65
+      - source: hasWidget = body.includes('data-testid="join-widget-load"')
+        style: secondary
+        start: 6
+        end: 65
   const heading = html.match(new RegExp(`<h1 id="${id}">([^<]*)`));:
     labels:
-    - source: html.match(new RegExp(`<h1 id="${id}">([^<]*)`))
-      style: primary
-      start: 16
-      end: 64
-    - source: heading = html.match(new RegExp(`<h1 id="${id}">([^<]*)`))
-      style: secondary
-      start: 6
-      end: 64
+      - source: html.match(new RegExp(`<h1 id="${id}">([^<]*)`))
+        style: primary
+        start: 16
+        end: 64
+      - source: heading = html.match(new RegExp(`<h1 id="${id}">([^<]*)`))
+        style: secondary
+        start: 6
+        end: 64
   expect(await response.text(), "Join link").toContain(`href="${joinPath}"`);:
     labels:
-    - source: expect(await response.text(), "Join link").toContain(`href="${joinPath}"`)
-      style: primary
-      start: 0
-      end: 74
+      - source: expect(await response.text(), "Join link").toContain(`href="${joinPath}"`)
+        style: primary
+        start: 0
+        end: 74
   ? |
     expect(body).toContain(
       '<p role="status">Ready</p>',
     );
   : labels:
-    - source: |-
-        expect(body).toContain(
-          '<p role="status">Ready</p>',
-        )
-      style: primary
-      start: 0
-      end: 57
+      - source: |-
+          expect(body).toContain(
+            '<p role="status">Ready</p>',
+          )
+        style: primary
+        start: 0
+        end: 57
   expect(body).toContain('rel="canonical"');:
     labels:
-    - source: expect(body).toContain('rel="canonical"')
-      style: primary
-      start: 0
-      end: 41
+      - source: expect(body).toContain('rel="canonical"')
+        style: primary
+        start: 0
+        end: 41
   expect(body).toMatch(/<main\b[^>]*>/i);:
     labels:
-    - source: expect(body).toMatch(/<main\b[^>]*>/i)
-      style: primary
-      start: 0
-      end: 38
+      - source: expect(body).toMatch(/<main\b[^>]*>/i)
+        style: primary
+        start: 0
+        end: 38
   expect(body).toMatch(/action="\/events"/);:
     labels:
-    - source: expect(body).toMatch(/action="\/events"/)
-      style: primary
-      start: 0
-      end: 41
+      - source: expect(body).toMatch(/action="\/events"/)
+        style: primary
+        start: 0
+        end: 41
   expect(html).toContain('name="duration" type="number"');:
     labels:
-    - source: expect(html).toContain('name="duration" type="number"')
-      style: primary
-      start: 0
-      end: 55
+      - source: expect(html).toContain('name="duration" type="number"')
+        style: primary
+        start: 0
+        end: 55
   expect(html.includes("<form")).toBe(true);:
     labels:
-    - source: html.includes("<form")
-      style: primary
-      start: 7
-      end: 29
-    - source: expect(html.includes("<form")).toBe(true)
-      style: secondary
-      start: 0
-      end: 41
-    - source: (html.includes("<form"))
-      style: secondary
-      start: 6
-      end: 30
+      - source: html.includes("<form")
+        style: primary
+        start: 7
+        end: 29
+      - source: expect(html.includes("<form")).toBe(true)
+        style: secondary
+        start: 0
+        end: 41
+      - source: (html.includes("<form"))
+        style: secondary
+        start: 6
+        end: 30
   if (!html.includes('aria-label="Primary"')) failures.push("missing navigation");:
     labels:
-    - source: html.includes('aria-label="Primary"')
-      style: primary
-      start: 5
-      end: 42
-    - source: if (!html.includes('aria-label="Primary"')) failures.push("missing navigation");
-      style: secondary
-      start: 0
-      end: 80
-    - source: (!html.includes('aria-label="Primary"'))
-      style: secondary
-      start: 3
-      end: 43
-    - source: '!html.includes(''aria-label="Primary"'')'
-      style: secondary
-      start: 4
-      end: 42
+      - source: html.includes('aria-label="Primary"')
+        style: primary
+        start: 5
+        end: 42
+      - source: if (!html.includes('aria-label="Primary"')) failures.push("missing navigation");
+        style: secondary
+        start: 0
+        end: 80
+      - source: (!html.includes('aria-label="Primary"'))
+        style: secondary
+        start: 3
+        end: 43
+      - source: '!html.includes(''aria-label="Primary"'')'
+        style: secondary
+        start: 4
+        end: 42
