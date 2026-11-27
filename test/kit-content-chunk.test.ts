@@ -75,7 +75,10 @@ describe("transformContentLeafChunk", () => {
 
   it("merges into an existing body class instead of duplicating the tag", () => {
     const out = transformContentLeafChunk('<head></head><body class="app"><div>hi</div></body>');
-    const [body] = tags(out, "body");
+    const errors: string[] = [];
+    const doc = parse(out, { ...parserOptions, onParseError: ({ code }) => errors.push(code) });
+    const body = elements(doc).find((el) => el.tagName === "body");
+    expect(errors).not.toContain("duplicate-attribute");
     expect(body && attr(body, "class")).toBe("app base-theme content-theme");
     const startTag = body?.sourceCodeLocation?.startTag;
     // HTML parsing folds duplicate body tags into one node. Check the bytes after its opening tag.
