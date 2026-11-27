@@ -86,8 +86,9 @@ class AdmissionTest(TestCase):
                     scope["verify_current"](lambda path, candidate=candidate: candidate, event)
 
     def actions_fixture(self):
-        head = {"sha": "a" * 40, "ref": "topic", "repo": {"id": 1}}
-        pr = {"number": 4, "head": head, "base": {"sha": "b" * 40, "ref": "main", "repo": {"id": 2}}}
+        head = {"sha": "a" * 40, "ref": "topic", "label": "fork:topic", "repo": {"id": 1}}
+        pr = {"number": 4, "head": head, "base": {"sha": "b" * 40, "ref": "main", "repo": {"id": 2}},
+              "created_at": "2026-01-01T00:00:00Z", "closed_at": None}
         runs, jobs = [], {}
 
         def add(workflow, *names):
@@ -104,6 +105,8 @@ class AdmissionTest(TestCase):
             return jobs[run]
 
         def api(path):
+            if path.startswith("pulls?"):
+                return [pr]
             if path.startswith("actions/workflows/"):
                 matches = [run for run in runs if Path(run["path"]).name == path.split("/")[2]]
                 return {"total_count": len(matches), "workflow_runs": matches}
@@ -131,7 +134,8 @@ class AdmissionTest(TestCase):
             return [{"name": name, "conclusion": "success"}
                     for name in ("Scan the full history", f"Scan PR 4 on 2:{ref} at {merge_sha}")]
 
-        add("pr-gates", "pr-lint", "gitleaks")[1]["steps"] = steps("main")
+        source = add("pr-gates", "pr-lint", "gitleaks")[1]
+        source["steps"] = steps("main")
         runs[0]["pull_requests"] = []  # GitHub omits associations for some fork runs.
         add("pr-gates", "pr-lint")[0]["labels"] = ["ubuntu-24.04"]
         runs[-1]["conclusion"] = "cancelled"
@@ -142,6 +146,12 @@ class AdmissionTest(TestCase):
 
         self.assertEqual(lookup(), (runs[0]["created_at"], 11, "synthetic"))
         self.assertIsNone(lookup(runs[1]["created_at"]))
+        with patch.dict(source, steps=steps("main")[:1]):
+            self.assertEqual(lookup(), (runs[0]["created_at"], 11, "synthetic"))
+            self.assertIsNone(lookup(runs[0]["created_at"]))
+            def shared_branch(path):
+                return [pr, dict(pr, number=5)] if path.startswith("pulls?") else api(path)
+            self.assertIsNone(source_scan(shared_branch, pr, current, "", merge_sha))
 
         newer = add("pr-gates", "pr-lint", "gitleaks")[1]
         for reason in ("failure", "skipped", "cancelled", "success"):

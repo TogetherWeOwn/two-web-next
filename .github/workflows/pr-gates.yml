@@ -35,7 +35,7 @@ permissions:
 
 # Keep source updates, metadata edits, and user-provided dispatch input isolated.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.action == 'edited' && !github.event.changes.base && 'metadata' || 'source' }}-${{ github.event.pull_request.number || inputs.pr_number || github.sha }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && 'dispatch' || github.event.action == 'edited' && !github.event.changes.base && 'metadata' || 'source' }}-${{ github.event.pull_request.number || inputs.pr_number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -354,6 +354,7 @@ jobs:
           import subprocess
           import time
           from pathlib import Path
+          from urllib.parse import quote
 
 
           def identity(pr):
@@ -380,6 +381,22 @@ jobs:
                   if len(events) < 100:
                       return latest
               raise ValueError("Incomplete PR retarget history")
+
+
+          def legacy_binding(api, pr, associations, started):
+              # The scan predates target receipts. Bind it to the only PR it could have served.
+              if associations:
+                  return identity(associations[0]) == identity(pr)
+              head = pr["head"]
+              label = quote(head["label"], safe="")
+              history = api(f"pulls?state=all&head={label}&per_page=100")
+              if len(history) >= 100:
+                  raise ValueError("Incomplete PR branch history")
+              matches = [other["number"] for other in history
+                         if other["head"]["ref"] == head["ref"]
+                         and (other["head"]["repo"] or {}).get("id") == head["repo"]["id"]
+                         and other["created_at"] <= started <= (other["closed_at"] or started)]
+              return matches == [pr["number"]]
 
 
           def source_scan(api, pr, current_run, retarget, merge_sha):
@@ -427,11 +444,18 @@ jobs:
                   if (scan["status"] != "completed" or scan["conclusion"] != "success"
                           or "Scan the full history" not in successful_steps):
                       raise ValueError(f"The latest source scan did not pass: {scan['html_url']}")
-                  if (not any(name.startswith(target) for name in successful_steps)
-                          or run["created_at"] < retarget
-                          or (run["created_at"] == retarget and target + merge_sha not in successful_steps)):
+                  started = run["created_at"]
+                  if started < max(retarget, pr["created_at"]):
                       return None
-                  proof = run["created_at"], scan["id"], scan["html_url"]
+                  targets = [step for step in scan["steps"] if step["name"].startswith("Scan PR ")]
+                  if targets:
+                      if (len(targets) != 1 or targets[0]["conclusion"] != "success"
+                              or not targets[0]["name"].startswith(target)
+                              or (started == retarget and targets[0]["name"] != target + merge_sha)):
+                          return None
+                  elif started == retarget or not legacy_binding(api, pr, associations, started):
+                      return None
+                  proof = started, scan["id"], scan["html_url"]
               return proof
 
 

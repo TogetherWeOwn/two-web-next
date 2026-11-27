@@ -33,7 +33,7 @@ describe("workflow concurrency", () => {
     const workflow = parse(readFileSync(join(dir, "pr-gates.yml"), "utf8"));
     const meta = "github.event.action == 'edited' && !github.event.changes.base";
     expect(workflow.concurrency.group).toBe(
-      `\${{ github.workflow }}-\${{ ${meta} && 'metadata' || 'source' }}-\${{ github.event.pull_request.number || inputs.pr_number || github.sha }}`,
+      `\${{ github.workflow }}-\${{ github.event_name == 'workflow_dispatch' && 'dispatch' || ${meta} && 'metadata' || 'source' }}-\${{ github.event.pull_request.number || inputs.pr_number || github.sha }}`,
     );
     expect(workflow.on.pull_request.types).toEqual([
       "opened",
