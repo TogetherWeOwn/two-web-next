@@ -211,9 +211,9 @@ describe("Kit /faq parity with Hono", () => {
     expect(dom.one("a", { class: "skip-link", href: "#main" })).toBeDefined();
     expect(dom.one("nav", { "aria-label": "Primary" })).toBeDefined();
     expect(dom.all("link", { rel: "canonical" })).toHaveLength(1);
-    expect(
-      dom.one("link", { rel: "canonical", href: canonicalUrl(APP_URL, "/faq") }),
-    ).toBeDefined();
+    expect(dom.headLinks({ rel: "canonical", href: canonicalUrl(APP_URL, "/faq") })).toHaveLength(
+      1,
+    );
     expect(dom.text(dom.one("h1", { id: "faq-heading" }))).toBe("Frequently asked questions");
     expect(dom.text(dom.one("p", { class: "strap" }))).toBe("New here? Start here");
     const list = dom.one("div", { "data-testid": "faq-list" });
@@ -242,8 +242,8 @@ describe("Kit /faq parity with Hono", () => {
     const kit = contentLeafDom(renderPage(faqPageData(APP_URL)));
     const { html } = await honoFaq();
     const alternate = { rel: "alternate", href: "/faq.md" };
-    expect(kit.one("link", { ...alternate, type: "text/markdown" })).toBeDefined();
-    expect(contentLeafDom(html).one("link", alternate)).toBeDefined();
+    expect(kit.headLinks({ ...alternate, type: "text/markdown" })).toHaveLength(1);
+    expect(contentLeafDom(html).headLinks(alternate)).toHaveLength(1);
   });
 
   it("renders no scripts and no secret-shaped content (no-JS page)", () => {
@@ -265,6 +265,18 @@ describe("Kit /faq parity with Hono", () => {
     expect(
       dom.elements.some((node) => /lobby-|font-sans/.test(dom.attr(node, "class") ?? "")),
     ).toBe(false);
+  });
+
+  it("detects resources inside templates and noscript fallbacks", () => {
+    const dom = contentLeafDom(`
+      <head><noscript><link rel="stylesheet" href="/fallback.css"></noscript></head>
+      <body><template><script></script><link rel="preload" as="style" href="/extra.css"></template></body>
+    `);
+    expect(dom.linksWithRel("stylesheet").map((link) => dom.attr(link, "href"))).toContain(
+      "/fallback.css",
+    );
+    expect(dom.linksWithRel("preload").some((link) => dom.attr(link, "as") === "style")).toBe(true);
+    expect(dom.elements.some((node) => node.tagName === "script")).toBe(true);
   });
 
   it("pins the server load contract at the source level", () => {

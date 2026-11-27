@@ -62,6 +62,9 @@ export function contentLeafDom(html: string) {
     text,
     elements,
     attr: renderedAttribute,
+    headLinks(attrs: Attributes) {
+      return all("link", attrs).filter((link) => link.parentNode?.nodeName === "head");
+    },
     guestJoin() {
       const account = one("nav", { "aria-label": "Account" });
       const caption = account && all("span", { class: "account-caption" }, account)[0];
