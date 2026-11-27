@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 
 // Direct release workflow inputs and deployed readiness wiring, not ordinary app imports.
 const directPaths = new Set(
-  `ci/promotion-path.mjs
+  `ci/promotion-path.mjs ci/promotion-path-local.mjs
    ci/resolve-promotion-sha.mjs ci/production-deploy-gate.mjs ci/rollback-target.mjs ci/drill-scripts-ref.mjs
    ci/post-deploy-watch.mjs ci/check-production-secrets.mjs
    ci/operator-constants.mjs ci/wrangler-config.mjs ci/worker-bundle-evidence.mjs
