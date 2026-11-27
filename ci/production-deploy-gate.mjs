@@ -109,6 +109,36 @@ export function isAlreadyLive(deploySha, liveSha) {
   );
 }
 
+// GitHub can include up to 300 file diffs on the first page even with one
+// commit requested. 16 MiB leaves room for those diffs and the commit metadata.
+const MAX_PROMOTION_COMPARE_BYTES = 16 * 1024 * 1024;
+
+async function readPromotionComparison(response) {
+  let reader;
+  try {
+    reader = response.body.getReader();
+    const bytes = new Uint8Array(MAX_PROMOTION_COMPARE_BYTES);
+    let length = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return JSON.parse(new TextDecoder().decode(bytes.subarray(0, length)));
+      if (value.byteLength > bytes.length - length) break;
+      bytes.set(value, length);
+      length += value.byteLength;
+    }
+  } catch {
+    throw new Error("Promotion ancestry lookup returned unreadable JSON");
+  } finally {
+    if (reader) {
+      // Count decoded body bytes independently of the advertised Content-Length.
+      // A slow cancellation must not delay a refusal.
+      void reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+    }
+  }
+  throw new Error("Promotion ancestry response exceeds 16 MiB");
+}
+
 // Default selection is monotonic even when staging eligibility falls back to
 // an older green. Run from the workflow-head checkout before candidate code.
 // An explicit dispatch only selects the existing recovery route; it grants no
@@ -138,7 +168,7 @@ export async function checkPromotionAncestry(env, { fetchImpl = fetch, refusal }
   }
   if (!env.GITHUB_TOKEN) throw new Error("Promotion ancestry requires GITHUB_TOKEN");
   const response = await fetchImpl(
-    `https://api.github.com/repos/${env.GITHUB_REPOSITORY}/compare/${liveSha}...${targetSha}`,
+    `https://api.github.com/repos/${env.GITHUB_REPOSITORY}/compare/${liveSha}...${targetSha}?per_page=1`,
     {
       headers: {
         Authorization: `Bearer ${env.GITHUB_TOKEN}`,
@@ -152,7 +182,7 @@ export async function checkPromotionAncestry(env, { fetchImpl = fetch, refusal }
   if (!response.ok) {
     throw new Error(`Promotion ancestry lookup failed (HTTP ${response.status})`);
   }
-  const comparison = await response.json();
+  const comparison = await readPromotionComparison(response);
   // Exact SHA refs bind the requested head. Require the base and merge-base
   // identities plus consistent counts, not a status string alone. Do not use
   // the commits array: GitHub can paginate/truncate it for large comparisons.
@@ -904,6 +934,30 @@ export async function verifyAllocationSoak(env, { fetchImpl = fetch, now = Date.
   );
 }
 
+async function readPassiveLedgerZip(body) {
+  if (!body) throw new Error("Passive ledger zip has no body");
+  const bytes = Buffer.alloc(PASSIVE_LEDGER_MAX_BYTES);
+  const reader = body.getReader();
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read().catch(() => {
+        throw new Error("Passive ledger zip could not be read");
+      });
+      if (done) return bytes.subarray(0, size);
+      if (size + value.byteLength > PASSIVE_LEDGER_MAX_BYTES) {
+        // Request cancellation immediately. A storage failure must not delay or mask refusal.
+        void reader.cancel().catch(() => undefined);
+        throw new Error(`Passive ledger zip is over the ${PASSIVE_LEDGER_MAX_BYTES}-byte limit`);
+      }
+      bytes.set(value, size);
+      size += value.byteLength;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 // The candidate's staging passive ledgers: the artifact of the newest
 // e2e-staging run titled for the candidate, which must name the candidate.
 export async function fetchPassiveLedgers(
@@ -991,14 +1045,14 @@ export async function fetchPassiveLedgers(
   if (redirect.status !== 302 || !location?.startsWith("https://")) {
     throw new Error(`Passive ledger download failed (HTTP ${redirect.status})`);
   }
-  const zip = await fetchImpl(location, { redirect: "error", signal: AbortSignal.timeout(60_000) });
+  const zip = await fetchImpl(location, {
+    redirect: "error",
+    signal: AbortSignal.timeout(60_000),
+  }).catch(() => {
+    throw new Error("Passive ledger download failed");
+  });
   if (!zip.ok) throw new Error(`Passive ledger download failed (HTTP ${zip.status})`);
-  const bytes = Buffer.from(await zip.arrayBuffer());
-  if (bytes.byteLength > PASSIVE_LEDGER_MAX_BYTES) {
-    throw new Error(
-      `Passive ledger zip is ${bytes.byteLength} bytes, over the ${PASSIVE_LEDGER_MAX_BYTES}-byte limit`,
-    );
-  }
+  const bytes = await readPassiveLedgerZip(zip.body);
   mkdirSync(dir, { recursive: true });
   const zipPath = join(dir, "ledger.zip");
   writeFileSync(zipPath, bytes);

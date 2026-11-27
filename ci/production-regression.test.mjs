@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { first, preRollback, soakEnv, trustedReads } from "../test/fixtures/staging-soak-http.mjs";
+import soakFixture from "../test/fixtures/staging-soak-receipt.json" with { type: "json" };
+import { STAGING_ORIGIN } from "./operator-constants.mjs";
 import {
   PASSIVE_LEDGER_MAX_BYTES,
   SOAK_ERROR_RATE_FLOOR,
@@ -20,6 +23,7 @@ import {
   stagingCandidateVersions,
   stagingSoakSample,
   sumScriptErrors,
+  verifyAllocationSoak,
 } from "./production-deploy-gate.mjs";
 
 const SHA = "a".repeat(40);
@@ -314,6 +318,84 @@ test("regression check refuses an elevated staging soak error rate and a missing
   );
 });
 
+test("the regression gate refuses a recorded staging soak with elevated errors", async () => {
+  const { sha, workerVersion, deployedAt, floorAt } = soakFixture.receipt;
+  const nowMs = Date.parse(floorAt);
+  const env = soakEnv({ accountId: ACCOUNT, token: "fixture-only" });
+  const capture = (errors) =>
+    verifyAllocationSoak(env, {
+      now: () => nowMs,
+      fetchImpl: trustedReads(
+        {
+          fetchImpl: async (input, init) => {
+            const url = String(input);
+            if (url === `${STAGING_ORIGIN}/version`) return Response.json({ sha, deployedAt });
+            if (url === `${STAGING_ORIGIN}/up`) {
+              return Response.json(
+                { revision: { commit: sha, version_id: workerVersion } },
+                { headers: { "x-two-origin": "two-web-next", "cache-control": "no-store" } },
+              );
+            }
+            assert.equal(url, "https://api.cloudflare.com/client/v4/graphql");
+            assert.deepEqual(JSON.parse(init.body).variables, {
+              accountTag: ACCOUNT,
+              scriptName: "two-web-next",
+              versionId: workerVersion,
+              since: preRollback.run_started_at,
+              until: floorAt,
+            });
+            const row = {
+              dimensions: { scriptVersion: workerVersion },
+              sum: { requests: 100, errors },
+            };
+            return Response.json({
+              data: { viewer: { accounts: [{ workersInvocationsAdaptive: [row] }] } },
+            });
+          },
+        },
+        { deployments: () => [first], run: preRollback },
+      ),
+    });
+  const qualify = ({ sample }) =>
+    checkRegression(
+      regressionEnv(green, {
+        STAGING_SOAK_REQUESTS: String(sample.requests),
+        STAGING_SOAK_ERRORS: String(sample.errors),
+      }),
+      {
+        readJson: (path) => structuredClone(green[path]),
+        fetchImpl: analytics(10_000, 100),
+        nowMs,
+      },
+    );
+
+  const elevated = await capture(2);
+  await assert.rejects(qualify(elevated), /staging error rate 0\.0200 exceeds the limit 0\.0150/);
+  const clean = await capture(0);
+  const result = await qualify(clean);
+  assert.equal(result.verdict, "pass");
+  assert.deepEqual(result.staging, { requests: 100, errors: 0 });
+
+  assert.deepEqual(elevated, {
+    schema: "staging-soak/2",
+    sha,
+    allocationId: first.id,
+    allocationStartedAt: "2026-01-01T10:01:00.123456000Z",
+    workerVersion,
+    e2e: {
+      runId: preRollback.id,
+      startedAt: preRollback.run_started_at,
+      completedAt: preRollback.updated_at,
+    },
+    deployedAt,
+    e2eCompletedAt: "2026-01-01T10:09:00.000Z",
+    floorAt,
+    status: "sampled",
+    sample: { observedAt: floorAt, workerVersion, requests: 100, errors: 2 },
+  });
+  assert.deepEqual(clean, { ...elevated, sample: { ...elevated.sample, errors: 0 } });
+});
+
 function versionsApi(pages, seen = []) {
   return async (url, init) => {
     const parsed = new URL(url);
@@ -390,12 +472,12 @@ test("a redeployed candidate sums every tagged version, oldest first", async () 
   );
 });
 
-function githubArtifacts({ runs, artifacts, commit = SHA, seen = {} }) {
+function githubArtifacts({ runs, artifacts, commit = SHA, zipResponse, seen = {} }) {
   return async (url, init = {}) => {
     const parsed = new URL(url);
     if (parsed.hostname === "blob.example") {
       seen.blobAuth = init.headers?.Authorization;
-      return { ok: true, arrayBuffer: async () => new TextEncoder().encode(commit).buffer };
+      return zipResponse ?? new Response(commit);
     }
     assert.equal(init.headers.Authorization, "Bearer fixture-only");
     if (parsed.pathname.endsWith("/actions/workflows/e2e-staging.yml/runs")) {
@@ -420,7 +502,7 @@ function githubArtifacts({ runs, artifacts, commit = SHA, seen = {} }) {
 }
 
 function fetchLedgers(options, unzipSeen = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "passive-"));
+  const dir = options.dir ?? mkdtempSync(join(tmpdir(), "passive-"));
   return fetchPassiveLedgers(
     {
       repository: "fixture/repo",
@@ -627,6 +709,10 @@ test("deploy-production runs the regression check before the deploy job", () => 
   assert.match(regression, /needs: \[preflight, staging-soak\]/);
   assert.match(job("preflight", "staging-soak"), /INPUT_SHA: \$\{\{ inputs\.sha \}\}/);
   assert.match(
+    job("staging-soak", "regression"),
+    /\n {6}errors: \$\{\{ steps\.soak\.outputs\.errors \}\}\n/,
+  );
+  assert.match(
     regression,
     /STAGING_E2E_RUN_ID: \$\{\{ needs\.staging-soak\.outputs\.e2e_run_id \}\}/,
   );
@@ -671,6 +757,7 @@ test("deploy-production runs the regression check before the deploy job", () => 
     regression,
     /STAGING_SOAK_REQUESTS: \$\{\{ needs\.staging-soak\.outputs\.requests \}\}/,
   );
+  assert.match(regression, /STAGING_SOAK_ERRORS: \$\{\{ needs\.staging-soak\.outputs\.errors \}\}/);
   // The gate runs from the tip, the checkers from the candidate.
   assert.match(regression, /ref: \$\{\{ needs\.preflight\.outputs\.sha \}\}/);
   assert.match(regression, /ref: \$\{\{ github\.sha \}\}\n {10}path: gate-tip\n/);
@@ -859,28 +946,94 @@ test("a passive ledger run without an integer id is refused", async () => {
   );
 });
 
-test("an oversized passive ledger zip is refused before it touches disk", async () => {
+test("an oversized passive ledger zip is refused before it touches disk", async (t) => {
   assert.equal(PASSIVE_LEDGER_MAX_BYTES, 8 * 1024 * 1024);
+  const root = mkdtempSync(join(tmpdir(), "passive-ledger-overflow-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const dir = join(root, "unpublished");
+  const unzipSeen = {};
+  let pulls = 0;
+  let cancelled = false;
+  const body = new ReadableStream(
+    {
+      pull(controller) {
+        pulls += 1;
+        if (pulls === 1) controller.enqueue(new Uint8Array(PASSIVE_LEDGER_MAX_BYTES));
+        else if (pulls === 2) controller.enqueue(new Uint8Array(1));
+        else controller.close();
+      },
+      cancel() {
+        cancelled = true;
+      },
+    },
+    { highWaterMark: 0 },
+  );
   await assert.rejects(
-    fetchLedgers({
-      runs: [e2eRun(9)],
-      artifacts: [{ id: 77, name: "staging-passive-ledger-9", expired: false }],
-      commit: "x".repeat(PASSIVE_LEDGER_MAX_BYTES + 1),
-    }),
+    fetchLedgers(
+      {
+        runs: [e2eRun(9)],
+        artifacts: [{ id: 77, name: "staging-passive-ledger-9", expired: false }],
+        dir,
+        zipResponse: new Response(body, { headers: { "content-length": "1" } }),
+      },
+      unzipSeen,
+    ),
     /over the 8388608-byte limit/,
   );
+  assert.equal(cancelled, true);
+  assert.equal(pulls, 2);
+  assert.equal(unzipSeen.zip, undefined);
+  assert.equal(existsSync(dir), false);
 });
 
-test("a passive ledger zip exactly at the size limit is accepted", async () => {
-  // The inclusive boundary: the guard rejects over the limit, not at it.
-  // Trailing spaces survive the stub unzip and trim away, so the payload is
-  // exactly the limit while still naming the candidate.
+test("a passive ledger zip read failure is refused without exposing provider data", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "passive-ledger-read-error-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const dir = join(root, "unpublished");
+  const unzipSeen = {};
+  const body = new ReadableStream({
+    pull(controller) {
+      controller.error(new Error("synthetic storage diagnostic"));
+    },
+  });
+  await assert.rejects(
+    fetchLedgers(
+      {
+        runs: [e2eRun(9)],
+        artifacts: [{ id: 77, name: "staging-passive-ledger-9", expired: false }],
+        dir,
+        zipResponse: new Response(body),
+      },
+      unzipSeen,
+    ),
+    { message: "Passive ledger zip could not be read" },
+  );
+  assert.equal(unzipSeen.zip, undefined);
+  assert.equal(existsSync(dir), false);
+});
+
+test("a passive ledger zip exactly at the size limit is accepted", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "passive-ledger-limit-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  // Split the candidate SHA across chunks. Trailing spaces fill the exact limit
+  // and survive the stub unzip before the gate trims the commit file.
+  const bytes = Buffer.from(SHA.padEnd(PASSIVE_LEDGER_MAX_BYTES));
+  const split = SHA.length / 2;
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(bytes.subarray(0, split));
+      controller.enqueue(bytes.subarray(split));
+      controller.close();
+    },
+  });
   const result = await fetchLedgers({
     runs: [e2eRun(9)],
     artifacts: [{ id: 77, name: "staging-passive-ledger-9", expired: false }],
-    commit: `${SHA}${" ".repeat(PASSIVE_LEDGER_MAX_BYTES - SHA.length)}`,
+    dir,
+    zipResponse: new Response(body),
   });
   assert.deepEqual(result, { runId: 9, artifactId: 77 });
+  assert.ok(readFileSync(join(dir, "ledger.zip")).equals(bytes));
 });
 
 test("legacy staging soak requires complete bounded history across pages", async () => {

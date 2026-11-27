@@ -66,7 +66,7 @@ export function fixtureCluster(directory) {
     throw error;
   }
 
-  const connect = (user, pass, database = "postgres") =>
+  const connect = (user, pass, database = "postgres", debug) =>
     postgres({
       path: join(directory, ".s.PGSQL.5432"),
       database,
@@ -74,6 +74,7 @@ export function fixtureCluster(directory) {
       pass,
       max: 1,
       connect_timeout: 5,
+      debug,
       connection: { statement_timeout: 10_000, lock_timeout: 2_000 },
       onnotice: () => {},
     });

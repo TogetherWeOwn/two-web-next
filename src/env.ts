@@ -100,6 +100,8 @@ export type Env = AgentEventsEnv & {
   KIT_PARITY_FIXTURE_EVENT_DETAIL?: string;
   // Loopback Kit parity fixture only; the shipped join entry stays disabled.
   KIT_PARITY_FIXTURE_JOIN?: string;
+  // Loopback installed Worker fixture only; admits the shared featured delete form.
+  KIT_PARITY_FIXTURE_ADMIN_FEATURED_DELETE?: string;
   // Loopback Kit parity fixture only; serves GET /admin for dashboard captures.
   KIT_PARITY_FIXTURE_ADMIN_DASHBOARD?: string;
   // Loopback Kit parity fixture only; serves the synthetic attendance record.
@@ -142,6 +144,8 @@ export type Env = AgentEventsEnv & {
   KIT_ROUTE_SECURITY_TXT?: string;
   // Admin serving integration is accepted only on canonical staging or loopback.
   KIT_ROUTE_ADMIN?: string;
+  // Exact queue preview GET on canonical staging or HTTP loopback. Default off.
+  KIT_ROUTE_ADMIN_QUEUE_PREVIEW?: string;
   // Owner-only profile PATCH and native form POST. Only "true" opts in.
   KIT_ROUTE_PROFILE_WRITES?: string;
   // Health, version, CSP sink and alert probe. Only "true" opts in.

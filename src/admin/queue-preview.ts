@@ -18,10 +18,10 @@ export type QueuePreviewVars = {
 };
 
 /** Join key for the audit-failure line: the preview's id, else the validated selector. */
-function previewFailureId(c: Context<QueuePreviewVars>): number | null {
+function previewFailureId(c: Context<QueuePreviewVars>, selector?: string): number | null {
   const preview = c.get("queuePreviewAudit");
   if (preview) return preview.failure.id;
-  return parseFailureId(c.req.param("id") ?? "");
+  return parseFailureId(selector ?? c.req.param("id") ?? "");
 }
 
 /** Operational reads use the existing activity trail, not invented member subjects. */
@@ -58,7 +58,11 @@ export async function recordQueuePreviewAccess(
  * any buffered contents leave the request. Audit failure always refuses.
  * https://hono.dev/docs/guides/middleware#execution-order
  */
-export async function queuePreviewAdmission(c: Context<QueuePreviewVars>, next: Next) {
+export async function queuePreviewAdmission(
+  c: Context<QueuePreviewVars>,
+  next: Next,
+  selector?: string,
+) {
   // One middleware registration covers the queue namespace so the route
   // inventory keeps a single staging-operator entry; the apply path owns its
   // own admission and audit below.
@@ -91,14 +95,18 @@ export async function queuePreviewAdmission(c: Context<QueuePreviewVars>, next: 
     // Exception class + failure id only: no message, SQL, bindings, URI or payload.
     console.error("queue preview audit failed; refusing preview.", {
       exception: err instanceof Error ? err.name : typeof err,
-      failureId: previewFailureId(c),
+      failureId: previewFailureId(c, selector),
     });
     c.res = c.json({ error: "preview_unavailable" }, 503);
   }
   c.header("cache-control", "private, no-store");
 }
 
-export async function queuePreviewHandler(c: Context<QueuePreviewVars>) {
+export function queuePreviewHandler(c: Context<QueuePreviewVars>) {
+  return respondQueuePreview(c, c.req.param("id") ?? "");
+}
+
+export async function respondQueuePreview(c: Context<QueuePreviewVars>, selector: string) {
   c.set("access", {
     resource: "queue_failed_jobs",
     action: "view",
@@ -107,7 +115,7 @@ export async function queuePreviewHandler(c: Context<QueuePreviewVars>) {
   if (c.get("adminActor").id !== configuredOperator(c.env)) {
     return bufferedMemberJson(c, { error: "operator_required" }, 403);
   }
-  const id = parseFailureId(c.req.param("id") ?? "");
+  const id = parseFailureId(selector);
   // No payload, event key, idempotency key or query overrides are admitted.
   if (id === null || new URL(c.req.url).search !== "")
     return bufferedMemberJson(c, { error: "invalid_failure_id" }, 422);
