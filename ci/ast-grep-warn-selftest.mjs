@@ -83,6 +83,12 @@ function checkByteLengthRuleCoverage() {
     symlinkSync(join(root, "node_modules"), join(directory, "node_modules"));
     const event = join(directory, "event.json");
     writeFileSync(event, "{}");
+    const lint = (ref, actions = "") =>
+      spawnSync("npm", ["run", "scan:fetch-await"], {
+        cwd: directory,
+        encoding: "utf8",
+        env: { ...process.env, GITHUB_EVENT_PATH: event, GITHUB_ACTIONS: actions, GITHUB_REF: ref },
+      });
     const expected = [
       `${nodePath}:3`,
       "src/probe.jsx:2",
@@ -101,18 +107,16 @@ function checkByteLengthRuleCoverage() {
         git("update-ref", "HEAD", planted);
         git("update-ref", "refs/remotes/origin/main", planted);
       }
-      const lint = spawnSync("npm", ["run", "scan:fetch-await"], {
-        cwd: directory,
-        encoding: "utf8",
-        env: { ...process.env, GITHUB_EVENT_PATH: event, GITHUB_ACTIONS: "", GITHUB_REF: ref },
-      });
-      assert.equal(lint.status, 1, lint.error?.message ?? lint.stderr);
+      const result = lint(ref);
+      assert.equal(result.status, 1, result.error?.message ?? result.stderr);
       assert.deepEqual(
-        lint.stderr.match(/^.+:\d+(?=: Use the shared byte-limit helpers for )/gm),
+        result.stderr.match(/^.+:\d+(?=: Use the shared byte-limit helpers for )/gm),
         expected,
       );
     }
-    assert.throws(() => scanByteLengthComparisons(directory, false), /missing tracked files/);
+    const hosted = lint("refs/heads/main", "true");
+    assert.equal(hosted.status, 1, hosted.error?.message ?? hosted.stderr);
+    assert.match(hosted.stderr, /The CI checkout has missing tracked files/);
     writeFileSync(join(directory, "ci/non-utf8.mjs"), Buffer.from([0xff]));
     assert.throws(() => scanByteLengthComparisons(directory), /ci\/non-utf8\.mjs: invalid UTF-8/);
     writeFileSync(
