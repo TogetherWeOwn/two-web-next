@@ -13,9 +13,8 @@ import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { serializeSigned } from "hono/utils/cookie";
 import { build } from "esbuild";
+import { type DefaultTreeAdapterMap, html } from "parse5";
 import { describe, expect, it, vi } from "vitest";
-// @ts-expect-error Standalone CI helper has no declaration file (single-line import: wrapping would detach this from TS7016).
-import { normalizeSection } from "../ci/kit-section-contract.mjs";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
@@ -25,10 +24,100 @@ import type { SuggestedEvent } from "../src/events/suggestions";
 import { resolveEventState, type EventStateStore } from "../src/kit-event-states";
 import { ROUTE_MANIFEST, resolveRouteOwner } from "../src/route-ownership";
 import app from "./app";
+import { elements, textOf } from "./helpers/kit-edit-controls";
 
 const APP_URL = "https://next.example.test";
 const KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const SECRET = "test-session-secret-at-least-32-bytes-long";
+
+type Node = DefaultTreeAdapterMap["node"];
+type Element = DefaultTreeAdapterMap["element"];
+const {
+  parseRenderedPage: parse,
+  renderedAttribute: attr,
+  renderedElements,
+  renderedText,
+} = createRequire(import.meta.url)("../ci/rendered-page.mjs") as {
+  parseRenderedPage: typeof import("parse5").parse;
+  renderedAttribute: (element: Element, name: string) => string | undefined;
+  renderedElements: (root: Node, selector: { tag?: string }) => Iterable<Element>;
+  renderedText: (root: Node) => string;
+};
+
+function find(root: Node | undefined, tag: string, attributes: Record<string, string> = {}) {
+  if (!root) return undefined;
+  return Array.from(renderedElements(root, { tag })).find((element) =>
+    Object.entries(attributes).every(([name, value]) => attr(element, name) === value),
+  );
+}
+
+function text(element: Element | undefined) {
+  return element && renderedText(element).replace(/\s+/g, " ").trim();
+}
+
+function findLink(root: Node | undefined, href: string, label: string) {
+  return (
+    root &&
+    Array.from(renderedElements(root, { tag: "a" })).find(
+      (link) => attr(link, "href") === href && text(link) === label,
+    )
+  );
+}
+
+function jsonLdBlocks(page: Node) {
+  const isJsonLdScript = (node: Element) =>
+    node.namespaceURI === html.NS.HTML &&
+    node.tagName === "script" &&
+    attr(node, "type")?.toLowerCase() === "application/ld+json";
+  const scripts = elements(page).filter(isJsonLdScript);
+  expect(sourceElements(page).filter(isJsonLdScript)).toHaveLength(scripts.length);
+  return scripts.map((node) => ({
+    testid: attr(node, "data-testid"),
+    payload: JSON.parse(textOf(node)),
+  }));
+}
+
+function robotsContents(page: Node) {
+  const head = find(page, "head");
+  return (head ? elements(head) : [])
+    .filter((node) => node.tagName === "meta" && attr(node, "name")?.toLowerCase() === "robots")
+    .map((node) => attr(node, "content"));
+}
+
+function templateContent(node: Element) {
+  return "content" in node ? (node as DefaultTreeAdapterMap["template"]).content : undefined;
+}
+
+// Absence checks inspect markup inside hidden elements and template content as well.
+function sourceElements(root: Node): Element[] {
+  return elements(root).flatMap((node) => {
+    const content = templateContent(node);
+    return content ? [node, ...sourceElements(content)] : [node];
+  });
+}
+
+function hasToken(value: string | undefined, token: string) {
+  return value?.split(/\s+/).includes(token);
+}
+
+function expectNoShareOrRsvp(page: Node) {
+  const nodes = sourceElements(page);
+  const forbiddenMarker =
+    /og:|twitter:|rsvp|event-join-pitch|event-copy-link|event-share|data-native-share/i;
+  expect(
+    nodes
+      .filter(
+        (node) =>
+          (node.tagName === "link" && hasToken(attr(node, "rel")?.toLowerCase(), "canonical")) ||
+          node.attrs.some(({ name, value }) => forbiddenMarker.test(`${name} ${value}`)) ||
+          (templateContent(node)?.childNodes ?? node.childNodes).some(
+            (child) => "value" in child && forbiddenMarker.test(child.value),
+          ),
+      )
+      .map((node) => ({ tag: node.tagName, attrs: node.attrs })),
+  ).toEqual([]);
+  expect(renderedText(page)).not.toMatch(forbiddenMarker);
+}
 
 // A cancelled row with an upcoming same-game sibling for alternatives.
 function cancelledRow(): typeof events.$inferSelect {
@@ -374,9 +463,13 @@ describe("served Hono /e/:key contract under port", () => {
     expect(memberHtml).toBe(guestHtml);
     expect(guest.headers.get("cache-control")).toBe("private, no-store");
     expect(guest.headers.get("x-robots-tag")).toBe("noindex, nofollow");
-    expect(guestHtml).toContain('data-testid="event-cancelled">Cancelled');
-    expect(guestHtml).toContain("https://schema.org/EventCancelled");
-    expect(guestHtml).not.toMatch(/rel="canonical"|og:|twitter:|event-join-pitch|event-copy-link/);
+    const page = parse(guestHtml, { scriptingEnabled: false });
+    expect(text(find(page, "p", { "data-testid": "event-cancelled" }))).toBe("Cancelled");
+    expect(jsonLdBlocks(page)).toContainEqual({
+      testid: "event-jsonld",
+      payload: expect.objectContaining({ eventStatus: "https://schema.org/EventCancelled" }),
+    });
+    expectNoShareOrRsvp(page);
   });
 
   it("301s a lowercase ULID key and preserves the query string", async () => {
@@ -477,18 +570,29 @@ export function renderMissing(model) {
   }
 }
 
-function heroSectionOf(html: string): string {
-  const match = html.match(/<section[^>]*aria-label="Cancelled event"[\s\S]*?<\/section>/);
-  if (!match) throw new Error("cancelled hero section is missing");
-  return normalizeSection(match[0].replace(/<!---->/g, ""));
+// Coalesce text split by hydration comments. Keep spacing in nonblank text runs.
+function sectionChildren(nodes: DefaultTreeAdapterMap["childNode"][]): unknown[] {
+  const children: unknown[] = [];
+  let pendingText = "";
+  for (const node of nodes) {
+    if ("value" in node) pendingText += node.value;
+    if ("tagName" in node) {
+      if (pendingText.trim()) children.push(pendingText);
+      children.push(sectionTree(node));
+      pendingText = "";
+    }
+  }
+  if (pendingText.trim()) children.push(pendingText);
+  return children;
 }
 
-function suggestionsSectionOf(html: string): string {
-  const match = html.match(
-    /<section[^>]*aria-labelledby="error-events-heading"[\s\S]*?<\/section>/,
-  );
-  if (!match) throw new Error("suggestions section is missing");
-  return normalizeSection(match[0].replace(/<!---->/g, ""));
+function sectionTree(node: Element) {
+  return {
+    tag: node.tagName,
+    namespace: node.namespaceURI,
+    attributes: [...node.attrs].sort((a, b) => a.name.localeCompare(b.name)),
+    children: sectionChildren(templateContent(node)?.childNodes ?? node.childNodes),
+  };
 }
 
 describe("Kit cancelled presentation", () => {
@@ -497,15 +601,14 @@ describe("Kit cancelled presentation", () => {
     const { outcome } = await resolve(KEY, store);
     if (outcome.kind !== "gone") throw new Error("unreachable");
     const { renderGone } = await buildKitEventStatesBundle();
-    const html = renderGone(outcome.model as unknown as Record<string, unknown>);
-    const blocks = [
-      ...html.matchAll(
-        /<script type="application\/ld\+json" data-testid="([^"]+)">([\s\S]*?)<\/script>/g,
-      ),
-    ].map((m) => ({ testid: m[1], payload: JSON.parse(m[2]!) }));
+    const page = parse(renderGone(outcome.model as unknown as Record<string, unknown>));
+    const blocks = jsonLdBlocks(page);
     expect(blocks.map((b) => b.testid)).toEqual(["event-jsonld", "site-jsonld"]);
     expect(blocks[0]!.payload["@type"]).toBe("Event");
-    expect(blocks[1]!.payload["@graph"]).toHaveLength(2);
+    expect(blocks[1]!.payload["@graph"]).toEqual([
+      expect.objectContaining({ "@type": "Organization" }),
+      expect.objectContaining({ "@type": "WebSite" }),
+    ]);
   });
 
   it("renders the 410 contract: status copy, title, alternatives, ICS and JSON-LD, never share or RSVP", async () => {
@@ -513,71 +616,104 @@ describe("Kit cancelled presentation", () => {
     const { outcome } = await resolve(KEY, store);
     if (outcome.kind !== "gone") throw new Error("unreachable");
     const { renderGone } = await buildKitEventStatesBundle();
-    const html = renderGone(outcome.model as unknown as Record<string, unknown>);
-    expect(html).toContain('data-testid="event-cancelled">Cancelled');
-    expect(html).toContain("<h1>Chess night</h1>");
-    expect(html).toContain(`href="/events/${KEY}.ics"`);
-    expect(html).toContain('data-testid="event-cancelled-ics"');
-    expect(html).toContain("Chess finals");
-    expect(html).toContain('href="/events"');
-    expect(html).toContain("https://schema.org/EventCancelled");
-    expect(html).toContain('data-testid="event-jsonld"');
-    expect(html).toContain('data-testid="site-jsonld"');
-    expect(html).toContain('name="robots" content="noindex, nofollow"');
-    expect(html).not.toMatch(/rel="canonical"|og:|twitter:|event-join-pitch|event-copy-link|rsvp/i);
+    const page = parse(renderGone(outcome.model as unknown as Record<string, unknown>), {
+      scriptingEnabled: false,
+    });
+    expect(text(find(page, "p", { "data-testid": "event-cancelled", role: "status" }))).toBe(
+      "Cancelled",
+    );
+    expect(text(find(page, "h1"))).toBe("Chess night");
+    const download = find(page, "a", { "data-testid": "event-cancelled-ics" });
+    expect(download).toBeDefined();
+    expect(attr(download!, "href")).toBe(`/events/${KEY}.ics`);
+    const alternatives = find(page, "ul", { "data-testid": "event-cancelled-alternatives" });
+    expect(findLink(alternatives, `/e/${RELATED[0]!.eventKey}`, "Chess finals")).toBeDefined();
+    expect(findLink(page, "/events", "See upcoming events")).toBeDefined();
+    const blocks = jsonLdBlocks(page);
+    expect(blocks).toContainEqual({
+      testid: "event-jsonld",
+      payload: expect.objectContaining({ eventStatus: "https://schema.org/EventCancelled" }),
+    });
+    expect(blocks.map((block) => block.testid)).toEqual(["event-jsonld", "site-jsonld"]);
+    expect(robotsContents(page)).toEqual(["noindex, nofollow"]);
+    expectNoShareOrRsvp(page);
   });
 
   it("drops the account area on both renderers: the sessionless page offers no sign-in", async () => {
     const source = honoFixture();
-    const honoHtml = await (await source.request()).text();
-    expect(honoHtml).not.toContain("header-account");
+    const honoPage = parse(await (await source.request()).text(), { scriptingEnabled: false });
     const { store } = fakeStore();
     const { outcome } = await resolve(KEY, store);
     if (outcome.kind !== "gone") throw new Error("unreachable");
     const { renderGone } = await buildKitEventStatesBundle();
-    const kitHtml = renderGone(outcome.model as unknown as Record<string, unknown>);
-    expect(kitHtml).not.toContain("header-account");
-    expect(kitHtml).not.toContain('data-testid="signin"');
+    const kitPage = parse(renderGone(outcome.model as unknown as Record<string, unknown>), {
+      scriptingEnabled: false,
+    });
+    for (const page of [honoPage, kitPage]) {
+      const nodes = sourceElements(page);
+      expect(nodes.some((node) => hasToken(attr(node, "class"), "header-account"))).toBe(false);
+      expect(nodes.some((node) => attr(node, "data-testid") === "signin")).toBe(false);
+      expect(
+        nodes.some((node) => {
+          if (node.tagName !== "a") return false;
+          const path = URL.parse(attr(node, "href") ?? "", APP_URL)?.pathname;
+          return path === "/auth/discord" || path === "/auth/discord/redirect";
+        }),
+      ).toBe(false);
+    }
   });
 
   it("keeps the served Hono hero core and the upcoming recovery link", async () => {
     // Kit puts recovery links below the cancellation record and facts.
     const source = honoFixture();
-    const honoHtml = await (await source.request()).text();
+    const honoPage = parse(await (await source.request()).text());
     const { store } = fakeStore();
     const { outcome } = await resolve(KEY, store);
     if (outcome.kind !== "gone") throw new Error("unreachable");
     const { renderGone } = await buildKitEventStatesBundle();
-    const kitHtml = renderGone(outcome.model as unknown as Record<string, unknown>);
-    const honoHero = heroSectionOf(honoHtml);
-    const kitHero = heroSectionOf(kitHtml);
-    for (const core of [
-      '<p class="event-kicker">Chess</p>',
-      'data-testid="event-cancelled">Cancelled',
-      "<h1>Chess night</h1>",
-    ]) {
-      expect(honoHero).toContain(core);
-      expect(kitHero).toContain(core);
+    const kitPage = parse(renderGone(outcome.model as unknown as Record<string, unknown>));
+    const honoHero = find(honoPage, "section", { "aria-label": "Cancelled event" });
+    const kitHero = find(kitPage, "section", { "aria-label": "Cancelled event" });
+    for (const hero of [honoHero, kitHero]) {
+      expect(text(find(hero, "p", { class: "event-kicker" }))).toBe("Chess");
+      expect(text(find(hero, "p", { "data-testid": "event-cancelled" }))).toBe("Cancelled");
+      expect(text(find(hero, "h1"))).toBe("Chess night");
     }
-    expect(honoHero).toContain(">See upcoming events</a>");
-    expect(kitHtml).toContain(">See upcoming events</a>");
+    expect(findLink(honoHero, "/events", "See upcoming events")).toBeDefined();
+    expect(findLink(kitPage, "/events", "See upcoming events")).toBeDefined();
   });
 });
 
 describe("Kit missing presentation", () => {
+  it("preserves inline spacing when comparing sections with hydration comments", () => {
+    const tree = (markup: string) => sectionTree(find(parse(markup), "section")!);
+    const heading = tree("<section><h2>Happening <em>soon</em></h2></section>");
+    expect(tree("<section>\n  <h2>Happen<!---->ing <em>soon</em></h2>\n</section>")).toEqual(
+      heading,
+    );
+    expect(tree("<section><h2>Happening<em>soon</em></h2></section>")).not.toEqual(heading);
+  });
+
   it("renders branded recovery with suggestions, search and browse links", async () => {
     const { store } = fakeStore({ event: null });
     const { outcome } = await resolve(KEY, store);
     if (outcome.kind !== "missing") throw new Error("unreachable");
     const { renderMissing } = await buildKitEventStatesBundle();
-    const html = renderMissing(outcome.model as unknown as Record<string, unknown>);
-    expect(html).toContain("We cannot find that page");
-    expect(html).toContain('data-testid="error-event-suggestions"');
-    expect(html).toContain('data-testid="error-event-suggestion"');
-    expect(html).toContain("Game night");
-    expect(html).toContain('data-testid="error-all-events"');
-    expect(html).toContain('data-testid="error-events-search"');
-    expect(html).toContain('name="robots" content="noindex, nofollow"');
+    const page = parse(renderMissing(outcome.model as unknown as Record<string, unknown>));
+    expect(text(find(page, "h1", { id: "error-heading" }))).toBe("We cannot find that page");
+    const suggestions = find(page, "section", { "data-testid": "error-event-suggestions" });
+    expect(suggestions).toBeDefined();
+    const suggestion = find(suggestions, "a", { "data-testid": "error-event-suggestion" });
+    expect(text(suggestion)).toBe("Game night");
+    expect(attr(suggestion!, "href")).toBe(`/e/${SUGGESTIONS[0]!.key}`);
+    expect(
+      find(suggestions, "a", { "data-testid": "error-all-events", href: "/events" }),
+    ).toBeDefined();
+    const search = find(suggestions, "form", { role: "search", action: "/events", method: "get" });
+    expect(
+      find(search, "input", { "data-testid": "error-events-search", type: "search", name: "q" }),
+    ).toBeDefined();
+    expect(robotsContents(page)).toEqual(["noindex, nofollow"]);
   });
 
   it("renders the empty-calendar fallback when no suggestions exist", async () => {
@@ -585,16 +721,23 @@ describe("Kit missing presentation", () => {
     const { outcome } = await resolve(KEY, store);
     if (outcome.kind !== "missing") throw new Error("unreachable");
     const { renderMissing } = await buildKitEventStatesBundle();
-    const html = renderMissing(outcome.model as unknown as Record<string, unknown>);
-    expect(html).toContain('data-testid="error-events-empty"');
-    expect(html).not.toContain('data-testid="error-event-suggestion"');
+    const page = parse(renderMissing(outcome.model as unknown as Record<string, unknown>), {
+      scriptingEnabled: false,
+    });
+    const suggestions = find(page, "section", { "data-testid": "error-event-suggestions" });
+    expect(text(find(suggestions, "p", { "data-testid": "error-events-empty" }))).toBe(
+      "Nothing is on the calendar right now — check back soon.",
+    );
+    expect(
+      sourceElements(page).some((node) => attr(node, "data-testid") === "error-event-suggestion"),
+    ).toBe(false);
   });
 
-  it("matches the served Hono suggestions section through the framework-tolerant treatment", async () => {
+  it("matches the parsed Hono suggestions section", async () => {
     const source = honoFixture();
     const missing = await source.request(undefined, "/e/01ARZ3NDEKTSV4RRFFQ69G5FA9");
     expect(missing.status).toBe(404);
-    const honoHtml = await missing.text();
+    const honoPage = parse(await missing.text());
     // The Hono 404 for an unknown row carries no suggestions in this
     // fixture (the suggestion query finds no rows); the Kit empty model
     // must agree with exactly that section.
@@ -602,7 +745,12 @@ describe("Kit missing presentation", () => {
     const { outcome } = await resolve(KEY, store);
     if (outcome.kind !== "missing") throw new Error("unreachable");
     const { renderMissing } = await buildKitEventStatesBundle();
-    const kitHtml = renderMissing(outcome.model as unknown as Record<string, unknown>);
-    expect(suggestionsSectionOf(kitHtml)).toBe(suggestionsSectionOf(honoHtml));
+    const kitPage = parse(renderMissing(outcome.model as unknown as Record<string, unknown>));
+    const sectionAttributes = { "aria-labelledby": "error-events-heading" };
+    const honoSection = find(honoPage, "section", sectionAttributes);
+    const kitSection = find(kitPage, "section", sectionAttributes);
+    expect(honoSection).toBeDefined();
+    expect(kitSection).toBeDefined();
+    expect(sectionTree(kitSection!)).toEqual(sectionTree(honoSection!));
   });
 });
