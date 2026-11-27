@@ -1,12 +1,151 @@
 #!/usr/bin/env node
-import { spawnSync } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import assert from "node:assert/strict";
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+  appendFileSync,
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { scanByteLengthComparisons } from "./raw-byte-length-ratchet.mjs";
+
+function checkByteLengthRuleCoverage() {
+  const directory = mkdtempSync(join(tmpdir(), "ast-grep-byte-length-"));
+  try {
+    for (const path of ["ci", "public", "src/http", "web/src", "web/scripts"]) {
+      mkdirSync(join(directory, path), { recursive: true });
+    }
+    const comparison = "left.byteLength > right.byteLength";
+    const unsafe = `if (${comparison}) reject();\n`;
+    const nodePath = "ci/unsafe.mjs";
+    const jsPath = "web/scripts/unsafe.js";
+    const sveltePath = "web/src/unsafe.svelte";
+    const cleanPath = "ci/clean.mjs";
+    writeFileSync(join(directory, nodePath), unsafe);
+    writeFileSync(join(directory, cleanPath), "exceedsByteLimit(left.byteLength, max);\n");
+    const git = (...args) => execFileSync("git", args, { cwd: directory });
+    const commit = (message, ...args) =>
+      git("-c", "core.hooksPath=/dev/null", "commit", "-qm", message, "--no-gpg-sign", ...args);
+    git("init", "--quiet");
+    git("add", "--", nodePath, cleanPath);
+    git("config", "user.name", "Fixture");
+    git("config", "user.email", "fixture@example.org");
+    commit("Fixture");
+    git("update-ref", "refs/remotes/origin/main", "HEAD");
+    writeFileSync(join(directory, ".gitignore"), `${nodePath}\n`);
+    writeFileSync(join(directory, nodePath), `${unsafe}// ast-grep-ignore\n${unsafe}`);
+    writeFileSync(join(directory, jsPath), unsafe);
+    renameSync(join(directory, cleanPath), join(directory, "ci/renamed.mjs"));
+    writeFileSync(join(directory, "ci/placeholder.mjs"), "");
+    writeFileSync(join(directory, "public/generated.js"), unsafe);
+    writeFileSync(
+      join(directory, sveltePath),
+      `<script module>// ast-grep-ignore
+      ${unsafe}</script>\n<script lang="ts">
+        function authReturnHref() {
+          const fits = (href: string) => new TextEncoder().encode(href).byteLength <= maxBytes;
+          return fits(url);
+        }
+      </script>`,
+    );
+    writeFileSync(
+      join(directory, "web/src/clean.svelte"),
+      `<script>let total = left.byteLength;</script>\n<p>left.byteLength &gt; max</p>\n`,
+    );
+    writeFileSync(
+      join(directory, "web/src/fallback.svelte"),
+      `\uFEFF\uFEFF<script lang="legacy">const marker = "</SCRIPTURE>"; const over = left.byteLength > 0</script>\n<svelte:head><script>${unsafe}</script></svelte:head>\n`,
+    );
+
+    for (const file of ["src/probe.tsx", "src/probe.jsx"]) {
+      writeFileSync(
+        join(directory, file),
+        "// ast-grep-ignore\nconst view = <div>{left.byteLength > max}</div>;\n",
+      );
+    }
+    const root = fileURLToPath(new URL("..", import.meta.url));
+    for (const path of [
+      "package.json",
+      "sgconfig.yml",
+      "sg-rules",
+      "ci/raw-byte-length-ratchet.mjs",
+      "ci/http-boundary-suppressions.mjs",
+    ]) {
+      cpSync(join(root, path), join(directory, path), { recursive: true });
+    }
+    symlinkSync(join(root, "node_modules"), join(directory, "node_modules"));
+    symlinkSync(join(root, "web/node_modules"), join(directory, "web/node_modules"));
+    const event = join(directory, "event.json");
+    writeFileSync(event, "{}");
+    const lint = (ref, actions = "") =>
+      spawnSync("npm", ["run", "scan:fetch-await"], {
+        cwd: directory,
+        encoding: "utf8",
+        env: { ...process.env, GITHUB_EVENT_PATH: event, GITHUB_ACTIONS: actions, GITHUB_REF: ref },
+      });
+    const expected = [
+      `${nodePath}:3`,
+      "src/probe.jsx:2",
+      "src/probe.tsx:2",
+      `${jsPath}:1`,
+      "web/src/fallback.svelte:1",
+      "web/src/fallback.svelte:2",
+      `${sveltePath}:2`,
+      `${sveltePath}:6`,
+    ];
+    git("add", "--", nodePath);
+    commit("Plant comparison");
+    const planted = git("rev-parse", "HEAD").toString().trim();
+    commit("Feature tip", "--allow-empty");
+    for (const ref of ["refs/heads/feature", "refs/heads/main"]) {
+      if (ref === "refs/heads/main") {
+        git("update-ref", "HEAD", planted);
+        git("update-ref", "refs/remotes/origin/main", planted);
+      }
+      const result = lint(ref);
+      assert.equal(result.status, 1, result.error?.message ?? result.stderr);
+      assert.deepEqual(
+        result.stderr.match(/^.+:\d+(?=: Use the shared byte-limit helpers for )/gm),
+        expected,
+      );
+    }
+    const hosted = lint("refs/heads/main", "true");
+    assert.equal(hosted.status, 1, hosted.error?.message ?? hosted.stderr);
+    assert.match(hosted.stderr, /The CI checkout has missing tracked files/);
+    const broken = join(directory, "web/src/broken.svelte");
+    writeFileSync(broken, "<script>const bad = ;</script>");
+    assert.throws(() => scanByteLengthComparisons(directory), /broken\.svelte: could not parse/);
+    rmSync(broken);
+    const invalid = join(directory, "ci/non-utf8.mjs");
+    writeFileSync(invalid, Buffer.from([0xff]));
+    assert.throws(() => scanByteLengthComparisons(directory), /ci\/non-utf8\.mjs: invalid UTF-8/);
+    writeFileSync(invalid, "// too large for ast-grep\n".repeat(200_001));
+    assert.throws(() => scanByteLengthComparisons(directory), /Incomplete ast-grep scan/);
+    const badName = Buffer.concat([
+      Buffer.from(`${directory}/ci/`),
+      Buffer.of(0xff),
+      Buffer.from(".mjs"),
+    ]);
+    writeFileSync(badName, unsafe);
+    assert.throws(() => scanByteLengthComparisons(directory), /Git returned non-UTF-8 paths/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+  console.log("ast-grep byte-length selftest passed");
+}
 
 const fixture = join("src", `ast-grep-warning-selftest-${process.pid}.test.ts`);
 try {
   writeFileSync(fixture, "expect(true).toBe(true);\n");
-  const result = spawnSync("npx", ["-y", "--package", "@ast-grep/cli@0.50.0", "ast-grep", "scan"], {
+  const args = ["-y", "--package", "@ast-grep/cli@0.50.0", "ast-grep", "scan"];
+  const result = spawnSync("npx", [...args, "--filter", "^ts-vacuous-literal-expect$"], {
     encoding: "utf8",
   });
   const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
@@ -17,6 +156,7 @@ try {
     throw new Error("ast-grep did not report the planted warning rule");
   }
   console.log("ast-grep WARN selftest: planted warning reported with exit 0");
+  checkByteLengthRuleCoverage();
 
   const directory = mkdtempSync(join("src", "http", "ast-grep-boundary-selftest-"));
   let outsideDirectory;

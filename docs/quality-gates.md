@@ -152,6 +152,13 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   caught one live `expect(true).toBe(true)` placeholder in
   `test/seo-headers.test.ts`, replaced with a mapping-table pin that asserts
   every documented section exists in the file.
+- **Raw byte-length comparisons (HARD):** `npm run scan:fetch-await` checks
+  authored application code, Node `.mjs` and `.js`, and Svelte script bodies
+  under `web/src/`. The Kit compiler supplies script ranges. The Node and
+  attendee-path checks count exact comparisons per file against the Git base.
+  The scan includes ignored tracked files and neutralizes inline suppressions.
+  Use the shared predicates in `src/http/length-limit.ts`. For local scans,
+  install Kit dependencies with `npm ci --prefix web --include=dev`.
 
 ## Pull-request CI selection
 

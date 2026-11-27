@@ -1,12 +1,14 @@
-# Keep the TSX twin in sync. Tooling and generated output are outside this rule.
+# Keep the TSX twin in sync.
 id: no-raw-byte-length-comparison
 language: TypeScript
 severity: error
 message: Use the shared byte-limit helpers in src/http/length-limit.ts.
 files:
-  - "{src,web/src,assets}/**/*.{ts,mts,cts,js,mjs,cjs}"
+  - "**/*.{js,mjs}"
+  - "{src,web/src,assets}/**/*.{ts,mts,cts,cjs}"
 ignores:
   - src/http/length-limit.ts
+  - "public/**"
 rule:
   any:
     - matches: byte-length-access
@@ -22,7 +24,9 @@ rule:
                 not:
                   matches: expression-wrapper
   inside:
-    matches: comparison
+    all:
+      - matches: comparison
+      - pattern: $COMPARISON
     stopBy:
       # A ternary condition selects an operand without supplying its value.
       any:
@@ -30,25 +34,8 @@ rule:
         - not:
             matches: operand-wrapper
   not:
-    any:
-      - matches: ternary-condition
-      - matches: attendee-return-cap
+    matches: ternary-condition
 utils:
-  # The attendee URL module is dependency-free. Remove this when its server
-  # return-link callers move the cap check to a module that can import it.
-  attendee-return-cap:
-    all:
-      - pattern: new TextEncoder().encode(href).byteLength
-      - inside:
-          pattern: "const fits = (href: string) => new TextEncoder().encode(href).byteLength <= maxBytes;"
-          stopBy:
-            kind: lexical_declaration
-      - inside:
-          kind: function_declaration
-          has:
-            field: name
-            regex: "^authReturnHref$"
-          stopBy: end
   operand-wrapper:
     any:
       - matches: expression-wrapper

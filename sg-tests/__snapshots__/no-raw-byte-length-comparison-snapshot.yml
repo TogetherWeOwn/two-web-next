@@ -25,22 +25,44 @@ snapshots:
       return fits(url);
     }
   : labels:
-      - source: buffer.byteLength
+      - source: new TextEncoder().encode(href).byteLength
         style: primary
-        start: 122
-        end: 139
+        start: 61
+        end: 102
       - source: byteLength
         style: secondary
-        start: 129
-        end: 139
-      - source: ">"
+        start: 92
+        end: 102
+      - source: <=
         style: secondary
-        start: 140
-        end: 141
-      - source: buffer.byteLength > maxBytes
+        start: 103
+        end: 105
+      - source: new TextEncoder().encode(href).byteLength <= maxBytes
         style: secondary
-        start: 122
-        end: 150
+        start: 61
+        end: 114
+  ? |
+    function authReturnHref() {
+      const fits = (href: string) => new TextEncoder().encode(href).byteLength <= maxBytes;
+      return fits(url);
+    }
+  : labels:
+      - source: new TextEncoder().encode(href).byteLength
+        style: primary
+        start: 61
+        end: 102
+      - source: byteLength
+        style: secondary
+        start: 92
+        end: 102
+      - source: <=
+        style: secondary
+        start: 103
+        end: 105
+      - source: new TextEncoder().encode(href).byteLength <= maxBytes
+        style: secondary
+        start: 61
+        end: 114
   ? |
     function returnHref() {
       const fits = (href: string) => new TextEncoder().encode(href).byteLength <= maxBytes;
@@ -291,3 +313,43 @@ snapshots:
         style: secondary
         start: 4
         end: 31
+  if (Buffer.byteLength(text, "utf8") > max) reject();:
+    labels:
+      - source: Buffer.byteLength(text, "utf8")
+        style: primary
+        start: 4
+        end: 35
+      - source: byteLength
+        style: secondary
+        start: 11
+        end: 21
+      - source: Buffer.byteLength
+        style: secondary
+        start: 4
+        end: 21
+      - source: ">"
+        style: secondary
+        start: 36
+        end: 37
+      - source: Buffer.byteLength(text, "utf8") > max
+        style: secondary
+        start: 4
+        end: 41
+  const fits = $derived(new TextEncoder().encode(text).byteLength <= max);:
+    labels:
+      - source: new TextEncoder().encode(text).byteLength
+        style: primary
+        start: 22
+        end: 63
+      - source: byteLength
+        style: secondary
+        start: 53
+        end: 63
+      - source: <=
+        style: secondary
+        start: 64
+        end: 66
+      - source: new TextEncoder().encode(text).byteLength <= max
+        style: secondary
+        start: 22
+        end: 70

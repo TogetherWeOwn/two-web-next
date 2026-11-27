@@ -20,7 +20,9 @@ rule:
                 not:
                   matches: expression-wrapper
   inside:
-    matches: comparison
+    all:
+      - matches: comparison
+      - pattern: $COMPARISON
     stopBy:
       # A ternary condition selects an operand without supplying its value.
       any:
