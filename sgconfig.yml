@@ -6,8 +6,8 @@
 # (quality/meta-only/rules/ts/); provenance is recorded in
 # docs/quality-gates.md. Rule fixtures live in sg-tests/.
 #
-# Run locally: npx -y --package @ast-grep/cli@0.50.0 ast-grep scan
-# CI runs `ast-grep scan --error`: any error-severity finding fails `check`.
+# Run the project scan and Node baseline check with npm run scan:fetch-await.
+# Error-severity findings and Node baseline changes fail the CI check job.
 # Rule tests: npx -y --package @ast-grep/cli@0.50.0 ast-grep test
 ruleDirs:
   - sg-rules
@@ -15,6 +15,9 @@ testConfigs:
   - testDir: sg-tests
 languageGlobs:
   # ast-grep's language globs match basenames, not paths.
+  # HTML injects JavaScript or TypeScript for script blocks based on lang.
+  Html:
+    - "*.svelte"
   tsx:
     - "*.jsx"
   TypeScript:

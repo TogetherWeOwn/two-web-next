@@ -1,0 +1,74 @@
+# Keep the TypeScript, TSX, and Svelte JavaScript matchers in sync.
+id: no-raw-byte-length-comparison-node
+language: TypeScript
+# The ratchet turns new findings into errors after accounting for existing comparisons.
+severity: warning
+message: Use the shared byte-limit helpers in src/http/length-limit.ts.
+files:
+  - "**/*.{js,mjs}"
+ignores:
+  - "{src,web/src,assets,public}/**"
+rule:
+  any:
+    - matches: byte-length-access
+    - kind: call_expression
+      has:
+        field: function
+        any:
+          - matches: byte-length-access
+          - matches: expression-wrapper
+            has:
+              matches: byte-length-access
+              stopBy:
+                not:
+                  matches: expression-wrapper
+  inside:
+    all:
+      - matches: comparison
+      - pattern: $COMPARISON
+    stopBy:
+      # A ternary condition selects an operand without supplying its value.
+      any:
+        - matches: ternary-condition
+        - not:
+            matches: operand-wrapper
+  not:
+    matches: ternary-condition
+utils:
+  operand-wrapper:
+    any:
+      - matches: expression-wrapper
+      - kind: ternary_expression
+      - kind: unary_expression
+        has:
+          field: operator
+          regex: "^[+~-]$"
+      - kind: binary_expression
+        not:
+          matches: comparison
+  ternary-condition:
+    inside:
+      kind: ternary_expression
+      field: condition
+  expression-wrapper:
+    any:
+      - kind: parenthesized_expression
+      - kind: non_null_expression
+      - kind: as_expression
+      - kind: satisfies_expression
+      - kind: type_assertion
+  byte-length-access:
+    any:
+      - kind: member_expression
+        has:
+          field: property
+          regex: "^byteLength$"
+      - kind: subscript_expression
+        has:
+          field: index
+          regex: '^(?:"byteLength"|\x27byteLength\x27|`byteLength`)$'
+  comparison:
+    kind: binary_expression
+    has:
+      field: operator
+      regex: "^(?:<=?|>=?|===?|!==?)$"

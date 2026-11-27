@@ -1,0 +1,7 @@
+id: no-raw-byte-length-comparison-svelte-js
+valid:
+  - const fits = $derived(fitsUtf8ByteLimit(text, max));
+  - 'const status = $derived((chunk.byteLength ? "present" : "empty") === label);'
+invalid:
+  - const fits = $derived(new TextEncoder().encode(text).byteLength <= max);
+  - const over = $derived(max < total + chunk["byteLength"]);

@@ -1,7 +1,75 @@
 #!/usr/bin/env node
+import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  compareByteLengthBaseline,
+  scanByteLengthComparisons,
+} from "./raw-byte-length-ratchet.mjs";
+
+function checkByteLengthRuleCoverage() {
+  const directory = mkdtempSync(join(tmpdir(), "ast-grep-byte-length-"));
+  try {
+    for (const path of ["ci", "public", "web/src", "web/scripts"]) {
+      mkdirSync(join(directory, path), { recursive: true });
+    }
+    const comparison = "left.byteLength > right.byteLength";
+    const unsafe = `if (${comparison}) reject();\n`;
+    const nodePath = "ci/unsafe.mjs";
+    const jsPath = "web/scripts/unsafe.js";
+    const sveltePath = "web/src/unsafe.svelte";
+    writeFileSync(join(directory, nodePath), unsafe.repeat(2));
+    writeFileSync(join(directory, jsPath), unsafe);
+    writeFileSync(
+      join(directory, "ci/clean.mjs"),
+      "if (exceedsByteLimit(left.byteLength, max)) reject();\n",
+    );
+    writeFileSync(join(directory, "public/generated.js"), unsafe);
+    writeFileSync(
+      join(directory, sveltePath),
+      `<script module>${unsafe}</script>\n<script lang="ts">if ((left.byteLength as number) > max) reject();</script>\n`,
+    );
+    writeFileSync(
+      join(directory, "web/src/clean.svelte"),
+      `<script>let total = left.byteLength;</script>\n<p>left.byteLength &gt; max</p>\n`,
+    );
+
+    const findings = scanByteLengthComparisons(directory, "^no-raw-byte-length-comparison");
+    assert.deepEqual([...new Set(findings.map(({ file }) => file))].sort(), [
+      nodePath,
+      jsPath,
+      sveltePath,
+    ]);
+    assert.deepEqual(
+      [
+        ...new Set(
+          findings.filter(({ file }) => file === sveltePath).map(({ language }) => language),
+        ),
+      ].sort(),
+      ["JavaScript", "TypeScript"],
+    );
+    assert.deepEqual(
+      compareByteLengthBaseline(
+        findings.filter(({ ruleId }) => ruleId.endsWith("-node")),
+        [[nodePath, comparison]],
+      ),
+      {
+        added: [
+          { file: nodePath, text: comparison, line: 2 },
+          { file: jsPath, text: comparison, line: 1 },
+        ],
+        stale: [],
+      },
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+  console.log(
+    "ast-grep byte-length selftest: Node and Svelte coverage, clean controls, and duplicate detection passed",
+  );
+}
 
 const fixture = join("src", `ast-grep-warning-selftest-${process.pid}.test.ts`);
 try {
@@ -17,6 +85,7 @@ try {
     throw new Error("ast-grep did not report the planted warning rule");
   }
   console.log("ast-grep WARN selftest: planted warning reported with exit 0");
+  checkByteLengthRuleCoverage();
 
   const directory = mkdtempSync(join("src", "http", "ast-grep-boundary-selftest-"));
   let outsideDirectory;

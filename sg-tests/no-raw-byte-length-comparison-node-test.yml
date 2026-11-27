@@ -1,0 +1,7 @@
+id: no-raw-byte-length-comparison-node
+valid:
+  - if (exceedsByteLimit(Buffer.byteLength(text, "utf8"), max)) reject();
+  - total += chunk.byteLength;
+invalid:
+  - if (Buffer.byteLength(text, "utf8") > max) reject();
+  - if (chunk.byteLength > max - total) reject();

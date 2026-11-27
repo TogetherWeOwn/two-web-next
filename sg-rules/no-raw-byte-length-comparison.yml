@@ -1,10 +1,11 @@
-# Keep the TSX twin in sync. Tooling and generated output are outside this rule.
+# Keep the Node, TSX, and Svelte JavaScript matchers in sync.
 id: no-raw-byte-length-comparison
 language: TypeScript
 severity: error
 message: Use the shared byte-limit helpers in src/http/length-limit.ts.
 files:
   - "{src,web/src,assets}/**/*.{ts,mts,cts,js,mjs,cjs}"
+  - "web/src/**/*.svelte"
 ignores:
   - src/http/length-limit.ts
 rule:
