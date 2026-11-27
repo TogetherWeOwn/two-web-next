@@ -13,7 +13,12 @@ async function probe() {
     signal: AbortSignal.timeout(10_000),
   });
   const { status, headers } = response;
-  await response.body?.cancel();
+  try {
+    await response.body?.cancel();
+  } catch {
+    // The status and renderer received with the headers determine the verdict.
+    console.warn("Warning: could not cancel the staging Kit response body");
+  }
   if (status !== 200) throw new Error(`GET ${path} returned HTTP ${status}; expected 200`);
   if (headers.get("x-two-renderer") !== "kit") {
     throw new Error(`GET ${path} did not return x-two-renderer: kit`);

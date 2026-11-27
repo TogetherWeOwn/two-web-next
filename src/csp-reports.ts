@@ -142,15 +142,17 @@ export function shouldSampleReport(rate: number, random: () => number = Math.ran
 const takeCspLogToken = createLogBudget("csp.report.shed");
 
 // No session, no cookie, no DB: an unauthenticated sink that must answer when
-// everything behind it is down. Every path — valid, malformed, oversized,
-// empty, aborted, log-budget exhausted — ends in 204.
-export async function cspReportsRoute(c: Context<{ Bindings: Env }>): Promise<Response> {
-  c.header("cache-control", "no-store");
+// everything behind it is down. The adapters always acknowledge reports with
+// 204, including malformed, oversized, empty or aborted submissions.
+export async function processCspReport(
+  request: Request,
+  env: Pick<Env, "CSP_REPORT_SAMPLE_RATE">,
+): Promise<void> {
   try {
-    const body = await readCappedBody(c.req.raw);
+    const body = await readCappedBody(request);
     if (body.truncated) {
       if (takeCspLogToken()) console.warn("csp.report.dropped_oversize", { bytes: body.bytes });
-      return c.body(null, 204);
+      return;
     }
     const report = extractCspReport(body.text);
     if (report === null) {
@@ -160,16 +162,15 @@ export async function cspReportsRoute(c: Context<{ Bindings: Env }>): Promise<Re
       // bucket plus shed signal bound it like any other warning. Bytes only:
       // never the body, a URI, or member identity.
       if (body.text !== "") {
-        if (shouldSampleReport(parseCspSampleRate(c.env.CSP_REPORT_SAMPLE_RATE))) {
+        if (shouldSampleReport(parseCspSampleRate(env.CSP_REPORT_SAMPLE_RATE))) {
           if (takeCspLogToken()) console.warn("csp.report.malformed", { bytes: body.bytes });
         }
       }
-      return c.body(null, 204);
+      return;
     }
-    if (shouldSampleReport(parseCspSampleRate(c.env.CSP_REPORT_SAMPLE_RATE))) {
+    if (shouldSampleReport(parseCspSampleRate(env.CSP_REPORT_SAMPLE_RATE))) {
       if (takeCspLogToken()) console.warn("csp.report.violation", cspReportLogFields(report));
     }
-    return c.body(null, 204);
   } catch (err) {
     // Body-read failure: exception class only, bucket-bounded like oversize.
     // Never the message (it can carry body bytes), a URI, or member identity.
@@ -182,6 +183,11 @@ export async function cspReportsRoute(c: Context<{ Bindings: Env }>): Promise<Re
     } catch {
       // Logger down: the 204 below still stands; nothing else can record this.
     }
-    return c.body(null, 204);
   }
+}
+
+export async function cspReportsRoute(c: Context<{ Bindings: Env }>): Promise<Response> {
+  c.header("cache-control", "no-store");
+  await processCspReport(c.req.raw, c.env);
+  return c.body(null, 204);
 }

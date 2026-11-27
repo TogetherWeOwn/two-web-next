@@ -751,8 +751,12 @@ describe("native automatic production promotion", () => {
     expect(production).toContain("id: target");
     expect(production).toContain("if: steps.target.outputs.sha != ''");
     // The deploy job stands down on empty sha or an already-live target.
-    expect(production).toContain(
-      "if: needs.preflight.outputs.sha != '' && needs.preflight.outputs.already_live != 'true'",
+    const deploy = production.slice(
+      production.indexOf("\n  deploy-production:\n"),
+      production.indexOf("\n  post-deploy-watch:\n"),
+    );
+    expect(deploy).toMatch(
+      /if: >-\n      needs\.preflight\.outputs\.sha != '' && needs\.preflight\.outputs\.already_live != 'true'/,
     );
   });
 

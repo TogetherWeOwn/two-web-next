@@ -491,6 +491,53 @@ Preserve all holds. Record exact-SHA startup and readiness, the bounded use wind
 and native cleanup or expiry even on failure or cancellation. An idle charge needs a
 dated owner exception with resource scope, cost, and expiry or review date.
 
+### Diagnose a queued shared staging deploy
+
+Open the existing `deploy` run titled `deploy <candidate SHA>`. For an
+automatic `workflow_run`, Actions `head_sha` can identify the workflow's
+`main` revision. Use the SHA in `display_title` to locate the candidate's CI.
+Read the run, its current attempt's job, and its pending deployments in one
+pass. Replace the example run ID for a new incident.
+
+```bash
+(
+  set -euo pipefail
+  run=repos/TogetherWeOwn/two-web-next/actions/runs/45686583838
+  metadata=$(gh api "$run")
+  jq '{display_title, head_sha, run_attempt, status, conclusion, html_url}' <<< "$metadata"
+  attempt=$(jq -er '.run_attempt' <<< "$metadata")
+  gh api "$run/attempts/$attempt/jobs" --jq '.jobs[] | select(.name == "deploy-staging") | {status, conclusion, runner_id, runner_name, html_url, steps: [.steps[]? | {name, status, conclusion}]}'
+  gh api "$run/pending_deployments" --jq '[.[] | .environment.name]'
+)
+```
+
+- **Runner queue.** A `queued` job with no runner, no steps and an empty
+  pending-deployments list is waiting for execution. Use the job's Actions
+  timeline to confirm runner pickup is pending. A `pending` run can also be
+  waiting for the shared `deploy-staging` concurrency group.
+- **Early skip.** A `completed` job with conclusion `skipped` and no steps
+  was filtered by the workflow's job-level condition. Check the trigger
+  event, repository, branch and CI conclusion in `deploy.yml`.
+- **Environment approval.** A `staging` entry in `pending_deployments`
+  identifies a pending environment gate. An empty list means no pending
+  approval was reported. The normal `staging` Environment has no required
+  reviewers.
+- **Deploy failure.** A `completed` job with conclusion `failure` has a
+  failed execution. Open the job link and identify the first failed step to
+  distinguish admission or setup failure from a deploy or verification
+  failure. If a job record is missing or a read fails, leave the cause open.
+
+During [run 45686583838](https://github.com/TogetherWeOwn/two-web-next/actions/runs/45686583838),
+[exact main CI passed](https://github.com/TogetherWeOwn/two-web-next/actions/runs/45677691590)
+while `deploy-staging` was queued without a runner or pending approval.
+While queued, keep the existing run link for its completion callback. On
+success, follow the automatic [staging E2E workflow](../.github/workflows/e2e-staging.yml)
+whose **Staging evidence** summary links back to that deploy run and attempt.
+For the served SHA, use the deploy's `Verify deployed revision` step
+(`bin/revision-check.mjs` checks `/up` for the exact commit and Worker Version
+ID) and `Verify /version reports the deployed commit` step
+(`bin/version-check.mjs` checks the same SHA and the upload timestamp).
+
 ### Neon web schema migrations (separate operator action)
 
 [db-migrate.yml](../.github/workflows/db-migrate.yml) is a **remote mutation**
@@ -712,9 +759,21 @@ Rehearse provision, forward, undo and revoke together on the isolated restore.
 Derive each target's repair pins after provisioning under its approved executor.
 The snapshot hashes the membership row OID. Recreating the edge changes the
 digest, so retain the same edge through the recovery window.
-Keep the repair credential separate. If a membership run is uncertain, use its
-same approved operation to confirm the state. An unexpected edge refuses without
-writes. Approve and dispatch `revoke` after recovery is no longer needed.
+Keep the repair credential separate. If closing the connection fails after
+transaction acknowledgement, the executor CLI exits `20` for confirmed
+membership after `provision` or `21` for confirmed absence after `revoke`.
+Treat other nonzero exits as unconfirmed. The protected workflow reports a
+generic failure for every nonzero exit, so a failed run can leave the grant in place.
+
+After that failure, stop writes and have the authorized operator check the
+approved database, provisioner and executor in a read-only catalog transaction.
+Compare the grantor and edge flags with the approved provisioner's single edge
+(`ADMIN` false, `INHERIT` and `SET` true) and check effective `MEMBER`, `USAGE` and
+`SET` rights. Expected absence means no direct edge and all three effective
+rights false. Stop on an unexpected or inconclusive state. Preserve a confirmed
+edge while recovery still needs it. Once recovery ends, use a separately approved
+`revoke` and verify absence. Reconcile the readback before approving another
+write. Keep automatic retries disabled for `provision`.
 
 Rehearse both directions of the [permissions repair](../.github/workflows/db-permissions-repair.yml) under the production release gate with catalog `MAINTAIN`.
 Use the approved executor login for every snapshot. Run `ci/db-permissions-repair-state.sql` read-only with `search_path = pg_catalog`. Use production Environment secrets.
@@ -966,8 +1025,9 @@ be older than the commit production currently serves. Staging eligibility is
 not proof of forward ancestry.
 
 Initial `/up` live-SHA capture makes at most three reads, two seconds apart,
-stopping on the first valid 40-hex commit. Exhausted or invalid reads leave
-live identity unknown; they never bypass default ancestry admission.
+stopping on the first HTTP 200 JSON response with a valid 40-hex commit and
+a body no larger than 16 KiB. Redirects, other HTTP statuses and invalid
+bodies leave live identity unknown if all three reads fail.
 After capture, `deploy-production` runs
 `node ci/production-deploy-gate.mjs --check-ancestry` from the trusted
 **workflow-head** checkout, before candidate checkout, migration checks or any
@@ -997,6 +1057,12 @@ candidate selects the separate explicit redeploy/recovery route. Apply the
 independent exact-candidate approval, tier review, exact-SHA CI and incident and
 rollback requirements. `migrations_applied=true` does not bypass
 default ancestry admission, and neither does an empty-SHA manual dispatch.
+If the ordinary recovery route still cannot read the live commit after the
+migration gate's retries, including when `/up` keeps returning 503 with a
+revision, restore the successful `/up` response or use the audited
+`migrations_applied=true` confirmation after verifying through the production
+`db-migrate.yml` workflow that the target's migrations are applied. Without a
+trusted live SHA the gate cannot compare journals.
 The rollback workflow remains a separate already-served-version route.
 
 #### Regression check against production

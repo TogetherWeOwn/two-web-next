@@ -181,6 +181,10 @@ test("soak error rate: 1.5x production with a 1% floor; small samples cannot be 
   }
 });
 
+const invocationRows = (sums) => ({
+  data: { viewer: { accounts: [{ workersInvocationsAdaptive: sums.map((sum) => ({ sum })) }] } },
+});
+
 test("analytics query validates identifiers and sums every row", () => {
   const query = buildScriptErrorQuery({
     accountId: ACCOUNT,
@@ -205,22 +209,22 @@ test("analytics query validates identifiers and sums every row", () => {
   assert.equal(all.variables.filter.scriptVersion, undefined);
   assert.throws(() => buildScriptErrorQuery({ accountId: "x", scriptName: "two-web-next" }));
   assert.throws(() => buildScriptErrorQuery({ accountId: ACCOUNT, scriptName: "a b" }));
-  const rows = (sums) => ({
-    data: { viewer: { accounts: [{ workersInvocationsAdaptive: sums.map((sum) => ({ sum })) }] } },
-  });
   assert.deepEqual(
     sumScriptErrors(
-      rows([
+      invocationRows([
         { requests: 10, errors: 1 },
         { requests: 5, errors: 0 },
       ]),
     ),
     { requests: 15, errors: 1 },
   );
-  assert.deepEqual(sumScriptErrors(rows([])), { requests: 0, errors: 0 });
+  assert.deepEqual(sumScriptErrors(invocationRows([])), { requests: 0, errors: 0 });
   assert.throws(() => sumScriptErrors({ errors: [{ message: "x" }] }), /returned errors/);
   assert.throws(() => sumScriptErrors({ data: {} }), /no invocation rows/);
-  assert.throws(() => sumScriptErrors(rows([{ requests: "1", errors: 0 }])), /invalid sums/);
+  assert.throws(
+    () => sumScriptErrors(invocationRows([{ requests: "1", errors: 0 }])),
+    /invalid sums/,
+  );
 });
 
 function analytics(requests, errors, seen = []) {
@@ -228,14 +232,7 @@ function analytics(requests, errors, seen = []) {
     assert.equal(url, "https://api.cloudflare.com/client/v4/graphql");
     const body = JSON.parse(init.body);
     seen.push(body.variables.filter);
-    return {
-      ok: true,
-      json: async () => ({
-        data: {
-          viewer: { accounts: [{ workersInvocationsAdaptive: [{ sum: { requests, errors } }] }] },
-        },
-      }),
-    };
+    return Response.json(invocationRows([{ requests, errors }]));
   };
 }
 
@@ -415,6 +412,84 @@ const version = (id, tag, created_on = "2026-11-01T10:00:00Z") => ({
   id,
   annotations: { "workers/tag": tag },
   metadata: { created_on },
+});
+
+test("Worker analytics sample caps streamed bytes before production or legacy staging can accept it", async () => {
+  const payload = Buffer.from(
+    JSON.stringify({
+      ...invocationRows([
+        { requests: 500, errors: 2 },
+        { requests: 100, errors: 1 },
+      ]),
+      extensions: { fixture: "é".repeat(100) },
+    }),
+  );
+  const split = payload.indexOf("é") + 1;
+  const padding = Buffer.alloc(1024 * 1024 - payload.length, " ");
+  const versions = versionsApi([[version(VERSION, SHA)]]);
+  const legacySoak = (fetchImpl) =>
+    stagingSoakSample(
+      { CLOUDFLARE_ACCOUNT_ID: ACCOUNT, CLOUDFLARE_API_TOKEN: "fixture-only", DEPLOY_SHA: SHA },
+      {
+        fetchImpl: (url, init) =>
+          url.endsWith("/graphql") ? fetchImpl(url, init) : versions(url, init),
+        nowMs: Date.parse("2026-11-01T12:00:00Z"),
+      },
+    );
+
+  for (const sample of [
+    async (fetchImpl) => (await regression(green, {}, fetchImpl)).production,
+    legacySoak,
+  ]) {
+    const validBody = new ReadableStream({
+      start(controller) {
+        controller.enqueue(payload.subarray(0, split));
+        controller.enqueue(payload.subarray(split));
+        controller.enqueue(padding);
+        controller.close();
+      },
+    });
+    const { requests, errors } = await sample(async () => new Response(validBody));
+    assert.deepEqual({ requests, errors }, { requests: 600, errors: 3 });
+
+    let pulls = 0;
+    let cancelled = false;
+    const chunks = [payload, padding, Buffer.from(" "), Buffer.from(" ")];
+    const body = new ReadableStream(
+      {
+        pull(controller) {
+          const chunk = chunks[pulls++];
+          if (chunk) controller.enqueue(chunk);
+          else controller.close();
+        },
+        cancel() {
+          cancelled = true;
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    await assert.rejects(
+      sample(async () => new Response(body)),
+      {
+        message: "Workers analytics response exceeds 1 MiB",
+      },
+    );
+    assert.equal(pulls, 3);
+    assert.equal(cancelled, true);
+
+    await assert.rejects(
+      sample(async () => new Response("private fixture content")),
+      {
+        message: "Workers analytics response is not readable JSON",
+      },
+    );
+    await assert.rejects(
+      sample(async () => new Response(null)),
+      {
+        message: "Workers analytics response has no body",
+      },
+    );
+  }
 });
 
 test("the candidate's staging version is the one tagged with its commit", async () => {

@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import { calendarFixtures, joinAction, smokeFixtures } from "../test/fixtures/smoke-routes.mjs";
 import { startSmokeFixture } from "../test/helpers/smoke-http.mjs";
+import { stagingConfig } from "./kit-cutover-database.mjs";
 import {
   LEDGER_STATES,
   STAGING_WORKER,
@@ -25,7 +26,12 @@ import {
   writeManifest,
 } from "./kit-cutover-evidence.mjs";
 import { packageCutover } from "./kit-cutover-package.mjs";
-import { cloudflare, exercise, runIsolatedCutover, verifyServed } from "./kit-cutover-staging.mjs";
+import {
+  cloudflare,
+  exercise,
+  verifyServed,
+  verifyStagedBindings,
+} from "./kit-cutover-staging.mjs";
 import "./fixtures/kit-cutover-cleanup.mjs";
 import { KIT_ROUTE_FLAGS } from "./production-deploy-gate.mjs";
 import { sha256 } from "./worker-bundle-evidence.mjs";
@@ -515,6 +521,118 @@ test("isolated qualification refuses changed packet bytes and preserves earlier 
   assert.deepEqual((await readdir(scratch)).sort(), ["kit-cutover-packet", "proof.json"]);
 });
 
+test("cutover packet publishes its digest after the summary", async (t) => {
+  const scratch = await mkdtemp(join(tmpdir(), "cutover-publication-test-"));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const repo = join(scratch, "repo");
+  const name = "two-web-next-production";
+  const wrangler = "1.2.3";
+  const kitModules = { "_worker.js": "// fixture facade", "kit-adapter.js": "// fixture Kit" };
+  const kitConfig = {
+    name,
+    main: ".svelte-kit/cloudflare/_worker.js",
+    assets: { directory: ".svelte-kit/cloudflare" },
+    workers_dev: false,
+    preview_urls: false,
+    triggers: { crons: [] },
+    vars: Object.fromEntries(KIT_ROUTE_FLAGS.map((flag) => [flag, "false"])),
+  };
+  for (const [path, body] of Object.entries({
+    "wrangler.jsonc": JSON.stringify({ env: { production: { name, main: "src/worker.ts" } } }),
+    "web/wrangler.production.jsonc": JSON.stringify(kitConfig),
+    "drizzle/meta/_journal.json": JSON.stringify({ entries: [] }),
+    "package-lock.json": JSON.stringify({
+      packages: { "node_modules/wrangler": { version: wrangler } },
+    }),
+    "node_modules/wrangler/package.json": JSON.stringify({ version: wrangler }),
+    "public/index.html": "<p>Fixture Hono</p>",
+    ...Object.fromEntries(
+      Object.entries(kitModules).map(([path, body]) => [`installed/${path}`, body]),
+    ),
+  })) {
+    const target = join(repo, path);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, body);
+  }
+  const stub = join(repo, "node_modules/.bin/wrangler");
+  await mkdir(dirname(stub));
+  await writeFile(
+    stub,
+    '#!/bin/sh\n[ "$5" = --outdir ] || exit 2\nprintf "%s\\n" "// fixture Hono" > "$6/worker.js"\n',
+    {
+      mode: 0o700,
+    },
+  );
+
+  const context = { sourceSha, runId: identity.runId, runAttempt: identity.runAttempt };
+  const installed = { assets: join(repo, "installed") };
+  const assetIdentity = {
+    files: Object.fromEntries(
+      Object.entries(kitModules).map(([path, body]) => [`cloudflare/${path}`, sha256(body)]),
+    ),
+  };
+  const fixtureInputs = await sourceInputs(repo);
+  const packager = new URL("./kit-cutover-package.mjs", import.meta.url).href;
+  const runPackage = (packet, output, summary) =>
+    spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        "const { packageCutover } = await import(process.argv[1]); await packageCutover(...JSON.parse(process.argv[2]));",
+        packager,
+        JSON.stringify([packet, repo, installed, assetIdentity, context]),
+      ],
+      {
+        encoding: "utf8",
+        env: { RUNNER_TEMP: scratch, GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary },
+        timeout: 10_000,
+      },
+    );
+  const verifyWrittenPacket = async (packet) => {
+    const manifestDigest = sha256(await readFile(join(packet, "manifest.json")));
+    await verifyPackage(packet, { ...context, digest: manifestDigest }, fixtureInputs);
+    return manifestDigest;
+  };
+
+  await t.test(
+    "summary write failure leaves the output unchanged and the packet verifiable",
+    async () => {
+      const packet = join(scratch, "failed-packet");
+      const output = join(scratch, "failed-output");
+      const summary = join(scratch, "failed-summary");
+      await writeFile(output, "existing=value\n");
+      await mkdir(summary);
+
+      const result = runPackage(packet, output, summary);
+      assert.ifError(result.error);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(result.stderr, /EISDIR/);
+      assert.ok(result.stderr.includes(summary));
+      await verifyWrittenPacket(packet);
+      assert.equal(await readFile(output, "utf8"), "existing=value\n");
+    },
+  );
+
+  await t.test("successful publication appends the exact manifest digest", async () => {
+    const packet = join(scratch, "successful-packet");
+    const output = join(scratch, "successful-output");
+    const summary = join(scratch, "successful-summary");
+    await writeFile(output, "existing=value\n");
+    await writeFile(summary, "Existing summary\n");
+
+    const result = runPackage(packet, output, summary);
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    const manifestDigest = await verifyWrittenPacket(packet);
+    assert.equal(await readFile(output, "utf8"), `existing=value\ndigest=${manifestDigest}\n`);
+    assert.equal(
+      await readFile(summary, "utf8"),
+      `Existing summary\nCutover packet manifest SHA-256: \`${manifestDigest}\`\n`,
+    );
+  });
+});
+
 test("cutover packaging cleans only its own incomplete packet", async (t) => {
   const scratch = await mkdtemp(join(tmpdir(), "cutover-packet-cleanup-test-"));
   t.after(() => rm(scratch, { recursive: true, force: true }));
@@ -666,6 +784,25 @@ test("cutover ledger admits exactly 1033 or 1037 and exact version readiness", (
       /canonical/,
     );
   }
+});
+
+test("cutover readiness bounds deferred migrations on the canonical 1033 ledger", () => {
+  const prefixes = ledgerPrefixes(ledgerJournal);
+  const body = {
+    db: "ok",
+    pending_migrations: 5,
+    migration_ledger: prefixes["1033"],
+    revision: { version_id: kit, commit: sourceSha },
+  };
+  const expected = { version: kit, commit: sourceSha, state: "1033" };
+  const deferred = { ...expected, allowDeferred: true };
+
+  assert.equal(verifyReady(503, body, prefixes, deferred), "1033");
+  assert.throws(
+    () => verifyReady(503, { ...body, pending_migrations: 6 }, prefixes, deferred),
+    /unexpected deferred migration count/,
+  );
+  assert.throws(() => verifyReady(503, body, prefixes, expected), /readiness/);
 });
 
 test("isolated Workers API GET bounds and disposes provider responses", async (t) => {
@@ -832,6 +969,36 @@ test("isolated cutover counts routes only from the successful retry", async () =
   });
   assert.equal(routeCount, 3);
   assert.deepEqual(calls, ["readiness", "smoke", "wait", "readiness", "smoke"]);
+});
+
+test("isolated Ember bindings reject duplicate names without exposing binding contents", () => {
+  const config = stagingConfig(
+    "kit",
+    inputs,
+    STAGING_WORKER,
+    "https://cutover.example.invalid",
+    "ember",
+  );
+  const bindings = [
+    ...Object.entries(config.vars).map(([name, text]) => ({ name, type: "plain_text", text })),
+    { name: "DATABASE_URL", type: "secret_text" },
+    { name: "SESSION_SECRET", type: "secret_text" },
+    { name: "DISCORD_CLIENT_SECRET", type: "secret_text" },
+    { name: "DISCORD_BOT_TOKEN", type: "secret_text" },
+    { name: "CF_VERSION_METADATA", type: "version_metadata" },
+  ];
+  verifyStagedBindings({ id: kit, resources: { bindings } }, kit, config);
+
+  const conflictingFlag = { name: "KIT_ROUTE_EMBER_PAGES", type: "plain_text", text: "false" };
+  assert.throws(
+    () =>
+      verifyStagedBindings(
+        { id: kit, resources: { bindings: [conflictingFlag, ...bindings] } },
+        kit,
+        config,
+      ),
+    { message: "staged bindings contain duplicate names" },
+  );
 });
 
 test("isolated cutover repeats readiness and smoke when rollback is still propagating", async () => {
@@ -1036,6 +1203,31 @@ test("isolated cutover refuses a healthy smoke response from the wrong Worker ve
   assert.ok(requests.every(({ override }) => override === undefined));
 });
 
+test("isolated cutover propagates a smoke rejection after a route callback", async () => {
+  const origin = "https://cutover.example.invalid";
+  const prefixes = ledgerPrefixes(ledgerJournal);
+  const ready = {
+    db: "ok",
+    pending_migrations: 0,
+    migration_ledger: prefixes["1037"],
+    revision: { version_id: kit, commit: sourceSha },
+  };
+  const failure = new Error("synthetic smoke adapter failure");
+  const verify = (complete) =>
+    verifyServed(origin, prefixes, identity, kit, "1037", "kit", {
+      probeReady: async (_origin, ledger, expected) => verifyReady(200, ready, ledger, expected),
+      probeRoutes: async (_origin, { onRoute }) => {
+        onRoute("/up", 0);
+        if (!complete) throw failure;
+        return true;
+      },
+      wait: async () => assert.fail("unexpected retry after smoke adapter rejection"),
+    });
+
+  await assert.rejects(verify(false), (error) => error === failure);
+  assert.equal(await verify(true), 1);
+});
+
 test("isolated cutover proof requires both exact versions and six healthy transitions", () => {
   const checks = LEDGER_STATES.flatMap((state) =>
     ["hono", "kit", "undo"].map((step) => ({
@@ -1102,6 +1294,17 @@ test("isolated cutover proof requires both exact versions and six healthy transi
     () => verifyStagingProof({ ...proof, checks: checks.slice(0, 3) }, identity),
     /must prove/,
   );
+
+  // Keep every transition consistent with the claimed version pair.
+  const sameVersion = {
+    ...ember,
+    kit: ember.hono,
+    checks: ember.checks.map((row) => ({ ...row, version: ember.hono })),
+  };
+  assert.throws(() => verifyStagingProof(sameVersion, { ...identity, mode: "ember" }), {
+    message: "staging requires distinct versions on one Worker",
+  });
+
   const adminPin = { ...identity, mode: "admin" };
   const admin = {
     ...proof,
@@ -1142,6 +1345,75 @@ test("Ember cutover configuration opts in only the Ember documents", () => {
     ...allOff,
     vars: { ...vars, KIT_ROUTE_ADMIN: "true" },
   });
+});
+
+test("all-off Hono fallback retains session settings and restores Hono route ownership", () => {
+  const name = "cutover-fixture-production";
+  const appUrl = "https://cutover.example.invalid";
+  const databaseId = "1".repeat(32);
+  const hyperdrive = [{ binding: "DB", id: databaseId }];
+  const assets = { binding: "ASSETS", run_worker_first: true };
+  const shared = { name, workers_dev: false, preview_urls: false, hyperdrive };
+  const fallbackInputs = {
+    root: {
+      name: "cutover-fixture-staging",
+      vars: { APP_URL: "https://staging.example.invalid" },
+      hyperdrive: [{ binding: "DB", id: "2".repeat(32) }],
+      assets,
+      keep_vars: true,
+      env: {
+        production: {
+          ...shared,
+          vars: { APP_URL: appUrl },
+          routes: [{ pattern: new URL(appUrl).hostname, custom_domain: true }],
+        },
+      },
+    },
+    kit: {
+      ...shared,
+      assets,
+      keep_vars: true,
+      vars: {
+        APP_URL: appUrl,
+        KIT_ROUTE_ARCHIVE: "false",
+        KIT_ROUTE_STATIC: "false",
+        KIT_ROUTE_EVENTS: "false",
+        KIT_ROUTE_HOME: "false",
+        KIT_ROUTE_JOIN: "false",
+        KIT_ROUTE_EMBER_PAGES: "false",
+        KIT_ROUTE_ADMIN: "false",
+      },
+    },
+  };
+
+  const ember = productionUploadConfig("kit", fallbackInputs, "ember");
+  const fallback = productionUploadConfig("hono", fallbackInputs, "all-off");
+
+  assert.equal(ember.main, "modules/_worker.js");
+  assert.equal(fallback.main, "modules/worker.js");
+  assert.deepEqual(
+    Object.entries(ember.vars).filter(
+      ([key, value]) => key.startsWith("KIT_ROUTE_") && value !== "false",
+    ),
+    [["KIT_ROUTE_EMBER_PAGES", "true"]],
+  );
+  assert.equal(
+    Object.keys(fallback.vars).some((key) => key.startsWith("KIT_ROUTE_")),
+    false,
+  );
+  for (const config of [ember, fallback]) {
+    assert.equal(config.name, name);
+    assert.equal(config.vars.APP_URL, appUrl);
+    assert.deepEqual(config.hyperdrive, [{ binding: "DB", id: databaseId }]);
+    assert.equal(config.keep_vars, true);
+    assert.equal(Object.hasOwn(config.vars, "SESSION_SECRET"), false);
+    assert.equal(config.workers_dev, false);
+    assert.equal(config.preview_urls, false);
+    assert.equal(Object.hasOwn(config, "routes"), false);
+    assert.equal(Object.hasOwn(config, "route"), false);
+    assert.equal(config.assets.binding, "ASSETS");
+    assert.equal(config.assets.run_worker_first, true);
+  }
 });
 
 test("isolated database admission fixes the host, database, owner, and run scope", async () => {
@@ -1388,6 +1660,7 @@ function isolatedDispatch(runAttempt, scratch) {
 }
 
 test("isolated cleanup removes only the claimed run attempt's resources", async (t) => {
+  const { runIsolatedCutover } = await import("./kit-cutover-staging.mjs");
   const scratch = await mkdtemp(join(tmpdir(), "cutover-cleanup-test-"));
   t.after(() => rm(scratch, { recursive: true, force: true }));
   const workers = new Set();
@@ -1460,6 +1733,7 @@ test("isolated cleanup removes only the claimed run attempt's resources", async 
 });
 
 test("isolated orchestration rejects invalid attempts before starting operations", async (t) => {
+  const { runIsolatedCutover } = await import("./kit-cutover-staging.mjs");
   const started = t.mock.fn();
   const operations = {
     qualifyPacket: started,

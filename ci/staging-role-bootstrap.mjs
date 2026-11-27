@@ -21,6 +21,8 @@
 // (staging environment, reviewed main only). Direct local runs need
 // PLANETSCALE_STAGING_DATABASE_URL in the environment; `--selftest` runs
 // the DB-free checks below.
+// The normal run exits 0 for a verified result with a clean close, 1 for a
+// bootstrap failure, or 3 for a verified result with closeFailed in its JSON.
 import { pathToFileURL } from "node:url";
 import postgres from "postgres";
 import {
@@ -51,6 +53,7 @@ export const ROLE_STATUS_QUERY =
 export const STATEMENT_TIMEOUT_MS = 30000;
 export const LOCK_TIMEOUT_MS = 10000;
 export const CONNECT_TIMEOUT_SECONDS = 10;
+const CLOSE_TIMEOUT_SECONDS = 5;
 
 export function assertBootstrapDdl(sql) {
   if (sql !== CREATE_ROLE_DDL) {
@@ -233,19 +236,41 @@ export function buildClientOptions(url) {
   };
 }
 
+class BootstrapCloseError extends Error {}
+
 export async function runBootstrap(env = process.env, { createClient = postgres } = {}) {
   const url = validateStagingUrl(env[SECRET_NAME]);
   assertBootstrapDdl(CREATE_ROLE_DDL);
   // createClient is a test seam only; the workflow always connects through
   // postgres with the pinned secret, so no caller can redirect the target.
   const client = createClient(url.href, buildClientOptions(url));
+  let evidence;
+  let closeFailed = false;
   try {
-    const evidence = await bootstrapRole(client);
-    console.log(JSON.stringify(evidence));
-    return evidence;
+    evidence = await bootstrapRole(client);
   } finally {
-    await client.end({ timeout: 5 });
+    // postgres.js can fulfill end() after forced shutdown. Start this timer
+    // first so it records the deadline before the driver's force-close timer.
+    const deadline = setTimeout(() => {
+      closeFailed = true;
+    }, CLOSE_TIMEOUT_SECONDS * 1000);
+    try {
+      await client.end({ timeout: CLOSE_TIMEOUT_SECONDS });
+    } catch {
+      closeFailed = true;
+    } finally {
+      clearTimeout(deadline);
+    }
+    if (closeFailed && !evidence)
+      console.warn("Bootstrap connection close failed; database details withheld.");
   }
+  // Only reached after a verified create or no-op. A close failure leaves
+  // that database outcome intact while making the CLI run fail distinctly.
+  console.log(JSON.stringify(closeFailed ? { ...evidence, closeFailed } : evidence));
+  if (closeFailed) {
+    throw new BootstrapCloseError("Bootstrap verified the role before connection close failed.");
+  }
+  return evidence;
 }
 
 function selftest() {
@@ -333,7 +358,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       await runBootstrap();
     } catch (error) {
       console.error(safeBootstrapError(error));
-      process.exitCode = 1;
+      process.exitCode = error instanceof BootstrapCloseError ? 3 : 1;
     }
   }
 }

@@ -34,6 +34,7 @@ import {
   pendingLedgerTags,
   pendingMigrationTags,
   pendingProductionMigrations,
+  productionJournalEntries,
   readLedgerState,
   readLiveProductionCommit,
   readLiveProductionLedger,
@@ -169,7 +170,7 @@ function stubProductionApi(evidence, seen = {}) {
     const parsed = new URL(url);
     if (parsed.pathname.endsWith("/environments/production")) {
       seen.environment = (seen.environment ?? 0) + 1;
-      return { ok: true, json: async () => protectedEnvironment };
+      return Response.json(protectedEnvironment);
     }
     if (/\/commits\/[0-9a-f]{40}$/.test(parsed.pathname)) {
       return {
@@ -211,6 +212,82 @@ test("allows only an enabled main dispatch with verified protection and green ex
   assert.deepEqual(evidence, { sha: dispatchSha, runId: 42, runAttempt: 1 });
   assert.equal(seen.environment, 1);
   assert.equal(seen.ci, 3);
+});
+
+const productionEnvironmentLimit = 64 * 1024;
+
+test("production Environment response at exactly 64 KiB advances to CI", async () => {
+  const body = JSON.stringify(protectedEnvironment).padEnd(productionEnvironmentLimit);
+  assert.equal(Buffer.byteLength(body), productionEnvironmentLimit);
+  const seen = {};
+  const evidence = await checkProductionGate(greenEnv, async () => new Response(body), {
+    checkoutSha: dispatchSha,
+    fetchCi: stubProductionApi(ciEvidence(), seen),
+  });
+  assert.deepEqual(evidence, { sha: dispatchSha, runId: 42, runAttempt: 1 });
+  assert.equal(seen.ci, 3);
+});
+
+test("oversized production Environment response cancels before further API calls", async () => {
+  const protection = new TextEncoder().encode(JSON.stringify(protectedEnvironment));
+  const padding = new Uint8Array(productionEnvironmentLimit + 1 - protection.byteLength);
+  const chunks = [protection, padding.fill(0x20)];
+  let reads = 0;
+  let cancelled = false;
+  const response = new Response(
+    new ReadableStream(
+      {
+        pull(controller) {
+          const chunk = chunks[reads++];
+          if (chunk) controller.enqueue(chunk);
+          else controller.close();
+        },
+        cancel() {
+          cancelled = true;
+        },
+      },
+      { highWaterMark: 0 },
+    ),
+    { headers: { "Content-Length": String(protection.byteLength) } },
+  );
+  const seen = [];
+  await assert.rejects(
+    checkProductionGate(
+      greenEnv,
+      async (url) => {
+        seen.push(new URL(url).pathname);
+        return response;
+      },
+      { checkoutSha: dispatchSha },
+    ),
+    { message: "Cannot verify production Environment protection (response exceeds 64 KiB)" },
+  );
+  assert.deepEqual(seen, ["/repos/fixture/repo/environments/production"]);
+  assert.equal(reads, 2);
+  assert.equal(cancelled, true);
+});
+
+test("unreadable production Environment response fails with a sanitized error", async () => {
+  const responses = [
+    new Response(null),
+    new Response("synthetic provider diagnostic"),
+    new Response(
+      new ReadableStream({
+        pull() {
+          throw new Error("synthetic stream diagnostic");
+        },
+      }),
+    ),
+  ];
+  for (const response of responses) {
+    await assert.rejects(
+      checkProductionGate(greenEnv, async () => response, {
+        checkoutSha: dispatchSha,
+        fetchCi: noNetwork,
+      }),
+      { message: "Cannot verify production Environment protection (unreadable JSON response)" },
+    );
+  }
 });
 
 for (const [name, pattern, mutate] of [
@@ -958,6 +1035,47 @@ function assertProductionBaselineScope(workflow) {
 const productionWorkflow = () =>
   readFileSync(new URL("../.github/workflows/deploy-production.yml", import.meta.url), "utf8");
 
+test("protected deploy admission requires the recovery pins for the selected mode", () => {
+  const { jobs } = parse(productionWorkflow());
+  const deploy = jobs["deploy-production"];
+  assert.equal(deploy.environment.name, "production");
+  assert.deepEqual(deploy.needs, ["preflight", "regression"]);
+  assert.equal(
+    jobs.preflight.outputs.rollback_version_id,
+    "${{ steps.rollback-target.outputs.version_id }}",
+  );
+  assert.equal(
+    jobs.preflight.outputs.rollback_commit,
+    "${{ steps.rollback-target.outputs.commit }}",
+  );
+  assert.equal(jobs.preflight.outputs.cutover_mode, "${{ steps.cutover.outputs.mode }}");
+  assert.equal(jobs.preflight.outputs.cutover_run, "${{ steps.cutover.outputs.run_id }}");
+  assert.equal(jobs.preflight.outputs.cutover_attempt, "${{ steps.cutover.outputs.run_attempt }}");
+
+  // Exercise the checked-in expression with successful dependencies. Actions
+  // resolves a missing job output to an empty string.
+  const admit = new Function("needs", `return (${deploy.if})`);
+  const receipt = {
+    sha: enabled.DEPLOY_SHA,
+    already_live: "",
+    rollback_version_id: "11111111-1111-1111-1111-111111111111",
+    rollback_commit: "b".repeat(40),
+    cutover_mode: "ember",
+    cutover_run: "21",
+    cutover_attempt: "3",
+  };
+  const starts = (outputs) => admit({ preflight: { outputs } });
+  assert.equal(starts(receipt), true);
+  for (const field of Object.keys(receipt).filter((field) => field !== "already_live")) {
+    assert.equal(starts({ ...receipt, [field]: "" }), false, `missing ${field}`);
+  }
+  assert.equal(starts({ ...receipt, already_live: "true" }), false);
+  assert.equal(
+    starts({ ...receipt, cutover_mode: "ordinary", cutover_run: "", cutover_attempt: "" }),
+    true,
+  );
+});
+
 test("production dead-letter baseline is scoped to the gradual and post-promotion smokes", () => {
   assertProductionBaselineScope(productionWorkflow());
 });
@@ -1525,7 +1643,7 @@ function stubAutoApi(staging, environment = autoEnvironment, seen = {}) {
     const parsed = new URL(url);
     if (parsed.pathname.endsWith("/environments/production")) {
       seen.environment = (seen.environment ?? 0) + 1;
-      return { ok: true, json: async () => environment };
+      return Response.json(environment);
     }
     if (/\/commits\/[0-9a-f]{40}$/.test(parsed.pathname)) {
       return {
@@ -2115,12 +2233,21 @@ test("live equality: same commit is already live, different or unknown is not", 
   assert.equal(PRODUCTION_ORIGIN, "https://togetherweown.com");
 });
 
-test("live commit reads the /up revision marker and fails open to null", async () => {
+test("live commit reads the exact revision from a successful /up JSON response", async () => {
   const sha = "c".repeat(40);
   const ok = await readLiveProductionCommit({
-    fetchImpl: async () => ({ json: async () => ({ revision: { commit: sha } }) }),
+    fetchImpl: async () =>
+      Response.json({
+        status: "degraded",
+        db: "ok",
+        pending_migrations: 0,
+        revision: { version_id: "11111111-1111-4111-8111-111111111111", commit: sha },
+      }),
   });
   assert.equal(ok, sha);
+});
+
+test("live commit reports unknown for invalid revisions or a failed fetch", async () => {
   for (const body of [
     {},
     { revision: null },
@@ -2128,7 +2255,7 @@ test("live commit reads the /up revision marker and fails open to null", async (
     { revision: { commit: "not-a-sha" } },
   ]) {
     assert.equal(
-      await readLiveProductionCommit({ fetchImpl: async () => ({ json: async () => body }) }),
+      await readLiveProductionCommit({ fetchImpl: async () => Response.json(body) }),
       null,
     );
   }
@@ -2142,11 +2269,193 @@ test("live commit reads the /up revision marker and fails open to null", async (
   );
 });
 
+test("live commit reports unknown for empty, malformed JSON and invalid UTF-8 bodies", async () => {
+  const sha = "c".repeat(40);
+  const truncated = `{"revision":{"commit":"${sha}"}`;
+  // Lossy decoding would preserve valid JSON and its otherwise usable revision.
+  const invalidUtf8 = Buffer.concat([
+    Buffer.from('{"note":"'),
+    Buffer.from([0xff]),
+    Buffer.from(`","revision":{"commit":"${sha}"}}`),
+  ]);
+  for (const body of ["", truncated, invalidUtf8]) {
+    const response = new Response(body, { headers: { "content-type": "application/json" } });
+    assert.equal(await readLiveProductionCommit({ fetchImpl: async () => response }), null);
+  }
+});
+
+test("live commit requires HTTP 200 JSON even when another response carries a valid revision", async () => {
+  const body = { revision: { commit: "c".repeat(40) } };
+  for (const response of [
+    Response.json(body, { status: 503 }),
+    Response.json(body, { status: 206 }),
+    new Response(JSON.stringify(body), { headers: { "content-type": "text/plain" } }),
+  ]) {
+    assert.equal(await readLiveProductionCommit({ fetchImpl: async () => response }), null);
+  }
+});
+
+test("live commit refuses redirects at the pinned /up request", async () => {
+  const origin = "https://production.invalid";
+  let request;
+  const live = await readLiveProductionCommit({
+    origin,
+    fetchImpl: async (url, options) => {
+      request = { url: url.href, redirect: options.redirect };
+      return Response.json(
+        { revision: { commit: "c".repeat(40) } },
+        { status: 302, headers: { location: "https://redirect.invalid/up" } },
+      );
+    },
+  });
+  assert.deepEqual(request, { url: `${origin}/up`, redirect: "manual" });
+  assert.equal(live, null);
+});
+
+test("live commit cancels a streamed response over 16 KiB without Content-Length", async () => {
+  const sha = "c".repeat(40);
+  const json = JSON.stringify({ revision: { commit: sha } });
+  const chunk = new TextEncoder().encode(json.padEnd(16 * 1024));
+  let pulls = 0;
+  let cancelled = false;
+  const body = new ReadableStream(
+    {
+      pull(controller) {
+        pulls += 1;
+        if (pulls === 1) controller.enqueue(chunk);
+        else if (pulls === 2) controller.enqueue(Uint8Array.of(32));
+        else controller.close();
+      },
+      cancel() {
+        cancelled = true;
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const headers = { "content-type": "application/json; charset=UTF-8" };
+  const atLimit = new Response(chunk, { headers });
+  assert.equal(await readLiveProductionCommit({ fetchImpl: async () => atLimit }), sha);
+  const oversize = new Response(body, { headers });
+  assert.equal(await readLiveProductionCommit({ fetchImpl: async () => oversize }), null);
+  assert.equal(pulls, 2);
+  assert.equal(cancelled, true);
+});
+
 test("pending migrations are target tags the live journal lacks", () => {
   assert.deepEqual(pendingMigrationTags(["a", "b", "c"], ["a", "b"]), ["c"]);
   assert.deepEqual(pendingMigrationTags(["a", "b"], ["a", "b"]), []);
   assert.deepEqual(pendingMigrationTags([], ["a"]), []);
   assert.deepEqual(pendingMigrationTags(["a"], []), ["a"]);
+});
+
+test("production journal reads retain tags and timestamps at both commits", async () => {
+  const targetSha = "a".repeat(40);
+  const liveSha = "b".repeat(40);
+  const live = [{ tag: "0000_init-users", when: 1790705195521 }];
+  const target = [...live, { tag: "1000_join-attempts-throttle", when: 1790713325933 }];
+  const contentsUrl =
+    "https://api.github.com/repos/fixture/repo/contents/drizzle/meta/_journal.json";
+  const journals = new Map([
+    [`${contentsUrl}?ref=${targetSha}`, target],
+    [`${contentsUrl}?ref=${liveSha}`, live],
+  ]);
+  const result = await productionJournalEntries({
+    repository: "fixture/repo",
+    targetSha,
+    liveSha,
+    token: "fixture-only",
+    fetchImpl: async (url) => {
+      const entries = journals.get(url);
+      assert.ok(entries, `unexpected journal request ${url}`);
+      journals.delete(url);
+      const journal = {
+        version: "7",
+        dialect: "postgresql",
+        entries: entries.map((entry, idx) => ({ ...entry, idx, version: "7", breakpoints: true })),
+      };
+      const encoded = Buffer.from(JSON.stringify(journal)).toString("base64");
+      const envelope = JSON.stringify({
+        encoding: "base64",
+        content: encoded.match(/.{1,60}/g).join("\n"),
+      });
+      // The ASCII envelope and its JSON whitespace occupy one byte per character.
+      return new Response(entries === target ? envelope.padEnd(256 * 1024, " ") : envelope);
+    },
+  });
+  assert.deepEqual(result, { target, live });
+  assert.equal(journals.size, 0);
+});
+
+test("production journal reads cancel an oversized Contents stream", async () => {
+  const targetSha = "a".repeat(40);
+  const liveSha = "b".repeat(40);
+  const journal = { encoding: "base64", content: Buffer.from('{"entries":[]}').toString("base64") };
+  const envelope = Buffer.from(JSON.stringify(journal));
+  // Trailing JSON whitespace makes the response valid at the limit and one byte over.
+  const chunks = [envelope, Buffer.alloc(256 * 1024 - envelope.length, " "), Buffer.from(" ")];
+  let pulls = 0;
+  let cancelled = false;
+  const body = new ReadableStream(
+    {
+      pull(controller) {
+        const chunk = chunks[pulls++];
+        if (chunk) controller.enqueue(chunk);
+        else controller.close();
+      },
+      cancel() {
+        cancelled = true;
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  await assert.rejects(
+    productionJournalEntries({
+      repository: "fixture/repo",
+      targetSha,
+      liveSha,
+      token: "fixture-only",
+      fetchImpl: async (url) => {
+        const ref = new URL(url).searchParams.get("ref");
+        if (ref === targetSha) return new Response(body);
+        assert.equal(ref, liveSha);
+        return Response.json(journal);
+      },
+    }),
+    /Migration journal response exceeds 262144 bytes/,
+  );
+  assert.equal(pulls, 3);
+  assert.equal(cancelled, true);
+  assert.equal(body.locked, false);
+});
+
+test("production journal reads reject missing and malformed Contents bodies", async () => {
+  const targetSha = "a".repeat(40);
+  const liveSha = "b".repeat(40);
+  for (const [body, error] of [
+    [null, /Migration journal lookup returned no body/],
+    ["", SyntaxError],
+    ["{", SyntaxError],
+    [
+      JSON.stringify({ encoding: "base64", content: Buffer.from("{}").toString("base64") }),
+      /Invalid migration journal/,
+    ],
+  ]) {
+    await assert.rejects(
+      productionJournalEntries({
+        repository: "fixture/repo",
+        targetSha,
+        liveSha,
+        token: "fixture-only",
+        fetchImpl: async (url) => {
+          const ref = new URL(url).searchParams.get("ref");
+          if (ref === targetSha) return new Response(body);
+          assert.equal(ref, liveSha);
+          return Response.json({ content: '{"entries":[]}' });
+        },
+      }),
+      error,
+    );
+  }
 });
 
 test("pending migration lookup compares journals at both commits and passes on unknown live", async () => {
@@ -2161,7 +2470,7 @@ test("pending migration lookup compares journals at both commits and passes on u
   const fetchImpl = async (url) => {
     const ref = new URL(url).searchParams.get("ref");
     const tags = ref === targetSha ? ["0000_a", "0001_b"] : ["0000_a"];
-    return { ok: true, json: async () => journal(tags) };
+    return Response.json(journal(tags));
   };
   assert.deepEqual(
     await pendingProductionMigrations({
@@ -2317,26 +2626,23 @@ test("pending migrations stop the promotion with a migrator-blocked error (CLI)"
 function spawnGateCli(args, env, stub) {
   const dir = mkdtempSync(join(tmpdir(), "gate-cli-"));
   const output = join(dir, "output");
-  const result = spawnSync(
-    process.execPath,
-    ["--import", "./ci/test-fetch-stub.mjs", "ci/production-deploy-gate.mjs", ...args],
-    {
-      env: {
-        ...process.env,
-        GITHUB_OUTPUT: output,
-        FETCH_STUB_JSON: JSON.stringify(stub),
-        ...env,
-      },
-      encoding: "utf8",
-    },
-  );
-  let written = "";
   try {
-    written = readFileSync(output, "utf8");
-  } catch {
-    written = "";
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "./ci/test-fetch-stub.mjs", "ci/production-deploy-gate.mjs", ...args],
+      {
+        env: {
+          GITHUB_OUTPUT: output,
+          FETCH_STUB_JSON: JSON.stringify(stub),
+          ...env,
+        },
+        encoding: "utf8",
+      },
+    );
+    return { ...result, written: existsSync(output) ? readFileSync(output, "utf8") : "" };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
-  return { ...result, written };
 }
 
 const journalBody = (tags) => ({
@@ -2491,19 +2797,32 @@ test("check-migrations CLI refuses unknown-live manual promotion without audited
   assert.match(defaulted.stderr, /migrations_applied=true/);
 });
 
-test("check-migrations CLI continues unknown-live manual promotion only with audited confirmation", () => {
+test("check-migrations CLI requires audited confirmation for explicit recovery after sustained /up 503", () => {
   const target = "a".repeat(40);
+  const live = "b".repeat(40);
+  const env = {
+    DEPLOY_SHA: target,
+    LIVE_SHA: "",
+    GITHUB_REPOSITORY: "o/r",
+    GITHUB_TOKEN: "fixture-only",
+    GITHUB_EVENT_NAME: "workflow_dispatch",
+    PRODUCTION_ORIGIN: "http://stub.invalid",
+    MIGRATIONS_APPLIED: "false",
+  };
+  const stubs = [
+    { match: "/up", status: 503, body: { revision: { commit: live } } },
+    { match: `ref=${target}`, body: journalBody(["0000_a"]) },
+    { match: `ref=${live}`, body: journalBody(["0000_a"]) },
+  ];
+  const refused = spawnGateCli(["--check-migrations"], env, stubs);
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /unknown after 3 \/up reads/);
+  assert.match(refused.stderr, /migrations_applied=true/);
+
   const continued = spawnGateCli(
     ["--check-migrations"],
-    {
-      DEPLOY_SHA: target,
-      GITHUB_REPOSITORY: "o/r",
-      GITHUB_TOKEN: "t",
-      GITHUB_EVENT_NAME: "workflow_dispatch",
-      PRODUCTION_ORIGIN: "http://stub.invalid",
-      MIGRATIONS_APPLIED: "true",
-    },
-    [{ match: "/up", fail: true }],
+    { ...env, MIGRATIONS_APPLIED: "true" },
+    stubs,
   );
   assert.equal(continued.status, 0);
   // The continuation is auditable from the log alone: it is a manual
@@ -2617,6 +2936,79 @@ test("check-migrations CLI halts closed with a ledger reason when the ledger is 
   assert.match(manual.stderr, /ledger/i);
   assert.match(manual.stderr, /run db-migrate\.yml \(target production\) first/);
   assert.match(manual.stderr, /migrations_applied=true/);
+});
+
+test("check-migrations CLI requires a successful bounded response from the deferred ledger read", async (t) => {
+  const target = "a".repeat(40);
+  const live = "b".repeat(40);
+  const first = { tag: "1000_a", when: 1000 };
+  const latest = { tag: "1001_b", when: 1001 };
+  const dated = (entries) => ({
+    content: Buffer.from(JSON.stringify({ entries })).toString("base64"),
+    encoding: "base64",
+  });
+  const run = (readiness) =>
+    spawnGateCli(
+      ["--check-migrations"],
+      {
+        DEPLOY_SHA: target,
+        LIVE_SHA: live,
+        GITHUB_REPOSITORY: "fixture/repo",
+        GITHUB_EVENT_NAME: "schedule",
+        PRODUCTION_ORIGIN: "https://stub.invalid",
+      },
+      [
+        { match: `ref=${target}`, body: dated([first, latest]) },
+        { match: `ref=${live}`, body: dated([first]) },
+        { match: "https://stub.invalid/up", ...readiness },
+      ],
+    );
+  const ledger = JSON.stringify({
+    db: "ok",
+    pending_migrations: 0,
+    migration_ledger: [first.when, latest.when],
+  });
+  const padding = " ".repeat(16 * 1024 - Buffer.byteLength(ledger));
+
+  await t.test("admits the applied ledger at the byte limit", () => {
+    const admitted = run({ chunks: [ledger, padding] });
+    assert.equal(admitted.status, 0, admitted.stderr);
+    assert.equal(admitted.stderr, "");
+    assert.equal(
+      admitted.stdout,
+      `Production ledger holds all 2 target web migration(s) (applied set of 2); clearing automatic promotion for ${target} vs live ${live}\n`,
+    );
+  });
+
+  for (const [label, readiness, reason] of [
+    [
+      "HTTP 503",
+      { status: 503, statusText: "untrusted status text", chunks: [ledger] },
+      "HTTP 503",
+    ],
+    [
+      "a stream over the byte limit",
+      { chunks: [ledger, padding, " "] },
+      "response exceeds 16384 bytes",
+    ],
+    ["an empty stream", { chunks: [] }, "response body is unreadable or invalid JSON"],
+    [
+      "malformed JSON",
+      { chunks: ["untrusted payload"] },
+      "response body is unreadable or invalid JSON",
+    ],
+  ]) {
+    await t.test(`refuses ${label} before a ledger verdict`, () => {
+      const refused = run(readiness);
+      assert.equal(refused.status, 1, reason);
+      assert.equal(refused.stdout, "");
+      assert.equal(refused.written, "");
+      assert.equal(
+        refused.stderr,
+        `::error::Target has 1 production migration(s) production lacks (1001_b); the production ledger read failed (production ledger read failed (${reason})), so this promotion stops here — automatic production migration is blocked until the least-privilege migrator lands\n`,
+      );
+    });
+  }
 });
 
 test("check-migrations CLI halts closed when the live Worker predates the ledger signal", () => {

@@ -1,14 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-// The advisory size labeller moved from a per-repo script to the org central
-// reusable, and this repo keeps only a thin caller. This contract pins the
-// moved behaviour in its new location so deleting the local copy cannot
-// silently drop coverage: exactly one of the local script and the central
-// caller must carry the labelling, the exclusions, and the advisory-only
-// wiring. A head with neither fails here first, before the floor guard
-// reports the deletion; a head with both fails too, rejecting a half-finished
-// move that leaves the local copy behind as dead code.
+// The org gate carries the advisory labeller and its exclusions.
 const workflow = readFileSync(".github/workflows/pr-size.yml", "utf8").replace(
   /^(      (?:issues|pull-requests): (?:read|write))[ \t]+#[^\n]*$/gm,
   "$1",
@@ -27,10 +20,7 @@ describe("pr-size moved-behaviour contract", () => {
   });
 
   it("excludes this repo's generated paths but keeps hand-written SQL counted", () => {
-    const extra =
-      job("pr-size").match(/^      exclude-extra: "([^"]*)"$/m)?.[1] ??
-      workflow.match(/PR_SIZE_EXCLUDE_EXTRA: "([^"]*)"/)?.[1] ??
-      "";
+    const extra = job("pr-size-gate").match(/^      exclude-extra: "([^"]*)"$/m)?.[1] ?? "";
     expect(extra.split(",")).toContain("public/islands/**");
     expect(extra.split(",")).toContain("public/styles.css");
     expect(extra.split(",")).toContain("drizzle/meta/**");
@@ -48,37 +38,26 @@ describe("pr-size moved-behaviour contract", () => {
     expect(branchProtection).toContain("`pr-size-gate`");
     const topLevel = workflow.split(/\npermissions:\n/)[1]?.split(/\n\S/)[0] ?? "";
     expect(topLevel).not.toMatch(/\bwrite\b/);
-    expect(job("pr-size")).toContain("      issues: write\n");
-    expect(job("pr-size")).toContain("      pull-requests: write\n");
+    expect(job("pr-size")).toBe("");
+    expect(workflow).not.toMatch(/workflows\/pr-size\.yml@/);
     expect(job("pr-size-gate")).toContain("      issues: write\n");
     expect(job("pr-size-gate")).toContain("      pull-requests: write\n");
     expect(job("pr-size-weekly")).not.toMatch(/\bwrite\b/);
   });
 
   it("carries the labeller from exactly one source of truth", () => {
-    const hasLocal = existsSync(".github/scripts/pr_size.py");
     const pins = [...workflow.matchAll(CENTRAL_RE)].map((m) => m[2]);
-    const hasCentral = pins.length === 3 && pins.every((pin) => pin === pins[0]);
-    // Failing-first core: a head that deletes the local script without
-    // wiring the central caller fails here, proving the move lost coverage.
-    // XOR: a half-finished move that wires the central caller but leaves the
-    // local script behind as dead code fails here too.
-    expect(hasLocal !== hasCentral).toBe(true);
-    if (hasCentral) {
-      expect(job("pr-size")).toMatch(/workflows\/pr-size\.yml@/);
-      expect(job("pr-size-gate")).toMatch(/workflows\/pr-size-gate\.yml@/);
-      expect(job("pr-size-weekly")).toMatch(/workflows\/pr-size-weekly\.yml@/);
-      expect(workflow.match(/\n    uses: /g)).toHaveLength(3);
-      expect(workflow).not.toContain("secrets:");
-      expect(workflow).not.toContain("python3");
-      expect(workflow).not.toContain("PR_SIZE_THRESHOLD");
-    }
-    if (hasLocal) {
-      const script = readFileSync(".github/scripts/pr_size.py", "utf8");
-      expect(script).toContain('("S", 100');
-      expect(script).toContain('("M", 400');
-      expect(script).toContain('("L", 1000');
-    }
+    expect(existsSync(".github/scripts/pr_size.py")).toBe(false);
+    expect(pins).toHaveLength(2);
+    expect(new Set(pins).size).toBe(1);
+    expect(job("pr-size-gate")).toMatch(/workflows\/pr-size-gate\.yml@/);
+    expect(job("pr-size-gate")).toMatch(/^      advisory-label: true$/m);
+    expect(job("pr-size-weekly")).toMatch(/workflows\/pr-size-weekly\.yml@/);
+    expect(workflow.match(/\n    uses: /g)).toHaveLength(2);
+    expect(workflow).not.toContain("secrets:");
+    expect(workflow).not.toContain("python3");
+    expect(workflow).not.toContain("PR_SIZE_THRESHOLD");
+    expect(job("pr-size-gate")).not.toMatch(/^      [\w-]*threshold:/m);
   });
 
   it("keeps the Monday weekly tally schedule", () => {

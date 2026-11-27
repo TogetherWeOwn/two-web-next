@@ -6,6 +6,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { parse } from "@babel/parser";
+import { traverseFast } from "@babel/types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { bundleCutoverAdapter } from "../ci/kit-cutover-adapter.mjs";
 import { securityHeadersFor } from "../src/headers";
@@ -366,18 +368,47 @@ describe("installed facade", () => {
   });
 });
 
-it("bundles the generated adapter's server import into the exact cutover companion", async () => {
+it("bundles nested server chunks into a standalone cutover companion", async () => {
   const dir = scratch();
   const modules = join(dir, "cloudflare");
+  const chunks = join(dir, "chunks");
   fsReal.mkdirSync(modules);
-  writeFileSync(join(dir, "server.js"), 'export const render = () => new Response("fixture");');
+  fsReal.mkdirSync(chunks);
+  writeFileSync(join(chunks, "message.js"), 'export const message = "nested chunk";');
+  writeFileSync(
+    join(dir, "server.js"),
+    `import { Buffer } from "buffer";
+export async function render() {
+  const { message } = await import("./chunks/message.js");
+  return new Response(Buffer.from(message));
+}`,
+  );
   const adapter = join(modules, COMPANION_NAME);
   writeFileSync(
     adapter,
     'import { render } from "./../server.js"; export default { fetch: render };',
   );
-  const output = await bundleCutoverAdapter(adapter);
-  const url = `data:text/javascript;base64,${Buffer.from(output).toString("base64")}`;
-  const { default: worker } = await import(/* @vite-ignore */ url);
-  expect(await worker.fetch().text()).toBe("fixture");
+
+  const detached = mkdtempSync(join(tmpdir(), "kit-cutover-companion-"));
+  dirs.push(detached);
+  const companion = join(detached, "standalone.mjs");
+  writeFileSync(companion, await bundleCutoverAdapter(adapter));
+  const emitted = parse(readFileSync(companion, "utf8"), { sourceType: "module" });
+  const specifiers = [];
+  traverseFast(emitted, (node) => {
+    if (
+      (node.type === "ImportDeclaration" ||
+        node.type === "ImportExpression" ||
+        node.type === "ExportNamedDeclaration" ||
+        node.type === "ExportAllDeclaration") &&
+      node.source
+    ) {
+      expect(node.source.type).toBe("StringLiteral");
+      specifiers.push(node.source.value);
+    }
+  });
+  expect(specifiers).toEqual(["node:buffer"]);
+
+  const { default: worker } = await import(/* @vite-ignore */ pathToFileURL(companion).href);
+  expect(await (await worker.fetch()).text()).toBe("nested chunk");
 });
