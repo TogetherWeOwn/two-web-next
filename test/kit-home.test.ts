@@ -2,26 +2,35 @@
 // independently degraded panels — session-aware header, join notices, flash,
 // featured content, upcoming events and bot-owned count/rank views.
 import { readFileSync, readdirSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
-import { NOTICES } from "../src/page-shell";
+import type { DefaultTreeAdapterMap, parse } from "parse5";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   FALLBACK_RANKS,
   HOME_JOIN_RESULT_COPY,
   HOME_NOTICES,
+  JOIN_INTRO,
   applyHomeFlashConsumption,
   applyHomeResponsePolicy,
   parseHomeNotice,
   resolveHomeFlash,
   resolveHomePageState,
 } from "../src/home-copy";
+import { NOTICES } from "../src/page-shell";
 import { JOIN_RESULT_COOKIE } from "../src/return-journey";
+import { siteJsonLd } from "../src/seo-json-ld";
+import { attr, elements, textOf } from "./helpers/kit-edit-controls";
+import { createKitSsrRenderer, type RenderPage } from "./helpers/kit-ssr-render";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const serverPath = join(root, "web/src/routes/+page.server.ts");
 const pagePath = join(root, "web/src/routes/+page.svelte");
 const manifestPath = join(root, "src/route-ownership.ts");
+const { parseRenderedPage } = createRequire(import.meta.url)("../ci/rendered-page.mjs") as {
+  parseRenderedPage: typeof parse;
+};
 
 function read(p: string): string {
   return readFileSync(p, "utf8");
@@ -125,93 +134,8 @@ describe("Kit home port: manifest", () => {
   });
 });
 
-describe("Kit home port: header, hero and metadata chrome", () => {
-  it("renders the session-aware header states", () => {
-    const page = read(pagePath);
-    // Guest chrome mirrors the Hono SiteHeader default: caption plus the
-    // ordinary-login round trip, never the join journey link.
-    expect(page).toContain("Welcome, guest");
-    expect(page).toContain('href="/auth/discord"');
-    expect(page).toContain('data-testid="signin"');
-    // Member chrome mirrors the Hono logout form with the viewer name.
-    expect(page).toContain('action="/logout"');
-    expect(page).toContain("Signed in");
-    expect(page).toContain('class="who"');
-    // Session outage keeps the guest header while the hero offers the invite.
-    expect(page).toContain("sessionUnavailable");
-    expect(page).toContain("Join with an invite link");
-    // The hero gates Open Discord on membership: a bare `{:else if session}`
-    // would hand non-members the member button (the SSR render test pins the
-    // rendered output for both states).
-    expect(page).toMatch(/\{\:else if session\?\.member\}/);
-  });
-
-  it("renders the hero, notice slot and exact page metadata", () => {
-    const page = read(pagePath);
-    expect(page).toContain('id="home-heading"');
-    expect(page).toContain("The lobby is <em>open</em>.");
-    expect(page).toContain("A close-knit gaming clan / mostly evenings / 18+");
-    expect(page).toContain("We spent most of our life private. Now you can just turn up.");
-    expect(page).toContain('data-testid="notice"');
-    expect(page).toContain('data-testid="join-result"');
-    expect(page).toContain('data-testid="reinvite-link"');
-    expect(page).toContain('data-testid="join"');
-    expect(page).toContain('data-testid="discord-join"');
-    expect(page).toContain('theme="home"');
-    expect(page).toContain('href="/" aria-current="page"');
-    expect(page).toContain("Together We Own — the lobby is open");
-    expect(page).toContain('testid="site-jsonld"');
-  });
-
-  it("renders counts, ranks, featured, events and community panels", () => {
-    const page = read(pagePath);
-    expect(page).toContain('data-testid="member-count"');
-    expect(page).toContain('data-testid="rank-stack"');
-    expect(page).toContain('data-testid="featured-content"');
-    expect(page).toContain('data-testid="featured-item"');
-    expect(page).toContain('data-testid="home-events-list"');
-    expect(page).toContain('data-testid="home-events-empty"');
-    expect(page).toContain('data-testid="home-events-join"');
-    const guestIntro = read(join(root, "web/src/routes/HomeGuestIntro.svelte"));
-    expect(page).toContain("<HomeGuestIntro />");
-    expect(guestIntro).toContain('data-testid="home-widget-link"');
-    expect(guestIntro).toContain('data-testid="home-discord-invite"');
-    expect(page).toContain('id="featured-heading"');
-    expect(guestIntro).toContain('id="community-heading"');
-    expect(guestIntro).toContain('id="discord-heading"');
-    expect(page).toContain('id="home-events-heading"');
-    expect(page).toContain("Community ladder");
-    expect(guestIntro).toContain('href="/join#join-heading"');
-    expect(page).toContain('href="/events"');
-  });
-
-  it("keeps each panel independently degraded", () => {
-    const page = read(pagePath);
-    // Missing snapshots hide counts; stale snapshots carry their observation time.
-    expect(page).toContain("{#if countsSnapshot}");
-    expect(page).toContain("countsSnapshot.observedAt");
-    // An empty ladder still names the ranks; a zero rank reads unclaimed.
-    expect(page).toContain("unclaimed");
-    // Featured renders only for visible rows; an empty events read states why.
-    expect(page).toContain("featured.length > 0");
-    expect(page).toContain("upcomingEvents.length > 0");
-    expect(page).toContain('"unavailable"');
-    expect(page).toContain('"empty"');
-    expect(page).toContain("Game nights are unavailable right now.");
-    expect(page).toContain("Nothing scheduled yet.");
-  });
-
-  it("preserves the featured image host policy and event links", () => {
-    const page = read(pagePath);
-    expect(page).toContain('referrerpolicy="no-referrer"');
-    expect(page).toContain('loading="lazy"');
-    expect(page).toContain('decoding="async"');
-    expect(page).toContain('href="/discord"');
-    expect(page).toContain("/e/${encodeURIComponent(");
-    expect(page).toContain("RSVP in Discord");
-  });
-
-  it("allows only the flag-gated public voice island as page JavaScript", () => {
+describe("Kit home port: script source wiring", () => {
+  it("keeps the route's public voice script behind the load flag", () => {
     const page = read(pagePath);
     const island = 'src="/islands/kit-public-voice.js"';
     expect(page.match(/<script[^>]+\bsrc="[^"]+"/g)).toEqual([`<script ${island}`]);
@@ -228,6 +152,202 @@ describe("Kit home port: header, hero and metadata chrome", () => {
     // literally, so the shared payload travels in a markup string instead.
     expect(page).toContain('<JsonLd testid="site-jsonld" json={siteGraph} />');
     expect(page).not.toContain("{@html siteJsonLd(appUrl)}</script>");
+  });
+});
+
+describe("Kit home port: rendered page structure", () => {
+  const appUrl = "https://example.test";
+  const inviteUrl = "https://discord.gg/invite";
+  const nowMs = Date.UTC(2030, 6, 19, 12);
+  const observedAt = "2030-07-19T11:00:00.000Z";
+  const countsSnapshot = { memberCount: 42, onlineCount: 7, observedAt, stale: false };
+  const session = { userId: "1", username: "Player", avatar: null, moderator: false };
+  const event = { title: "Game night", startsAt: new Date(nowMs + 3600e3), timezone: "UTC" };
+  let renderPage: RenderPage;
+  let cleanup: (() => void) | undefined;
+
+  beforeAll(async () => {
+    ({ renderPage, cleanup } = await createKitSsrRenderer("web/src/routes/+page.svelte"));
+  });
+  afterAll(() => cleanup?.());
+
+  function render(overrides: Record<string, unknown> = {}) {
+    return parseRenderedPage(
+      renderPage({
+        appUrl,
+        inviteUrl,
+        nowMs,
+        countsSnapshot,
+        session: null,
+        sessionUnavailable: false,
+        notice: null,
+        joinResult: null,
+        counts: { memberCount: 42, onlineCount: 7, ranks: [] },
+        featured: [],
+        imageHosts: "",
+        upcomingEvents: [],
+        eventsUnavailable: false,
+        homeCopy: { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS, JOIN_INTRO },
+        ...overrides,
+      }),
+    );
+  }
+
+  function matching(
+    root: DefaultTreeAdapterMap["node"],
+    tag: string,
+    attrs: Record<string, string> = {},
+  ) {
+    return elements(root).filter(
+      (el) =>
+        el.tagName === tag &&
+        Object.entries(attrs).every(([key, value]) => attr(el, key) === value),
+    );
+  }
+
+  function one(root: DefaultTreeAdapterMap["node"], tag: string, attrs?: Record<string, string>) {
+    const [element, ...duplicates] = matching(root, tag, attrs);
+    if (!element || duplicates.length) {
+      throw new Error(
+        `Expected one ${tag} with ${JSON.stringify(attrs ?? {})}, found ${element ? 1 + duplicates.length : 0}`,
+      );
+    }
+    return element;
+  }
+
+  const testId = (id: string) => ({ "data-testid": id });
+  const heroAttrs = { "aria-labelledby": "home-heading" };
+  const eventsAttrs = { "aria-labelledby": "home-events-heading" };
+
+  it("renders the guest, member, non-member and outage account and hero actions", () => {
+    for (const sessionUnavailable of [false, true]) {
+      const page = render({ sessionUnavailable });
+      const account = one(one(page, "header"), "nav", { "aria-label": "Account" });
+      expect(textOf(account)).toContain("Welcome, guest");
+      expect(attr(one(account, "a", testId("signin")), "href")).toBe("/auth/discord");
+      const hero = one(page, "section", heroAttrs);
+      const link = one(hero, "a", testId(sessionUnavailable ? "discord-join" : "join"));
+      expect(attr(link, "href")).toBe(sessionUnavailable ? "/discord" : "/auth/discord");
+      expect(textOf(link)).toBe(
+        sessionUnavailable ? "Join with an invite link" : "Join with Discord",
+      );
+    }
+    for (const member of [true, false]) {
+      const page = render({ session: { ...session, member } });
+      const form = one(one(page, "header"), "form", { method: "post", action: "/logout" });
+      expect(textOf(form)).toContain("Signed in");
+      expect(textOf(one(form, "span", { class: "who" }))).toBe(session.username);
+      const hero = one(page, "section", heroAttrs);
+      const discord = matching(hero, "a", { href: inviteUrl });
+      expect(discord.map(textOf)).toEqual(member ? ["Open Discord"] : []);
+      expect(matching(hero, "a", testId("join")).map((link) => attr(link, "href"))).toEqual(
+        member ? [] : ["/auth/discord"],
+      );
+    }
+  });
+
+  it("renders the hero, notice slot and exact page metadata", () => {
+    const page = render({ notice: "joined" });
+    const head = one(page, "head");
+    expect(textOf(one(head, "title"))).toBe("Together We Own — the lobby is open");
+    const stylesheets = matching(head, "link", { rel: "stylesheet" });
+    expect(stylesheets.map((link) => attr(link, "href"))).toEqual(["/styles.css", "/theme.css"]);
+    const intro = "We spent most of our life private. Now you can just turn up.";
+    expect(attr(one(head, "meta", { name: "description" }), "content")).toBe(intro);
+    const theme = one(page, "div", { "data-theme": "home" });
+    one(one(theme, "header"), "a", { href: "/", "aria-current": "page" });
+    const hero = one(theme, "section", heroAttrs);
+    const heading = one(hero, "h1", { id: "home-heading" });
+    expect(textOf(heading).trim()).toBe("The lobby is open.");
+    expect(textOf(one(heading, "em"))).toBe("open");
+    expect(textOf(hero)).toContain("A close-knit gaming clan / mostly evenings / 18+");
+    expect(textOf(hero)).toContain(intro);
+    const notice = one(theme, "p", testId("notice"));
+    expect(textOf(notice)).toBe(HOME_NOTICES.joined);
+    expect(elements(theme).indexOf(notice)).toBeLessThan(elements(theme).indexOf(hero));
+    const flash = one(render({ joinResult: "already_member" }), "p", testId("join-result"));
+    expect(textOf(one(flash, "a", testId("reinvite-link")))).toBe(HOME_JOIN_RESULT_COPY.reinvite);
+  });
+
+  it("renders grouped community, featured and upcoming event panels with their own links", () => {
+    const page = render({
+      featured: [{ id: "f1", title: "Night report", imageUrl: `${appUrl}/report.png` }],
+      upcomingEvents: [
+        { ...event, source: "canonical", eventKey: "night/one", goingCount: 1, capacity: null },
+        { ...event, source: "discord", discordId: "123" },
+      ],
+    });
+    const featured = one(page, "section", testId("featured-content"));
+    one(featured, "h2", { id: "featured-heading" });
+    one(one(featured, "article", testId("featured-item")), "img", {
+      src: "/report.png",
+      referrerpolicy: "no-referrer",
+      loading: "lazy",
+      decoding: "async",
+    });
+    const community = one(page, "section", testId("home-guest-intro"));
+    one(community, "h2", { id: "community-heading" });
+    const discord = one(community, "section", { "aria-labelledby": "discord-heading" });
+    one(discord, "h3", { id: "discord-heading" });
+    one(discord, "a", { ...testId("home-widget-link"), href: "/join#join-heading" });
+    one(discord, "a", { ...testId("home-discord-invite"), href: "/discord" });
+    const events = one(page, "section", eventsAttrs);
+    one(events, "h2", { id: "home-events-heading" });
+    const list = one(events, "ul", testId("home-events-list"));
+    const group = one(list, "li", testId("home-events-group-tonight"));
+    const rows = one(group, "ul");
+    expect(
+      rows.childNodes.filter((node) => "tagName" in node).map((row) => attr(row, "data-source")),
+    ).toEqual(["canonical", "discord"]);
+    one(one(rows, "li", { "data-source": "canonical" }), "a", { href: "/e/night%2Fone" });
+    const discordRow = one(rows, "li", { "data-source": "discord" });
+    one(discordRow, "a", { ...testId("home-event-discord"), href: inviteUrl });
+    expect(textOf(discordRow)).toContain("RSVP in Discord");
+    expect(textOf(one(events, "a", { href: "/events" }))).toContain("See all events");
+  });
+
+  it("keeps counts, ranks, featured content and the schedule independently degraded", () => {
+    const page = render({ countsSnapshot: { ...countsSnapshot, stale: true } });
+    const counts = one(one(page, "section", heroAttrs), "p", testId("member-count"));
+    expect(attr(one(counts, "time"), "datetime")).toBe(observedAt);
+    const ladder = one(page, "section", { "aria-label": "Community ladder" });
+    expect(matching(one(ladder, "dl", testId("rank-stack")), "dt").map(textOf)).toEqual(
+      FALLBACK_RANKS.map(({ label }) => label),
+    );
+    const events = one(page, "section", eventsAttrs);
+    one(events, "a", { ...testId("home-events-join"), href: "/join" });
+    const empty = one(events, "div", { ...testId("home-events-empty"), "data-state": "empty" });
+    expect(textOf(one(empty, "h3")).trim()).toBe("Nothing scheduled yet.");
+    expect(matching(page, "section", testId("featured-content"))).toEqual([]);
+    const unavailable = render({
+      countsSnapshot: null,
+      eventsUnavailable: true,
+      counts: { ranks: [{ key: "prospect", label: "Prospect", memberCount: 0 }] },
+      upcomingEvents: [{ ...event, source: "discord", discordId: "123" }],
+    });
+    expect(matching(unavailable, "p", testId("member-count"))).toEqual([]);
+    expect(matching(unavailable, "ul", testId("home-events-list"))).toEqual([]);
+    const status = one(one(unavailable, "section", eventsAttrs), "div", {
+      ...testId("home-events-empty"),
+      "data-state": "unavailable",
+    });
+    expect(textOf(one(status, "h3")).trim()).toBe("Game nights are unavailable right now.");
+    const ranks = one(unavailable, "dl", testId("rank-stack"));
+    expect(textOf(one(one(ranks, "div", { "data-rank": "prospect" }), "dd"))).toBe("unclaimed");
+  });
+
+  it("renders inert site JSON-LD and only the flag-gated public voice script", () => {
+    for (const publicVoiceEnabled of [false, true]) {
+      const page = render({ publicVoiceEnabled });
+      const jsonLd = one(page, "script", testId("site-jsonld"));
+      expect(attr(jsonLd, "type")).toBe("application/ld+json");
+      expect(attr(jsonLd, "src")).toBeUndefined();
+      expect(textOf(jsonLd)).toBe(siteJsonLd(appUrl));
+      const scripts = matching(page, "script").filter((script) => script !== jsonLd);
+      expect(scripts.map((script) => [attr(script, "src"), attr(script, "defer")])).toEqual(
+        publicVoiceEnabled ? [["/islands/kit-public-voice.js", ""]] : [],
+      );
+    }
   });
 });
 
