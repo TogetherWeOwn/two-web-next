@@ -250,9 +250,9 @@ test("isolated cutover cleanup CLI reports each failure and keeps the claim for 
     import fs from "node:fs/promises";
     import { registerHooks, syncBuiltinESMExports } from "node:module";
     import { join } from "node:path";
+    const claimPath = join(process.env.RUNNER_TEMP, "kit-cutover-claimed.json");
     const claimOperation = process.env.FAKE_CLAIM_OPERATION;
     if (claimOperation) {
-      const claimPath = join(process.env.RUNNER_TEMP, "kit-cutover-claimed.json");
       const original = fs[claimOperation];
       fs[claimOperation] = async (path, ...args) => {
         if (path === claimPath) throw Object.assign(new Error("raw claim I/O detail"), { code: "EIO" });
@@ -267,7 +267,7 @@ test("isolated cutover cleanup CLI reports each failure and keeps the claim for 
         assert.equal(url, target);
         console.log("Worker delete");
         if (process.env.FAKE_WORKER === "fail") throw new Error("raw Worker detail");
-        deleted = true;
+        deleted = process.env.FAKE_WORKER !== "stale-settings";
       } else {
         assert.equal(method, "GET");
         assert.equal(url, target + "/settings");
@@ -288,6 +288,7 @@ test("isolated cutover cleanup CLI reports each failure and keeps the claim for 
           console.log("Login drop");
         } else {
           assert.match(template[0], /^SELECT/);
+          assert.equal(await fs.readFile(claimPath, "utf8"), ${JSON.stringify(worker)});
           console.log("Database and login verification");
           return [{ db: false, login: false }];
         }
@@ -347,6 +348,14 @@ test("isolated cutover cleanup CLI reports each failure and keeps the claim for 
 
   const workerCleanup = ["Worker settings", "Worker delete", "Worker settings"];
   const databaseCleanup = ["Database drop", "Login drop", "Database and login verification"];
+  async function retryWithAbsentWorker() {
+    const result = run("absent", "ok");
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(result.stdout.trim().split("\n"), ["Worker settings", ...databaseCleanup]);
+    assert.equal(result.stderr, "");
+    await assert.rejects(readFile(claim, "utf8"), { code: "ENOENT" });
+  }
+
   for (const [workerMode, databaseMode, failures, operations] of [
     ["fail", "fail", "Worker, database and login", [...workerCleanup.slice(0, 2), "Database drop"]],
     ["fail", "ok", "Worker", [...workerCleanup.slice(0, 2), ...databaseCleanup]],
@@ -366,12 +375,15 @@ test("isolated cutover cleanup CLI reports each failure and keeps the claim for 
       );
     });
   }
-  await t.test("successful retry tolerates a Worker already removed", async () => {
-    const result = run("absent", "ok");
-    assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(result.stdout.trim().split("\n"), ["Worker settings", ...databaseCleanup]);
-    assert.equal(result.stderr, "");
-    await assert.rejects(readFile(claim, "utf8"), { code: "ENOENT" });
+  await t.test("successful retry tolerates a Worker already removed", retryWithAbsentWorker);
+  await t.test("stale post-delete settings retain the claim for a bounded retry", async () => {
+    await writeFile(claim, worker, { flag: "wx" });
+    const result = run("stale-settings", "ok");
+    assert.equal(result.status, 1, result.stderr);
+    assert.deepEqual(result.stdout.trim().split("\n"), [...workerCleanup, ...databaseCleanup]);
+    assert.match(result.stderr, /^Error: Could not verify isolated cleanup: Worker$/m);
+    assert.equal(await readFile(claim, "utf8"), worker);
+    await retryWithAbsentWorker();
   });
   await t.test("successful cleanup deletes and verifies the Worker", async () => {
     await writeFile(claim, worker);
