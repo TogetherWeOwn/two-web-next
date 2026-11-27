@@ -1,13 +1,16 @@
 # Keep the TypeScript, TSX, and Svelte JavaScript matchers in sync.
-id: no-raw-byte-length-comparison-node
+id: no-raw-byte-length-comparison-ratchet
 language: TypeScript
-# The ratchet turns new findings into errors after accounting for existing comparisons.
+# The ratchet rejects all Svelte findings and new findings elsewhere.
 severity: warning
 message: Use the shared byte-limit helpers in src/http/length-limit.ts.
 files:
   - "**/*.{js,mjs}"
+  - "web/src/**/*.svelte"
+  - src/events/attendee-paths.ts
 ignores:
-  - "{src,web/src,assets,public}/**"
+  - "{src,web/src,assets}/**/*.{js,mjs}"
+  - "public/**"
 rule:
   any:
     - matches: byte-length-access

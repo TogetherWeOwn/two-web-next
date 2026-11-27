@@ -11,12 +11,12 @@ valid:
   - 'if ((bytes.byteLength ? "a" : "b") === status) report();'
   - 'if (((bytes.byteLength + 1) ? "a" : "b") === status) report();'
   - if (rows.length > MAX_ROWS) refuse();
+invalid:
   - |
     function authReturnHref() {
       const fits = (href: string) => new TextEncoder().encode(href).byteLength <= maxBytes;
       return fits(url);
     }
-invalid:
   - if (chunk.byteLength > remaining) cancel();
   - if (max < size + chunk.byteLength) cancel();
   - if ((chunk.byteLength + offset) <= max) accept();

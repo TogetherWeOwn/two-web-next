@@ -1,4 +1,4 @@
-id: no-raw-byte-length-comparison-node
+id: no-raw-byte-length-comparison-ratchet
 valid:
   - if (exceedsByteLimit(Buffer.byteLength(text, "utf8"), max)) reject();
   - total += chunk.byteLength;

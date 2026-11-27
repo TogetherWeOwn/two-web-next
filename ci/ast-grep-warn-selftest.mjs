@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  compareByteLengthBaseline,
+  addedByteLengthComparisons,
   scanByteLengthComparisons,
 } from "./raw-byte-length-ratchet.mjs";
 
@@ -20,6 +20,11 @@ function checkByteLengthRuleCoverage() {
     const nodePath = "ci/unsafe.mjs";
     const jsPath = "web/scripts/unsafe.js";
     const sveltePath = "web/src/unsafe.svelte";
+    writeFileSync(join(directory, nodePath), unsafe);
+    const git = (...args) => execFileSync("git", args, { cwd: directory });
+    git("init", "--quiet");
+    git("add", "--", nodePath);
+    const base = git("write-tree").toString().trim();
     writeFileSync(join(directory, nodePath), unsafe.repeat(2));
     writeFileSync(join(directory, jsPath), unsafe);
     writeFileSync(
@@ -29,7 +34,12 @@ function checkByteLengthRuleCoverage() {
     writeFileSync(join(directory, "public/generated.js"), unsafe);
     writeFileSync(
       join(directory, sveltePath),
-      `<script module>${unsafe}</script>\n<script lang="ts">if ((left.byteLength as number) > max) reject();</script>\n`,
+      `<script module>${unsafe}</script>\n<script lang="ts">
+        function authReturnHref() {
+          const fits = (href: string) => new TextEncoder().encode(href).byteLength <= maxBytes;
+          return fits(url);
+        }
+      </script>`,
     );
     writeFileSync(
       join(directory, "web/src/clean.svelte"),
@@ -42,33 +52,29 @@ function checkByteLengthRuleCoverage() {
       jsPath,
       sveltePath,
     ]);
-    assert.deepEqual(
-      [
-        ...new Set(
-          findings.filter(({ file }) => file === sveltePath).map(({ language }) => language),
-        ),
-      ].sort(),
-      ["JavaScript", "TypeScript"],
+    assert.ok(
+      findings.some(({ file, language }) => file === sveltePath && language === "JavaScript"),
     );
     assert.deepEqual(
-      compareByteLengthBaseline(
-        findings.filter(({ ruleId }) => ruleId.endsWith("-node")),
-        [[nodePath, comparison]],
+      addedByteLengthComparisons(
+        directory,
+        base,
+        findings.filter(({ ruleId }) => ruleId.endsWith("-ratchet")),
       ),
-      {
-        added: [
-          { file: nodePath, text: comparison, line: 2 },
-          { file: jsPath, text: comparison, line: 1 },
-        ],
-        stale: [],
-      },
+      [
+        { file: nodePath, text: comparison, line: 2 },
+        { file: jsPath, text: comparison, line: 1 },
+        {
+          file: sveltePath,
+          text: "new TextEncoder().encode(href).byteLength <= maxBytes",
+          line: 5,
+        },
+      ],
     );
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
-  console.log(
-    "ast-grep byte-length selftest: Node and Svelte coverage, clean controls, and duplicate detection passed",
-  );
+  console.log("ast-grep byte-length selftest passed");
 }
 
 const fixture = join("src", `ast-grep-warning-selftest-${process.pid}.test.ts`);

@@ -1,4 +1,4 @@
-# Keep the TypeScript and Svelte JavaScript matchers in sync.
+# Keep the TypeScript twin in sync. Tooling and generated output are outside this rule.
 id: no-raw-byte-length-comparison-tsx
 language: tsx
 severity: error

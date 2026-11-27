@@ -155,10 +155,10 @@ not fail) unless marked HARD. All of them run on the existing runners only.
 - **Raw byte-length comparisons (HARD):** Use the shared predicates in
   `src/http/length-limit.ts` for byte limits. The scan covers authored
   application code, Node `.mjs` and `.js` scripts, and JavaScript and
-  TypeScript `<script>` blocks in `web/src/**/*.svelte`. The Node ratchet
-  counts exact comparison expressions per path. When removing a legacy
-  comparison, delete its row from `ci/raw-byte-length-baseline.json`.
-  `npm run scan:fetch-await` enforces the baseline and the application rules.
+  TypeScript `<script>` blocks in `web/src/**/*.svelte`. The Node tooling
+  ratchet and the attendee-path check compare exact expressions and counts
+  per file against the tested base commit. Removed comparisons fall out of
+  the baseline when merged. `npm run scan:fetch-await` runs these checks.
 
 ## Pull-request CI selection
 

@@ -25,22 +25,44 @@ snapshots:
       return fits(url);
     }
   : labels:
-      - source: buffer.byteLength
+      - source: new TextEncoder().encode(href).byteLength
         style: primary
-        start: 122
-        end: 139
+        start: 61
+        end: 102
       - source: byteLength
         style: secondary
-        start: 129
-        end: 139
-      - source: ">"
+        start: 92
+        end: 102
+      - source: <=
         style: secondary
-        start: 140
-        end: 141
-      - source: buffer.byteLength > maxBytes
+        start: 103
+        end: 105
+      - source: new TextEncoder().encode(href).byteLength <= maxBytes
         style: secondary
-        start: 122
-        end: 150
+        start: 61
+        end: 114
+  ? |
+    function authReturnHref() {
+      const fits = (href: string) => new TextEncoder().encode(href).byteLength <= maxBytes;
+      return fits(url);
+    }
+  : labels:
+      - source: new TextEncoder().encode(href).byteLength
+        style: primary
+        start: 61
+        end: 102
+      - source: byteLength
+        style: secondary
+        start: 92
+        end: 102
+      - source: <=
+        style: secondary
+        start: 103
+        end: 105
+      - source: new TextEncoder().encode(href).byteLength <= maxBytes
+        style: secondary
+        start: 61
+        end: 114
   ? |
     function returnHref() {
       const fits = (href: string) => new TextEncoder().encode(href).byteLength <= maxBytes;
