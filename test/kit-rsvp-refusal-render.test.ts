@@ -18,6 +18,18 @@ import {
   rsvpRefusalModelFor,
   type RsvpRefusalModel,
 } from "../src/events/rsvp-refusal";
+import {
+  childText,
+  discordGuestLinks,
+  documentElements,
+  element,
+  elements,
+  fallbackText,
+  parseRenderedPage,
+  renderedAttribute,
+  responseValues,
+  text,
+} from "./helpers/rendered-dom.mjs";
 
 const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
 const { compile } = webRequire("svelte/compiler") as {
@@ -29,7 +41,24 @@ const { compile } = webRequire("svelte/compiler") as {
 
 type RenderRefusal = (props: RsvpRefusalModel) => string;
 
-let renderRefusal: RenderRefusal;
+let renderHtml: RenderRefusal;
+
+function renderRefusal(props: RsvpRefusalModel) {
+  return parseRenderedPage(renderHtml(props));
+}
+
+function guestChrome(html: string) {
+  const page = parseRenderedPage(html, { scriptingEnabled: false });
+  return {
+    accountNav: documentElements(page, "nav").some(
+      (nav) => renderedAttribute(nav, "aria-label") === "Account",
+    ),
+    guestCaption: [text(page), fallbackText(page), ...responseValues(page, html)].some((value) =>
+      value.includes("Welcome, guest"),
+    ),
+    guestLink: discordGuestLinks(page).length > 0,
+  };
+}
 
 beforeAll(async () => {
   const worktree = fileURLToPath(new URL("../", import.meta.url));
@@ -74,7 +103,7 @@ export function renderRefusal(props) {
       },
     ],
   });
-  ({ renderRefusal } = (await import(pathToFileURL(outfile).href)) as {
+  ({ renderRefusal: renderHtml } = (await import(pathToFileURL(outfile).href)) as {
     renderRefusal: RenderRefusal;
   });
   rmSync(scratch, { recursive: true, force: true });
@@ -82,54 +111,77 @@ export function renderRefusal(props) {
 
 describe("Kit RSVP refusal presentation", () => {
   it("renders the generic refusal with the back nav, heading, alert and return link", () => {
-    const html = renderRefusal(
+    const page = renderRefusal(
       rsvpRefusalModelFor({ status: 403, retryAfter: null, eventKey: "EVT" }),
     );
-    expect(html).toContain(`<h1>${RSVP_COPY.failedTitle}</h1>`);
-    expect(html).toContain('role="alert"');
-    expect(html).toContain(RSVP_REFUSAL_GENERIC_MESSAGE);
-    expect(html).toContain('href="/e/EVT"');
-    expect(html).toContain("Return to the event");
-    expect(html).toContain('aria-label="Event calendar"');
-    expect(html).toContain(`<title>${RSVP_COPY.failedTitle} — Together We Own</title>`);
+    const main = element(page, "main");
+    expect(text(element(main, "h1"))).toBe(RSVP_COPY.failedTitle);
+    const alerts = elements(main, "p", { role: "alert" });
+    expect(alerts).toHaveLength(1);
+    expect(alerts.map(text)).toContain(RSVP_REFUSAL_GENERIC_MESSAGE);
+    expect(text(element(main, "a", { href: "/e/EVT" }))).toBe("Return to the event");
+    const calendar = element(main, "nav", { "aria-label": "Event calendar" });
+    expect(text(element(calendar, "a", { href: "/events" }))).toBe("← All events");
+    const head = element(page, "head");
+    const titles = head.childNodes
+      .filter((node) => "tagName" in node)
+      .filter((node) => node.tagName === "title");
+    expect(titles.map(childText)).toEqual([`${RSVP_COPY.failedTitle} — Together We Own`]);
   });
 
   it("renders the throttled refusal with the announced wait", () => {
-    const html = renderRefusal(
+    const page = renderRefusal(
       rsvpRefusalModelFor({ status: 429, retryAfter: "7", eventKey: "EVT" }),
     );
-    expect(html).toContain('role="alert"');
-    expect(html).toContain(throttleWaitCopy(7));
-    expect(html).not.toContain(RSVP_REFUSAL_GENERIC_MESSAGE);
+    expect(text(element(page, "p", { role: "alert" }))).toBe(throttleWaitCopy(7));
+    expect(text(page)).not.toContain(RSVP_REFUSAL_GENERIC_MESSAGE);
   });
 
   it("escapes the message instead of rendering raw HTML", () => {
     const hostile = '</p><script>alert("xss")</script>';
-    const html = renderRefusal({
+    const page = renderRefusal({
       title: RSVP_COPY.failedTitle,
       message: hostile,
       returnPath: "/e/EVT",
     });
-    expect(html).not.toContain("</p><script>");
-    expect(html).toContain("alert(");
-    expect(html).toContain('role="alert"');
+    expect(text(element(element(page, "main"), "p", { role: "alert" }))).toBe(hostile);
+    expect(documentElements(page, "script").map(childText)).not.toContainEqual(
+      expect.stringContaining('alert("xss")'),
+    );
   });
 
   it("marks Events as the current location, like its Hono oracle", () => {
-    const html = renderRefusal(
+    const page = renderRefusal(
       rsvpRefusalModelFor({ status: 403, retryAfter: null, eventKey: "EVT" }),
     );
-    expect(html).toContain('<a href="/events" aria-current="location">Events</a>');
-    expect(html).not.toContain('aria-current="page">Events');
+    const nav = element(page, "nav", { "aria-label": "Primary" });
+    const events = element(nav, "a", { href: "/events" });
+    expect(text(events)).toBe("Events");
+    expect(renderedAttribute(events, "aria-current")).toBe("location");
   });
 
   it("keeps the served shell chrome: event theme, no account area, skip link", () => {
-    const html = renderRefusal(
+    const html = renderHtml(
       rsvpRefusalModelFor({ status: 503, retryAfter: null, eventKey: "EVT" }),
     );
-    expect(html).toContain('data-theme="event"');
-    expect(html).not.toContain("Welcome, guest");
-    expect(html).not.toContain('href="/join/discord');
-    expect(html).toContain('href="#main"');
+    const page = parseRenderedPage(html);
+    expect(elements(page, "div", { "data-theme": "event" })).toHaveLength(1);
+    const chrome = guestChrome(html);
+    expect(chrome.accountNav).toBe(false);
+    expect(chrome.guestCaption).toBe(false);
+    expect(chrome.guestLink).toBe(false);
+    expect(text(element(page, "a", { href: "#main" }))).toBe("Skip to content");
+    expect(elements(page, "main", { id: "main" })).toHaveLength(1);
+  });
+
+  it("detects guest chrome in a no-script fallback", () => {
+    const html = `<body><noscript><nav aria-label="Account">Welcome, <!---->guest
+      <a href="/join/discord">Join</a></nav></noscript></body>`;
+    expect(guestChrome(html)).toEqual({ accountNav: true, guestCaption: true, guestLink: true });
+  });
+
+  it("detects a standalone no-script guest caption split across nodes", () => {
+    const html = "<body><noscript>Welcome, <strong>guest</strong></noscript></body>";
+    expect(guestChrome(html)).toEqual({ accountNav: false, guestCaption: true, guestLink: false });
   });
 });
