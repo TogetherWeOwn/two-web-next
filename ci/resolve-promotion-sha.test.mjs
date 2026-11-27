@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { stagingQualityJob, stagingQualitySteps } from "./production-deploy-gate.mjs";
 import { resolvePromotionSha } from "./resolve-promotion-sha.mjs";
+import { resolveStagingCandidate } from "./staging-provenance.mjs";
 
 const A = "a".repeat(40);
 const B = "b".repeat(40);
@@ -170,19 +171,92 @@ test("runs without a deployed SHA in their name (pre run-name) are ignored", asy
   assert.equal(await resolve([old], { 5: "success" }), null);
 });
 
-test("deploy.yml and e2e-staging.yml run-names carry the deployed SHA", () => {
+test("only an admitted deploy names a candidate for staging qualification", () => {
   const deploy = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
   const e2e = readFileSync(
     new URL("../.github/workflows/e2e-staging.yml", import.meta.url),
     "utf8",
   );
   assert.match(
-    deploy,
-    /^run-name: deploy \$\{\{ github\.event\.workflow_run\.head_sha \|\| github\.sha \}\}$/m,
-  );
-  assert.match(
     e2e,
     /^run-name: e2e-staging \$\{\{ github\.event\.workflow_run\.display_title \|\| github\.sha \}\}$/m,
+  );
+
+  const format = (pattern, value) => pattern.replace("{0}", value);
+  const evaluate = (expression, github) =>
+    new Function("github", "format", `return (${expression})`)(github, format);
+  const [, foldedTitle, inlineTitle] = deploy.match(/^run-name: (?:>-\n((?:  .*\n)+)|(.+)$)/m);
+  const deployTitle = (foldedTitle ?? inlineTitle).trim();
+  const deployJob = deploy.match(/^    if: >-\n((?:      .*\n)+)/m)[1];
+  const scopeJob = e2e.match(/^    if: >-\n((?:      .*\n)+)/m)[1];
+  const lock = e2e.match(/^  group: \$\{\{ (.+) \}\}$/m)[1];
+  const repository = "example/site";
+  const head_repository = { full_name: repository };
+  const ci = {
+    event: "push",
+    head_sha: A,
+    conclusion: "success",
+    head_branch: "main",
+    head_repository,
+  };
+  const context = { repository, ref: "refs/heads/main" };
+
+  const verifyHandoff = (trigger, expected) => {
+    assert.equal(evaluate(deployJob, trigger), expected !== null);
+    // A workflow whose deploy job was skipped can still complete successfully.
+    const run = {
+      path: ".github/workflows/deploy.yml",
+      status: "completed",
+      conclusion: "success",
+      event: trigger.event_name,
+      head_branch:
+        trigger.event_name === "workflow_dispatch"
+          ? trigger.ref.slice("refs/heads/".length)
+          : "main",
+      head_repository,
+      head_sha: trigger.sha,
+      display_title: deployTitle.replace(/\$\{\{([\s\S]+?)\}\}/g, (_, expression) =>
+        evaluate(expression, trigger),
+      ),
+    };
+    const event = { workflow_run: run };
+    const qualification = { ...context, event_name: "workflow_run", event, run_id: 21 };
+    const candidate = () =>
+      resolveStagingCandidate({ ...context, eventName: "workflow_run", event, sha: TIP });
+    assert.equal(evaluate(scopeJob, qualification), expected !== null);
+    assert.equal(
+      evaluate(lock, qualification),
+      expected ? "deploy-staging" : "e2e-staging-rejected-21",
+    );
+    if (expected === null) {
+      assert.equal(run.display_title, "staging deploy not admitted");
+      assert.throws(candidate, /requires a successful same-repository main deploy title/);
+    } else {
+      assert.equal(run.display_title, `deploy ${expected}`);
+      assert.equal(candidate(), expected);
+    }
+  };
+
+  const fromCi = { ...context, event_name: "workflow_run", sha: B };
+  verifyHandoff({ ...fromCi, event: { workflow_run: ci } }, A);
+  for (const override of [
+    { event: "schedule" },
+    { conclusion: "failure" },
+    { head_branch: "feature" },
+    { head_repository: { full_name: "fork/site" } },
+  ]) {
+    verifyHandoff({ ...fromCi, event: { workflow_run: { ...ci, ...override } } }, null);
+  }
+  const manualDeploy = { ...context, event_name: "workflow_dispatch", event: {}, sha: B };
+  verifyHandoff(manualDeploy, B);
+  verifyHandoff({ ...manualDeploy, ref: "refs/heads/feature" }, null);
+
+  const manual = { ...context, event_name: "workflow_dispatch", event: {}, run_id: 21 };
+  assert.equal(evaluate(scopeJob, manual), true);
+  assert.equal(evaluate(lock, manual), "deploy-staging");
+  assert.equal(
+    resolveStagingCandidate({ ...context, eventName: manual.event_name, sha: TIP }),
+    TIP,
   );
 });
 
