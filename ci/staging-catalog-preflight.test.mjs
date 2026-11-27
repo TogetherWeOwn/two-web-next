@@ -414,6 +414,110 @@ test("C3 check passes on bigserial defaults and flags any divergence", () => {
   assert.ok(renamed.extra.includes("web_throttle_hits_seq"));
 });
 
+test("CLI preserves the catalog verdict through connection cleanup", async (t) => {
+  const refusal = "Refusing synthetic catalog read.";
+  const masked =
+    "Preflight failed; database details withheld. Stop and investigate with the authorized database operator; do not substitute credentials.";
+  const entry = new URL("./staging-catalog-preflight.mjs", import.meta.url);
+  const results = [
+    [{ object: "join_attempts", owner: "fixture_owner" }],
+    EXPECTED_SEQUENCES.map((name) => ({ name, owner: "fixture_owner" })),
+    [{ schema: "public", acl: null }],
+    [{ app_has_create: false, public_has_create: false }],
+    [],
+    [],
+    [{ owner: "fixture_owner", tables: "1" }],
+  ];
+  for (const [name, readError, closeError, expectedError] of [
+    ["read and close reject", refusal, true, refusal],
+    ["only close rejects", null, true, masked],
+    ["reads and close succeed", null, false, null],
+  ]) {
+    await t.test(name, (subtest) => {
+      const scratch = mkdtempSync(join(tmpdir(), "catalog-preflight-close-"));
+      subtest.after(() => rmSync(scratch, { recursive: true, force: true }));
+      const outfile = join(scratch, "preflight.json");
+      const summary = join(scratch, "summary.md");
+      const trace = join(scratch, "driver-trace.json");
+      const reads = QUERIES.map(({ sql }) => sql);
+      const driver = `
+        import { setImmediate } from "node:timers/promises";
+        const reads = ${JSON.stringify(reads)};
+        const results = ${JSON.stringify(results)};
+        export const calls = [];
+        export default function postgres() {
+          return {
+            async unsafe(sql) {
+              if (sql === "ROLLBACK") await setImmediate();
+              calls.push(sql);
+              const read = reads.indexOf(sql);
+              if (read === 1 && ${JSON.stringify(readError)}) {
+                throw new Error(${JSON.stringify(readError)});
+              }
+              return results[read] ?? [];
+            },
+            async end(options) {
+              calls.push(["end:start", options]);
+              await setImmediate();
+              calls.push("end:settled");
+              if (${closeError}) throw new Error("synthetic private close detail");
+            },
+          };
+        }
+      `;
+      const driverUrl = `data:text/javascript,${encodeURIComponent(driver)}`;
+      const source = `
+        import { writeFileSync } from "node:fs";
+        import { registerHooks } from "node:module";
+        import { Socket } from "node:net";
+        Socket.prototype.connect = () => { throw new Error("network forbidden in catalog fixture"); };
+        registerHooks({
+          resolve(specifier, context, nextResolve) {
+            if (specifier === "postgres") return { url: ${JSON.stringify(driverUrl)}, shortCircuit: true };
+            return nextResolve(specifier, context);
+          },
+        });
+        const { calls } = await import(${JSON.stringify(driverUrl)});
+        process.argv[1] = ${JSON.stringify(fileURLToPath(entry))};
+        await import(${JSON.stringify(entry.href)});
+        writeFileSync(${JSON.stringify(trace)}, JSON.stringify(calls));
+      `;
+      const child = spawnSync(process.execPath, ["--input-type=module", "-e", source], {
+        cwd: repoRoot,
+        encoding: "utf8",
+        env: { [SECRET_NAME]: staging(), PREFLIGHT_OUTFILE: outfile, GITHUB_STEP_SUMMARY: summary },
+        timeout: 10_000,
+      });
+      assert.ifError(child.error);
+      assert.deepEqual(JSON.parse(readFileSync(trace, "utf8")), [
+        "BEGIN READ ONLY",
+        "SET LOCAL statement_timeout = '30s'",
+        "SET LOCAL lock_timeout = '10s'",
+        ...(readError ? [...reads.slice(0, 2), "ROLLBACK"] : [...reads, "COMMIT"]),
+        ["end:start", { timeout: 5 }],
+        "end:settled",
+      ]);
+      if (expectedError) {
+        assert.equal(child.status, 1);
+        assert.equal(child.stderr, `${expectedError}\n`);
+        assert.equal(child.stdout, "");
+        assert.equal(existsSync(outfile), false);
+        assert.equal(existsSync(summary), false);
+      } else {
+        assert.equal(child.status, 0);
+        assert.equal(child.stderr, "");
+        assert.equal(child.stdout, readFileSync(outfile, "utf8"));
+        const output = JSON.parse(child.stdout);
+        assert.deepEqual(output.table_owners, results[0]);
+        assert.deepEqual(output.sequences, results[1]);
+        assert.deepEqual(output.c2, results[3][0]);
+        assert.equal(output.c3.mismatch, false);
+        assert.match(readFileSync(summary, "utf8"), /C3 sequence names: match bigserial defaults/);
+      }
+    });
+  }
+});
+
 test("CLI usage errors exit 2 with a usage line; --selftest stays valid", () => {
   for (const args of [["--bogus"], ["--selftest", "extra"]]) {
     const child = spawnSync(process.execPath, ["ci/staging-catalog-preflight.mjs", ...args], {
