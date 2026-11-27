@@ -18,6 +18,11 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   rejects `ast-grep-ignore` comments in JavaScript and TypeScript under
   `src/http/`, including hidden directories. The guard runs before ast-grep
   and does not depend on any HTTP import rules.
+- **Rendered HTML assertions (HARD on added lines):** `npm run scan:fetch-await`
+  checks inline markup queries in JavaScript and TypeScript smoke, probe, and
+  parity tooling. Use the [shared DOM queries](../ci/rendered-page.mjs) or a
+  Playwright locator. The Git baseline preserves existing assertions. Raw-body
+  leak checks, MIME types, XML-specific tags, and fixture inputs stay valid.
 - **Byte-limit comparisons (HARD):** The same scan rejects direct
   `byteLength` comparisons in authored JavaScript and TypeScript under
   `src/`, `web/src/` and `assets/`. Use [the shared length helpers](../src/http/length-limit.ts)
