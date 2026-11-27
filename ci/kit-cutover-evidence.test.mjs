@@ -6,6 +6,8 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { readMigrationFiles } from "drizzle-orm/migrator";
+import { calendarFixtures, joinAction, smokeFixtures } from "../test/fixtures/smoke-routes.mjs";
+import { startSmokeFixture } from "../test/helpers/smoke-http.mjs";
 import {
   LEDGER_STATES,
   STAGING_WORKER,
@@ -13,6 +15,7 @@ import {
   inventory,
   ledgerPrefixes,
   productionUploadConfig,
+  readReady,
   sourceInputs,
   verifyPackage,
   verifyReady,
@@ -331,6 +334,88 @@ syncBuiltinESMExports();
       if (bytesRead !== undefined)
         assert.equal(await readFile(readCount, "utf8"), String(bytesRead));
     });
+  }
+});
+
+const readyOrigin = "https://cutover.example.invalid";
+const readyPrefixes = ledgerPrefixes(ledgerJournal);
+const readyIdentity = { version: kit, commit: sourceSha, state: "1033" };
+const readyBody = {
+  db: "ok",
+  pending_migrations: 0,
+  migration_ledger: readyPrefixes["1033"],
+  revision: { version_id: kit, commit: sourceSha },
+};
+
+test("readReady admits exact 200 and approved deferred 503 responses", async () => {
+  const jsonAtLimit = JSON.stringify(readyBody).padEnd(16 * 1024);
+  const response = async (url, { headers, redirect, signal }) => {
+    assert.equal(url.href, `${readyOrigin}/up`);
+    assert.deepEqual(headers, { "cache-control": "no-cache" });
+    assert.equal(redirect, "error");
+    assert.ok(signal instanceof AbortSignal && !signal.aborted);
+    return new Response(jsonAtLimit);
+  };
+  assert.equal(await readReady(readyOrigin, readyPrefixes, readyIdentity, response), "1033");
+
+  const deferred = async () =>
+    Response.json({ ...readyBody, pending_migrations: 1 }, { status: 503 });
+  assert.equal(
+    await readReady(
+      readyOrigin,
+      readyPrefixes,
+      { ...readyIdentity, allowDeferred: true },
+      deferred,
+    ),
+    "1033",
+  );
+  await assert.rejects(readReady(readyOrigin, readyPrefixes, readyIdentity, deferred), /readiness/);
+});
+
+test("readReady cancels and refuses an oversized stream without Content-Length", {
+  timeout: 2_000,
+}, async () => {
+  const atLimit = new TextEncoder().encode(JSON.stringify(readyBody).padEnd(16 * 1024));
+  const chunks = [atLimit, Uint8Array.of(0x20)];
+  let pulls = 0;
+  let cancelled = false;
+  const stream = new ReadableStream(
+    {
+      pull(controller) {
+        const chunk = chunks[pulls++];
+        if (chunk) controller.enqueue(chunk);
+        else controller.close();
+      },
+      cancel() {
+        cancelled = true;
+        // An unsettled cleanup must leave the refusal prompt.
+        return new Promise(() => {});
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const response = new Response(stream);
+  assert.equal(response.headers.get("content-length"), null);
+  await assert.rejects(
+    readReady(readyOrigin, readyPrefixes, readyIdentity, async () => response),
+    /readiness response exceeds/,
+  );
+  assert.equal(pulls, 2);
+  assert.equal(cancelled, true);
+  assert.equal(stream.locked, false);
+});
+
+test("readReady refuses empty, invalid or truncated JSON", async () => {
+  await assert.rejects(
+    readReady(readyOrigin, readyPrefixes, readyIdentity, async () => new Response()),
+    /missing readiness response body/i,
+  );
+  const json = JSON.stringify(readyBody);
+  for (const body of ["", `${json} garbage`, json.slice(0, -1)]) {
+    await assert.rejects(
+      readReady(readyOrigin, readyPrefixes, readyIdentity, async () => new Response(body)),
+      /invalid readiness JSON/i,
+    );
   }
 });
 
@@ -721,6 +806,70 @@ test("isolated cutover refuses successful smoke with no route checks", async () 
     { message: "isolated route smoke ran no checks" },
   );
   assert.deepEqual(calls, ["readiness", "smoke"]);
+});
+
+test("isolated cutover refuses a healthy smoke response from the wrong Worker version", async (t) => {
+  const prefixes = ledgerPrefixes(ledgerJournal);
+  let smokeVersion = kit;
+  const observations = [];
+  const { url, requests } = await startSmokeFixture(
+    t,
+    (path, response, headers) => {
+      if (path === "/join") response.body += joinAction;
+      if (path === "/up") {
+        // readReady sends no-cache. The ordinary-traffic smoke makes its own request.
+        const ready = headers["cache-control"] === "no-cache";
+        const version = ready ? hono : smokeVersion;
+        observations.push([ready ? "readiness" : "smoke", version]);
+        response.body = JSON.stringify({
+          ...JSON.parse(response.body),
+          migration_ledger: prefixes[1033],
+          revision: { version_id: version, commit: sourceSha },
+        });
+      }
+    },
+    calendarFixtures,
+  );
+  const log = t.mock.method(console, "log", () => {});
+  const waits = [];
+  const verify = () =>
+    verifyServed(url, prefixes, identity, hono, "1033", "hono", {
+      wait: async (ms) => {
+        waits.push(ms);
+      },
+    });
+
+  await assert.rejects(verify(), /isolated public-route smoke failed/);
+  assert.deepEqual(waits, Array(5).fill(10_000));
+  assert.deepEqual(
+    observations,
+    Array.from({ length: 6 }, () => [
+      ["readiness", hono],
+      ["smoke", kit],
+    ]).flat(),
+  );
+  const failures = log.mock.calls
+    .map(({ arguments: [line] }) => line)
+    .filter((line) => line.startsWith("FAIL "));
+  assert.deepEqual(
+    failures,
+    Array(6).fill(
+      `FAIL /up: expected revision.version_id ${hono}; actual revision.version_id ${kit}`,
+    ),
+  );
+
+  smokeVersion = hono;
+  observations.length = 0;
+  assert.equal(
+    await verify(),
+    Object.keys(smokeFixtures).length + Object.keys(calendarFixtures).length,
+  );
+  assert.deepEqual(observations, [
+    ["readiness", hono],
+    ["smoke", hono],
+  ]);
+  assert.equal(waits.length, 5);
+  assert.ok(requests.every(({ override }) => override === undefined));
 });
 
 test("isolated cutover proof requires both exact versions and six healthy transitions", () => {

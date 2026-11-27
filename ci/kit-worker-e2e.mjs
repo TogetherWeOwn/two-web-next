@@ -17,6 +17,7 @@ import {
   assertInstalledJoinAttemptDetail,
   assertKitAdminServing,
   assertKitAttendanceDisabled,
+  assertKitQueuePreviewServing,
   assertMixedAdminAuthRollback,
   prepareAdminFixture,
   prepareAdminPublishFixture,
@@ -30,6 +31,10 @@ import { assertEventCreateFormParity } from "./fixtures/kit-event-create-form-pa
 import { assertFeaturedDeleteParity } from "./fixtures/kit-featured-delete-parity.mjs";
 import { assertResponseContracts } from "./fixtures/kit-response-contracts.mjs";
 import { assertStaticFeedParity } from "./fixtures/kit-static-feed-parity.mjs";
+import {
+  withPublicVoiceBrowserWorkers,
+  withWorkerCleanup,
+} from "./fixtures/kit-worker-lifecycle.mjs";
 import { startLoopbackWorker, tail } from "./kit-worker-loopback.mjs";
 import { expectedMarkerFor, kitHomeHeadingText } from "./kit-parity-gates.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
@@ -254,19 +259,25 @@ function fetch(request, env, context) {
     // Run the documents against separate persisted Workers so the hub starts
     // cold and the disabled fixture has a working session bridge.
     const browserVars = { ...liveVars, KIT_PARITY_FIXTURE_EVENT_DETAIL: "true" };
-    const off = await startWorker(
-      "kit-voice-off",
-      entry,
-      assets,
-      secret,
-      { ...browserVars, DISCORD_LIVE_SOCKET_ENABLED: undefined },
-      true,
-    );
-    await listen(off.child, off.origin, () => off.log);
-    const enabled = await startWorker("kit-voice", entry, assets, secret, browserVars, true);
-    await listen(enabled.child, enabled.origin, () => enabled.log);
-    const { verifyKitPublicVoice } = await import("./fixtures/kit-public-voice.mjs");
-    await verifyKitPublicVoice(off.origin, enabled.origin, databaseUrl, secret);
+    await withPublicVoiceBrowserWorkers({
+      startOff: () =>
+        startWorker(
+          "kit-voice-off",
+          entry,
+          assets,
+          secret,
+          { ...browserVars, DISCORD_LIVE_SOCKET_ENABLED: undefined },
+          true,
+        ),
+      startEnabled: () => startWorker("kit-voice", entry, assets, secret, browserVars, true),
+      waitForWorker: (instance) => listen(instance.child, instance.origin, () => instance.log),
+      verify: async (offOrigin, enabledOrigin) => {
+        const { verifyKitPublicVoice } = await import("./fixtures/kit-public-voice.mjs");
+        await verifyKitPublicVoice(offOrigin, enabledOrigin, databaseUrl, secret);
+      },
+      stopWorker,
+    });
+    console.log("PASS public voice browser Workers stopped");
   }
   if (!liveSocketOnly && process.env.KIT_INSTALLED_LIVE_SOCKET_SEPARATE === "true") return;
   const live = await startWorker("kit-live", entry, assets, secret, liveVars, true);
@@ -1019,6 +1030,34 @@ export default {
       hono: honoWithSession,
       databaseUrl,
     });
+    const previewWorkers = [];
+    try {
+      await assertKitQueuePreviewServing({
+        worker,
+        honoWorker: join(repo, "src/worker.ts"),
+        scratch,
+        databaseUrl,
+        start: async (name, entry) => {
+          const instance = await startWorker(
+            `queue-preview-${name}`,
+            entry,
+            name === "hono" ? join(repo, "public") : assets,
+            secret,
+          );
+          previewWorkers.push(instance);
+          await listen(instance.child, instance.origin, () => instance.log);
+          return instance;
+        },
+      });
+    } finally {
+      await Promise.all(previewWorkers.map(stopWorker));
+    }
+    assert.ok(
+      previewWorkers.every(({ stopped }) => stopped),
+      "queue preview Workers did not stop",
+    );
+    console.log("PASS queue preview Workers stopped and synthetic fixture cleanup completed");
+
     const deleteFixture = await startWorker("kit-featured-delete", worker, assets, secret, {
       KIT_ROUTE_ADMIN: "true",
       KIT_PARITY_FIXTURE_ADMIN_FEATURED_DELETE: "true",
@@ -1417,15 +1456,12 @@ export default machineParityWorker(inner, ${JSON.stringify(probePath)}, ${name =
 
 // Buffer Worker output and print it only on failure so both proof modes show
 // the error and close every Worker they started.
-let failed = false;
-try {
-  if (liveSocketOnly) await runInstalledLive();
-  else if (installedAdminRsvp) await runAdminRsvpControls();
-  else await runWorkerParity();
-} catch (error) {
-  failed = true;
-  throw error;
-} finally {
+const runProof = liveSocketOnly
+  ? runInstalledLive
+  : installedAdminRsvp
+    ? runAdminRsvpControls
+    : runWorkerParity;
+await withWorkerCleanup(runProof, async (failed) => {
   // A parallel startup may still be preparing or retrying after its sibling fails.
   startup.abort();
   await Promise.allSettled(starting);
@@ -1441,4 +1477,4 @@ try {
   );
   await rm(scratch, { recursive: true, force: true });
   if (args.length) console.log("PASS loopback Workers and scratch cleaned up");
-}
+});

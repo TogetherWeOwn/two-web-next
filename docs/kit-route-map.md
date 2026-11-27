@@ -213,6 +213,16 @@ The `POST /admin/events/:key/rsvp-pause` and `POST /admin/events/:key/rsvp-reope
 endpoints use the shared Hono moderator guard and transition controller. With
 Admin ownership off, the Hono app serves both POSTs directly.
 
+### Admin queue preview
+
+`KIT_ROUTE_ADMIN_QUEUE_PREVIEW=true` selects Kit for the exact queue preview GET
+on canonical staging or HTTP loopback. With the binding absent or false, Hono
+owns the request. HEAD, other methods, encoded paths, trailing slashes and Kit
+data requests continue through Hono. The queue preview's separate staging-only
+admission, moderator session, dedicated operator check and operational audit
+apply under both owners. Keep the ownership binding unset in deployed Workers
+until a separate qualification.
+
 ### Security disclosure endpoint
 
 `KIT_ROUTE_SECURITY_TXT=true` admits trusted GET and HEAD on the literal
@@ -506,11 +516,14 @@ literal keys, checks the same query and moderator contract against direct Hono, 
 follows the redirect to the seeded Kit edit form. With the fixture switch off,
 encoded key spellings, or methods other than GET and HEAD, Hono handles the request.
 
-For API-5, it compares the disabled queue preview guard with the earlier
-source-evidence handler on Hono fallback. The two distinct JSON refusals
-confirm which branch answered before the moderator gate. Enabled queue preview
-admission and audit, the remaining middleware registrations, and named matcher
-targets remain open.
+For API-5, the fallback fixture compares the disabled Hono queue preview guard
+with Hono's earlier source-evidence handler. The two JSON refusals identify
+which branch answered before the moderator gate.
+
+The installed Worker compares native queue preview with direct Hono using
+synthetic sessions and a disposable database. It checks the exact owner,
+default-off fallback, admission and refusal responses, one operational audit
+receipt per successful preview, and refusal when the audit insert fails.
 
 The separate [installed source-evidence fixture](../ci/fixtures/kit-source-evidence.mjs)
 adds the native comparison for `/admin/queue/source-evidence/:id`, with direct
@@ -520,6 +533,9 @@ one unencoded incident segment. GET and HEAD keep the verifier's separate
 staging origin, bearer, incident and expiry checks ahead of any moderator or
 preview admission. POST, PUT, PATCH, DELETE and OPTIONS keep their existing
 origin and body checks and method refusal. Encoded paths use Hono.
+
+The remaining middleware registrations and named matcher targets still need
+installed Worker evidence.
 
 Retirement follows the [all-off cutover and Hono undo](kit-cutover-release.md),
 M0 and production parity for every live page and API family. Record each

@@ -642,13 +642,23 @@ test("PostgreSQL 18 branch replay preserves repair and Bot scope with alternate 
     t.diagnostic("Snapshot writer held through the repair lock timeout. PRE and ledger matched.");
 
     phase = "forward, exact undo and revoke";
+    const provisionedRoles = await readRestore();
+    // The repair snapshot excludes this unrelated customer membership.
+    assert.deepEqual(
+      provisionedRoles.edges.filter(
+        ([role, member]) => role === "pg_monitor" && member === customer,
+      ),
+      [["pg_monitor", customer, bootstrap, true, true, true]],
+    );
     assert.equal(await repair("readback"), "before");
     assert.equal(await repair("forward"), "committed");
     assert.equal(await repair("readback"), "after");
+    assert.deepEqual(await readRestore(), provisionedRoles);
     await webReads(fresh, true);
     await botReads(connect);
     assert.equal(await repair("undo"), "committed");
     assert.equal(await repair("readback"), "before");
+    assert.deepEqual(await readRestore(), provisionedRoles);
     await runAuthority(connect, "revoke");
     assert.deepEqual(await inspect(connect), unprovisioned);
     assert.deepEqual(await readRestore(), replayed);
