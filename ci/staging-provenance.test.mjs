@@ -693,7 +693,12 @@ Date.now = () => ${now};
 globalThis.fetch = async (url) => {
   switch (new URL(url).pathname) {
     case "/up":
-      return Response.json({ revision: { commit: "${A}", version_id: "12345678-0123-4567-abcd-123456789abc" } });
+      return Response.json({
+        status: "healthy",
+        db: "ok",
+        pending_migrations: 0,
+        revision: { commit: "${A}", version_id: "12345678-0123-4567-abcd-123456789abc" },
+      });
     case "/version":
       return Response.json({ sha: "${A}", deployedAt: "${deployedAt}" });
     default:
