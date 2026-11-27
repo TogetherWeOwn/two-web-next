@@ -122,6 +122,14 @@ snapshots:
         style: secondary
         start: 0
         end: 41
+      - source: expect(html.includes("<form")).toBe
+        style: secondary
+        start: 0
+        end: 35
+      - source: expect(html.includes("<form"))
+        style: secondary
+        start: 0
+        end: 30
       - source: (html.includes("<form"))
         style: secondary
         start: 6
@@ -144,3 +152,39 @@ snapshots:
         style: secondary
         start: 4
         end: 42
+  if (checkPage && (!html.includes('<main>') || missingData)) failures.push("incomplete page");:
+    labels:
+      - source: html.includes('<main>')
+        style: primary
+        start: 19
+        end: 42
+      - source: if (checkPage && (!html.includes('<main>') || missingData)) failures.push("incomplete page");
+        style: secondary
+        start: 0
+        end: 93
+      - source: (checkPage && (!html.includes('<main>') || missingData))
+        style: secondary
+        start: 3
+        end: 59
+      - source: "!html.includes('<main>')"
+        style: secondary
+        start: 18
+        end: 42
+  if (hasLoad && !html.includes('<script src="/islands/join-widget.js"')) failures.push("missing widget script");:
+    labels:
+      - source: html.includes('<script src="/islands/join-widget.js"')
+        style: primary
+        start: 16
+        end: 70
+      - source: if (hasLoad && !html.includes('<script src="/islands/join-widget.js"')) failures.push("missing widget script");
+        style: secondary
+        start: 0
+        end: 111
+      - source: (hasLoad && !html.includes('<script src="/islands/join-widget.js"'))
+        style: secondary
+        start: 3
+        end: 71
+      - source: '!html.includes(''<script src="/islands/join-widget.js"'')'
+        style: secondary
+        start: 15
+        end: 70

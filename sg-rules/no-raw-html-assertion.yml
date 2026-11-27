@@ -20,14 +20,16 @@ rule:
         - matches: string-query
         - inside:
             any:
-              - inside:
-                  any:
-                    - pattern: expect($CONDITION).toBe(true)
-                    - pattern: expect($CONDITION).toBeTruthy()
-                  stopBy: end
               - kind: arguments
                 inside:
                   any:
+                    - pattern: expect($QUERY)
+                      inside:
+                        kind: member_expression
+                        inside:
+                          any:
+                            - pattern: expect($QUERY).toBe(true)
+                            - pattern: expect($QUERY).toBeTruthy()
                     - pattern: assert.ok($QUERY)
                     - pattern: assert.ok($QUERY, $MESSAGE)
                     - pattern: assert($QUERY)
@@ -41,6 +43,14 @@ rule:
                   inside:
                     kind: if_statement
                     field: condition
+                  stopBy:
+                    not:
+                      any:
+                        - kind: parenthesized_expression
+                        - kind: binary_expression
+                          has:
+                            field: operator
+                            regex: '^(?:&&|\|\|)$'
         - not:
             inside:
               matches: raw-query-context
@@ -48,9 +58,15 @@ rule:
     - all:
         - matches: string-query
         - not:
-            inside:
-              matches: raw-query-context
-              stopBy: end
+            any:
+              - inside:
+                  matches: raw-query-context
+                  stopBy: end
+              - inside:
+                  pattern: "!$NEGATED"
+                  stopBy:
+                    not:
+                      kind: parenthesized_expression
         - any:
             - inside:
                 kind: variable_declarator

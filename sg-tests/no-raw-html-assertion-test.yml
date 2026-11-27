@@ -16,6 +16,8 @@ valid:
   - expect(html).not.toContain("<script");
   - assert.doesNotMatch(html, /<iframe\b/);
   - assert.ok(!html.includes('<a href="/members/private">'));
+  - expect(!html.includes('data-testid="member-rsvp"')).toBe(true);
+  - expect(!html.match(/<script\b/)).toBeTruthy();
   - const safe = !html.includes("<script");
   - const hasXmlRoot = body.includes("<urlset>");
   - assert.equal(html.length, 0, 'body must omit <div id="private">');
@@ -30,6 +32,8 @@ invalid:
   - assert(/<form\b/.test(html));
   - expect(html.includes("<form")).toBe(true);
   - if (!html.includes('aria-label="Primary"')) failures.push("missing navigation");
+  - if (hasLoad && !html.includes('<script src="/islands/join-widget.js"')) failures.push("missing widget script");
+  - if (checkPage && (!html.includes('<main>') || missingData)) failures.push("incomplete page");
   - const heading = html.match(new RegExp(`<h1 id="${id}">([^<]*)`));
   - const hasWidget = body.includes('data-testid="join-widget-load"');
   - const hasTable = /<table[\s>]/.test(html);
