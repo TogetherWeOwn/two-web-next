@@ -10,6 +10,32 @@ exec(dedent(yaml.split("<<'PYTHON'\n")[1].rsplit("          PYTHON", 1)[0]), sco
 
 
 class AdmissionTest(TestCase):
+    def test_queued_admission_allows_main_to_advance(self):
+        head = {"sha": "a" * 40, "ref": "topic", "repo": {"id": 1}}
+        event = {"number": 4, "head": head, "base": {"sha": "b" * 40, "ref": "main", "repo": {"id": 2}},
+                 "state": "open", "draft": False}
+        live = deepcopy(event)
+        live["base"]["sha"] = "c" * 40
+
+        self.assertEqual(scope["current_identity"](live), scope["current_identity"](event))
+        self.assertNotEqual(scope["identity"](live), scope["identity"](event))
+        scope["verify_current"](lambda path: live, event)
+
+    def test_current_binding_rejects_mismatched_head_or_base_identity(self):
+        head = {"sha": "a" * 40, "ref": "topic", "repo": {"id": 1}}
+        event = {"number": 4, "head": head, "base": {"sha": "b" * 40, "ref": "main", "repo": {"id": 2}},
+                 "state": "open", "draft": False}
+
+        for field, value in (("head", {**head, "sha": "c" * 40}),
+                             ("base", {**event["base"], "ref": "release"}),
+                             ("base", {**event["base"], "repo": {"id": 3}})):
+            with self.subTest(field=field, value=value):
+                candidate = deepcopy(event)
+                candidate[field] = value
+                self.assertNotEqual(scope["current_identity"](candidate), scope["current_identity"](event))
+                with self.assertRaisesRegex(ValueError, "head, base, or readiness changed"):
+                    scope["verify_current"](lambda path, candidate=candidate: candidate, event)
+
     def test_current_jobs_and_refusals(self):
         head = {"sha": "a" * 40, "ref": "topic", "repo": {"id": 1}}
         pr = {"number": 4, "head": head, "base": dict(head, sha="b" * 40, ref="main")}

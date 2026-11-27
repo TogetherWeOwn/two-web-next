@@ -37,6 +37,14 @@ jobs:
                   (ref["sha"], ref["ref"], ref["repo"]["id"]) for ref in (pr["head"], pr["base"])
               ))
 
+          def current_identity(pr):
+              """Bind a live PR while allowing its base commit to advance."""
+              return (pr["number"], (
+                  pr["head"]["sha"], pr["head"]["ref"], pr["head"]["repo"]["id"]
+              ), (
+                  pr["base"]["ref"], pr["base"]["repo"]["id"]
+              ))
+
           def collection(api, path, key):
               result = api(path + ("&" if "?" in path else "?") + "per_page=100")
               rows = result[key]
@@ -96,6 +104,11 @@ jobs:
                           break
               return proof if set(proof) == set().union(*GATES.values()) else None
 
+          def verify_current(api, pr):
+              live = api(f"pulls/{pr['number']}")
+              if current_identity(live) != current_identity(pr) or live["state"] != "open" or live["draft"]:
+                  raise ValueError("Pull request head, base, or readiness changed")
+
           def main():
               pr = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())["pull_request"]
               repository = os.environ["GITHUB_REPOSITORY"]
@@ -103,17 +116,12 @@ jobs:
               def api(path):
                   return json.loads(subprocess.check_output(["gh", "api", f"repos/{repository}/{path}"], timeout=15))
 
-              def verify_current():
-                  live = api(f"pulls/{pr['number']}")
-                  if identity(live) != identity(pr) or live["state"] != "open" or live["draft"]:
-                      raise ValueError("Pull request head, base, or readiness changed")
-
               deadline = time.monotonic() + 420
               while time.monotonic() < deadline:
-                  verify_current()
+                  verify_current(api, pr)
                   proof = evidence(api, pr)
                   if proof and proof == evidence(api, pr):
-                      verify_current()
+                      verify_current(api, pr)
                       for name, (run, attempt, job) in sorted(proof.items()):
                           print(f"{name} passed on {pr['head']['sha']} (attempt {attempt}): "
                                 f"https://github.com/{repository}/actions/runs/{run}/job/{job}")
