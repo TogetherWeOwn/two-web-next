@@ -329,7 +329,7 @@ const detailIslands = $derived([
         <ul class="event-related-grid" role="list" aria-labelledby="event-related-heading">
           {#each model.related as event (event.key)}
             <li>
-              <a href="/e/{event.key}" data-testid="event-related-link">
+              <a class="discovery-link" href="/e/{event.key}" data-testid="event-related-link">
                 {event.title}{" "}
                 {@render destinationPreview(event)}
               </a>
@@ -342,7 +342,7 @@ const detailIslands = $derived([
             next one before it lands here.
           </p>
           <a
-            class="btn"
+            class="btn discovery-link"
             href="/join?next={encodeURIComponent(model.path)}"
             data-testid="event-related-join"
           >
@@ -373,6 +373,9 @@ const detailIslands = $derived([
 </Shell>
 
 <style>
+  /* Add the outline's reach to the scrollport reserved by the header and seat bar. */
+  .discovery-link { scroll-margin-block: calc(var(--focus-width) + var(--focus-offset)); }
+
   /* Keep the static status labels in the detail stylesheet. */
   .event-tag {
     display: inline-flex;

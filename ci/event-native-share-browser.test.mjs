@@ -3,6 +3,7 @@
 // The Hono a11y/Lighthouse gates do not cover Kit.
 import assert from "node:assert/strict";
 import { readFile, readdir, mkdir, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { resolve, sep } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { chromium, expect, webkit } from "@playwright/test";
@@ -21,6 +22,7 @@ import {
 
 let browser;
 let kitCss;
+let kitSuggestionCss;
 const evidence = process.env.EVENT_NATIVE_SHARE_EVIDENCE_DIR;
 const listEvidence =
   process.env.KIT_EVENT_LIST_EVIDENCE_DIR ??
@@ -41,6 +43,18 @@ before(async () => {
     const sheets = await Promise.all(names.map((name) => readFile(resolve(assets, name), "utf8")));
     kitCss = sheets.join("\n");
   }
+  // The accessibility job installs Kit dependencies without a full Vite build.
+  // Compile the layout's actual theme and add its header sheet for these fixtures.
+  const kitSource = resolve("web/src");
+  const { compile } = createRequire(resolve("web/package.json"))("@tailwindcss/node");
+  const theme = await compile(await readFile(resolve(kitSource, "app.css"), "utf8"), {
+    base: kitSource,
+    onDependency() {},
+  });
+  kitSuggestionCss = [
+    theme.build(["bg-lobby-surface", "font-sans", "text-lobby-ink"]),
+    await readFile(resolve(kitSource, "lib/site-header.css"), "utf8"),
+  ].join("\n");
 });
 after(async () => {
   await browser?.close();
@@ -124,6 +138,7 @@ async function open(t, view, options = {}) {
     viewport = { width: 390, height: 844 },
   } = options;
   const fixture = await nativeShareFixture(view, options);
+  const layoutCss = view === "Kit" && (kitCss ?? (options.kitRelated?.length && kitSuggestionCss));
   assert.equal(fixture.status, options.missing ? 404 : options.status === "cancelled" ? 410 : 200);
   const origin = insecure ? "http://events.example.test" : SHARE_ORIGIN;
   const context = await browser.newContext({
@@ -152,10 +167,9 @@ async function open(t, view, options = {}) {
       await route.fulfill({
         status: fixture.status,
         contentType: "text/html; charset=utf-8",
-        body:
-          view === "Kit" && evidence
-            ? fixture.html.replace("</head>", `<style>${kitCss}</style></head>`)
-            : fixture.html,
+        body: layoutCss
+          ? fixture.html.replace("</head>", `<style>${layoutCss}</style></head>`)
+          : fixture.html,
       });
       return;
     }
@@ -560,94 +574,210 @@ describe("Native event sharing", () => {
             }
           }
         }
+        if (view === "Kit") await captureSuggestionFocus(t);
       });
   }
 });
 
+const suggestionEvents = [
+  { eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAA", title: "Chess finals" },
+  { eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAB", title: "Chess open" },
+].map((event, index) => ({
+  ...event,
+  id: index + 2,
+  startsAt: new Date(`2035-01-1${index + 1}T20:00:00Z`),
+  endsAt: new Date(`2035-01-1${index + 1}T22:00:00Z`),
+  timezone: "UTC",
+  location: "The lobby",
+  game: "Chess",
+  rsvpOpen: true,
+}));
+const suggestionPages = [
+  {
+    status: "published",
+    name: "More events you might like",
+    headingId: "event-related-heading",
+    listSelector: "[data-testid=event-related] > ul",
+    linkTestId: "event-related-link",
+  },
+  {
+    status: "cancelled",
+    name: "Other upcoming events",
+    headingId: "event-cancelled-alternatives-heading",
+    listSelector: "[data-testid=event-cancelled-alternatives]",
+    linkTestId: "event-cancelled-alternative",
+  },
+];
+const suggestionViewports = [
+  { width: 1280, height: 800 },
+  { width: 390, height: 844 },
+];
+
+// Frame the screenshot comparisons at the same scrollport edge.
+async function alignSuggestion(link, block) {
+  await link.evaluate((node, block) => node.scrollIntoView({ block, behavior: "instant" }), block);
+}
+
+async function visitSuggestionFocus(page, status, linkTestId, observe, beforeTab) {
+  const links = page.getByTestId(linkTestId);
+  const preceding =
+    status === "cancelled"
+      ? page.getByTestId("event-cancelled-ics")
+      : page.getByTestId("event-roster-guest-nudge").getByRole("link");
+  await tabTo(page, preceding);
+
+  const tab = async (link, state, key = "Tab") => {
+    await beforeTab?.(link, state);
+    await page.keyboard.press(key);
+    await expect(link).toBeFocused();
+    await observe(link, state);
+  };
+  await tab(links.first(), "first-link");
+  await tab(links.last(), "last-link");
+  if (status === "published") {
+    await tab(page.getByTestId("event-related-join"), "join");
+  }
+  const previous = status === "published" ? links.last() : links.first();
+  await tab(previous, "reverse", "Shift+Tab");
+}
+
+async function assertSuggestionOutline(link, compact, published) {
+  const focus = await link.evaluate((node) => {
+    const style = getComputedStyle(node);
+    const bounds = node.getBoundingClientRect();
+    const ring = Number.parseFloat(style.outlineWidth) + Number.parseFloat(style.outlineOffset);
+    const header = document.querySelector("[data-kit-site-header]");
+    const seatBar = document.querySelector(".event-seat-bar");
+    const sticky = header && getComputedStyle(header).position === "sticky";
+    const fixed = seatBar && getComputedStyle(seatBar).position === "fixed";
+    return {
+      visible: node.matches(":focus-visible"),
+      outline: style.outlineStyle,
+      width: Number.parseFloat(style.outlineWidth),
+      offset: Number.parseFloat(style.outlineOffset),
+      tokenWidth: Number.parseFloat(style.getPropertyValue("--focus-width")),
+      tokenOffset: Number.parseFloat(style.getPropertyValue("--focus-offset")),
+      margin: [style.scrollMarginBlockStart, style.scrollMarginBlockEnd].map(Number.parseFloat),
+      ring,
+      sticky,
+      fixed: Boolean(fixed),
+      above: bounds.top - ring - (sticky ? header.getBoundingClientRect().bottom : 0),
+      below: (fixed ? seatBar.getBoundingClientRect().top : innerHeight) - bounds.bottom - ring,
+      left: bounds.left - ring,
+      right: document.documentElement.clientWidth - bounds.right - ring,
+    };
+  });
+  assert.ok(focus.visible, "Tab uses the visible focus state");
+  assert.equal(focus.outline, "solid");
+  assert.ok(focus.width > 0 && focus.offset > 0, "outline is visible outside the link");
+  assert.equal(focus.width, focus.tokenWidth);
+  assert.equal(focus.offset, focus.tokenOffset);
+  assert.deepEqual(focus.margin, [focus.ring, focus.ring]);
+  if (compact) assert.equal(focus.sticky, true, "fixture includes the sticky Kit header");
+  assert.equal(focus.fixed, compact && published, "fixture exercises the mobile seat bar");
+  for (const edge of ["above", "below", "left", "right"]) {
+    assert.ok(focus[edge] >= -0.5, `focus outline clears the ${edge} edge (${focus[edge]}px)`);
+  }
+}
+
+// The existing evidence workflow runs this recipe on the actual fork point
+// and PR head. The focus assertions below run unconditionally in normal CI.
+async function captureSuggestionFocus(t) {
+  await mkdir(listEvidence, { recursive: true });
+  for (const { status, headingId, linkTestId } of suggestionPages) {
+    for (const viewport of suggestionViewports) {
+      const { page, blocked, errors } = await open(t, "Kit", {
+        status,
+        viewport,
+        javaScriptEnabled: false,
+        kitRelated: suggestionEvents,
+      });
+      const capture = (state) =>
+        page.screenshot({
+          path: resolve(listEvidence, `focus-${status}-${viewport.width}-${state}.png`),
+        });
+      await page.evaluate(() => document.fonts.ready);
+      await alignSuggestion(page.locator(`#${headingId}`), "center");
+      await capture("resting");
+      await visitSuggestionFocus(
+        page,
+        status,
+        linkTestId,
+        (_link, state) => capture(state),
+        async (link, state) => {
+          if (state !== "first-link" || status === "cancelled") {
+            await alignSuggestion(link, state === "reverse" ? "start" : "end");
+          }
+        },
+      );
+      assert.deepEqual(blocked, []);
+      assert.deepEqual(errors, []);
+    }
+  }
+}
+
 describe("Kit event suggestions expose named markerless lists and keep native link order", () => {
-  const related = [
-    { eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAA", title: "Chess finals" },
-    { eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAB", title: "Chess open" },
-  ].map((event, index) => ({
-    ...event,
-    id: index + 2,
-    startsAt: new Date(`2035-01-1${index + 1}T20:00:00Z`),
-    endsAt: new Date(`2035-01-1${index + 1}T22:00:00Z`),
-    timezone: "UTC",
-    location: "The lobby",
-    game: "Chess",
-    rsvpOpen: true,
-  }));
   before(async () => {
     if (listEvidence) await mkdir(listEvidence, { recursive: true });
   });
 
-  for (const { status, name, headingId, listSelector, linkTestId } of [
-    {
-      status: "published",
-      name: "More events you might like",
-      headingId: "event-related-heading",
-      listSelector: "[data-testid=event-related] > ul",
-      linkTestId: "event-related-link",
-    },
-    {
-      status: "cancelled",
-      name: "Other upcoming events",
-      headingId: "event-cancelled-alternatives-heading",
-      listSelector: "[data-testid=event-cancelled-alternatives]",
-      linkTestId: "event-cancelled-alternative",
-    },
-  ]) {
-    for (const viewport of [
-      { width: 1280, height: 800 },
-      { width: 390, height: 844 },
-    ]) {
+  for (const { status, name, headingId, listSelector, linkTestId } of suggestionPages) {
+    for (const viewport of suggestionViewports) {
       const label = `${status}-${viewport.width}`;
       test(label, async (t) => {
         const options = { status, viewport, javaScriptEnabled: false };
         const { page, html, blocked, errors } = await open(t, "Kit", {
           ...options,
-          kitRelated: related,
+          kitRelated: suggestionEvents,
         });
         const listOpening = new RegExp(`<ul\\b[^>]*aria-labelledby="${headingId}"[^>]*>`);
         const ssrList = html.match(new RegExp(`${listOpening.source}[\\s\\S]*?</ul>`))?.[0];
         assert.ok(ssrList, "SSR associates the list with its heading");
         assert.match(ssrList, /^<ul\b[^>]* role="list"/);
-        assert.equal([...ssrList.matchAll(/<li\b/g)].length, related.length);
+        assert.equal([...ssrList.matchAll(/<li\b/g)].length, suggestionEvents.length);
 
         const list = page.getByRole("list", { name, exact: true });
         await expect(list.and(page.locator(listSelector))).toBeVisible();
         assert.equal(await list.evaluate((node) => getComputedStyle(node).listStyleType), "none");
         const items = list.getByRole("listitem");
         const links = items.getByTestId(linkTestId);
-        await expect(items).toHaveCount(related.length);
-        await expect(links).toHaveCount(related.length);
-        for (const [index, event] of related.entries()) {
+        await expect(items).toHaveCount(suggestionEvents.length);
+        await expect(links).toHaveCount(suggestionEvents.length);
+        for (const [index, event] of suggestionEvents.entries()) {
           const link = links.nth(index);
           await expect(link).toHaveText(new RegExp(`^${event.title}`));
           await expect(link).toHaveAttribute("href", `/e/${event.eventKey}`);
         }
         const snapshot = await list.ariaSnapshot();
         assert.match(snapshot, new RegExp(`^- list "${name}":`, "m"));
-        assert.equal([...snapshot.matchAll(/^  - listitem:/gm)].length, related.length);
+        assert.equal([...snapshot.matchAll(/^  - listitem:/gm)].length, suggestionEvents.length);
 
         if (status === "cancelled") {
           const calendar = page.getByTestId("event-cancelled-ics");
           await expect(calendar).toHaveAttribute("href", `/events/${SHARE_KEY}.ics`);
-          await calendar.focus();
-          await page.keyboard.press("Tab");
-          await expect(links.first()).toBeFocused();
-        } else {
-          await tabTo(page, links.first());
         }
-        await page.keyboard.press("Tab");
-        await expect(links.last()).toBeFocused();
-        if (status === "published") {
-          await page.keyboard.press("Tab");
-          await expect(page.getByTestId("event-related-join")).toBeFocused();
-        }
-        await page.keyboard.press("Shift+Tab");
-        await expect(status === "published" ? links.last() : links.first()).toBeFocused();
+        await visitSuggestionFocus(
+          page,
+          status,
+          linkTestId,
+          async (link, state) => {
+            if (state === "first-link") {
+              assert.ok(
+                await page.evaluate(() => scrollY > 0),
+                "Tab must scroll to reach the list",
+              );
+            }
+            await assertSuggestionOutline(link, viewport.width === 390, status === "published");
+          },
+          async (link, state) => {
+            if (state === "first-link") {
+              // Keep the preceding link focused and start the next native Tab
+              // with its destination below the viewport.
+              await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+              await expect(link).not.toBeInViewport();
+            }
+          },
+        );
 
         if (listEvidence) {
           const listNode = page.locator(listSelector);
