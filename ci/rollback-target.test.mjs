@@ -2001,19 +2001,19 @@ test("staging lane is busy while deploy or e2e-staging runs are queued or runnin
 });
 
 function cli(args, { env = {}, input } = {}) {
-  const output = join(mkdtempSync(join(tmpdir(), "rollback-target-")), "out");
-  const result = spawnSync(process.execPath, ["ci/rollback-target.mjs", ...args], {
-    encoding: "utf8",
-    input,
-    env: { PATH: process.env.PATH, GITHUB_OUTPUT: output, ...env },
-  });
-  let written = "";
+  const dir = mkdtempSync(join(tmpdir(), "rollback-target-"));
+  const output = join(dir, "out");
   try {
-    written = readFileSync(output, "utf8");
-  } catch {
-    written = "";
+    const result = spawnSync(process.execPath, ["ci/rollback-target.mjs", ...args], {
+      encoding: "utf8",
+      input,
+      env: { PATH: process.env.PATH, GITHUB_OUTPUT: output, ...env },
+    });
+    const written = existsSync(output) ? readFileSync(output, "utf8") : "";
+    return { ...result, written };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
-  return { ...result, written };
 }
 
 test("CLI resolves the environment, the guard action and refuses unknown flags", () => {
@@ -2043,6 +2043,56 @@ test("CLI resolves the environment, the guard action and refuses unknown flags",
   assert.equal(cli(["--live-version"], { input: deployments }).stdout, `${V1}\n`);
   assert.equal(cli(["--nope"]).status, 2);
   assert.equal(cli([]).status, 2);
+});
+
+test("rollback selection requires ordered provider timestamps", () => {
+  const utc = "2026-11-01T06:00:00Z";
+  const equivalent = "2026-11-01T01:00:00.000-05:00";
+  const later = "2026-11-01T01:00:00.000000001-05:00";
+  const action = (rows, flag = "--action") =>
+    cli([flag], {
+      env: { EXPECTED_CURRENT_VERSION_ID: V2, ROLLBACK_VERSION_ID: V1 },
+      input: JSON.stringify(rows),
+    });
+  const assertRefuses = (rows, error, flag) => {
+    const result = action(rows, flag);
+    assert.ifError(result.error);
+    assert.equal(result.status, 1, result.stdout);
+    assert.equal(result.written, "");
+    assert.match(result.stderr, error);
+  };
+
+  for (const timestamp of [utc, equivalent]) {
+    const tied = [full(V2, utc), full(V1, timestamp)];
+    assertRefuses(tied, /Cannot determine the newest rollback deployment/);
+    assertRefuses(tied.reverse(), /Cannot determine the newest rollback deployment/);
+  }
+  for (const timestamp of [
+    undefined,
+    0,
+    "2026-02-30T06:00:00Z",
+    "2026-11-01T06:00:00.0000000001Z",
+    `${utc}\n`,
+  ]) {
+    assertRefuses([full(V2, utc), full(V3, timestamp)], /Invalid rollback deployment timestamp/);
+  }
+  const ordered = [full(V1, utc), full(V2, later)];
+  assert.equal(action(ordered).written, "action=rollback\n");
+  assert.equal(action(ordered.reverse()).written, "action=rollback\n");
+  assert.throws(
+    () => previousVersion([full(V1, utc), full(V2, later), full(V3, equivalent)]),
+    /Cannot determine the previous rollback version/,
+  );
+  assert.equal(previousVersion([...ordered, split(V2, V3, utc), full(V1, equivalent)]), V1);
+
+  const partial = [full(V1, utc), split(V2, V1, later)];
+  assertRefuses(partial, /not a single-version 100% deployment/);
+  assert.equal(action(partial, "--manual-action").written, "action=rollback\n");
+  assertRefuses(
+    [split(V2, V1, utc), full(V3, equivalent)],
+    /Cannot determine the newest rollback deployment/,
+    "--manual-action",
+  );
 });
 
 test("the staging drill rolls back and forward through rollback-production.yml", () => {

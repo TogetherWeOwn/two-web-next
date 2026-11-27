@@ -40,7 +40,14 @@ export async function assertReadinessResponseBounds() {
       if (pathname.endsWith("/deployments")) {
         return Response.json({
           success: true,
-          result: { deployments: [{ versions: [{ percentage: 100, version_id: version }] }] },
+          result: {
+            deployments: [
+              {
+                created_on: "2026-11-01T06:00:00.123456Z",
+                versions: [{ percentage: 100, version_id: version }],
+              },
+            ],
+          },
         });
       }
       assert.equal(pathname, "/up");

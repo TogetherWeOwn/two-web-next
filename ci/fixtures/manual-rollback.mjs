@@ -92,10 +92,11 @@ set -eu
 printf '%s\\n' "$*" >> "$RUNNER_TEMP/wrangler"
 case "$*" in
   'wrangler deployments list --name stub-worker --json')
+    created_on="2026-11-01T06:00:00.123456Z"
     if [ -n "$SPLIT" ]; then
-      printf '[{"versions":[{"version_id":"%s","percentage":5},{"version_id":"%s","percentage":95}]}]\\n' "$LIVE" "$SPLIT"
+      printf '[{"created_on":"%s","versions":[{"version_id":"%s","percentage":5},{"version_id":"%s","percentage":95}]}]\\n' "$created_on" "$LIVE" "$SPLIT"
     else
-      printf '[{"versions":[{"version_id":"%s","percentage":100}]}]\\n' "$LIVE"
+      printf '[{"created_on":"%s","versions":[{"version_id":"%s","percentage":100}]}]\\n' "$created_on" "$LIVE"
     fi
     if [ "$DEPLOYMENT_QUERY_FAILS" = true ]; then
       printf '%s\\n' 'Stub provider deployment query failed' >&2

@@ -1,7 +1,12 @@
 import { addAbortListener } from "node:events";
 import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { liveVersion, readLiveRevision, rollbackEnvironment } from "./rollback-target.mjs";
+import {
+  liveVersion,
+  orderedDeploymentTime as deploymentTime,
+  readLiveRevision,
+  rollbackEnvironment,
+} from "./rollback-target.mjs";
 import { isSha } from "./staging-provenance.mjs";
 
 // Cloudflare's deployments API allows up to 100 rows per page, each with a
@@ -41,17 +46,7 @@ async function readProviderJson(response, signal, maxBytes) {
 }
 
 export function orderedDeploymentTime(value) {
-  const parsed =
-    typeof value === "string" &&
-    /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/.exec(value);
-  if (!parsed || parsed[0] !== value) throw new Error("Invalid staging deployment timestamp");
-  const [, time, fraction = "", offset] = parsed;
-  const wallClock = new Date(`${time}Z`).toJSON();
-  const utc = new Date(`${time}${offset}`).toJSON();
-  if (!utc || !wallClock?.startsWith(time)) {
-    throw new Error("Invalid staging deployment timestamp");
-  }
-  return `${utc.slice(0, 19)}.${fraction.padEnd(9, "0")}Z`;
+  return deploymentTime(value, "staging");
 }
 
 // The caller holds the shared staging lane through the last mutation. Check
