@@ -286,7 +286,6 @@ const destination = (
     overflow-wrap: anywhere;
   }
   .board-layout :global(.member-board-table thead th) {
-    top: var(--two-layout-sticky-offset);
     background: var(--two-color-bg-surface);
   }
   .board-layout :global(.member-board-table.frozen-standings thead th:last-child) {
@@ -300,8 +299,6 @@ const destination = (
 
   @media (max-width: 820px) {
     .board-heading { padding-block: var(--two-space-7) var(--two-space-6); }
-    /* The shared shell applies its 60px offset while the compact menu is sticky. */
-    .board-layout :global(.member-board-table thead th) { top: 0; }
     .board-layout { grid-template-columns: minmax(0, 1fr); gap: var(--two-space-7); padding-bottom: var(--two-space-section-compact); }
     .board-leaders { grid-template-columns: minmax(0, 1fr); }
     .board-leaders li { grid-template-columns: auto minmax(0, 1fr); column-gap: var(--two-space-4); }
