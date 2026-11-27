@@ -90,6 +90,8 @@ export interface RouteDecision {
 }
 
 const ADMIN_EVENT_CREATE_REDIRECT = "/admin/events/create";
+const ADMIN_EVENT_EDIT_REDIRECT = "/admin/events/:key/edit";
+const ADMIN_EVENT_EDIT_REDIRECT_ID = "/admin/events/[key]/edit";
 
 // The archive page, events list, hot-zone heatmaps, member board and the
 // about/faq, join and recovery leaves render natively. Privacy and rules are
@@ -210,15 +212,21 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   // Moderator event-edit form: same declaration as the Hono handler
   // (admin.events.edit, src/admin/routes.tsx). Only this GET migrates:
   // POST /admin/events/:key, the publish/cancel/RSVP-pause/RSVP-reopen
-  // siblings and the guarded /admin/events/:key/edit legacy redirect stay
-  // Hono-owned, so wall-time UTC carriers, future recurrence propagation,
-  // bounded roster paging and postcommit writeback keep one authority until
-  // the write slice lands. Off until the enablement review.
+  // siblings stay Hono-owned, so wall-time UTC carriers, future recurrence
+  // propagation, bounded roster paging and postcommit writeback keep one
+  // authority until the write slice lands. Off until the enablement review.
   {
     method: "GET",
     path: "/admin/events/:key",
     enabled: false,
     reads: { resource: "events", action: "view", route: "admin.events.edit" },
+  },
+  // Legacy bookmark: only the guarded admin dispatcher may release the redirect.
+  {
+    method: "GET",
+    path: "/admin/events/:key/edit",
+    enabled: false,
+    reads: { resource: "events", action: "view", route: "admin.events.legacy-edit" },
   },
   // Join-attempts audit list: member data, so the Kit branch renders
   // inside the member-read boundary with this declaration and the bridged
@@ -784,11 +792,8 @@ export interface HookDispatchDeps {
   // before.
   eventDetailRotationFor?: (event: HookEventLike) => Promise<string | null>;
   // Optional sliding-session renewal for Kit-served admin reads. Runs
-  // only after the member-read boundary releases a successful GET document
-  // (see releasedAdminRenewsSession): a refused, failed, bounced or
-  // redirected read never reaches it, so the bearer stays live for the
-  // retry. Absent by default: without it the dispatch behaves exactly as
-  // before.
+  // only after the member-read boundary releases an eligible GET document or
+  // legacy bookmark redirect (see releasedAdminRenewsSession).
   adminRenewalFor?: (event: HookEventLike) => Promise<string | null>;
   // Access-log sink for member-read Kit routes. Absent or null refuses the read.
   accessSink?: () => Promise<AccessSink | null>;
@@ -1068,10 +1073,9 @@ function releasedEventDetailRenewsSession(
 // Rotating renewal for Kit-served admin reads: the post-release twin of Hono's
 // admin-guard re-stamp (src/admin/guard.ts mints a fresh bearer with a fresh
 // 120-minute window on a current bearer only). Only a released
-// successful-or-missing HTML GET document or the authorized legacy create
-// redirect renews. The same Hono guard renews both. Not in the loader: that would
-// renew before the audit can refuse, spending the window on a response the
-// boundary throws away.
+// successful-or-missing HTML GET document or an authorized legacy event create or edit 301
+// renews for an authenticated moderator. Awaiting the read boundary before
+// rotating keeps the bearer live on a read refusal.
 function releasedAdminRenewsSession(
   route: OwnedRoute,
   event: HookEventLike,
@@ -1079,7 +1083,9 @@ function releasedAdminRenewsSession(
 ): boolean {
   if (route.path !== "/admin" && !route.path.startsWith("/admin/")) return false;
   if (event.request.method !== "GET") return false;
-  const redirect = route.path === ADMIN_EVENT_CREATE_REDIRECT && response.status === 301;
+  const redirect =
+    (route.path === ADMIN_EVENT_CREATE_REDIRECT || route.path === ADMIN_EVENT_EDIT_REDIRECT) &&
+    response.status === 301;
   const document =
     (response.status === 200 || response.status === 404) &&
     response.headers.get("content-type")?.includes("text/html");
@@ -1243,18 +1249,21 @@ async function dispatchOwnedRequest(
   );
 }
 
-// The admin family opts into audited GET pages. The legacy endpoint keeps
-// its own switch, and its exact entry wins even when disabled.
+// The admin family opts into audited GET pages. Each legacy redirect keeps
+// its own switch. The static create entry wins even when disabled.
 const KIT_ADMIN_READS = ROUTE_MANIFEST.filter(({ path }) => isInNamespace(path, "/admin")).map(
   (entry) =>
-    entry.path === ADMIN_EVENT_CREATE_REDIRECT
+    entry.path === ADMIN_EVENT_CREATE_REDIRECT || entry.path === ADMIN_EVENT_EDIT_REDIRECT
       ? entry
       : { ...entry, enabled: entry.method === "GET" && typeof entry.reads === "object" },
 );
-const KIT_ADMIN_FIXTURE_READS = KIT_ADMIN_READS.map((entry) =>
+const KIT_ADMIN_EVENT_CREATE_FIXTURE_READS = KIT_ADMIN_READS.map((entry) =>
   entry.method === "GET" && entry.path === ADMIN_EVENT_CREATE_REDIRECT
     ? { ...entry, enabled: true }
     : entry,
+);
+const KIT_ADMIN_EVENT_EDIT_FIXTURE_READS = KIT_ADMIN_READS.map((entry) =>
+  entry.path === ADMIN_EVENT_EDIT_REDIRECT ? { ...entry, enabled: true } : entry,
 );
 
 async function dispatchKitAdminRequest(
@@ -1282,10 +1291,21 @@ async function dispatchKitAdminRequest(
   ) {
     return null;
   }
-  const fixture =
+  let reads = KIT_ADMIN_READS;
+  if (
+    legacyCreate &&
     env.KIT_PARITY_FIXTURE_ADMIN_EVENT_CREATE_REDIRECT === "true" &&
-    fixtureRequest(request, deps.appUrl);
-  const page = decideRoute(request, fixture ? KIT_ADMIN_FIXTURE_READS : KIT_ADMIN_READS, url);
+    fixtureRequest(request, deps.appUrl)
+  ) {
+    reads = KIT_ADMIN_EVENT_CREATE_FIXTURE_READS;
+  } else if (
+    routeId === ADMIN_EVENT_EDIT_REDIRECT_ID &&
+    env.KIT_PARITY_FIXTURE_ADMIN_EVENT_EDIT_REDIRECT === "true" &&
+    fixtureRequest(request, deps.appUrl)
+  ) {
+    reads = KIT_ADMIN_EVENT_EDIT_FIXTURE_READS;
+  }
+  const page = decideRoute(request, reads, url);
   const read = page && routeId === page.path.replace(/:(\w+)/g, "[$1]") ? page : undefined;
   const route = queuePreview?.path ?? operator?.route.path ?? (formPath || read?.path);
   // Keep fixture-only reconciliation in its manifest and pass the other
@@ -1365,6 +1385,8 @@ async function dispatchFromManifest(
   deps: HookDispatchDeps,
   manifest: OwnedRoute[],
 ): Promise<Response> {
+  // The layoutless endpoint can only resolve through moderator admission.
+  if (event.route?.id === ADMIN_EVENT_EDIT_REDIRECT_ID) return deps.honoFetch(event.request);
   // Use the tested Request-to-decision path for both the method and URL.
   const route = decideRoute(event.request, manifest, event.url);
   // This endpoint has no page layout. Only dispatchKitAdminRequest can

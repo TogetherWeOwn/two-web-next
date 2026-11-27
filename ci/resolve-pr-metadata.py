@@ -80,6 +80,9 @@ def resolve_metadata(event_name, repository, workflow_sha, checked_sha, parents,
                 ref_repository(snapshot.get("head")) == source,
                 "Event PR repository identities differ from the current PR")
         require(snapshot["head"].get("sha") == head["sha"], "PR head moved since the event")
+        require(isinstance(base.get("ref"), str) and base["ref"] and
+                snapshot["base"].get("ref") == base["ref"],
+                "PR base ref moved since the event")
         # GITHUB_SHA pins the GitHub-generated merge, not a moving base ref.
         # Event/API base.sha and live merge_commit_sha can describe a different
         # merge after base advancement. Verify the exact immutable commit instead.

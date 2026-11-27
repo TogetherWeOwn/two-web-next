@@ -248,12 +248,14 @@ test("Kit admin fixture flags are absent from deployed configuration", () => {
     const deployed = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
     assert.doesNotMatch(deployed, /KIT_PARITY_FIXTURE_ADMIN_DASHBOARD/, file);
     assert.doesNotMatch(deployed, /KIT_PARITY_FIXTURE_ADMIN_ATTENDANCE/, file);
+    assert.doesNotMatch(deployed, /KIT_PARITY_FIXTURE_ADMIN_EVENT_EDIT_REDIRECT/, file);
     assert.doesNotMatch(deployed, /KIT_PARITY_FIXTURE_ADMIN_FEATURED_UNPUBLISH/, file);
   }
   const production = readFileSync(
     new URL("../web/wrangler.production.jsonc", import.meta.url),
     "utf8",
   );
+  assert.doesNotMatch(production, /KIT_PARITY_FIXTURE_ADMIN_EVENT_EDIT_REDIRECT/);
   assert.doesNotMatch(production, /KIT_PARITY_FIXTURE_ADMIN_FEATURED_UNPUBLISH/);
 });
 

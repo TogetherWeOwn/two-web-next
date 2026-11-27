@@ -32,6 +32,7 @@ const blacksmithSelection = [
   "&& vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest'",
 ].join(" ");
 const blacksmithRunner = `\${{ ${blacksmithSelection} }}`;
+const metadataGateRunner = `\${{ github.event.action == 'edited' && !github.event.changes.base && 'ubuntu-24.04' || ${blacksmithSelection} }}`;
 const sizeGateRunner = `\${{ format('["{0}"]', ${blacksmithSelection}) }}`;
 const calendarRunner = [
   "${{ github.event_name == 'pull_request'",
@@ -120,7 +121,7 @@ function expectHostedJob(name: string, id: string, job: Job) {
       expect(job["runs-on"], `${label} uses the approved 2-vCPU selector`).toBe(browserSmokeRunner);
     } else if (blacksmithJobs.get(name)?.includes(id)) {
       expect(job["runs-on"], `${label} uses the same-repository 2-vCPU selector`).toBe(
-        blacksmithRunner,
+        name === "pr-gates.yml" ? metadataGateRunner : blacksmithRunner,
       );
     } else {
       const expected = pinnedHostedJobs.get(name) === id ? "ubuntu-24.04" : hosted;

@@ -206,6 +206,13 @@ async function executeRepair(tx, config, plan, direction) {
   return "committed";
 }
 
+class RepairCloseError extends Error {
+  constructor(outcome) {
+    super("Database permissions connection cleanup failed after an acknowledged outcome.");
+    this.outcome = outcome;
+  }
+}
+
 export async function runRepair(direction, env, connect = migrationClient) {
   assert.ok(["forward", "undo", "readback"].includes(direction));
   const plan = parsePlan(env.PRODUCTION_DB_REPAIR_PLAN, env.PRODUCTION_DB_REPAIR_PLAN_SHA256);
@@ -217,14 +224,23 @@ export async function runRepair(direction, env, connect = migrationClient) {
   assert.equal(config.url.pathname, "/postgres");
   const readOnly = direction === "readback";
   const client = connect(config, { readOnly });
+  let outcome;
+  let closeFailed = false;
   try {
-    return await client.begin(
+    outcome = await client.begin(
       readOnly ? "isolation level repeatable read read only" : "isolation level read committed",
       (tx) => executeRepair(tx, config, plan, direction),
     );
   } finally {
-    await client.end({ timeout: 5 });
+    try {
+      await client.end({ timeout: 5 });
+    } catch {
+      closeFailed = true;
+    }
   }
+  // Only reached when begin() acknowledged the outcome.
+  if (closeFailed) throw new RepairCloseError(outcome);
+  return outcome;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -232,7 +248,11 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     // Exit codes convey only fixed states. The workflow suppresses both streams.
     const result = await runRepair(process.argv[2], process.env);
     process.exitCode = { committed: 0, before: 10, after: 11 }[result] ?? 1;
-  } catch {
-    process.exitCode = 1;
+  } catch (error) {
+    // Cleanup failure stays non-success even with an acknowledged outcome.
+    process.exitCode =
+      error instanceof RepairCloseError
+        ? ({ committed: 12, before: 13, after: 14 }[error.outcome] ?? 1)
+        : 1;
   }
 }

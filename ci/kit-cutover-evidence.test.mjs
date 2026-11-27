@@ -1955,7 +1955,12 @@ test("Ember fixture requires the exact 1033 starting prefix before recording 103
           runWrangler: (profile, [command, subcommand, target]) => {
             assert.equal(profile, "hono");
             if (command === "deployments" && subcommand === "list") {
-              return JSON.stringify([{ versions: [{ version_id: live, percentage: 100 }] }]);
+              return JSON.stringify([
+                {
+                  created_on: "2026-11-01T06:00:00.123456Z",
+                  versions: [{ version_id: live, percentage: 100 }],
+                },
+              ]);
             }
             if (command === "versions" && subcommand === "deploy") {
               assert.equal(target, `${kit}@100%`);
@@ -2000,6 +2005,110 @@ test("Ember fixture requires the exact 1033 starting prefix before recording 103
       }
     });
   }
+});
+
+function isolatedDispatch(runAttempt, scratch) {
+  return {
+    GITHUB_ACTIONS: "true",
+    RUNNER_ENVIRONMENT: "github-hosted",
+    GITHUB_REF: "refs/heads/main",
+    GITHUB_EVENT_NAME: "workflow_dispatch",
+    GITHUB_RUN_ID: "21",
+    GITHUB_RUN_ATTEMPT: runAttempt,
+    GITHUB_SHA: sourceSha,
+    CUTOVER_PACKET_DIGEST: digest,
+    RUNNER_TEMP: scratch,
+  };
+}
+
+test("isolated cleanup removes only the claimed run attempt's resources", async (t) => {
+  const { cleanup, runIsolatedCutover } = await import("./kit-cutover-staging.mjs");
+  const scratch = await mkdtemp(join(tmpdir(), "cutover-cleanup-test-"));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const workers = new Set();
+  const allocations = [];
+  const calls = [];
+  const database = Symbol("synthetic database");
+  const api = async (path, method = "GET") => {
+    calls.push([method, path]);
+    if (method === "DELETE") return workers.delete(path.slice("scripts/".length));
+    const worker = path.slice("scripts/".length, -"/settings".length);
+    return workers.has(worker) ? {} : null;
+  };
+  const dropFixture = async (target, names) => {
+    assert.equal(target, database);
+    calls.push(["drop fixture", names]);
+  };
+  const operations = {
+    qualifyPacket: async (packet, proofPath, { worker, names, claim }) => {
+      assert.deepEqual([packet, proofPath], ["packet", "proof.json"]);
+      allocations.push({ worker, names });
+      await writeFile(claim, worker, { flag: "wx" });
+      workers.add(worker);
+    },
+    cleanupAttempt: (ctx) => cleanup(ctx, api, database, dropFixture),
+  };
+  const attempts = ["1", "2"].map((attempt) => isolatedDispatch(attempt, join(scratch, attempt)));
+  const expected = ["1", "2"].map((attempt) => ({
+    worker: `${STAGING_WORKER}-21-${attempt}`,
+    names: {
+      suffix: `21-${attempt}`,
+      db: `two_web_cutover_21_${attempt}`,
+      login: `two_web_cutover_21_${attempt}_runtime`,
+    },
+  }));
+  for (const env of attempts) {
+    await mkdir(env.RUNNER_TEMP);
+    await runIsolatedCutover(["packet", "proof.json"], env, operations);
+  }
+  assert.deepEqual(allocations, expected);
+
+  const [first, second] = attempts;
+  const firstClaim = join(first.RUNNER_TEMP, "kit-cutover-claimed.json");
+  await assert.rejects(
+    runIsolatedCutover(["--cleanup"], { ...second, RUNNER_TEMP: first.RUNNER_TEMP }, operations),
+    { message: "Isolated cleanup claim mismatch" },
+  );
+  assert.deepEqual(calls, []);
+  assert.equal(await readFile(firstClaim, "utf8"), expected[0].worker);
+
+  for (const [index, env] of attempts.entries()) {
+    await runIsolatedCutover(["--cleanup"], env, operations);
+    const { worker, names } = expected[index];
+    const script = `scripts/${worker}`;
+    assert.deepEqual(calls.splice(0), [
+      ["GET", `${script}/settings`],
+      ["DELETE", script],
+      ["GET", `${script}/settings`],
+      ["drop fixture", names],
+    ]);
+    assert.deepEqual(
+      [...workers],
+      expected.slice(index + 1).map(({ worker }) => worker),
+    );
+    await assert.rejects(readFile(join(env.RUNNER_TEMP, "kit-cutover-claimed.json")), {
+      code: "ENOENT",
+    });
+  }
+});
+
+test("isolated orchestration rejects invalid attempts before starting operations", async (t) => {
+  const { runIsolatedCutover } = await import("./kit-cutover-staging.mjs");
+  const started = t.mock.fn();
+  const operations = {
+    qualifyPacket: started,
+    cleanupAttempt: started,
+  };
+  for (const attempt of [undefined, "0", "02", "2/../1", "1234567890123456"]) {
+    const env = isolatedDispatch(attempt, "unused");
+    for (const args of [["packet", "proof.json"], ["--cleanup"]]) {
+      await assert.rejects(runIsolatedCutover(args, env, operations), {
+        code: "ERR_ASSERTION",
+        operator: "match",
+      });
+    }
+  }
+  assert.equal(started.mock.callCount(), 0);
 });
 
 test("isolated upload diagnostics keep only the operation, exit status and provider code", () => {

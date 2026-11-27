@@ -12,6 +12,7 @@ import { PLANETSCALE_PRODUCTION_BRANCH_ID, PLANETSCALE_PRODUCTION_HOST } from ".
 import { runRepair } from "./db-permissions-repair.mjs";
 import { runExecutorAuthority } from "./db-repair-executor.mjs";
 import { runServingIsolation } from "./db-serving-ledger-isolation.mjs";
+import { repairClientWithCloseFailure } from "./fixtures/db-repair-close/postgres.mjs";
 import { prepareServingIsolation } from "./fixtures/web-serving-isolation.mjs";
 import { addedAfter1033, publicServingRights } from "./web-readiness-scoped-acl.mjs";
 
@@ -98,6 +99,137 @@ test("executor authority replays committed provision and revoke without another 
     });
     assert.equal(committed, operation === "provision");
     assert.deepEqual(events, ["connect", ...expectedEvents, "commit", "close start", "closed"]);
+  }
+});
+
+test("repair close failures preserve only acknowledged outcomes", async (t) => {
+  const hash = (value) => createHash("sha256").update(value).digest("hex");
+  const inventory = JSON.parse(read("db-permissions-repair-inventory.json"));
+  const owner = "repair_owner";
+  const migrator = "two_web_migrate";
+  const before = "a".repeat(64);
+  const after = "b".repeat(64);
+  const plan = JSON.stringify({
+    before,
+    after,
+    identity: hash(`postgres\0${owner}`),
+    owners: inventory.map(() => owner),
+  });
+  const fixtureEnv = {
+    PRODUCTION_DB_REPAIR_PLAN: plan,
+    PRODUCTION_DB_REPAIR_PLAN_SHA256: hash(plan),
+    PRODUCTION_DB_REPAIR_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:synthetic@${PLANETSCALE_PRODUCTION_HOST}/postgres?sslmode=verify-full`,
+  };
+  const snapshot = (repaired) => ({
+    digest: repaired ? after : before,
+    state: JSON.stringify({
+      ledger: {
+        count: 34,
+        digest: "b1d91750ac74a8ad4744bb603bcae55bd23b919ecdae7621c54ff0fece4b245c",
+        ids: "c".repeat(64),
+      },
+      inventory: {
+        ...Object.fromEntries(
+          inventory.map(([name, kind, parent]) => [
+            name,
+            [kind === "TABLE" ? "r" : "S", repaired ? migrator : owner, parent],
+          ]),
+        ),
+        "public.web_session_grace": ["r", owner, null],
+      },
+      defaults: [
+        ["S", "two_web_app", ["SELECT", "USAGE"]],
+        ...(repaired
+          ? []
+          : [
+              ["r", "two_web_app", ["INSERT", "SELECT", "UPDATE", "DELETE"]],
+              ["r", "two_web_backup", ["SELECT"]],
+              ["S", "two_web_backup", ["SELECT", "USAGE"]],
+            ]),
+      ].flatMap(([kind, grantee, rights]) =>
+        rights.map((privilege_type) => ({
+          schema: "public",
+          owner: migrator,
+          grantor: migrator,
+          is_grantable: false,
+          kind,
+          grantee,
+          privilege_type,
+        })),
+      ),
+      drizzle_access: [repaired, repaired],
+      object_acl: [],
+      migrator_ready: repaired,
+    }),
+  });
+
+  for (const { operation, acknowledge, states, outcome, code } of [
+    {
+      operation: "forward",
+      acknowledge: true,
+      states: [false, true],
+      outcome: "committed",
+      code: 12,
+    },
+    { operation: "undo", acknowledge: true, states: [true, false], outcome: "committed", code: 12 },
+    {
+      operation: "forward",
+      acknowledge: false,
+      states: [false, true],
+      outcome: "committed",
+      code: 1,
+    },
+    { operation: "readback", acknowledge: true, states: [false], outcome: "before", code: 13 },
+    { operation: "readback", acknowledge: true, states: [true], outcome: "after", code: 14 },
+  ]) {
+    await t.test(`${operation} ${outcome}, acknowledged=${acknowledge}`, async () => {
+      const fixture = { states: states.map(snapshot), acknowledge };
+      const transactionError = new Error("fixture transaction driver detail");
+      const events = [];
+      // Substitute postgres before loading the CLI, so the subprocess cannot connect.
+      const cli = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          fileURLToPath(new URL("fixtures/db-repair-close/preload.mjs", import.meta.url)),
+          fileURLToPath(new URL("db-permissions-repair.mjs", import.meta.url)),
+          operation,
+        ],
+        { env: { ...fixtureEnv, REPAIR_CLOSE_FIXTURE: JSON.stringify(fixture) }, encoding: "utf8" },
+      );
+      assert.ifError(cli.error);
+      assert.equal(cli.signal, null);
+      assert.equal(cli.stdout, "");
+      assert.equal(cli.stderr, "");
+      const protectedStep = shell(
+        workflow.jobs.repair.steps.at(-1).run,
+        { OPERATION: operation, FIXTURE_STATUS: String(cli.status) },
+        'node() { return "$FIXTURE_STATUS"; }',
+      );
+      assert.equal(protectedStep.status, 1);
+      assert.equal(protectedStep.stdout, "");
+      assert.equal(
+        protectedStep.stderr,
+        "Database permissions operation did not confirm an outcome.\n",
+      );
+      assert.equal(cli.status, code);
+
+      await assert.rejects(
+        runRepair(operation, fixtureEnv, () =>
+          repairClientWithCloseFailure(fixture, events, transactionError),
+        ),
+        acknowledge
+          ? {
+              outcome,
+              message:
+                "Database permissions connection cleanup failed after an acknowledged outcome.",
+            }
+          : (error) => error === transactionError,
+      );
+      const mutations =
+        operation === "readback" ? 0 : inventory.filter(([, , parent]) => !parent).length + 5;
+      assert.deepEqual(events, ["begin", ...Array(mutations).fill("mutation"), outcome, "end:5"]);
+    });
   }
 });
 

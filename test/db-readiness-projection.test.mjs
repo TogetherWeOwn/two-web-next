@@ -56,7 +56,14 @@ test("accepts healthy readiness traffic through deployments and health", async (
     if (pathname.endsWith("/deployments")) {
       return Response.json({
         success: true,
-        result: { deployments: [{ versions: [{ version_id: version, percentage: 100 }] }] },
+        result: {
+          deployments: [
+            {
+              created_on: "2026-11-01T06:00:00.123456Z",
+              versions: [{ version_id: version, percentage: 100 }],
+            },
+          ],
+        },
       });
     }
     assert.equal(pathname, "/up");

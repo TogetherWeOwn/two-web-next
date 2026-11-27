@@ -1,3 +1,4 @@
+import { exceedsCodeUnitLimit } from "../http/length-limit";
 import type { ListParams, SortOrder } from "./table-list";
 
 export type FeaturedSort = "position" | "updated_at";
@@ -16,7 +17,7 @@ export const FEATURED_PAGE_SIZE = 25;
 // (NULs stripped, then trimmed); overlong falls back to absent, never truncated.
 const FEATURED_FREE_TEXT_MAX_LENGTH = 128;
 const boundFeaturedFreeText = (value: string): string =>
-  value.length > FEATURED_FREE_TEXT_MAX_LENGTH ? "" : value;
+  exceedsCodeUnitLimit(value, FEATURED_FREE_TEXT_MAX_LENGTH) ? "" : value;
 
 export function parseFeaturedListQuery(params: ListParams): FeaturedListQuery {
   const page = Number(params.page);

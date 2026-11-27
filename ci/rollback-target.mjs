@@ -40,16 +40,33 @@ export function rollbackEnvironment(name) {
   return { name, ...ROLLBACK_ENVIRONMENTS[name] };
 }
 
-// `wrangler deployments list --json` prints oldest first; order by
-// created_on, never by array position. Self-contained (no import from the
-// gradual-promote action) so sparse /ci/ checkouts can run it.
+// Wrangler passes Cloudflare's created_on through in JSON. Order these
+// RFC 3339 timestamps by UTC instant, retaining up to nine fractional digits.
+export function orderedDeploymentTime(value, context = "rollback") {
+  const parsed =
+    typeof value === "string" &&
+    /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!parsed || parsed[0] !== value) throw new Error(`Invalid ${context} deployment timestamp`);
+  const [, time, fraction = "", offset] = parsed;
+  const wallClock = new Date(`${time}Z`).toJSON();
+  const utc = new Date(`${time}${offset}`).toJSON();
+  if (utc?.length !== 24 || !wallClock?.startsWith(time)) {
+    throw new Error(`Invalid ${context} deployment timestamp`);
+  }
+  return `${utc.slice(0, 19)}.${fraction.padEnd(9, "0")}Z`;
+}
+
 function newestFirst(deployments) {
   if (!Array.isArray(deployments) || deployments.length === 0) {
     throw new Error("expected a non-empty deployments list");
   }
-  return [...deployments].sort((a, b) =>
-    String(b?.created_on ?? "").localeCompare(String(a?.created_on ?? "")),
-  );
+  const ordered = deployments
+    .map((deployment) => ({ deployment, time: orderedDeploymentTime(deployment?.created_on) }))
+    .sort((a, b) => b.time.localeCompare(a.time));
+  if (ordered[0].time === ordered[1]?.time) {
+    throw new Error("Cannot determine the newest rollback deployment");
+  }
+  return ordered;
 }
 
 function singleFullVersion(deployment) {
@@ -62,25 +79,37 @@ function singleFullVersion(deployment) {
     : null;
 }
 
-// The live version: the single 100% version of the newest deployment. A
-// split deployment refuses: an active gradual rollout has no single target.
-export function liveVersion(deployments) {
-  const id = singleFullVersion(newestFirst(deployments)[0]);
+function requireFullVersion(deployment) {
+  const id = singleFullVersion(deployment);
   if (!id) {
     throw new Error("refusing: latest deployment is not a single-version 100% deployment");
   }
   return id;
 }
 
+// The live version: the single 100% version of the newest deployment. A
+// split deployment refuses: an active gradual rollout has no single target.
+export function liveVersion(deployments) {
+  return requireFullVersion(newestFirst(deployments)[0].deployment);
+}
+
 // The version that served 100% before the live one: the newest older
 // single-version 100% deployment whose version differs from the live one.
 // Split deployments (a past gradual rollout) are skipped, never chosen.
 export function previousVersion(deployments) {
-  const current = liveVersion(deployments);
-  for (const entry of newestFirst(deployments).slice(1)) {
-    const id = singleFullVersion(entry);
-    if (id && id !== current) return id;
+  const [latest, ...older] = newestFirst(deployments);
+  const current = requireFullVersion(latest.deployment);
+  let previous;
+  for (const { deployment, time } of older) {
+    if (previous && previous.time !== time) break;
+    const id = singleFullVersion(deployment);
+    if (!id || id === current) continue;
+    if (previous && previous.id !== id) {
+      throw new Error("Cannot determine the previous rollback version");
+    }
+    previous = { id, time };
   }
+  if (previous) return previous.id;
   throw new Error("No earlier single-version 100% deployment to roll back to");
 }
 
@@ -92,7 +121,8 @@ export function previousVersion(deployments) {
 export function rollbackAction(deployments, { expected, target, allowKnownSplit = false }) {
   assertRollbackVersionId(expected);
   assertRollbackVersionId(target);
-  const versions = allowKnownSplit ? newestFirst(deployments)[0]?.versions : null;
+  const { deployment } = newestFirst(deployments)[0];
+  const versions = allowKnownSplit ? deployment.versions : null;
   if (Array.isArray(versions) && versions.length === 2) {
     const serving = new Set(versions.map((version) => version?.version_id));
     if (
@@ -107,7 +137,7 @@ export function rollbackAction(deployments, { expected, target, allowKnownSplit 
       "Refusing rollback: split traffic must serve only the expected and target versions",
     );
   }
-  const current = liveVersion(deployments);
+  const current = requireFullVersion(deployment);
   if (current === target) return "skip";
   if (current === expected) return "rollback";
   throw new Error(

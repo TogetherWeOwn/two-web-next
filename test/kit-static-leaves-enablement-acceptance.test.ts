@@ -148,6 +148,12 @@ describe("static leaves enablement acceptance (shipped manifest)", () => {
       },
       {
         method: "GET",
+        path: "/admin/events/:key/edit",
+        enabled: false,
+        reads: { resource: "events", action: "view", route: "admin.events.legacy-edit" },
+      },
+      {
+        method: "GET",
         path: "/admin/join-attempts",
         enabled: true,
         reads: { resource: "join_attempts", action: "list", route: "admin.join-attempts.index" },

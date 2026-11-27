@@ -11,6 +11,7 @@ import type { Db } from "../db/index";
 import { containsControlCharacters } from "../admin/validation-shared";
 import { keyedMemberRead } from "../member-reads";
 import { pgSeasonBound, type SeasonWindow } from "../hotzones/season";
+import { exceedsCodePointLimit } from "../http/length-limit";
 import { OVERALL_CAP, RELATIVE_NEIGHBORS } from "./captions";
 
 // The window constants live in ./captions (the pure caption module both
@@ -63,7 +64,7 @@ export function parseActivityParam(raw: string | null | undefined): ActivityPars
   // check runs here — lowercasing first would expand İ (U+0130) to two code
   // points and 400 a savable 100-character name on both boards.
   const game = trimmed.toLowerCase();
-  if ([...trimmed].length > ACTIVITY_MAX_LENGTH || containsControlCharacters(game))
+  if (exceedsCodePointLimit(trimmed, ACTIVITY_MAX_LENGTH) || containsControlCharacters(game))
     return { ok: false, message: "Unknown activity" };
   return { ok: true, game };
 }

@@ -1,6 +1,7 @@
 // W9 calendar feeds: pure builders ported byte-for-byte from two-web's
 // EventIcs / EventRss / EventSubscribe / EventGoogleCalendar. No query, no auth, no HTTP.
 import { containsControlCharacters } from "../admin/validation-shared";
+import { exceedsCodePointLimit } from "../http/length-limit";
 import { stripTrailingSlash } from "../seo";
 import type { FeedEventRow as EventRow } from "./reads";
 import { rssXml as xml } from "./rss-xml";
@@ -21,7 +22,7 @@ export function parseFeedGameScope(raw: string | null | undefined): string | nul
   if (raw === null || raw === undefined) return null;
   const game = raw.trim();
   if (game === "") return null;
-  if ([...game].length > FEED_GAME_SCOPE_MAX_LENGTH) return undefined;
+  if (exceedsCodePointLimit(game, FEED_GAME_SCOPE_MAX_LENGTH)) return undefined;
   if (game.includes("\r") || game.includes("\n")) return undefined;
   if (containsControlCharacters(game)) return undefined;
   return game;

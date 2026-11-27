@@ -99,7 +99,7 @@ expect() {
 expect_fixture() {
   local rc fingerprint log="${work}/last-plain.log"
   fingerprint="$(git -C "${repo}" rev-parse HEAD):fixture.txt:github-pat:1"
-  rc="$(scan_rc pull_request)"
+  rc="$(scan_rc "${3:-pull_request}" "${2:-main}")"
   # Gitleaks can style the verbose Secret field even when output is redirected.
   sed -E $'s/\033\\[[0-9;]*m//g' "${work}/last.log" > "${log}"
   cases=$((cases + 1))
@@ -261,6 +261,30 @@ printf 'more docs\n' >> "${repo}/README.md"
 pr_commit
 expect "pr: unfetched base branch fails the scan" 2 "$(scan_rc pull_request missing-branch)"
 
+new_repo pr-retarget
+write_allowlist_config
+base_commit
+git -C "${repo}" switch -q -c strict-base
+write_stock_config
+pr_commit
+git -C "${repo}" update-ref refs/remotes/origin/strict-base HEAD
+git -C "${repo}" switch -q -c topic main
+plant_token
+pr_commit
+for target in main strict-base; do
+  git -C "${repo}" switch -q -c "merge-into-${target}" "${target}"
+  git -C "${repo}" merge -q --no-ff -m "merge topic into ${target}" topic
+  test "$(git -C "${repo}" rev-parse HEAD^2)" = "$(git -C "${repo}" rev-parse topic)"
+  if [[ "${target}" == main ]]; then
+    expect "pr retarget: original base policy accepts the head" 0 "$(scan_rc pull_request main)"
+    git -C "${repo}" update-ref refs/remotes/origin/main strict-base
+    expect "pr: an advanced base ref cannot change the merge revision's policy" 0 \
+      "$(POLICY_REVISION=HEAD^1 scan_rc pull_request main)"
+  else
+    expect_fixture "pr retarget: new base policy detects the same head on its new merge SHA" strict-base
+  fi
+done
+
 # -- non-PR runs keep the repo's own (already merged) policy ------------------
 new_repo push-allowlist
 write_allowlist_config
@@ -299,6 +323,10 @@ write_allowlist_config
 pr_commit
 expect "merge_group: allowlist added in .gitleaks.toml does not silence the scan" 1 \
   "$(scan_rc merge_group refs/heads/main)"
+queue_base="$(git -C "${repo}" rev-parse HEAD^1)"
+git -C "${repo}" update-ref refs/remotes/origin/main HEAD
+POLICY_REVISION="${queue_base}" expect_fixture \
+  "merge_group: an advanced base ref cannot replace the pinned policy" refs/heads/main merge_group
 
 new_repo mg-ignore
 write_stock_config
