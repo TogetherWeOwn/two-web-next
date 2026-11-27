@@ -331,11 +331,12 @@ export async function assertRollbackDrillGreen({ repository, token, fetchImpl = 
   return latest.id;
 }
 
-// Workflows that deploy to staging or test it: the drill waits until none of
-// them is queued or running, so it never moves staging under a journey run.
+// Active deploy and qualification runs reported by the standalone lane check.
+// The scheduled and manual drill uses the deploy-staging concurrency group.
 export const STAGING_LANE_WORKFLOWS = ["deploy.yml", "e2e-staging.yml"];
 
 export async function stagingBusyRuns({ repository, token, fetchImpl = fetch }) {
+  const invalidListing = "Staging lane lookup returned an invalid run listing";
   const busy = [];
   for (const file of STAGING_LANE_WORKFLOWS) {
     for (const status of ["in_progress", "queued", "waiting"]) {
@@ -353,8 +354,17 @@ export async function stagingBusyRuns({ repository, token, fetchImpl = fetch }) 
         },
       );
       if (!response.ok) throw new Error(`Staging lane lookup failed (HTTP ${response.status})`);
-      for (const run of (await response.json()).workflow_runs ?? []) {
-        if (Number.isSafeInteger(run?.id)) busy.push(`${file} run ${run.id}`);
+      let runs;
+      try {
+        runs = (await response.json())?.workflow_runs;
+      } catch {
+        throw new Error(invalidListing);
+      }
+      if (!Array.isArray(runs)) throw new Error(invalidListing);
+      for (const run of runs) {
+        const id = run?.id;
+        if (!Number.isSafeInteger(id) || id <= 0) throw new Error(invalidListing);
+        busy.push(`${file} run ${id}`);
       }
     }
   }

@@ -1727,6 +1727,78 @@ test("staging rollback drill uses the latest decisive run and permits empty hist
   }
 });
 
+test("staging lane CLI requires trustworthy run listings", async (t) => {
+  const sentinel = "PRIVATE_FIXTURE_BODY";
+  const empty = { workflow_runs: [] };
+  const occupied = { workflow_runs: [{ id: 1 }, { id: 1 }, { id: Number.MAX_SAFE_INTEGER }] };
+  const occupiedMessage =
+    "Staging lane busy: e2e-staging.yml run 1, e2e-staging.yml run 1, " +
+    `e2e-staging.yml run ${Number.MAX_SAFE_INTEGER}\n`;
+  const cases = [
+    { name: "empty", body: empty, busy: false },
+    { name: "occupied with boundary IDs and duplicates", body: occupied, busy: true },
+    { name: "absent listing", body: { details: sentinel } },
+    { name: "null listing", body: { workflow_runs: null } },
+    { name: "string listing", body: { workflow_runs: sentinel } },
+    { name: "object listing", body: { workflow_runs: { details: sentinel } } },
+    { name: "null run", body: { workflow_runs: [null] } },
+    { name: "missing ID", body: { workflow_runs: [{}] } },
+    ...[sentinel, "7", 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1].map((id) => ({
+      name: `invalid ID ${id}`,
+      body: { workflow_runs: [{ id }] },
+    })),
+    { name: "mixed listing", body: { workflow_runs: [{ id: 7 }, { id: sentinel }] } },
+  ];
+
+  for (const { name, body, busy } of cases) {
+    await t.test(name, (t) => {
+      const dir = mkdtempSync(join(tmpdir(), "staging-lane-proof-"));
+      t.after(() => rmSync(dir, { recursive: true, force: true }));
+      const output = join(dir, "out");
+      const stubs = [
+        { match: "/e2e-staging.yml/runs?status=waiting&per_page=20", body },
+        { match: "/runs?status=", body: empty },
+      ];
+      const result = spawnSync(process.execPath, ["ci/rollback-target.mjs", "--staging-busy"], {
+        encoding: "utf8",
+        env: {
+          GITHUB_OUTPUT: output,
+          GITHUB_REPOSITORY: "fixture/repo",
+          GITHUB_TOKEN: "fixture-only",
+          NODE_OPTIONS: `--import=${new URL("./test-fetch-stub.mjs", import.meta.url).href}`,
+          FETCH_STUB_JSON: JSON.stringify(stubs),
+        },
+      });
+      assert.ifError(result.error);
+      if (busy === undefined) {
+        assert.equal(result.status, 1, result.stdout);
+        assert.equal(result.stdout, "");
+        assert.equal(
+          result.stderr,
+          "::error::Staging lane lookup returned an invalid run listing\n",
+        );
+        assert.equal(existsSync(output), false);
+      } else {
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.stderr, "");
+        assert.equal(readFileSync(output, "utf8"), `busy=${busy}\n`);
+        assert.equal(result.stdout, busy ? occupiedMessage : "Staging lane idle\n");
+      }
+    });
+  }
+
+  await t.test("malformed JSON", async () => {
+    await assert.rejects(
+      stagingBusyRuns({
+        repository: "fixture/repo",
+        token: "fixture-only",
+        fetchImpl: async () => new Response(sentinel),
+      }),
+      { message: "Staging lane lookup returned an invalid run listing" },
+    );
+  });
+});
+
 test("staging lane is busy while deploy or e2e-staging runs are queued or running", async () => {
   const asked = [];
   const busy = await stagingBusyRuns({
