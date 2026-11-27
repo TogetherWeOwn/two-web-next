@@ -10,6 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
 import { getPublicApiEvent, listPublicApiEvents, type PublicApiEvent } from "../src/events/reads";
+import * as lengthLimit from "../src/http/length-limit";
 import { __resetApiPublicCacheForTests } from "../src/public-data/cache";
 import {
   API_PUBLIC_BOUNDS,
@@ -21,6 +22,8 @@ import {
   fitByteBudget,
   getEventTrimmedNotice,
   LIST_EVENTS_TRIMMED_NOTICE,
+  serializeEvent,
+  serializeEventCollection,
 } from "../src/public-data/routes";
 import app from "./app";
 import { fetchAppPath } from "./helpers/fetch-app";
@@ -172,7 +175,7 @@ describe("MCP event results fit the budget at the serialized tool-result boundar
   afterEach(() => __resetApiPublicCacheForTests());
 
   it("eventResultBytes counts both copies, escaping and SDK metadata", () => {
-    const body = JSON.stringify({ description: ESCAPED });
+    const body = JSON.stringify({ description: `${ESCAPED}😀é` });
     const text = JSON.stringify(body);
     expect(eventResultBytes(body)).toBeGreaterThan(body.length + text.length);
     // The measure is exactly the newest protocol's result shape.
@@ -207,7 +210,8 @@ describe("MCP event results fit the budget at the serialized tool-result boundar
   });
 
   it("fitByteBudget keeps a result exactly at the cap and trims one byte over", () => {
-    const dto = () => [{ event_key: key(1), description: ESCAPED } as PublicApiEventDto];
+    const description = `😀${ESCAPED}`;
+    const dto = () => [serializeEvent(row(1, description))];
     const wrap = (rows: PublicApiEventDto[]) => ({ data: rows });
     const exact = eventResultBytes(JSON.stringify(wrap(dto())));
 
@@ -215,7 +219,7 @@ describe("MCP event results fit the budget at the serialized tool-result boundar
     const atCap = fitByteBudget(dto(), exact, wrap, LIST_EVENTS_TRIMMED_NOTICE);
     expect(atCap.trimmed).toBe(false);
     expect(eventResultBytes(atCap.body)).toBe(exact);
-    expect(JSON.parse(atCap.body).data[0].description).toBe(ESCAPED);
+    expect(JSON.parse(atCap.body).data[0].description).toBe(description);
 
     // One byte over trims, and the trimmed body fits with its notice counted.
     const oneOver = fitByteBudget(dto(), exact - 1, wrap, LIST_EVENTS_TRIMMED_NOTICE);
@@ -225,6 +229,56 @@ describe("MCP event results fit the budget at the serialized tool-result boundar
     );
     expect(JSON.parse(oneOver.body).data[0].description.endsWith("…")).toBe(true);
   });
+
+  it("counts the notice at the trimmed cap and trims again one byte over", () => {
+    const notice = LIST_EVENTS_TRIMMED_NOTICE;
+    const dto = () => [serializeEvent(row(1, "😀".repeat(256)))];
+    const wrap = (rows: PublicApiEventDto[]) => rows[0];
+    const once = JSON.stringify(serializeEvent(row(1, `${"😀".repeat(127)}…`)));
+    const twice = JSON.stringify(serializeEvent(row(1, `${"😀".repeat(63)}…`)));
+    const exact = eventResultBytes(once, notice);
+
+    expect(fitByteBudget(dto(), exact, wrap, notice)).toEqual({ body: once, trimmed: true });
+    expect(fitByteBudget(dto(), exact - 1, wrap, notice)).toEqual({ body: twice, trimmed: true });
+  });
+
+  it.each(["collection", "detail"] as const)(
+    "REST %s serves exactly 32 KiB and refuses one UTF-8 byte over",
+    async (shape) => {
+      const event = { ...row(1, null), title: "" };
+      const collection = shape === "collection";
+      const path = collection ? "/api/public/events" : `/api/public/events/${event.eventKey}`;
+      const body = () => {
+        const dto = serializeEvent(event);
+        return JSON.stringify(collection ? serializeEventCollection([dto], 1, 1, 20) : dto);
+      };
+      const titleBytes = CAP - Buffer.byteLength(body());
+      event.title = "😀".repeat(Math.floor(titleBytes / 4)) + "x".repeat(titleBytes % 4);
+      useRows([event]);
+
+      // The wrapped MCP cap normally binds first. Bypass it to isolate the final REST guard.
+      const fit = vi.spyOn(lengthLimit, "fitsUtf8ByteLimit");
+      try {
+        fit.mockReturnValueOnce(true);
+        const exact = await app.request(path, {}, env);
+        expect(exact.status).toBe(200);
+        const text = await exact.text();
+        expect(Buffer.byteLength(text)).toBe(CAP);
+        expect(text).toBe(body());
+
+        __resetApiPublicCacheForTests();
+        event.title += "x";
+        expect(Buffer.byteLength(body())).toBe(CAP + 1);
+        fit.mockReturnValueOnce(true);
+        const over = await app.request(path, {}, env);
+        expect(over.status).toBe(503);
+        expect(over.headers.get("cache-control")).toBe("no-store, private");
+        expect(await over.json()).toMatchObject({ error: { code: "unavailable" } });
+      } finally {
+        fit.mockRestore();
+      }
+    },
+  );
 
   for (const protocol of PROTOCOLS) {
     it(`list_events trims an oversized page so the ${protocol} result fits 32 KiB`, async () => {
