@@ -48,7 +48,11 @@ async function readJson(url, options, fetchImpl, maxBytes) {
     redirect: "error",
     signal: AbortSignal.timeout(5_000),
   });
-  assert.ok(response.status === 200 && response.body, "Readiness traffic check unavailable");
+  if (response.status !== 200 || !response.body) {
+    // Cleanup can stall or reject. Preserve the fixed refusal without waiting for it.
+    void response.body?.cancel().catch(() => undefined);
+    assert.fail("Readiness traffic check unavailable");
+  }
   const reader = response.body.getReader();
   const decoder = new TextDecoder("utf-8", { fatal: true });
   let bytes = 0;
