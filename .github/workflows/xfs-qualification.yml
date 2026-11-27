@@ -291,7 +291,7 @@ jobs:
   # The socket deadlines consume over three minutes on their own. A separate
   # job lets both proofs finish tearing down their own fixtures.
   kit-live-socket-proof:
-    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && !inputs.qualify_cutover && !inputs.moderator_rsvp_only)
+    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && !inputs.qualify_cutover && !inputs.moderator_rsvp_only) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
