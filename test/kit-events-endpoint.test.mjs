@@ -3,9 +3,12 @@
 // Only framework/data boundaries and the deliberately failing renderer are seams.
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
+import { defaultTreeAdapter, Parser } from "parse5";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseRenderedPage, renderedElements, renderedText } from "../ci/rendered-page.mjs";
 import { renderKitEvents as realRender } from "./helpers/calendar-game-recovery";
 import { gathering } from "./helpers/calendar-multiday-acceptance";
+import { attribute, elements, tag, testId } from "./helpers/schedule-search-context-acceptance";
 
 const modelModule = fileURLToPath(new URL("../src/events/page-models.server.ts", import.meta.url));
 const virtualModules = new Map([
@@ -175,6 +178,44 @@ function failRendering() {
   seams.render.mockRejectedValueOnce(new Error("render failed after the model loaded"));
 }
 
+// Fragment parsing can discard document tags. Record them before tree construction.
+class IslandFragmentParser extends Parser {
+  documentTags = [];
+
+  onDoctype(token) {
+    this.documentTags.push("doctype");
+    super.onDoctype(token);
+  }
+
+  onStartTag(token) {
+    if (["html", "body", "main", "script"].includes(token.tagName)) {
+      this.documentTags.push(token.tagName);
+    }
+    super.onStartTag(token);
+  }
+}
+
+function sourceElements(root, predicate) {
+  return [
+    ...elements(root, predicate),
+    ...tag(root, "template").flatMap((template) =>
+      template.content ? sourceElements(template.content, predicate) : [],
+    ),
+  ];
+}
+
+function sourceTestIds(page) {
+  return sourceElements(page, (node) => attribute(node, "data-testid") !== undefined).map((node) =>
+    attribute(node, "data-testid"),
+  );
+}
+
+function stylesheets(page) {
+  return tag(page, "link")
+    .filter((link) => attribute(link, "rel") === "stylesheet")
+    .map((link) => attribute(link, "href"));
+}
+
 describe("Kit events endpoint late-failure contract", () => {
   it("replaces anonymous success-cache headers with private no-store on render failure", async () => {
     const { event, headers, deleteCookie } = requestEvent();
@@ -208,7 +249,7 @@ describe("Kit events endpoint late-failure contract", () => {
 
     expect(construct).toHaveBeenCalledOnce();
     const rendered = await seams.render.mock.results[0].value;
-    expect(rendered.body).toContain('data-testid="join-result"');
+    expect(testId(parseRenderedPage(rendered.body), "join-result")).toHaveLength(1);
     expectPrivate(headers);
     expect(deleteCookie).not.toHaveBeenCalled();
   });
@@ -225,15 +266,31 @@ describe("Kit events endpoint flash-consumption controls", () => {
     expect(response.headers.get("cache-control")).toBe("public, max-age=60");
     expect(response.headers.get("vary")).toBe("Cookie, X-Two-Island");
     const body = await response.text();
-    expect(body).toContain('data-testid="events-calendar"');
-    expect(body).toMatch(/<nav\b[^>]*class="segments"/);
-    expect(body).toContain("&lt;drill");
+    const page = parseRenderedPage(body);
+    const [calendar] = testId(page, "events-calendar");
+    expect(calendar).toBeDefined();
+    expect(tag(page, "nav").map((nav) => attribute(nav, "class"))).toContain("segments");
+    expect(calendar && renderedText(calendar)).toContain("<drill>");
+    expect(sourceElements(page, (node) => node.tagName === "drill")).toHaveLength(0);
+    // Wire bytes also cover nested markup in attributes and markers in comments.
     expect(body).not.toContain("<drill>");
     expect(body).not.toContain("not-public");
-    expect(body).toContain('<link rel="stylesheet" href="/schedule-theme.css"');
-    expect(body).toContain('<link rel="stylesheet" href="/kit-events-controls.css"');
-    expect(body).toContain('src="/islands/events-calendar.js"');
-    expect(body).not.toMatch(/<script\b[^>]*\btype="module"/);
+    expect(stylesheets(page)).toContain("/schedule-theme.css");
+    expect(stylesheets(page)).toContain("/kit-events-controls.css");
+    const scripts = tag(page, "script");
+    expect(scripts.map((script) => attribute(script, "src"))).toContain(
+      "/islands/events-calendar.js",
+    );
+    const documents = [page, parseRenderedPage(body, { scriptingEnabled: false })];
+    expect(
+      documents.flatMap((document) =>
+        sourceElements(
+          document,
+          (node) =>
+            node.tagName === "script" && attribute(node, "type")?.toLowerCase() === "module",
+        ),
+      ),
+    ).toHaveLength(0);
     expect(deleteCookie).not.toHaveBeenCalled();
   });
 
@@ -244,10 +301,18 @@ describe("Kit events endpoint flash-consumption controls", () => {
 
     expect(response.status).toBe(200);
     expectPrivate(response.headers);
-    const body = await response.text();
-    expect(body).toContain('data-testid="events-calendar"');
-    expect(body).toContain('data-testid="join-result"');
-    expect(body).toMatch(/<main\b[^>]*><div role="status" tabindex="-1" data-testid="auth-error"/);
+    const page = parseRenderedPage(await response.text());
+    expect(testId(page, "events-calendar")).toHaveLength(1);
+    expect(testId(page, "join-result")).toHaveLength(1);
+    const [main] = tag(page, "main");
+    expect(main?.childNodes[0]).toMatchObject({
+      tagName: "div",
+      attrs: expect.arrayContaining([
+        { name: "role", value: "status" },
+        { name: "tabindex", value: "-1" },
+        { name: "data-testid", value: "auth-error" },
+      ]),
+    });
     expect(deleteCookie.mock.calls).toEqual([
       ["__Host-two_join_result", { path: "/", secure: true, httpOnly: true, sameSite: "lax" }],
     ]);
@@ -264,7 +329,11 @@ describe("Kit events endpoint flash-consumption controls", () => {
 
     expect(response.status).toBe(200);
     expect(seams.render.mock.calls[0][0]).toMatchObject({ joinResult: null });
-    expect(await response.text()).not.toContain('data-testid="join-result"');
+    const body = await response.text();
+    const page = parseRenderedPage(body, { scriptingEnabled: false });
+    expect(sourceTestIds(page)).not.toContain("join-result");
+    // Also reject the private marker in comments and other unparsed wire bytes.
+    expect(body).not.toContain('data-testid="join-result"');
     expect(deleteCookie).not.toHaveBeenCalled();
   });
 
@@ -276,16 +345,50 @@ describe("Kit events endpoint flash-consumption controls", () => {
       search: "?q=Paged&page=2",
     });
     const body = await (await GET(event)).text();
-    expect(body).toContain('data-testid="events-page-unreadable">Events on page 2 can');
-    expect(body).toContain('data-testid="events-search-status">Events on page 2 can');
-    expect(body).toContain('href="/events?q=Paged" data-testid="events-pager-first"');
-    expect(body).not.toContain('data-testid="events-empty-search"');
-    expect(body).not.toMatch(/<!doctype|<(?:html|body|main|script)\b/i);
-    expect(body).toContain('data-island="events-calendar"');
-    const zones = Array.from(body.matchAll(/data-cal-zone="([^"]+)"/g), (match) => match[1]);
-    expect(zones).toEqual(["head", "subscribe", "actions", "miss", "content"]);
-    const head = body.split('data-cal-zone="head">')[1]?.trimStart();
-    expect(head).toMatch(/^<link rel="stylesheet" href="\/kit-events-controls\.css"/);
+    // The client feeds the fragment to DOMParser before locating the island.
+    const parser = new IslandFragmentParser({ scriptingEnabled: false });
+    parser.tokenizer.write(body, true);
+    const fragment = parser.document;
+    const islands = elements(
+      fragment,
+      (node) => attribute(node, "data-island") === "events-calendar",
+    );
+    expect(islands).toHaveLength(1);
+    const [island] = islands;
+    const rendered = new Set(renderedElements(fragment, {}));
+    const unreadable = testId(island, "events-page-unreadable").find((node) => rendered.has(node));
+    const status = testId(island, "events-search-status").find((node) => rendered.has(node));
+    expect(unreadable && renderedText(unreadable).trim()).toMatch(/^Events on page 2 can/);
+    expect(status && renderedText(status).trim()).toMatch(/^Events on page 2 can/);
+    expect(status && attribute(status, "role")).toBe("status");
+    const [firstPage] = testId(island, "events-pager-first");
+    expect(firstPage?.tagName).toBe("a");
+    expect(firstPage && attribute(firstPage, "href")).toBe("/events?q=Paged");
+    const emittedTestIds = sourceTestIds(fragment);
+    expect(emittedTestIds).not.toContain("events-empty-search");
+    expect(parser.documentTags).toEqual([]);
+    const isZone = (node) => attribute(node, "data-cal-zone") !== undefined;
+    const zones = elements(island, (node) => node !== island && isZone(node));
+    expect(zones.map((zone) => attribute(zone, "data-cal-zone"))).toEqual([
+      "head",
+      "subscribe",
+      "actions",
+      "miss",
+      "content",
+    ]);
+    expect(sourceElements(fragment, isZone)).toHaveLength(zones.length);
+    const firstHeadChild = zones[0]?.childNodes.find(
+      (node) => !defaultTreeAdapter.isTextNode(node) || node.value.trim() !== "",
+    );
+    expect(firstHeadChild).toMatchObject({
+      tagName: "link",
+      attrs: expect.arrayContaining([
+        { name: "rel", value: "stylesheet" },
+        { name: "href", value: "/kit-events-controls.css" },
+      ]),
+    });
+    expect(emittedTestIds).not.toContain("auth-error");
+    expect(emittedTestIds).not.toContain("join-result");
     expect(body).not.toContain('data-testid="auth-error"');
     expect(body).not.toContain('data-testid="join-result"');
     expect(deleteCookie).not.toHaveBeenCalled();
@@ -300,10 +403,14 @@ describe("Kit events endpoint flash-consumption controls", () => {
     });
     const response = await GET(event);
     const body = await response.text();
+    const page = parseRenderedPage(body, { scriptingEnabled: false });
     expect(response.headers.get("x-two-events-too-long")).toBe("true");
-    expect(body).toContain('role="alert"');
+    expect(elements(page, (node) => attribute(node, "role") === "alert")).toHaveLength(1);
+    // Check the wire bytes for disclosure even outside rendered text and attributes.
     expect(body).not.toContain(query);
-    expect(body).not.toContain('data-testid="events-calendar"');
+    const emittedTestIds = sourceTestIds(page);
+    expect(emittedTestIds).not.toContain("events-calendar");
+    expect(emittedTestIds).not.toContain("auth-error");
     expect(body).not.toContain('data-testid="auth-error"');
     expect(seams.model).not.toHaveBeenCalled();
     expect(seams.render.mock.calls[0][0]).toMatchObject({ queryTooLong: true });
