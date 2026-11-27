@@ -6,11 +6,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { readMigrationFiles } from "drizzle-orm/migrator";
 import { parse } from "yaml";
 import { PLANETSCALE_PRODUCTION_BRANCH_ID, PLANETSCALE_PRODUCTION_HOST } from "./db-migrate.mjs";
 import { runRepair } from "./db-permissions-repair.mjs";
 import { runExecutorAuthority } from "./db-repair-executor.mjs";
 import { runServingIsolation } from "./db-serving-ledger-isolation.mjs";
+import { prepareServingIsolation } from "./fixtures/web-serving-isolation.mjs";
+import { addedAfter1033, publicServingRights } from "./web-readiness-scoped-acl.mjs";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const workflow = parse(read("../.github/workflows/db-permissions-repair.yml"));
@@ -791,6 +794,152 @@ test("executor rolls back a grant or revoke when the post-write membership query
         failPostWrite ? ["write", "close"] : ["write", "commit", "close"],
       );
     }
+  }
+});
+
+test("serving isolation readback verifies endpoints and closes without mutation or locks", async () => {
+  const database = "postgres";
+  const migrationRole = "fixture_executor";
+  // Differs from the production default so a dropped login option fails.
+  const login = "fixture_runtime_login";
+  const firstEnd = "1033_session-roles-checked-at";
+  const { entries } = JSON.parse(read("../drizzle/meta/_journal.json"));
+  const migrationCount = entries.findIndex(({ tag }) => tag === firstEnd) + 1;
+  assert.ok(migrationCount > 0);
+  const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
+  const ledger = readMigrationFiles({ migrationsFolder })
+    .slice(0, migrationCount)
+    .map(({ hash, folderMillis }) => ({ hash, created_at: folderMillis }));
+  const requiredRights = publicServingRights.filter(({ name }) => !addedAfter1033.has(name));
+  const publicAcl = Array.from(
+    Map.groupBy(requiredRights, ({ kind, name, column }) =>
+      JSON.stringify([kind, name, column]),
+    ).values(),
+    (rights) => {
+      const [{ kind, name, column }] = rights;
+      return {
+        kind,
+        name,
+        column,
+        owner: migrationRole,
+        direct: rights.map(({ right }) => [right, migrationRole, false]),
+      };
+    },
+  );
+  const ledgerSchema = { kind: "schema", name: "drizzle", column: "", owner: migrationRole };
+  const ledgerAccess = { ...ledgerSchema, direct: [["USAGE", migrationRole, false]] };
+  const ledgerIsolated = { ...ledgerSchema, direct: [] };
+  const broadRoles = ["pg_read_all_data", "pg_write_all_data"].map((role) => ({
+    role,
+    grantor: migrationRole,
+    admin: false,
+    inherit: true,
+    set: false,
+  }));
+  const before = { acl: [...publicAcl, ledgerAccess], membership: broadRoles };
+  const after = { acl: [...publicAcl, ledgerIsolated], membership: [] };
+  const unclassified = { ...after, acl: [...publicAcl, ledgerAccess] };
+  const catalogQuery = /^with objects as \(/;
+  const membershipQuery = /^select role\.rolname/;
+
+  for (const { state, result, allowed } of [
+    { state: before, result: "before" },
+    { state: after, result: "after", allowed: true },
+    { state: unclassified, result: "unclassified" },
+    { state: after, result: "missing effective rights", allowed: false },
+  ]) {
+    // Offer only the ordered readback statements. An advisory lock, explicit
+    // relation lock, role change or write fails at the connector boundary.
+    const steps = [
+      [/^set local search_path = pg_catalog, pg_temp$/, []],
+      [/^set local lock_timeout = '500ms'$/, []],
+      [/^set local statement_timeout = '5s'$/, []],
+      [/^set local transaction_timeout = '25s'$/, []],
+      [
+        /^select pg_catalog\.current_database\(\)/,
+        [{ database, authenticated: migrationRole, effective: migrationRole }],
+      ],
+      [
+        /^select hash, created_at from drizzle\.__drizzle_migrations order by created_at, id limit \?$/,
+        ledger,
+        [entries.length + 1],
+      ],
+      [catalogQuery, state.acl, [login]],
+      [membershipQuery, state.membership, [login]],
+    ];
+    if (allowed !== undefined) {
+      steps.push(
+        [/^WITH runtimes AS \(/, [], [login]],
+        [
+          /^select bool_and\(case/,
+          [{ allowed }],
+          [login, login, login, JSON.stringify(requiredRights)],
+        ],
+      );
+    }
+    if (allowed) steps.push([/^select rolcanlogin and not/, [{ scoped: true }], [login]]);
+
+    let queryCount = 0;
+    const execute = (sql, params) => {
+      const step = steps[queryCount++];
+      assert.ok(step, `Unexpected readback statement: ${sql}`);
+      const [pattern, rows, expectedParams] = step;
+      const statement = sql.trim().replace(/\s+/g, " ");
+      assert.doesNotMatch(
+        statement,
+        /;|\bpg_(?:try_)?advisory_|\bfor (?:no key update|key share|update|share)\b/i,
+      );
+      assert.match(statement, pattern);
+      if (expectedParams) assert.deepEqual(params, expectedParams);
+      return rows;
+    };
+    const tx = (strings, ...params) => execute(strings.join("?"), params);
+    tx.unsafe = execute;
+    const lifecycle = [];
+    const { run, plan } = await prepareServingIsolation({
+      owner([sql]) {
+        if (catalogQuery.test(sql)) return before.acl;
+        assert.match(sql, membershipQuery);
+        return before.membership;
+      },
+      login,
+      database,
+      migrationRole,
+      firstEnd,
+      timestamps: ledger.map(({ created_at }) => created_at),
+      connect(_, options) {
+        assert.deepEqual(options, { readOnly: true });
+        return {
+          async begin(mode, work) {
+            lifecycle.push("begin");
+            assert.equal(mode, "isolation level repeatable read read only");
+            try {
+              return await work(tx);
+            } finally {
+              lifecycle.push("transaction ended");
+            }
+          },
+          async end(options) {
+            lifecycle.push("closed");
+            assert.deepEqual(options, { timeout: 5 });
+          },
+        };
+      },
+    });
+
+    if (result === "unclassified") {
+      await assert.rejects(run("readback"), {
+        code: "ERR_ASSERTION",
+        operator: "strictEqual",
+        expected: JSON.parse(plan).after,
+      });
+    } else if (result === "missing effective rights") {
+      await assert.rejects(run("readback"), /Required Web\/Jobs privileges are missing/);
+    } else {
+      assert.equal(await run("readback"), result);
+    }
+    assert.equal(queryCount, steps.length, result);
+    assert.deepEqual(lifecycle, ["begin", "transaction ended", "closed"], result);
   }
 });
 
