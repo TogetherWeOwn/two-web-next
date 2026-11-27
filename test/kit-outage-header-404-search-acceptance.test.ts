@@ -28,8 +28,14 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { type DefaultTreeAdapterMap, Parser, type ParserOptions, type Token } from "parse5";
+import { assert, beforeAll, describe, expect, it, vi } from "vitest";
 import type { KitErrorStatus } from "../src/kit-errors";
+import { attr, elements, textOf } from "./helpers/kit-edit-controls";
+
+type Element = DefaultTreeAdapterMap["element"];
+type Node = DefaultTreeAdapterMap["node"];
+type Template = DefaultTreeAdapterMap["template"];
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
@@ -46,6 +52,7 @@ const INVITE = "https://discord.gg/fixture-invite";
 const OUTAGE: KitErrorStatus[] = [403, 429, 500, 503];
 const SIGNIN: KitErrorStatus[] = [400, 404, 410, 422];
 const ALL: KitErrorStatus[] = [400, 404, 403, 410, 422, 429, 500, 503];
+const OAUTH_START = /\/(?:join|auth)\/discord/;
 
 type RenderErrorShell = (
   code: KitErrorStatus,
@@ -119,9 +126,18 @@ function requireRender(): RenderErrorShell {
   return renderErrorShell;
 }
 
+class OutageParser extends Parser<DefaultTreeAdapterMap> {
+  override onStartTag(token: Token.TagToken): void {
+    // Tree construction can discard a start tag and all its attributes.
+    const oauth = token.attrs.find(({ value }) => OAUTH_START.test(value));
+    expect(oauth?.value, `OAuth reference on ${token.tagName}`).toBeUndefined();
+    super.onStartTag(token);
+  }
+}
+
 // The shell offers recovery with no session, DB or network reads: every
 // render runs with fetch refusing, and any call fails the rendering test.
-function renderShell(code: KitErrorStatus): { head: string; body: string } {
+function renderShell(code: KitErrorStatus, scriptingEnabled = false) {
   const fetchSpy = vi.fn(() => {
     throw new Error("kit error fixtures must remain offline");
   });
@@ -129,44 +145,84 @@ function renderShell(code: KitErrorStatus): { head: string; body: string } {
   try {
     const rendered = requireRender()(code, INVITE);
     expect(fetchSpy, `${code} renders without a network read`).not.toHaveBeenCalled();
-    return rendered;
+    const options: ParserOptions<DefaultTreeAdapterMap> = {
+      scriptingEnabled,
+      onParseError: (error) => {
+        throw new Error(`${code} shell HTML parse error ${error.code}`);
+      },
+    };
+    const parser = OUTAGE.includes(code) ? OutageParser : Parser;
+    const document = parser.parse(
+      `<!doctype html><html><head>${rendered.head}</head><body>${rendered.body}</body></html>`,
+      options,
+    );
+    const nodes = elements(document);
+    const head = nodes.find((node) => node.tagName === "head");
+    const body = nodes.find((node) => node.tagName === "body");
+    assert(head && body, `${code} shell has a head and body`);
+    return { document, head, body };
   } finally {
     vi.unstubAllGlobals();
   }
 }
 
-function headerAccount(body: string, label: string): string {
-  const matches = body.match(/<nav[^>]*class="header-account"[^>]*>[\s\S]*?<\/nav>/g);
-  expect(matches, `${label} renders exactly one account nav`).toHaveLength(1);
-  return matches![0]!;
+function headerAccount(body: Node, label: string): Element {
+  const nodes = parsedRoots(body).flatMap((root) => elements(root));
+  const matches = nodes.filter(
+    (node) => node.tagName === "nav" && attr(node, "class") === "header-account",
+  );
+  const nav = elements(body).find((node) => matches.includes(node));
+  assert(nav && matches.length === 1, `${label} renders exactly one account nav`);
+  return nav;
 }
 
-function signinCta(header: string, label: string): { href: string; text: string } {
-  const matches = header.match(/<a\b[^>]*data-testid="signin"[^>]*>[\s\S]*?<\/a>/g);
-  expect(matches, `${label} header keeps exactly one signin CTA`).toHaveLength(1);
-  const anchor = matches![0]!;
-  expect(anchor, `${label} signin CTA keeps the button class`).toMatch(/class="[^"]*\bbtn\b/);
-  const href = /href="([^"]*)"/.exec(anchor)?.[1];
+const directText = (node: Element) =>
+  node.childNodes.some((child) => "tagName" in child) ? "" : textOf(node);
+
+function signinCta(header: Element, label: string) {
+  const caption = elements(header).find((node) => attr(node, "class") === "account-caption");
+  assert(caption, `${label} has an account caption`);
+  expect(directText(caption)).toBe("Welcome, guest");
+  const matches = parsedRoots(header).flatMap((root) =>
+    elements(root).filter((node) => node.tagName === "a" && attr(node, "data-testid") === "signin"),
+  );
+  const anchor = elements(header).find((node) => matches.includes(node));
+  assert(anchor && matches.length === 1, `${label} header keeps exactly one signin CTA`);
+  expect(attr(anchor, "class")?.split(/\s+/), `${label} signin CTA class`).toContain("btn");
+  const href = attr(anchor, "href");
   expect(href, `${label} signin CTA has an href`).toBeDefined();
-  const text = /<a\b[^>]*>([\s\S]*?)<\/a>/.exec(anchor)?.[1]?.replace(/\s+/g, " ").trim();
-  return { href: href!, text: text ?? "" };
+  return { href, text: directText(anchor).replace(/\s+/g, " ").trim() };
 }
 
-function searchForms(body: string): string[] {
-  return body.match(/<form\b[^>]*>[\s\S]*?<\/form>/g) ?? [];
+function parsedRoots(root: Node): Node[] {
+  const roots = [root];
+  for (const subtree of roots)
+    for (const node of elements(subtree))
+      if ("content" in node) roots.push((node as Template).content);
+  return roots;
 }
 
-function mainHtml(body: string, label: string): string {
-  const match = /<main\b[^>]*>([\s\S]*?)<\/main>/.exec(body);
-  expect(match, `${label} renders a main landmark`).not.toBeNull();
-  return match![1]!;
+function searchForms(body: Node): Element[] {
+  const nodes = parsedRoots(body).flatMap((root) => elements(root));
+  return nodes.filter((node) => node.tagName === "form");
+}
+
+function expectNoOAuthStart(root: Node, label: string): void {
+  const roots = parsedRoots(root);
+  const nodes = roots.flatMap((subtree) => elements(subtree));
+  const values = nodes.flatMap((node) => node.attrs.map(({ value }) => value));
+  values.push(...roots.map(textOf));
+  for (const node of [...roots, ...nodes])
+    if ("childNodes" in node)
+      for (const child of node.childNodes) if ("data" in child) values.push(child.data);
+  const oauth = values.find((value) => OAUTH_START.test(value));
+  expect(oauth, label).toBeUndefined();
 }
 
 describe("acceptance: outage headers point at Discord, never the OAuth start", () => {
   it.each(OUTAGE)("%d header renders the invite Open Discord CTA", (code) => {
     const { body } = renderShell(code);
     const header = headerAccount(body, `${code}`);
-    expect(header).toContain("Welcome, guest");
     const cta = signinCta(header, `${code}`);
     // Same href/label/testid contract as Hono's cta branch
     // (src/page-shell.tsx): the invite that works during an outage.
@@ -180,65 +236,74 @@ describe("acceptance: outage headers point at Discord, never the OAuth start", (
     // Ordinary sign-in is /auth/discord (a 302 to Discord); explicit
     // join/RSVP entries use /join/discord instead. During an outage
     // neither can help, so neither may appear in the header.
-    expect(header).not.toContain("/join/discord");
-    expect(header).not.toContain("/auth/discord");
+    expectNoOAuthStart(header, `${code} account nav`);
   });
 
   it("no outage page sends the member to the OAuth start anywhere", () => {
     for (const code of OUTAGE) {
-      const { body } = renderShell(code);
-      expect(body, `${code} body links no join journey`).not.toContain("/join/discord");
-      expect(body, `${code} body links no ordinary sign-in`).not.toContain("/auth/discord");
+      for (const mode of [false, true]) {
+        const { document } = renderShell(code, mode);
+        expectNoOAuthStart(document, `${code} scripting=${mode}`);
+      }
     }
   });
 });
 
 describe("acceptance: Kit 404 restores the event search form", () => {
-  function searchForm(code: KitErrorStatus = 404): string {
+  function searchForm(code: KitErrorStatus = 404): Element {
     const { body } = renderShell(code);
     const forms = searchForms(body);
-    expect(forms, `${code} renders exactly one form`).toHaveLength(1);
-    expect(mainHtml(body, `${code}`), `the ${code} form lives in the main landmark`).toContain(
-      forms[0],
-    );
-    return forms[0]!;
+    const [form] = forms;
+    assert(form && forms.length === 1, `${code} renders exactly one form`);
+    const main = elements(body).find((node) => node.tagName === "main");
+    assert(main, `${code} renders a main landmark`);
+    expect(searchForms(main), `the ${code} form lives in the main landmark`).toContain(form);
+    return form;
   }
 
   it("targets the event index with a GET search", () => {
-    const tag = /<form\b[^>]*>/.exec(searchForm())![0];
+    const form = searchForm();
     // Attribute order is the builder's choice; the contract is the twins'.
-    expect(tag).toMatch(/action="\/events"/);
-    expect(tag).toMatch(/method="get"/);
-    expect(tag).toMatch(/role="search"/);
-    expect(tag).toMatch(/class="error-events-search"/);
+    expect(attr(form, "action")).toBe("/events");
+    expect(attr(form, "method")).toBe("get");
+    expect(attr(form, "role")).toBe("search");
+    expect(attr(form, "class")).toBe("error-events-search");
   });
 
   it("labels the query input and names it q", () => {
-    const form = searchForm();
-    expect(form).toMatch(/<label[^>]*for="error-events-search"[^>]*>\s*Search events\s*<\/label>/);
-    expect(form).toContain('id="error-events-search"');
-    expect(form).toContain('name="q"');
-    expect(form).toContain('type="search"');
-    expect(form).toContain('placeholder="Search events…"');
-    expect(form).toContain('autocomplete="off"');
-    expect(form).toContain('data-testid="error-events-search"');
+    const nodes = elements(searchForm());
+    const label = nodes.find((node) => node.tagName === "label");
+    const input = nodes.find((node) => node.tagName === "input");
+    assert(label && input);
+    expect(attr(label, "for")).toBe("error-events-search");
+    expect(directText(label).trim()).toBe("Search events");
+    expect(attr(input, "id")).toBe("error-events-search");
+    expect(attr(input, "name")).toBe("q");
+    expect(attr(input, "type")).toBe("search");
+    expect(attr(input, "placeholder")).toBe("Search events…");
+    expect(attr(input, "autocomplete")).toBe("off");
+    expect(attr(input, "data-testid")).toBe("error-events-search");
   });
 
   it("submits with the twin submit button", () => {
-    const form = searchForm();
-    const button =
-      /<button\b(?=[^>]*type="submit")(?=[^>]*data-testid="error-events-search-submit")[^>]*>([\s\S]*?)<\/button>/.exec(
-        form,
-      );
-    expect(button, "404 form keeps the twin submit button").not.toBeNull();
-    expect(button![1]!.replace(/\s+/g, " ").trim()).toBe("Search events");
+    const button = elements(searchForm()).find((node) => node.tagName === "button");
+    assert(button, "404 form keeps the twin submit button");
+    expect(attr(button, "type")).toBe("submit");
+    expect(attr(button, "data-testid")).toBe("error-events-search-submit");
+    expect(directText(button).replace(/\s+/g, " ").trim()).toBe("Search events");
   });
 
   it.each([400, 410] as const)("%d renders the same search form as 404", (code) => {
-    // The three forms are verbatim copies; 404's action/method/role/class/
-    // label/input/submit contract is pinned above, so byte equality extends
-    // that contract to 400/410.
-    expect(searchForm(code)).toBe(searchForm(404));
+    function formTree(node: Node): unknown {
+      if ("value" in node) return node.value;
+      if ("data" in node && !/^(?:\[[\d-]*|\])?$/.test(node.data)) return { comment: node.data };
+      if (!("tagName" in node)) return;
+      const tree = "content" in node ? (node as Template).content : node;
+      const attributes = [...node.attrs].sort((a, b) => a.name.localeCompare(b.name));
+      const children = tree.childNodes.map(formTree).filter(Boolean);
+      return { namespace: node.namespaceURI, tag: node.tagName, attributes, children };
+    }
+    expect(formTree(searchForm(code))).toEqual(formTree(searchForm(404)));
   });
 
   it("markup-matches the Hono NotFoundPage and EventMissing twins", () => {
@@ -270,10 +335,12 @@ describe("acceptance: Kit 404 restores the event search form", () => {
 
   it("keeps the 404 recovery links alongside the form", () => {
     const { body } = renderShell(404);
-    expect(body).toContain('data-testid="error-join"');
-    expect(body).toContain('href="/auth/discord"');
-    expect(body).toContain('data-testid="error-home"');
-    expect(body).toContain('data-testid="error-all-events"');
+    const links = elements(body).filter((node) => node.tagName === "a");
+    const join = links.find((node) => attr(node, "data-testid") === "error-join");
+    expect(join && attr(join, "href")).toBe("/auth/discord");
+    const testIds = links.map((node) => attr(node, "data-testid"));
+    expect(testIds).toContain("error-home");
+    expect(testIds).toContain("error-all-events");
   });
 
   it.each([403, 422, 429, 500, 503] as const)(
@@ -281,6 +348,7 @@ describe("acceptance: Kit 404 restores the event search form", () => {
     (code) => {
       const { body } = renderShell(code);
       expect(searchForms(body), `${code} renders no form`).toHaveLength(0);
+      expect(searchForms(renderShell(code, true).body)).toHaveLength(0);
     },
   );
 });
@@ -291,7 +359,6 @@ describe("controls: sign-in statuses, selectors, indexes and read budget stay pu
     const header = headerAccount(body, `${code}`);
     // OAuth is alive on these statuses, so the header is unchanged: the
     // guest caption plus the ordinary sign-in link (/auth/discord).
-    expect(header).toContain("Welcome, guest");
     const cta = signinCta(header, `${code}`);
     expect(cta.href).toBe("/auth/discord");
     expect(cta.text).toBe("Sign in with Discord");
@@ -304,7 +371,10 @@ describe("controls: sign-in statuses, selectors, indexes and read budget stay pu
 
   it.each(ALL)("%d stays out of search indexes", (code) => {
     const { head } = renderShell(code);
-    expect(head).toContain("noindex");
+    const robots = elements(head).find(
+      (node) => node.tagName === "meta" && attr(node, "name") === "robots",
+    );
+    expect(robots && attr(robots, "content")).toBe("noindex, nofollow");
   });
 
   it("rendering every status performs no network read", () => {
@@ -334,7 +404,10 @@ describe("controls: sign-in statuses, selectors, indexes and read budget stay pu
 
   it.each(OUTAGE)("%d body keeps its invite recovery links", (code) => {
     const { body } = renderShell(code);
-    expect(body).toContain('data-testid="error-invite"');
-    expect(body).toContain(`href="${INVITE}"`);
+    const invite = elements(body).find(
+      (node) => node.tagName === "a" && attr(node, "data-testid") === "error-invite",
+    );
+    assert(invite, `${code} has an invite recovery link`);
+    expect(attr(invite, "href")).toBe(INVITE);
   });
 });
