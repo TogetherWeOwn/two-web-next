@@ -77,10 +77,10 @@ export function assertProductionHold(env, { nowMs = Date.now() } = {}) {
 }
 
 // Live production identity: the Cloudflare active version's commit, read from
-// the production apex /up revision marker (the same source the production
-// promoter uses). Returns the 40-hex commit, or null when the marker is
-// absent or unreadable (unknown, never equal).
+// a successful production apex /up response. A 503 can carry a revision
+// for diagnostics. The promoter treats that identity as unknown.
 export const PRODUCTION_ORIGIN = APEX_ORIGIN;
+const PRODUCTION_UP_MAX_BYTES = 16 * 1024;
 
 export async function readLiveProductionCommit({
   origin = PRODUCTION_ORIGIN,
@@ -92,7 +92,32 @@ export async function readLiveProductionCommit({
       headers: { "cache-control": "no-cache" },
       signal: AbortSignal.timeout(10_000),
     });
-    const data = await response.json();
+    const mediaType = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
+    if (response.status !== 200 || response.redirected || mediaType !== "application/json") {
+      void response.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    if (!response.body) return null;
+
+    // Bound the actual response bytes, including bodies without Content-Length.
+    const reader = response.body.getReader();
+    const bytes = new Uint8Array(PRODUCTION_UP_MAX_BYTES);
+    let length = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value.byteLength === 0 || value.byteLength > bytes.length - length) return null;
+        bytes.set(value, length);
+        length += value.byteLength;
+      }
+    } finally {
+      void reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+    }
+    const data = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, length)),
+    );
     const commit = data?.revision?.commit;
     return typeof commit === "string" && /^[0-9a-f]{40}$/.test(commit) ? commit : null;
   } catch {

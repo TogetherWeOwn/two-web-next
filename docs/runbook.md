@@ -966,8 +966,9 @@ be older than the commit production currently serves. Staging eligibility is
 not proof of forward ancestry.
 
 Initial `/up` live-SHA capture makes at most three reads, two seconds apart,
-stopping on the first valid 40-hex commit. Exhausted or invalid reads leave
-live identity unknown; they never bypass default ancestry admission.
+stopping on the first HTTP 200 JSON response with a valid 40-hex commit and
+a body no larger than 16 KiB. Redirects, other HTTP statuses and invalid
+bodies leave live identity unknown if all three reads fail.
 After capture, `deploy-production` runs
 `node ci/production-deploy-gate.mjs --check-ancestry` from the trusted
 **workflow-head** checkout, before candidate checkout, migration checks or any
@@ -997,6 +998,12 @@ candidate selects the separate explicit redeploy/recovery route. Apply the
 independent exact-candidate approval, tier review, exact-SHA CI and incident and
 rollback requirements. `migrations_applied=true` does not bypass
 default ancestry admission, and neither does an empty-SHA manual dispatch.
+If the ordinary recovery route still cannot read the live commit after the
+migration gate's retries, including when `/up` keeps returning 503 with a
+revision, restore the successful `/up` response or use the audited
+`migrations_applied=true` confirmation after verifying through the production
+`db-migrate.yml` workflow that the target's migrations are applied. Without a
+trusted live SHA the gate cannot compare journals.
 The rollback workflow remains a separate already-served-version route.
 
 #### Regression check against production
