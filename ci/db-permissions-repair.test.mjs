@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import { PLANETSCALE_PRODUCTION_BRANCH_ID, PLANETSCALE_PRODUCTION_HOST } from "./db-migrate.mjs";
 import { runRepair } from "./db-permissions-repair.mjs";
+import { runExecutorAuthority } from "./db-repair-executor.mjs";
 import { runServingIsolation } from "./db-serving-ledger-isolation.mjs";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
@@ -292,6 +293,84 @@ test("database repair recovery pins an unchanged dispatcher and a main ancestor"
   assert.equal(directory.undo, removed.undo);
   assert.deepEqual(directory.unavailableDispatchPaths, [selector]);
   assert.ok(directory.changedPaths.includes(nestedPath));
+});
+
+test("executor authority refuses mismatched membership before any write", async () => {
+  const hash = (value) => createHash("sha256").update(value).digest("hex");
+  const executor = "repair_executor";
+  const provisioner = "repair_provisioner";
+  const identity = { database: "postgres", authenticated: provisioner, effective: provisioner };
+  const plan = JSON.stringify({
+    operation: "revoke",
+    executor,
+    identity: hash(`postgres\0${provisioner}`),
+  });
+  const env = {
+    PRODUCTION_DB_EXECUTOR_PLAN: plan,
+    PRODUCTION_DB_EXECUTOR_PLAN_SHA256: hash(plan),
+    PRODUCTION_DB_EXECUTOR_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:synthetic@${PLANETSCALE_PRODUCTION_HOST}/postgres?sslmode=verify-full`,
+  };
+  const approvedEdge = ["123", false, true, true];
+
+  for (const edge of [["456", false, true, true], ["123", true, true, true], approvedEdge]) {
+    const events = [];
+    const attempt = runExecutorAuthority("revoke", env, () => ({
+      async begin(_isolation, run) {
+        let present = true;
+        try {
+          await run((strings, ...values) => {
+            if (typeof strings === "string") {
+              assert.equal(strings, executor);
+              return strings;
+            }
+            const sql = strings.join("?").trim().replace(/\s+/g, " ");
+            if (sql.startsWith("set local ")) return [];
+            if (sql.startsWith("select pg_catalog.current_database()")) return [identity];
+            if (sql.startsWith("select pg_try_advisory_xact_lock(")) return [{ acquired: true }];
+            assert.deepEqual(values, [executor]);
+            if (/^(grant|revoke)\b/i.test(sql)) {
+              events.push("write");
+              assert.equal(sql, "revoke two_web_migrate from ? granted by current_user restrict");
+              present = false;
+              return [];
+            }
+            assert.match(sql, /^select p\.oid::text as provisioner,/);
+            events.push(present ? "read present" : "read absent");
+            return [
+              {
+                authorized: true,
+                provisioner: "123",
+                member: present,
+                inherits: present,
+                can_set: present,
+                edges: present ? [edge] : [],
+              },
+            ];
+          });
+          events.push("commit");
+        } catch (error) {
+          events.push("rollback");
+          throw error;
+        }
+      },
+      async end(options) {
+        assert.deepEqual(options, { timeout: 5 });
+        events.push("close");
+      },
+    }));
+
+    if (edge === approvedEdge) {
+      await attempt;
+      assert.deepEqual(events, ["read present", "write", "read absent", "commit", "close"]);
+    } else {
+      await assert.rejects(attempt, {
+        code: "ERR_ASSERTION",
+        actual: [edge],
+        expected: [approvedEdge],
+      });
+      assert.deepEqual(events, ["read present", "rollback", "close"]);
+    }
+  }
 });
 
 test("repair refuses missing plan provenance and stale live identity before a write", async () => {
