@@ -37,16 +37,62 @@ const cutoverProfile = process.env.CUTOVER_PROFILE || "all-off";
 const ember = cutoverProfile === "ember";
 const admin = cutoverProfile === "admin";
 const baseline = admin ? "ember" : "hono";
+const MAX_WORKERS_GET_BYTES = 1024 * 1024;
 
-function cloudflare() {
-  const account = process.env.CLOUDFLARE_ACCOUNT_ID;
-  const token = process.env.CLOUDFLARE_API_TOKEN;
+function cancelBody(stream) {
+  // Disposal can fail after an abort. Keep the status or reader error authoritative.
+  void stream?.cancel().catch(() => undefined);
+}
+
+async function readWorkersGet(response) {
+  if (!response.ok) {
+    cancelBody(response.body);
+    if (response.status === 404) return null;
+    throw new Error("staging Workers API refused the request");
+  }
+
+  assert.ok(response.body, "staging Workers API response body missing");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_WORKERS_GET_BYTES) break;
+      text += decoder.decode(value, { stream: true });
+    }
+  } catch {
+    throw new Error("staging Workers API response could not be read");
+  } finally {
+    cancelBody(reader);
+    reader.releaseLock();
+  }
+  assert.ok(bytes <= MAX_WORKERS_GET_BYTES, "staging Workers API response too large");
+
+  let body;
+  try {
+    body = JSON.parse(text + decoder.decode());
+  } catch {
+    throw new Error("staging Workers API response was not valid JSON");
+  }
+  assert.ok(body?.success === true, "staging Workers API returned an error");
+  return body.result;
+}
+
+export function cloudflare({
+  account = process.env.CLOUDFLARE_ACCOUNT_ID,
+  token = process.env.CLOUDFLARE_API_TOKEN,
+  fetchImpl = fetch,
+} = {}) {
   assert.ok(
     /^[a-f0-9]{32}$/.test(account ?? "") && token,
     "missing staging Cloudflare credentials",
   );
   return async (path, method = "GET") => {
-    const response = await fetch(
+    const response = await fetchImpl(
       `https://api.cloudflare.com/client/v4/accounts/${account}/workers/${path}`,
       {
         method,
@@ -55,6 +101,7 @@ function cloudflare() {
         signal: AbortSignal.timeout(10_000),
       },
     );
+    if (method === "GET") return readWorkersGet(response);
     if (response.status === 404) return null;
     assert.ok(response.ok, "staging Workers API refused the request");
     const body = await response.json();
@@ -297,6 +344,19 @@ export async function exercise(
   if (admin) proof.adminChecks = ADMIN_STAGING_CHECKS;
 }
 
+export async function finalizeIsolatedCutover(owner, scratch, publishProof) {
+  try {
+    try {
+      await owner?.end({ timeout: 0 });
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+  } catch {
+    throw new Error("Cutover staging failed during local fixture finalization");
+  }
+  await publishProof?.();
+}
+
 async function qualify(dir, proofPath, ctx) {
   const { identity, worker, names, claim } = ctx;
   const inputs = await sourceInputs();
@@ -319,6 +379,7 @@ async function qualify(dir, proofPath, ctx) {
     bindingCheck: `isolated-and-${cutoverProfile}`,
   };
   let owner;
+  let publishProof;
   let phase = "synthetic database setup";
   try {
     const fixture = await createFixture(database, names, () =>
@@ -335,16 +396,17 @@ async function qualify(dir, proofPath, ctx) {
     await deployPacket(dir, scratch, proof, origin, inputs, api, secrets);
     phase = "exact readiness, route smoke and guarded undo";
     await exercise(proof, prefixes, owner, names, origin, dir, secrets);
+    publishProof = async () => {
+      verifyStagingProof(proof, { ...identity, mode: admin ? "admin" : ember ? "ember" : "kit" });
+      await writeFile(proofPath, JSON.stringify(proof), { flag: "wx" });
+    };
   } catch (error) {
     // Report only the operation and numeric provider code from Wrangler.
     const detail = error instanceof WranglerOperationError ? ` (${error.message})` : "";
     throw new Error(`Cutover staging failed during ${phase}${detail}`);
   } finally {
-    await owner?.end({ timeout: 0 });
-    await rm(scratch, { recursive: true, force: true });
+    await finalizeIsolatedCutover(owner, scratch, publishProof);
   }
-  verifyStagingProof(proof, { ...identity, mode: admin ? "admin" : ember ? "ember" : "kit" });
-  await writeFile(proofPath, JSON.stringify(proof), { flag: "wx" });
   console.info(
     `Isolated ${cutoverProfile} pin ${identity.runId}:${identity.runAttempt}:${identity.digest}, baseline ${proof[baseline]}, candidate ${proof.kit}`,
   );

@@ -19,7 +19,7 @@ import {
   writeManifest,
 } from "./kit-cutover-evidence.mjs";
 import { packageCutover } from "./kit-cutover-package.mjs";
-import { exercise, runIsolatedCutover, verifyServed } from "./kit-cutover-staging.mjs";
+import { cloudflare, exercise, runIsolatedCutover, verifyServed } from "./kit-cutover-staging.mjs";
 import { KIT_ROUTE_FLAGS } from "./production-deploy-gate.mjs";
 
 const sourceSha = "a".repeat(40);
@@ -241,6 +241,147 @@ test("cutover ledger admits exactly 1033 or 1037 and exact version readiness", (
       /canonical/,
     );
   }
+});
+
+test("isolated Workers API GET bounds and disposes provider responses", async (t) => {
+  const account = "a".repeat(32);
+  const token = "synthetic-token";
+  const settingsPath = "scripts/synthetic-worker/settings";
+  const versionPath = `scripts/synthetic-worker/versions/${kit}`;
+  const mockApi = (respond) =>
+    cloudflare({
+      account,
+      token,
+      fetchImpl: async (url, options) => {
+        assert.equal(options.method, "GET");
+        assert.equal(options.headers.Authorization, `Bearer ${token}`);
+        assert.equal(options.redirect, "error");
+        assert.ok(options.signal instanceof AbortSignal);
+        const prefix = `https://api.cloudflare.com/client/v4/accounts/${account}/workers/`;
+        assert.ok(url.startsWith(prefix));
+        return respond(url.slice(prefix.length));
+      },
+    });
+
+  await t.test("accepts exactly 1 MiB of UTF-8 and cancels one byte over before EOF", async () => {
+    const version = { id: kit, annotations: { "workers/tag": "Épreuve" } };
+    const json = new TextEncoder().encode(JSON.stringify({ success: true, result: version }));
+    const padding = new Uint8Array(1024 * 1024 - json.byteLength).fill(32);
+    const readVersion = (...chunks) => {
+      let pulls = 0;
+      let cancelled = false;
+      const stream = new ReadableStream(
+        {
+          pull(controller) {
+            const chunk = chunks[pulls++];
+            if (chunk) controller.enqueue(chunk);
+            else controller.close();
+          },
+          cancel() {
+            cancelled = true;
+          },
+        },
+        { highWaterMark: 0 },
+      );
+      return {
+        result: mockApi(() => new Response(stream))(versionPath),
+        state: () => ({ pulls, cancelled, locked: stream.locked }),
+      };
+    };
+
+    const exact = readVersion(json, padding);
+    assert.deepEqual(await exact.result, version);
+    assert.deepEqual(exact.state(), { pulls: 3, cancelled: false, locked: false });
+    const oversized = readVersion(json, padding, Uint8Array.of(32));
+    await assert.rejects(oversized.result, { message: "staging Workers API response too large" });
+    assert.deepEqual(oversized.state(), { pulls: 3, cancelled: true, locked: false });
+  });
+
+  await t.test("cancels missing and refused settings responses without pulling", async () => {
+    for (const status of [404, 502]) {
+      let pulls = 0;
+      let cancelled = false;
+      const stream = new ReadableStream(
+        {
+          pull(controller) {
+            pulls++;
+            controller.close();
+          },
+          cancel() {
+            cancelled = true;
+            throw new Error("synthetic cancellation failure");
+          },
+        },
+        { highWaterMark: 0 },
+      );
+      const api = mockApi(() => new Response(stream, { status }));
+
+      if (status === 404) assert.equal(await api(settingsPath), null);
+      else
+        await assert.rejects(api(settingsPath), {
+          message: "staging Workers API refused the request",
+        });
+      assert.equal(pulls, 0);
+      assert.equal(cancelled, true);
+      assert.equal(stream.locked, false);
+    }
+  });
+
+  await t.test("releases the reader and sanitizes a stream read failure", async () => {
+    const stream = new ReadableStream({
+      pull(controller) {
+        controller.error(new Error("synthetic private response"));
+      },
+    });
+    const api = mockApi(() => new Response(stream));
+
+    await assert.rejects(api(settingsPath), {
+      message: "staging Workers API response could not be read",
+    });
+    assert.equal(stream.locked, false);
+  });
+
+  await t.test("returns synthetic version and settings evidence", async () => {
+    const version = {
+      id: kit,
+      resources: { bindings: [{ name: "DATABASE_URL", type: "secret_text" }] },
+    };
+    const settings = { bindings: [{ name: "FIXTURE_NAME", type: "plain_text", text: "Épreuve" }] };
+    const api = mockApi((path) => {
+      if (path === versionPath) return Response.json({ success: true, result: version });
+      assert.equal(path, settingsPath);
+      const bytes = new TextEncoder().encode(JSON.stringify({ success: true, result: settings }));
+      const split = bytes.indexOf(0xc3) + 1;
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(bytes.subarray(0, split));
+            controller.enqueue(bytes.subarray(split));
+            controller.close();
+          },
+        }),
+      );
+    });
+
+    assert.deepEqual(await api(versionPath), version);
+    assert.deepEqual(await api(settingsPath), settings);
+  });
+
+  await t.test(
+    "reports empty or malformed JSON and provider errors without response data",
+    async () => {
+      for (const payload of ["", "synthetic private response"]) {
+        const invalid = mockApi(() => new Response(payload));
+        await assert.rejects(invalid(settingsPath), {
+          message: "staging Workers API response was not valid JSON",
+        });
+      }
+      const refused = mockApi(() => Response.json({ success: "synthetic private response" }));
+      await assert.rejects(refused(settingsPath), {
+        message: "staging Workers API returned an error",
+      });
+    },
+  );
 });
 
 test("isolated cutover repeats readiness and smoke when rollback is still propagating", async () => {
@@ -744,4 +885,56 @@ test("isolated upload diagnostics keep only the operation, exit status and provi
     );
     assert.equal(refusal.message, "Wrangler rollback failed");
   }
+});
+
+test("isolated cutover removes scratch and withholds proof when the owner close fails", async (t) => {
+  const { finalizeIsolatedCutover } = await import("./kit-cutover-staging.mjs");
+  const runnerTemp = await mkdtemp(join(tmpdir(), "kit-cutover-finalization-test-"));
+  t.after(() => rm(runnerTemp, { recursive: true, force: true }));
+  const scratch = await mkdtemp(join(runnerTemp, "kit-cutover-staging-"));
+  await writeFile(join(scratch, "synthetic-bindings.json"), "disposable fixture");
+  const owner = {
+    end: t.mock.fn(async () => {
+      throw new Error("untrusted synthetic connection detail");
+    }),
+  };
+  const publishProof = t.mock.fn(() =>
+    writeFile(join(runnerTemp, "proof.json"), "synthetic proof", { flag: "wx" }),
+  );
+
+  const failure = await finalizeIsolatedCutover(owner, scratch, publishProof).catch(
+    (error) => error,
+  );
+  assert.deepEqual(await readdir(runnerTemp), []);
+  assert.ok(failure instanceof Error);
+  assert.equal(failure.message, "Cutover staging failed during local fixture finalization");
+  assert.equal(failure.cause, undefined);
+  assert.deepEqual(
+    owner.end.mock.calls.map(({ arguments: args }) => args),
+    [[{ timeout: 0 }]],
+  );
+  assert.equal(publishProof.mock.callCount(), 0);
+});
+
+test("isolated cutover withholds proof when scratch removal fails", async (t) => {
+  const { finalizeIsolatedCutover } = await import("./kit-cutover-staging.mjs");
+  const runnerTemp = await mkdtemp(join(tmpdir(), "kit-cutover-removal-test-"));
+  t.after(() => rm(runnerTemp, { recursive: true, force: true }));
+  const blocker = join(runnerTemp, "not-a-directory");
+  await writeFile(blocker, "disposable fixture");
+  // A file as the parent forces ENOTDIR even with recursive, forced removal.
+  const scratch = join(blocker, "scratch");
+  const owner = { end: t.mock.fn(async () => {}) };
+  const publishProof = t.mock.fn(() =>
+    writeFile(join(runnerTemp, "proof.json"), "synthetic proof", { flag: "wx" }),
+  );
+
+  await assert.rejects(finalizeIsolatedCutover(owner, scratch, publishProof), (failure) => {
+    assert.equal(failure.message, "Cutover staging failed during local fixture finalization");
+    assert.equal(failure.cause, undefined);
+    return true;
+  });
+  assert.equal(owner.end.mock.callCount(), 1);
+  assert.equal(publishProof.mock.callCount(), 0);
+  assert.deepEqual(await readdir(runnerTemp), ["not-a-directory"]);
 });
