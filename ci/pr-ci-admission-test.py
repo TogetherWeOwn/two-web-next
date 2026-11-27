@@ -154,6 +154,8 @@ class AdmissionTest(TestCase):
         runs[0]["conclusion"] = "success"
         ignored["name"] = "gitleaks"
         self.assertIsNone(evidence())
+        edit.pop()
+        self.assertEqual(evidence()["gitleaks"], (1, 2, 12))
 
 
 if __name__ == "__main__":

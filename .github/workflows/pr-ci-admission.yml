@@ -87,6 +87,8 @@ jobs:
                           named = [job for job in jobs if job["name"] == name
                                    or advisory_name(job["name"], name, not cancelled or metadata_scan)]
                           if not named:
+                              if metadata_scan and "pr-lint" in proof:
+                                  continue
                               return None
                           attempt = max(job["run_attempt"] for job in named)
                           latest = [job for job in named if job["run_attempt"] == attempt]

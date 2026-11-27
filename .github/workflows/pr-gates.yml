@@ -9,9 +9,7 @@ run-name: >-
 # workflow with sequential jobs, so a PR push occupies one runner slot at a
 # time instead of two parallel `pr-lint` + `secret-scan` runs.
 #
-# Required-check names are the job display names: `pr-lint` (pr-conventions)
-# and `gitleaks` (protect-main). Skipped checks need distinct names because
-# GitHub treats a skipped required check as passing.
+# Required jobs use `pr-lint` and `gitleaks`. GitHub treats skipped required checks as passing.
 #
 # Same-repository pull requests use included 2-vCPU capacity when enabled.
 # The GitHub-hosted fallback is ubuntu-latest.
@@ -38,8 +36,7 @@ permissions:
   contents: read
   pull-requests: read # Read PR metadata and commit subjects for pr-lint.
 
-# GitHub's edited payload supplies changes.base.ref.from only on a base-ref
-# change. Require string refs and trust the delta, including case-only changes.
+# A typed base-ref delta identifies a retarget, including case-only changes.
 # Title/body edits need fresh lint but must never displace a source scan.
 # Distinct prefixes also isolate user-provided dispatch input from edit groups.
 concurrency:
