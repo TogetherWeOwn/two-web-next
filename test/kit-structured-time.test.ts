@@ -8,8 +8,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
+import type { DefaultTreeAdapterTypes } from "parse5";
 import { beforeAll, describe, expect, it } from "vitest";
+import { parseRenderedPage, renderedElements, renderedText } from "../ci/rendered-page.mjs";
 import type { rowTimeModel as RowTimeModel, RowTimeInput } from "../web/src/lib/structured-time";
+import { attr, elements, textOf } from "./helpers/kit-edit-controls";
 
 const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
 const { compile } = webRequire("svelte/compiler") as {
@@ -136,30 +139,55 @@ describe("row time model", () => {
   });
 });
 
+function pageCopy(page: DefaultTreeAdapterTypes.Document): string {
+  const values = elements(page).flatMap((el) => [
+    ...el.attrs.map(({ value }) => value),
+    ...el.childNodes.filter((node) => node.nodeName === "#text").map(textOf),
+  ]);
+  return [textOf(page), ...values].join("\n");
+}
+
 describe("StructuredTime.svelte SSR", () => {
   it("renders the upcoming row with a semantic UTC time and the zone", () => {
-    const html = render(base);
-    expect(html).toContain(`<time datetime="${START}">Sat 19:30</time>`);
-    expect(html).toContain("Europe/London");
-    expect(html).not.toMatch(/Cancelled|<s>|<script|Time to be confirmed/i);
+    const page = parseRenderedPage(render(base));
+    const times = [...renderedElements(page, { tag: "time" })];
+    expect(times.map((time) => [attr(time, "datetime"), renderedText(time)])).toEqual([
+      [START, "Sat 19:30"],
+    ]);
+    expect(renderedText(page)).toContain("Europe/London");
+    expect(pageCopy(page)).not.toMatch(/Cancelled|Time to be confirmed/i);
+    expect(elements(page).filter((el) => el.tagName === "s" || el.tagName === "script")).toEqual(
+      [],
+    );
   });
 
   it("renders past with ended, and cancelled struck with the visible word", () => {
-    expect(render({ ...base, state: "past", endsAt: START })).toContain(">ended<");
-    const html = render({ ...base, state: "cancelled" });
-    expect(html).toContain(`<s><time datetime="${START}">Sat 7 Nov</time></s>`);
-    expect(html).toContain("Cancelled");
+    const past = parseRenderedPage(render({ ...base, state: "past", endsAt: START }));
+    expect([...renderedElements(past, { tag: "p" })].map(renderedText)).toContain("ended");
+    const cancelled = parseRenderedPage(render({ ...base, state: "cancelled" }));
+    const times = [...renderedElements(cancelled, { tag: "time" })];
+    expect(
+      times.map((time) => [time.parentNode?.nodeName, attr(time, "datetime"), renderedText(time)]),
+    ).toEqual([["s", START, "Sat 7 Nov"]]);
+    expect(renderedText(cancelled)).toContain("Cancelled");
   });
 
   it("renders the unavailable row without a time element", () => {
-    const html = render({ ...base, startsAt: "nope", zone: "Europe/London" });
-    expect(html).toContain("Time to be confirmed");
-    expect(html).not.toMatch(/<time|Europe\/London|line2/);
+    const page = parseRenderedPage(render({ ...base, startsAt: "nope", zone: "Europe/London" }));
+    expect(renderedText(page)).toContain("Time to be confirmed");
+    expect(pageCopy(page)).not.toContain("Europe/London");
+    expect(
+      elements(page).filter(
+        (el) => el.tagName === "time" || attr(el, "class")?.split(/\s+/).includes("line2"),
+      ),
+    ).toEqual([]);
   });
 
   it("is deterministic and relative-text free", () => {
-    expect(render(base)).toBe(render({ ...base }));
-    expect(render(base)).not.toMatch(/\bin \d|\bago\b|as of|your time/);
+    const html = render(base);
+    // Parsing can normalize byte differences between renders of the same row.
+    expect(html).toBe(render({ ...base }));
+    expect(pageCopy(parseRenderedPage(html))).not.toMatch(/\bin \d|\bago\b|as of|your time/);
   });
 
   it("has no client-only behaviour and uses only generated tokens", () => {

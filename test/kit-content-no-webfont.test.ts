@@ -11,8 +11,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { URL, fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
+import type { DefaultTreeAdapterTypes } from "parse5";
 import { beforeAll, describe, expect, it } from "vitest";
+import { parseRenderedPage } from "../ci/rendered-page.mjs";
 import { LEAF_CRITICAL_CSS } from "../src/leaf-critical-css";
+import { attr, elements, textOf } from "./helpers/kit-edit-controls";
 
 type Theme = "home" | "event" | "content" | "join" | "profile" | "schedule";
 
@@ -85,6 +88,21 @@ export function renderMeta(props) {
 
 const stripComments = (css: string): string => css.replace(/\/\*[\s\S]*?\*\//g, "");
 
+function linksWithRel(page: DefaultTreeAdapterTypes.Document, rel: string) {
+  return elements(page).filter(
+    (el) =>
+      el.tagName === "link" &&
+      attr(el, "rel")
+        ?.toLowerCase()
+        .split(/[\t\n\f\r ]+/)
+        .includes(rel),
+  );
+}
+
+function fontPreloads(page: DefaultTreeAdapterTypes.Document) {
+  return linksWithRel(page, "preload").filter((el) => attr(el, "as")?.toLowerCase() === "font");
+}
+
 describe("Kit content shell preloads no Mona Sans webfont", () => {
   let renderMeta: (props: { title: string; theme: Theme; leafCss?: string }) => string;
 
@@ -93,30 +111,45 @@ describe("Kit content shell preloads no Mona Sans webfont", () => {
   }, 120_000);
 
   it("emits zero font preloads for the content theme", () => {
-    const html = renderMeta({ title: "Fixture", theme: "content" });
-    expect(html).not.toContain('.woff2" as="font"');
+    const page = parseRenderedPage(renderMeta({ title: "Fixture", theme: "content" }));
+    expect(fontPreloads(page)).toEqual([]);
   });
 
   it("keeps the Mona Sans preload on every other theme", () => {
     for (const theme of ["home", "event", "join", "profile", "schedule"] as const) {
-      const html = renderMeta({ title: "Fixture", theme });
-      expect(html).toContain('href="/fonts/mona-sans-latin-wght.woff2" as="font"');
-      expect(html).toContain('crossorigin="anonymous"');
+      const page = parseRenderedPage(renderMeta({ title: "Fixture", theme }));
+      const preload = fontPreloads(page).find(
+        (el) => attr(el, "href") === "/fonts/mona-sans-latin-wght.woff2",
+      );
+      expect(preload && attr(preload, "crossorigin"), theme).toBe("anonymous");
     }
   });
 
   it("inlines the leaf CSS for the content theme instead of stylesheet links", () => {
     const html = renderMeta({ title: "Fixture", theme: "content", leafCss: LEAF_CRITICAL_CSS });
+    const page = parseRenderedPage(html);
+    expect(
+      elements(page)
+        .filter((el) => el.tagName === "style")
+        .map(textOf),
+    ).toEqual([LEAF_CRITICAL_CSS]);
+    expect(linksWithRel(page, "stylesheet")).toEqual([]);
+    // HTML parsing normalizes CSS line endings and drops duplicate link attributes.
     expect(html).toContain(`<style>${LEAF_CRITICAL_CSS}</style>`);
     expect(html).not.toContain('rel="stylesheet"');
   });
 
   it("leaves every other theme on external stylesheets", () => {
     for (const theme of ["home", "event", "join", "profile", "schedule"] as const) {
-      const html = renderMeta({ title: "Fixture", theme });
-      expect(html).toContain('rel="stylesheet" href="/styles.css"');
-      expect(html).toContain('rel="stylesheet" href="/theme.css"');
-      expect(html).not.toContain("<style>");
+      const page = parseRenderedPage(renderMeta({ title: "Fixture", theme }));
+      expect(
+        linksWithRel(page, "stylesheet").map((el) => attr(el, "href")),
+        theme,
+      ).toEqual(expect.arrayContaining(["/styles.css", "/theme.css"]));
+      expect(
+        elements(page).filter((el) => el.tagName === "style"),
+        theme,
+      ).toEqual([]);
     }
   });
 

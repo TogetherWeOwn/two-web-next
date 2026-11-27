@@ -7,8 +7,11 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
+import type { DefaultTreeAdapterTypes } from "parse5";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { parseRenderedPage } from "../ci/rendered-page.mjs";
 import { buildSiteGraph, escapeJsonLdText, eventJsonLd, safeJsonLd } from "../src/seo-json-ld";
+import { attr, elements, textOf } from "./helpers/kit-edit-controls";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const webRequire = createRequire(join(root, "web/package.json"));
@@ -17,16 +20,19 @@ const { compile } = webRequire("svelte/compiler") as {
 };
 
 const APP_URL = "https://next.example.test";
-const BLOCK = /<script type="application\/ld\+json" data-testid="([^"]+)">([\s\S]*?)<\/script>/g;
+const JSON_LD_TYPE = "application/ld+json";
 
-type Block = { testid: string; payload: string };
 type RenderJsonLd = (props: { testid: string; json: string }) => string;
 
 let renderJsonLd: RenderJsonLd;
 let scratch = "";
 
-function blocksIn(html: string): Block[] {
-  return [...html.matchAll(BLOCK)].map((m) => ({ testid: m[1]!, payload: m[2]! }));
+function jsonLdPayload(page: DefaultTreeAdapterTypes.Document, testid: string) {
+  const scripts = elements(page).filter((el) => el.tagName === "script");
+  expect(scripts.map((el) => [attr(el, "type"), attr(el, "data-testid")])).toEqual([
+    [JSON_LD_TYPE, testid],
+  ]);
+  return textOf(scripts[0]!);
 }
 
 beforeAll(async () => {
@@ -95,26 +101,30 @@ const hostileEvent = {
 describe("JsonLd component: one escaped block per entity", () => {
   it("emits exactly one block carrying the shared site graph", () => {
     const html = renderJsonLd({ testid: "site-jsonld", json: safeJsonLd(buildSiteGraph(APP_URL)) });
-    const blocks = blocksIn(html);
-    expect(blocks.map((b) => b.testid)).toEqual(["site-jsonld"]);
-    expect(html.match(/application\/ld\+json/g)).toHaveLength(1);
-    expect(JSON.parse(blocks[0]!.payload)).toEqual(buildSiteGraph(APP_URL));
+    expect(JSON.parse(jsonLdPayload(parseRenderedPage(html), "site-jsonld"))).toEqual(
+      buildSiteGraph(APP_URL),
+    );
   });
 
   it("keeps a closing-script title from closing the block", () => {
     const html = renderJsonLd({ testid: "event-jsonld", json: eventJsonLd(hostileEvent, APP_URL) });
+    // The parser can consume or repair a stray closer. Keep the wire checks too.
     expect(html.match(/<\/script>/gi)).toHaveLength(1);
     expect(html).not.toContain("<script>alert");
     expect(html).not.toContain("<img");
-    const [block] = blocksIn(html);
-    expect(JSON.parse(block!.payload).name).toBe(hostileTitle);
+    const page = parseRenderedPage(html);
+    expect(elements(page).filter((el) => el.tagName === "img")).toEqual([]);
+    expect(JSON.parse(jsonLdPayload(page, "event-jsonld"))).toMatchObject({
+      name: hostileTitle,
+      description: hostileEvent.description,
+    });
   });
 
   it("re-escapes an already escaped payload without changing it", () => {
     const once = safeJsonLd({ name: hostileTitle });
     expect(escapeJsonLdText(once)).toBe(once);
     const html = renderJsonLd({ testid: "event-jsonld", json: once });
-    expect(blocksIn(html)[0]!.payload).toBe(once);
+    expect(jsonLdPayload(parseRenderedPage(html), "event-jsonld")).toBe(once);
   });
 
   it("escapes angle brackets, ampersands and the line separators", () => {
