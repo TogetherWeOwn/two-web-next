@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { setImmediate } from "node:timers/promises";
 import { assertEventDetailRollback } from "./fixtures/kit-event-detail-rollback.mjs";
+import { withEventMarkdownDatabaseCleanup } from "./fixtures/kit-event-markdown-parity.mjs";
 import { cleanUpWorkers, withWorkerCleanup } from "./fixtures/kit-worker-lifecycle.mjs";
 import { startLoopbackWorker } from "./kit-worker-loopback.mjs";
 
@@ -185,46 +186,55 @@ test("a bad redirect header fails the redirect phase before requesting the docum
   await assertCleanup();
 });
 
-test("a readiness failure waits for the sibling launch before shared teardown", async (t) => {
+test("the first startup failure survives a later sibling launch failure", async (t) => {
   const { run, startWorker, phases, assertCleanup } = await fixture(t);
   const { promise: readinessFailed, resolve } = Promise.withResolvers();
   const fetchPage = t.mock.fn();
   await assert.rejects(
     run({
       async startWorker(name, ...args) {
-        if (name === honoName) {
-          await readinessFailed;
-          await setImmediate();
-        }
-        return startWorker(name, ...args);
+        if (name === honoName) return startWorker(name, ...args);
+        await readinessFailed;
+        await setImmediate();
+        startWorker(name, ...args);
+        throw new Error(privateDetail);
       },
-      async waitForWorker({ name }) {
-        if (name === kitName) {
-          resolve();
-          throw new Error(privateDetail);
-        }
+      async waitForWorker() {
+        resolve();
+        throw new Error(privateDetail);
       },
       fetchPage,
     }),
     { message: "Event detail rollback phase failed: readiness" },
   );
   assert.equal(fetchPage.mock.callCount(), 0);
-  assert.deepEqual(phases(kitName), [
-    "launch start",
-    "launch complete",
-    "readiness start",
-    "stop start",
-    "stop complete",
-  ]);
+  assert.deepEqual(phases(kitName), ["launch start", "stop start", "stop complete"]);
   assert.deepEqual(phases(honoName), [
     "launch start",
     "launch complete",
     "readiness start",
-    "readiness complete",
     "stop start",
     "stop complete",
   ]);
   await assertCleanup();
+});
+
+test("database teardown preserves the phase error without exposing cleanup details", async (t) => {
+  const phaseError = new Error("Event detail rollback phase failed: readiness");
+  const report = t.mock.method(console, "error", () => {});
+  const rejectCleanup = () => Promise.reject(new Error(privateDetail));
+  const sql = Object.assign(rejectCleanup, { end: t.mock.fn(rejectCleanup) });
+  const run = (proof) => withEventMarkdownDatabaseCleanup(proof, sql, "synthetic", []);
+  const rejectProof = () => Promise.reject(phaseError);
+  await assert.rejects(run(rejectProof), (error) => error === phaseError);
+  const message = "Event Markdown fixture database cleanup failed";
+  await assert.rejects(
+    run(() => Promise.resolve()),
+    { message },
+  );
+  assert.equal(sql.end.mock.callCount(), 2);
+  const diagnostics = report.mock.calls.map((call) => call.arguments);
+  assert.deepEqual(diagnostics, [[message]]);
 });
 
 test("a bind timeout marks only the final attempt and redacts all Worker output", async (t) => {
@@ -287,6 +297,7 @@ test("a deferred rollback Worker starts its first HTTP probe when readiness is a
     /reportPhase,\s+deferHttpReadiness: true,/,
   );
   const fetch = t.mock.method(globalThis, "fetch", async () => new Response());
+  const reportPhase = t.mock.fn();
   const worker = await startLoopbackWorker(
     kitName,
     (port) => {
@@ -296,8 +307,9 @@ test("a deferred rollback Worker starts its first HTTP probe when readiness is a
       return child;
     },
     [],
-    { selectPort: () => 32123, deferHttpReadiness: true },
+    { selectPort: () => 32123, deferHttpReadiness: true, reportPhase },
   );
+  assert.equal(worker.reportPhase, reportPhase);
   assert.equal(fetch.mock.callCount(), 0);
   assert.equal(await worker.waitForReadiness(), null);
   assert.equal(await worker.waitForReadiness(), null);

@@ -31,7 +31,7 @@ export async function cleanUpWorkers(workers, scratch, failed) {
   await rm(scratch, { recursive: true, force: true });
 }
 
-export async function withWorkerCleanup(run, cleanUp) {
+export async function withFixtureCleanup(run, cleanUp, reportCleanupFailure) {
   let failure;
   try {
     await run();
@@ -42,9 +42,13 @@ export async function withWorkerCleanup(run, cleanUp) {
     await cleanUp(failure !== undefined);
   } catch (error) {
     if (!failure) throw error;
-    console.error("Worker cleanup failed", error);
+    reportCleanupFailure(error);
   }
   if (failure) throw failure.error;
+}
+
+export function withWorkerCleanup(run, cleanUp) {
+  return withFixtureCleanup(run, cleanUp, (error) => console.error("Worker cleanup failed", error));
 }
 
 export async function withPublicVoiceBrowserWorkers({

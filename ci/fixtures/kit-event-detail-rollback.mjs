@@ -77,14 +77,14 @@ export default {
     return instance;
   }
 
-  // Finish registering both Workers before the caller's shared teardown takes its snapshot.
-  const profiles = await Promise.allSettled([
+  const profiles = [
     startProfile("kit-ember-event-detail", kit, EMBER_CUTOVER_VARS),
     startProfile("hono-event-detail-rollback", hono, {}),
-  ]);
-  const [ember, rollback] = profiles.map((result) => {
-    if (result.status === "rejected") throw result.reason;
-    return result.value;
+  ];
+  const [ember, rollback] = await Promise.all(profiles).catch(async (error) => {
+    // Preserve the first failure and drain both startups before shared teardown.
+    await Promise.allSettled(profiles);
+    throw error;
   });
   const path = `/e/${event.key}`;
   const query = "?archivePage=2&archiveQuery=Synthetic%20Markdown";
