@@ -807,6 +807,31 @@ test("isolated Workers API GET bounds and disposes provider responses", async (t
   );
 });
 
+test("isolated cutover counts routes only from the successful retry", async () => {
+  const origin = "https://cutover.example.invalid";
+  const prefixes = ledgerPrefixes(ledgerJournal);
+  const calls = [];
+  let retrying = false;
+  const routeCount = await verifyServed(origin, prefixes, identity, kit, "1037", "kit", {
+    probeReady: async () => {
+      calls.push("readiness");
+    },
+    probeRoutes: async (_origin, { onRoute }) => {
+      calls.push("smoke");
+      onRoute("/up", 0);
+      onRoute("/", retrying ? 0 : 1);
+      if (retrying) onRoute("/events", 0);
+      return retrying;
+    },
+    wait: async () => {
+      calls.push("wait");
+      retrying = true;
+    },
+  });
+  assert.equal(routeCount, 3);
+  assert.deepEqual(calls, ["readiness", "smoke", "wait", "readiness", "smoke"]);
+});
+
 test("isolated cutover repeats readiness and smoke when rollback is still propagating", async () => {
   const origin = "https://cutover.example.invalid";
   const prefixes = ledgerPrefixes(ledgerJournal);
