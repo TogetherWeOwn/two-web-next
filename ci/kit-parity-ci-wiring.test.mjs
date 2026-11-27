@@ -51,11 +51,7 @@ test("fixture boundaries await closure of completed Workers and retain shared Wo
   assert.deepEqual(signals, [["completed", "SIGTERM"]]);
   assert.equal(completed.stopped, true);
   assert.equal(shared.stopped, false);
-  assert.deepEqual(
-    workers,
-    [shared, completed, closed],
-    "retain Worker records for final cleanup",
-  );
+  assert.deepEqual(workers, [shared, completed, closed], "retain Worker records for final cleanup");
 });
 
 test("parity runner awaits phase cleanup before later fixtures", () => {
