@@ -19,6 +19,31 @@ import { fileURLToPath } from "node:url";
 
 const VERSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const COMMIT = /^[0-9a-f]{40}$/;
+const MAX_UP_BYTES = 16 * 1024;
+
+async function readUpJson(response) {
+  if (!response.body) throw new SyntaxError("Empty /up response");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return JSON.parse(text + decoder.decode());
+      bytes += value.byteLength;
+      // Fetch exposes decoded bytes, including for chunked or compressed responses.
+      if (bytes > MAX_UP_BYTES) {
+        // Refuse immediately even if the transport stalls while cancelling.
+        void reader.cancel().catch(() => undefined);
+        throw new RangeError("/up response too large");
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
 
 export async function readRevision(origin, { fetchImpl = fetch, timeoutMs = 10_000 } = {}) {
   // Manual redirects: never follow an unexpected host. The bounded signal also
@@ -28,7 +53,7 @@ export async function readRevision(origin, { fetchImpl = fetch, timeoutMs = 10_0
     headers: { "cache-control": "no-cache" },
     signal: AbortSignal.timeout(timeoutMs),
   });
-  const data = await response.json();
+  const data = await readUpJson(response);
   const revision = data?.revision;
   if (!revision || typeof revision !== "object") return null;
   return { version_id: revision.version_id ?? null, commit: revision.commit ?? null };
