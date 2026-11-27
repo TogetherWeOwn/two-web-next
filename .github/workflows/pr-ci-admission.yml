@@ -82,8 +82,10 @@ jobs:
                       jobs = collection(api, f"actions/runs/{run_id}/jobs?filter=all", "jobs")
                       cancelled = run["conclusion"] == "cancelled"
                       for name in tuple(pending):
-                          metadata_scan = (cancelled and name == "gitleaks" and run.get("name") == "pr-gates (source and metadata)"
-                                           and run.get("display_title") == "pr-gates metadata lint")
+                          metadata_scan = cancelled and name == "gitleaks" and any(
+                              job["name"] == "pr-lint" and job.get("labels") == ["ubuntu-24.04"]
+                              and (job["head_sha"], job["run_id"], job["run_attempt"]) == (head["sha"], run_id, run["run_attempt"])
+                              for job in jobs)
                           named = [job for job in jobs if job["name"] == name
                                    or advisory_name(job["name"], name, not cancelled or metadata_scan)]
                           if not named:

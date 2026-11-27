@@ -1,9 +1,6 @@
 # guards: release: exact-main commit lint and full-history scan (required on PRs: pr-lint, gitleaks)
 # guards: metadata-edit: pr-lint
-name: pr-gates (source and metadata) # Admission distinguishes legacy runs by workflow name.
-run-name: >-
-  ${{ github.event.action == 'edited' && !github.event.changes.base &&
-      (github.event.changes.title != null || github.event.changes.body != null) && 'pr-gates metadata lint' || 'pr-gates' }}
+name: pr-gates
 
 # Lightweight PR gates: PR-title lint + full-history secret scan in ONE
 # workflow with sequential jobs, so a PR push occupies one runner slot at a
@@ -42,10 +39,10 @@ concurrency:
     ${{ (github.event.action != 'edited' ||
       (startsWith(toJSON(github.event.changes.base.ref.from), '"') && github.event.changes.base.ref.from != '' &&
        startsWith(toJSON(github.event.pull_request.base.ref), '"') && github.event.pull_request.base.ref != '')) &&
-      format('pr-gates-source-{0}', github.event.pull_request.number || inputs.pr_number || github.sha) ||
+      format('{0}-source-{1}', github.workflow, github.event.pull_request.number || inputs.pr_number || github.sha) ||
       (github.event.changes.title != null || github.event.changes.body != null) &&
-      format('pr-gates-metadata-{0}', github.event.pull_request.number) ||
-      format('pr-gates-ignored-edit-{0}', github.run_id) }}
+      format('{0}-metadata-{1}', github.workflow, github.event.pull_request.number) ||
+      format('{0}-ignored-edit-{1}', github.workflow, github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -90,8 +87,10 @@ jobs:
         (startsWith(toJSON(github.event.changes.base.ref.from), '"') && github.event.changes.base.ref.from != '' &&
          startsWith(toJSON(github.event.pull_request.base.ref), '"') && github.event.pull_request.base.ref != '') ||
         github.event.changes.title != null || github.event.changes.body != null) }}
+    # Admission uses the metadata-only runner label even if lint never starts.
     runs-on: >-
-      ${{ github.event_name == 'pull_request'
+      ${{ github.event.action == 'edited' && !github.event.changes.base && 'ubuntu-24.04' ||
+      github.event_name == 'pull_request'
       && github.repository
       && github.event.pull_request.head.repo.full_name == github.repository
       && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'
