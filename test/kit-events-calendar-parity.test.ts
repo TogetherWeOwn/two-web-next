@@ -9,6 +9,7 @@
 // no-JS fallback (real anchors + GET form) and the CSP/keyboard surface.
 // Green on arrival: the shared screen already carries all of it; the pins
 // exist so a Kit divergence fails loudly instead of silently dropping a fix.
+import { defaultTreeAdapter, html, parse, type DefaultTreeAdapterMap } from "parse5";
 import { describe, expect, it, vi } from "vitest";
 import { loadEventsPage } from "../src/kit-events";
 import { renderEventsHtml } from "../src/kit-events-html";
@@ -28,6 +29,7 @@ import {
   EVENTS_OUT_OF_RANGE_TESTID,
   EVENTS_PAST_STATUS_TESTID,
   EVENTS_SEARCH_CLEAR_EMPTY_TESTID,
+  EVENTS_SEARCH_CLEAR_TESTID,
   EVENTS_SEARCH_MAX_LENGTH,
   EVENTS_SEARCH_STATUS_TESTID,
   EVENTS_SEARCH_TESTID,
@@ -43,6 +45,7 @@ import {
   calendarUrl,
   eventsSearchHitCopy,
 } from "../src/islands/contracts";
+import { attr, elements, textOf } from "./helpers/kit-edit-controls";
 
 const env = {
   APP_URL: "https://example.test",
@@ -82,59 +85,21 @@ const baseData = () => ({
   queryTooLong: false,
 });
 
-const VOID_ELEMENTS = new Set([
-  "area",
-  "base",
-  "br",
-  "col",
-  "embed",
-  "hr",
-  "img",
-  "input",
-  "link",
-  "meta",
-  "param",
-  "source",
-  "track",
-  "wbr",
-]);
+type Element = DefaultTreeAdapterMap["element"];
 
-// Walk the serialized tags with a depth counter so a stable element moved
-// inside any data-cal-zone fails, not just a missing testid.
-function assertStableOutsideZones(body: string, markers: string[]): void {
-  const tagRe = /<[^>]+>/g;
-  const stack: boolean[] = [];
-  const violations: string[] = [];
-  let match: RegExpExecArray | null;
-  while ((match = tagRe.exec(body)) !== null) {
-    const tag = match[0];
-    if (tag.startsWith("<!--") || tag.startsWith("<!") || tag.startsWith("<?")) continue;
-    const isClosing = tag.startsWith("</");
-    if (isClosing) {
-      stack.pop();
-      continue;
-    }
-    const name =
-      tag
-        .slice(1)
-        .split(/[\s/>]/, 1)[0]
-        ?.toLowerCase() ?? "";
-    const isSelfClosing = tag.endsWith("/>") || VOID_ELEMENTS.has(name);
-    const insideZone = stack.some(Boolean);
-    if (insideZone) {
-      for (const marker of markers) {
-        if (tag.includes(marker)) violations.push(marker);
-      }
-    }
-    if (!isSelfClosing) {
-      stack.push(tag.includes("data-cal-zone="));
-    }
-  }
-  expect(violations).toEqual([]);
+function byTestId(nodes: Element[], testId: string): Element | undefined {
+  return nodes.find((node) => attr(node, "data-testid") === testId);
 }
 
-function zoneNames(body: string): string[] {
-  return [...body.matchAll(/data-cal-zone="([^"]+)"/g)].map((m) => m[1] as string).sort();
+function inSwapZone(element: Element): boolean {
+  for (
+    let node: Element["parentNode"] = element;
+    node;
+    node = defaultTreeAdapter.getParentNode(node)
+  ) {
+    if ("tagName" in node && attr(node, "data-cal-zone") !== undefined) return true;
+  }
+  return false;
 }
 
 const headers = {
@@ -146,55 +111,58 @@ const headers = {
 describe("Kit calendar island mount parity", () => {
   it("carries every data hook the fragment binder reads", async () => {
     const rendered = await renderEventsHtml({ ...baseData() } as never, headers);
+    const document = elements(parse(rendered.body));
 
     // Mount identity the binder queries before doing anything.
-    expect(rendered.body).toContain('data-island="events-calendar"');
-    expect(rendered.body).toContain(`data-testid="${EVENTS_CALENDAR_TESTID}"`);
-    expect(rendered.body).toContain('data-view="list"');
-    expect(rendered.body).toContain('data-month="2026-10"');
+    const mount = document.find((node) => attr(node, "data-island") === "events-calendar");
+    expect(mount).toBeDefined();
+    expect(attr(mount!, "data-testid")).toBe(EVENTS_CALENDAR_TESTID);
+    expect(attr(mount!, "data-view")).toBe("list");
+    expect(attr(mount!, "data-month")).toBe("2026-10");
     // Over-limit naming and failure copy come from data, never from the query.
-    expect(rendered.body).toContain(`data-search-max-length="${EVENTS_SEARCH_MAX_LENGTH}"`);
-    expect(rendered.body).toContain(EVENTS_SEARCH_TOO_LONG_COPY);
-    // The failure copy rides in an attribute, so the apostrophe is HTML-escaped.
-    expect(rendered.body).toContain("data-load-error=");
-    expect(rendered.body).toContain("refresh the events — try again.");
+    expect(attr(mount!, "data-search-max-length")).toBe(String(EVENTS_SEARCH_MAX_LENGTH));
+    expect(attr(mount!, "data-search-too-long")).toBe(EVENTS_SEARCH_TOO_LONG_COPY);
+    expect(attr(mount!, "data-load-error")).toBe("Couldn't refresh the events — try again.");
     // Stable zones: head/actions/miss/content/subscribe swap, everything else persists.
-    for (const zone of ["head", "actions", "miss", "content", "subscribe"]) {
-      expect(rendered.body).toContain(`data-cal-zone="${zone}"`);
-    }
-    expect(zoneNames(rendered.body)).toEqual(["actions", "content", "head", "miss", "subscribe"]);
-    expect(rendered.body).toContain("data-cal-feedback");
+    const nodes = elements(mount!).slice(1);
+    const zones = nodes
+      .map((node) => attr(node, "data-cal-zone"))
+      .filter((zone) => zone !== undefined);
+    expect(zones.sort()).toEqual(["actions", "content", "head", "miss", "subscribe"]);
+    expect(nodes.some((node) => attr(node, EVENTS_CAL_FEEDBACK) !== undefined)).toBe(true);
     // A real row renders the list card instead of the out-of-range note.
-    expect(rendered.body).toContain(`data-testid="${EVENT_CARD_TESTID}"`);
-    expect(rendered.body).toContain(`data-testid="${EVENTS_LIST_TESTID}"`);
-    expect(rendered.body).not.toContain(`data-testid="${EVENTS_OUT_OF_RANGE_TESTID}"`);
-    expect(rendered.body).toContain(`data-testid="${EVENTS_CONTENT_TESTID}"`);
+    expect(byTestId(nodes, EVENT_CARD_TESTID)).toBeDefined();
+    expect(byTestId(nodes, EVENTS_LIST_TESTID)).toBeDefined();
+    expect(byTestId(document, EVENTS_OUT_OF_RANGE_TESTID)).toBeUndefined();
+    expect(attr(byTestId(nodes, EVENTS_CONTENT_TESTID)!, "data-cal-zone")).toBe("content");
     // Skeleton stays hidden until a member-started action shows it.
-    expect(rendered.body).toContain(`data-testid="${EVENTS_LOADING_TESTID}"`);
-    expect(rendered.body).toMatch(
-      new RegExp(`data-testid="${EVENTS_LOADING_TESTID}"[^>]*\\shidden`),
-    );
+    const skeleton = byTestId(nodes, EVENTS_LOADING_TESTID);
+    expect(skeleton).toBeDefined();
+    expect(attr(skeleton!, "hidden")).toBeDefined();
     // Live regions stay outside the swapped zones so they are never re-created.
-    for (const testid of [
+    const stableIds = [
       EVENTS_VIEW_STATUS_TESTID,
       EVENTS_SEARCH_STATUS_TESTID,
       EVENTS_PAST_STATUS_TESTID,
       CALENDAR_MONTH_STATUS_TESTID,
-    ]) {
-      expect(rendered.body).toContain(`data-testid="${testid}"`);
+      EVENTS_SEARCH_TESTID,
+      EVENTS_LOADING_TESTID,
+    ];
+    for (const testId of stableIds) {
+      expect(byTestId(nodes, testId)).toBeDefined();
     }
-    assertStableOutsideZones(rendered.body, [
-      `data-testid="${EVENTS_VIEW_STATUS_TESTID}"`,
-      `data-testid="${EVENTS_SEARCH_STATUS_TESTID}"`,
-      `data-testid="${EVENTS_PAST_STATUS_TESTID}"`,
-      `data-testid="${CALENDAR_MONTH_STATUS_TESTID}"`,
-      `data-testid="${EVENTS_SEARCH_TESTID}"`,
-      `data-testid="${EVENTS_LOADING_TESTID}"`,
-      EVENTS_CAL_FEEDBACK,
-    ]);
+    const stableNodes = nodes.filter(
+      (node) =>
+        stableIds.some((id) => attr(node, "data-testid") === id) ||
+        attr(node, EVENTS_CAL_FEEDBACK) !== undefined,
+    );
+    expect(stableNodes.filter(inSwapZone)).toEqual([]);
     // The binder itself: one deferred external script, the no-global-hydration deal.
-    expect(rendered.body).toContain('<script src="/islands/events-calendar.js"');
-    expect(rendered.body).toContain("defer");
+    const scripts = document.filter(
+      (node) => node.tagName === "script" && attr(node, "src") === "/islands/events-calendar.js",
+    );
+    expect(scripts).toHaveLength(1);
+    expect(attr(scripts[0]!, "defer")).toBeDefined();
   });
 
   it("renders the month grid with real prev/next and day-cell anchors", async () => {
@@ -206,22 +174,37 @@ describe("Kit calendar island mount parity", () => {
       headers,
     );
 
-    expect(rendered.body).toContain(`data-testid="${EVENTS_CALENDAR_GRID_TESTID}"`);
-    expect(rendered.body).toContain(`data-testid="${CALENDAR_MONTH_TESTID}"`);
-    expect(rendered.body).toContain(calendarMonthLabel("2026-10"));
-    expect(rendered.body).toContain(`aria-label="${CALENDAR_PREV_LABEL}"`);
-    expect(rendered.body).toContain(`aria-label="${CALENDAR_NEXT_LABEL}"`);
+    const nodes = elements(parse(rendered.body));
+    const grid = byTestId(nodes, EVENTS_CALENDAR_GRID_TESTID);
+    expect(grid?.tagName).toBe("table");
+    const month = byTestId(nodes, CALENDAR_MONTH_TESTID);
+    expect(month).toBeDefined();
+    expect(textOf(month!)).toBe(calendarMonthLabel("2026-10"));
     // Month steps share the list's URL model: view + month params only.
-    expect(rendered.body).toContain('href="/events?view=calendar&amp;month=2026-09"');
-    expect(rendered.body).toContain('href="/events?view=calendar&amp;month=2026-11"');
-    for (const day of WEEKDAY_HEADINGS) {
-      expect(rendered.body).toContain(`<th scope="col">${day}</th>`);
+    for (const [label, month] of [
+      [CALENDAR_PREV_LABEL, "2026-09"],
+      [CALENDAR_NEXT_LABEL, "2026-11"],
+    ]) {
+      const step = nodes.find((node) => node.tagName === "a" && attr(node, "aria-label") === label);
+      expect(step).toBeDefined();
+      expect(attr(step!, "href")).toBe(`/events?view=calendar&month=${month}`);
     }
+    const cells = elements(grid!);
+    const headings = cells.filter((node) => node.tagName === "th" && attr(node, "scope") === "col");
+    expect(headings.map(textOf)).toEqual(WEEKDAY_HEADINGS);
     // The fixture row lands in-month, so day cells carry real jump anchors.
-    expect(rendered.body).toContain(`data-testid="${CALENDAR_DAY_TESTID}"`);
-    expect(rendered.body).toContain(`data-testid="${CALENDAR_MONTH_STATUS_TESTID}"`);
-    expect(rendered.body).toContain("data-cal-jump");
-    expect(rendered.body).toContain("Game night parity");
+    const day = cells.find(
+      (node) =>
+        attr(node, "data-testid") === CALENDAR_DAY_TESTID &&
+        attr(node, "data-date") === "2026-10-15",
+    );
+    expect(day?.tagName).toBe("td");
+    expect(byTestId(nodes, CALENDAR_MONTH_STATUS_TESTID)).toBeDefined();
+    const jump = elements(day!).find(
+      (node) => node.tagName === "a" && attr(node, "data-cal-jump") !== undefined,
+    );
+    expect(attr(jump!, "href")).toBe(calendarJumpUrl(false, "discord-parity-1"));
+    expect(textOf(jump!)).toContain("Game night parity");
   });
 
   it("keeps search a GET form with real anchors so no-JS stays functional", async () => {
@@ -229,22 +212,37 @@ describe("Kit calendar island mount parity", () => {
       {
         ...baseData(),
         state: { view: "list", month: "2026-10", q: "chess", past: false, page: 1 },
+        upcoming: [{ ...sampleRow(), title: "Chess night" }],
       } as never,
       { ...headers, "cache-control": "private, no-store" },
     );
 
-    expect(rendered.body).toContain('<form method="get" action="/events"');
-    expect(rendered.body).toContain(`data-testid="${EVENTS_SEARCH_TESTID}"`);
-    expect(rendered.body).toContain('name="q"');
-    expect(rendered.body).toContain('type="submit"');
+    const nodes = elements(parse(rendered.body));
+    const form = nodes.find((node) => node.tagName === "form" && attr(node, "role") === "search");
+    expect(attr(form!, "method")).toBe("get");
+    expect(attr(form!, "action")).toBe("/events");
+    const controls = elements(form!);
+    const query = byTestId(controls, EVENTS_SEARCH_TESTID);
+    expect(query?.tagName).toBe("input");
+    expect(attr(query!, "name")).toBe("q");
+    expect(attr(query!, "value")).toBe("chess");
+    expect(
+      controls.some((node) => node.tagName === "button" && attr(node, "type") === "submit"),
+    ).toBe(true);
     // A settled search names its hit line and offers a real clear navigation.
-    // The shared fixture carries a visible row, so this exercises the hit
-    // branch (hasVisibleResults) rather than the out-of-range branch.
-    expect(rendered.body).toContain(eventsSearchHitCopy("chess"));
-    expect(rendered.body).toContain(`data-testid="${EVENT_CARD_TESTID}"`);
-    expect(rendered.body).not.toContain(`data-testid="${EVENTS_OUT_OF_RANGE_TESTID}"`);
-    expect(rendered.body).toContain(`data-testid="${EVENTS_VIEW_LIST_TESTID}"`);
-    expect(rendered.body).toContain(`data-testid="${EVENTS_VIEW_CALENDAR_TESTID}"`);
+    expect(textOf(byTestId(nodes, EVENTS_SEARCH_STATUS_TESTID)!)).toBe(
+      eventsSearchHitCopy("chess"),
+    );
+    expect(textOf(byTestId(nodes, EVENT_CARD_TESTID)!)).toContain("Chess night");
+    expect(byTestId(nodes, EVENTS_OUT_OF_RANGE_TESTID)).toBeUndefined();
+    for (const [link, href] of [
+      [byTestId(controls, EVENTS_SEARCH_CLEAR_TESTID), "/events"],
+      [byTestId(nodes, EVENTS_VIEW_LIST_TESTID), "/events?q=chess"],
+      [byTestId(nodes, EVENTS_VIEW_CALENDAR_TESTID), "/events?q=chess&view=calendar&month=2026-10"],
+    ] as const) {
+      expect(link?.tagName).toBe("a");
+      expect(attr(link!, "href")).toBe(href);
+    }
   });
 
   it("renders the search-miss block with a clear-empty navigation", async () => {
@@ -262,27 +260,57 @@ describe("Kit calendar island mount parity", () => {
       { ...headers, "cache-control": "private, no-store" },
     );
 
-    expect(rendered.body).toContain("Nothing matches that search.");
-    expect(rendered.body).toContain(`data-testid="${EVENTS_EMPTY_SEARCH_TESTID}"`);
-    expect(rendered.body).toContain(`data-testid="${EVENTS_SEARCH_CLEAR_EMPTY_TESTID}"`);
+    const miss = byTestId(elements(parse(rendered.body)), EVENTS_EMPTY_SEARCH_TESTID);
+    expect(miss).toBeDefined();
+    expect(textOf(miss!)).toContain("Nothing matches that search.");
+    const clear = byTestId(elements(miss!), EVENTS_SEARCH_CLEAR_EMPTY_TESTID);
+    expect(clear?.tagName).toBe("a");
+    expect(attr(clear!, "href")).toBe("/events");
   });
 
   it("keeps skip-link, main and heading focus targets for keyboard users", async () => {
     const rendered = await renderEventsHtml({ ...baseData() } as never, headers);
 
-    expect(rendered.body).toContain('class="skip-link"');
-    expect(rendered.body).toContain('href="#main"');
-    expect(rendered.body).toContain('id="main"');
-    expect(rendered.body).toContain('id="events-heading"');
-    expect(rendered.body).toContain(`data-testid="${EVENTS_LIST_TESTID}"`);
+    const nodes = elements(parse(rendered.body));
+    const skipLink = nodes.find((node) => attr(node, "class")?.split(/\s+/).includes("skip-link"));
+    expect(skipLink?.tagName).toBe("a");
+    expect(attr(skipLink!, "href")).toBe("#main");
+    const main = nodes.find((node) => attr(node, "id") === "main");
+    expect(main?.tagName).toBe("main");
+    expect(attr(main!, "tabindex")).toBe("-1");
+    const heading = elements(main!).find((node) => attr(node, "id") === "events-heading");
+    expect(heading?.tagName).toBe("h1");
+    expect(attr(heading!, "tabindex")).toBe("-1");
+    expect(byTestId(elements(main!), EVENTS_LIST_TESTID)).toBeDefined();
   });
 
   it("emits no inline scripts or handlers, keeping script-src 'self' intact", async () => {
     const rendered = await renderEventsHtml({ ...baseData() } as never, headers);
 
-    expect(rendered.body).not.toMatch(/<script(?![^>]*\bsrc=)[^>]*>/);
-    expect(rendered.body).not.toMatch(/\son(click|load|error|input|submit|change|keydown)=/i);
-    expect(rendered.body).not.toContain("application/ld+json");
+    // A browser parses noscript markup differently depending on whether scripting is enabled.
+    for (const scriptingEnabled of [true, false]) {
+      const nodes = elements(parse(rendered.body, { scriptingEnabled }));
+      for (const node of nodes) {
+        if ("content" in node)
+          nodes.push(...elements(node.content as DefaultTreeAdapterMap["documentFragment"]));
+      }
+      const scripts = nodes.filter((node) => node.tagName === "script");
+      const context = `scriptingEnabled=${scriptingEnabled}`;
+      expect(
+        scripts.filter((node) => node.namespaceURI !== html.NS.HTML || !attr(node, "src")?.trim()),
+        context,
+      ).toEqual([]);
+      expect(
+        nodes.flatMap((node) => node.attrs).filter(({ name }) => name.startsWith("on")),
+        context,
+      ).toEqual([]);
+      expect(
+        scripts.filter(
+          (node) => attr(node, "type")?.trim().toLowerCase() === "application/ld+json",
+        ),
+        context,
+      ).toEqual([]);
+    }
   });
 });
 
