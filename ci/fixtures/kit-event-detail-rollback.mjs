@@ -60,14 +60,18 @@ export default {
   },
 };\n`,
       );
-      const worker = await startWorker(name, entry, assets, {
-        ...vars,
-        APP_URL: appUrl,
-        // The Home renderer control uses the fallback and cannot refresh Discord events.
-        DISCORD_GUILD_ID: "",
-      });
-      worker.reportPhase = reportPhase;
-      return worker;
+      return startWorker(
+        name,
+        entry,
+        assets,
+        {
+          ...vars,
+          APP_URL: appUrl,
+          // The Home renderer control uses the fallback and cannot refresh Discord events.
+          DISCORD_GUILD_ID: "",
+        },
+        reportPhase,
+      );
     });
     await inPhase(reportPhase, "readiness", () => waitForWorker(instance));
     return instance;

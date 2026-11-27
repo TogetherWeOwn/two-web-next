@@ -71,7 +71,7 @@ export async function startLoopbackWorker(
   name,
   launch,
   workers,
-  { selectPort = unusedPort, signal, suppressFailureLog = false, deferHttpReadiness = false } = {},
+  { selectPort = unusedPort, signal, reportPhase, deferHttpReadiness = false } = {},
 ) {
   const deadline = Date.now() + 60_000;
   for (let attempt = 1; ; attempt += 1) {
@@ -81,7 +81,7 @@ export async function startLoopbackWorker(
     const origin = `http://${loopback}:${port}`;
     const child = await launch(port, origin);
     const worker = trackWorker(name, child, origin, port, workers);
-    worker.suppressFailureLog = suppressFailureLog;
+    worker.suppressFailureLog = reportPhase !== undefined;
     try {
       await waitForBind(worker, deadline, signal);
       const startHttpReadiness = () =>
@@ -95,6 +95,7 @@ export async function startLoopbackWorker(
         // A paired launch may still be binding. Start HTTP alongside it.
         worker.readiness = startHttpReadiness();
       }
+      worker.reportPhase = reportPhase;
       return worker;
     } catch (error) {
       const collision = `Address already in use (${loopback}:${port}). Please check that you are not already running a server on this address or specify a different port with --port.`;
@@ -107,6 +108,7 @@ export async function startLoopbackWorker(
         child.exitCode !== 1 ||
         !stripVTControlCharacters(worker.log).includes(collision)
       ) {
+        worker.reportPhase = reportPhase;
         throw error;
       }
       console.log(`Loopback bind collision for ${name} Worker, retrying with a fresh port`);

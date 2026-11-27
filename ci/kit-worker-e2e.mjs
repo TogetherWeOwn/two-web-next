@@ -32,10 +32,11 @@ import { assertFeaturedDeleteParity } from "./fixtures/kit-featured-delete-parit
 import { assertResponseContracts } from "./fixtures/kit-response-contracts.mjs";
 import { assertStaticFeedParity } from "./fixtures/kit-static-feed-parity.mjs";
 import {
+  cleanUpWorkers,
+  stopWorker,
   withPublicVoiceBrowserWorkers,
   withWorkerCleanup,
 } from "./fixtures/kit-worker-lifecycle.mjs";
-import { cleanUpWorkers, stopWorker } from "./kit-local-worker.mjs";
 import { startLoopbackWorker, tail } from "./kit-worker-loopback.mjs";
 import { expectedMarkerFor, kitHomeHeadingText } from "./kit-parity-gates.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
@@ -108,14 +109,14 @@ function startWorker(
   sessionSecret,
   vars,
   liveHub = false,
-  { suppressFailureLog = false, deferHttpReadiness = false } = {},
+  { reportPhase, deferHttpReadiness = false } = {},
 ) {
   const bound = startLoopbackWorker(
     name,
     (port, origin) =>
       launchWorker(name, main, assetsDirectory, sessionSecret, vars, liveHub, port, origin),
     workers,
-    { signal: startup.signal, suppressFailureLog, deferHttpReadiness },
+    { signal: startup.signal, reportPhase, deferHttpReadiness },
   ).finally(() => starting.delete(bound));
   starting.add(bound);
   return bound;
@@ -1436,9 +1437,9 @@ export default machineParityWorker(inner, ${JSON.stringify(probePath)}, ${name =
           scratch,
           kit: { main: worker, assets },
           hono: { main: join(repo, "src/worker.ts"), assets: join(repo, "public") },
-          startWorker: (name, main, assetsDirectory, vars) =>
+          startWorker: (name, main, assetsDirectory, vars, reportPhase) =>
             startWorker(name, main, assetsDirectory, undefined, vars, false, {
-              suppressFailureLog: true,
+              reportPhase,
               deferHttpReadiness: true,
             }),
           waitForWorker: (instance) => listen(instance.child, instance.origin, () => ""),

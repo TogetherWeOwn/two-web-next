@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { setImmediate } from "node:timers/promises";
 import { assertEventDetailRollback } from "./fixtures/kit-event-detail-rollback.mjs";
-import { cleanUpWorkers } from "./kit-local-worker.mjs";
+import { cleanUpWorkers, withWorkerCleanup } from "./fixtures/kit-worker-lifecycle.mjs";
 import { startLoopbackWorker } from "./kit-worker-loopback.mjs";
 
 const kitName = "kit-ember-event-detail";
@@ -41,12 +41,14 @@ async function fixture(t) {
     return true;
   });
 
-  function startWorker(name) {
+  function startWorker(name, _entry, _assets, _vars, reportPhase) {
     const { promise: closed, resolve } = Promise.withResolvers();
     const worker = {
       name,
       origin: "http://127.0.0.1:1",
       log: privateDetail,
+      reportPhase,
+      suppressFailureLog: reportPhase !== undefined,
       stopped: false,
       closed,
       child: {
@@ -65,24 +67,20 @@ async function fixture(t) {
     return worker;
   }
 
-  async function run(injected) {
-    let failed = false;
-    try {
-      await assertEventDetailRollback({
-        scratch,
-        event,
-        kit: output,
-        hono: output,
-        startWorker,
-        waitForWorker: async () => {},
-        ...injected,
-      });
-    } catch (error) {
-      failed = true;
-      throw error;
-    } finally {
-      await cleanUpWorkers(workers, scratch, failed);
-    }
+  function run(injected) {
+    return withWorkerCleanup(
+      () =>
+        assertEventDetailRollback({
+          scratch,
+          event,
+          kit: output,
+          hono: output,
+          startWorker,
+          waitForWorker: async () => {},
+          ...injected,
+        }),
+      (failed) => cleanUpWorkers(workers, scratch, failed),
+    );
   }
 
   function phases(name) {
@@ -193,12 +191,12 @@ test("a readiness failure waits for the sibling launch before shared teardown", 
   const fetchPage = t.mock.fn();
   await assert.rejects(
     run({
-      async startWorker(name) {
+      async startWorker(name, ...args) {
         if (name === honoName) {
           await readinessFailed;
           await setImmediate();
         }
-        return startWorker(name);
+        return startWorker(name, ...args);
       },
       async waitForWorker({ name }) {
         if (name === kitName) {
@@ -229,11 +227,14 @@ test("a readiness failure waits for the sibling launch before shared teardown", 
   await assertCleanup();
 });
 
-test("failed bind attempts keep rollback Worker output out of shared teardown logs", async (t) => {
+test("a bind timeout marks only the final attempt and redacts all Worker output", async (t) => {
   const scratch = await mkdtemp(join(tmpdir(), "kit-event-detail-bind-"));
   t.after(() => rm(scratch, { recursive: true, force: true }));
   const workers = [];
   const stderr = t.mock.method(process.stderr, "write", () => true);
+  const reportPhase = t.mock.fn();
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
   const firstPort = 32123;
   const collision = `Address already in use (127.0.0.1:${firstPort}). Please check that you are not already running a server on this address or specify a different port with --port.`;
 
@@ -241,35 +242,50 @@ test("failed bind attempts keep rollback Worker output out of shared teardown lo
     startLoopbackWorker(
       kitName,
       (port) => {
+        const collided = port === firstPort;
         const child = Object.assign(new EventEmitter(), {
-          exitCode: 1,
+          exitCode: collided ? 1 : null,
           signalCode: null,
           stderr: new EventEmitter(),
+          kill: t.mock.fn(() => child.emit("close")),
         });
+        if (!collided) now += 60_000;
         void setImmediate().then(() => {
-          child.stderr.emit(
-            "data",
-            port === firstPort ? `${collision}\n${privateDetail}` : privateDetail,
-          );
-          child.emit("close");
+          child.stderr.emit("data", collided ? `${collision}\n${privateDetail}` : privateDetail);
+          if (collided) child.emit("close");
         });
         return child;
       },
       workers,
-      { selectPort: () => firstPort + workers.length, suppressFailureLog: true },
+      { selectPort: () => firstPort + workers.length, reportPhase },
     ),
-    /Wrangler dev exited before ready/,
+    /Timed out waiting for Wrangler to bind/,
   );
+  await setImmediate();
   assert.equal(workers.length, 2);
-  assert.ok(workers.every((worker) => worker.log.includes(privateDetail) && !worker.reportPhase));
+  assert.ok(workers.every((worker) => worker.log.includes(privateDetail)));
+  assert.equal(workers[0].reportPhase, undefined);
+  assert.equal(workers[1].stopped, false);
   await cleanUpWorkers(workers, scratch, true);
+  assert.equal(workers[0].child.kill.mock.callCount(), 0);
+  assert.equal(workers[1].child.kill.mock.callCount(), 1);
+  assert.deepEqual(
+    reportPhase.mock.calls.map((call) => call.arguments),
+    [
+      ["stop", "start"],
+      ["stop", "complete"],
+    ],
+  );
   assert.equal(stderr.mock.callCount(), 0);
   await assert.rejects(stat(scratch), { code: "ENOENT" });
 });
 
 test("a deferred rollback Worker starts its first HTTP probe when readiness is awaited", async (t) => {
   const runner = readFileSync(new URL("./kit-worker-e2e.mjs", import.meta.url), "utf8");
-  assert.match(runner.split("assertEventDetailRollback({")[1], /deferHttpReadiness: true,/);
+  assert.match(
+    runner.split("assertEventDetailRollback({")[1],
+    /reportPhase,\s+deferHttpReadiness: true,/,
+  );
   const fetch = t.mock.method(globalThis, "fetch", async () => new Response());
   const worker = await startLoopbackWorker(
     kitName,
