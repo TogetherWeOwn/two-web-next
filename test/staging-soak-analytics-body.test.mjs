@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { setImmediate } from "node:timers/promises";
+import { test, vi } from "vitest";
 import { STAGING_ORIGIN } from "../ci/operator-constants.mjs";
 import { captureAllocationSoak } from "../ci/staging-soak-receipt.mjs";
 import { first, preRollback, trustedReads } from "./fixtures/staging-soak-http.mjs";
@@ -29,11 +30,11 @@ const body = encoder.encode(JSON.stringify(graph));
 const padding = new Uint8Array(64 * 1024 - body.byteLength).fill(0x20);
 const utf8Bom = encoder.encode("\uFEFF");
 
-function capture(analyticsResponse) {
+function capture(analyticsResponse, onAnalyticsRequest) {
   const reads = [];
   const fetchImpl = trustedReads(
     {
-      fetchImpl: async (input) => {
+      fetchImpl: async (input, init) => {
         const url = String(input);
         if (url === `${STAGING_ORIGIN}/version`) return Response.json({ sha, deployedAt });
         if (url === `${STAGING_ORIGIN}/up`) {
@@ -43,6 +44,7 @@ function capture(analyticsResponse) {
           );
         }
         assert.equal(url, graphUrl);
+        onAnalyticsRequest?.(init.signal);
         return analyticsResponse;
       },
     },
@@ -122,6 +124,48 @@ test("cancels oversized staging analytics before certifying the receipt", async 
   assert.equal(pulls, chunks.length);
   assert.equal(response.body.locked, false);
   assert.equal(reads.at(-1), graphUrl);
+});
+
+test("refuses a stalled analytics body on the fetch deadline", async ({ onTestFinished }) => {
+  const deadline = new AbortController();
+  const nativeTimeout = AbortSignal.timeout;
+  const timeout = vi
+    .spyOn(AbortSignal, "timeout")
+    .mockImplementation((ms) => (ms === 30_000 ? deadline.signal : nativeTimeout(ms)));
+  onTestFinished(() => timeout.mockRestore());
+
+  const { promise: reading, resolve: startRead } = Promise.withResolvers();
+  let cancelled = false;
+  const stream = new ReadableStream(
+    {
+      pull(controller) {
+        startRead(controller);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  let requestSignal;
+  const { reads, result } = capture(new Response(stream), (signal) => {
+    requestSignal = signal;
+  });
+  const refusal = assert.rejects(result, {
+    message: "Version-tagged staging analytics could not be verified",
+  });
+  const controller = await reading;
+  try {
+    assert.equal(requestSignal, deadline.signal);
+    deadline.abort(new Error("synthetic-analytics-deadline"));
+    await setImmediate();
+    assert.equal(cancelled, true);
+    await refusal;
+    assert.equal(stream.locked, false);
+    assert.equal(reads.at(-1), graphUrl);
+  } finally {
+    if (!cancelled) controller.error(new Error("synthetic test cleanup"));
+  }
 });
 
 test("refuses a normal analytics HTTP error before certifying the receipt", async () => {
