@@ -176,12 +176,14 @@ const queueCommand = step("Ensure queues exist");
 const tailCommand = `${step("Re-verify exact-SHA full CI before Tail Worker deploy")}\n${step("Deploy alert Tail Worker before attaching the app")}`;
 const deployGateCommand = step("Re-verify exact-SHA full CI before Worker deploy");
 const workerDeployCommand = step("Deploy to Cloudflare Workers");
-const deployCommand = `${deployGateCommand}\n${workerDeployCommand}`;
+const deployCommand = `GITHUB_OUTPUT="$TEST_WEB_ADMISSION_OUTPUT" ${deployGateCommand}\n${workerDeployCommand}`;
 
 function executeStaging(ctx, evidence, changes = {}, routeFamily = "hono") {
   const flags = kitRouteFlagsForFamily(routeFamily);
   const dir = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "staging-gate-"));
   try {
+    const webAdmissionOutput = join(dir, "web-admission.txt");
+    writeFileSync(webAdmissionOutput, "");
     writeFileSync(join(dir, "event.json"), JSON.stringify(ctx.event));
     writeFileSync(join(dir, "evidence.json"), JSON.stringify(evidence));
     writeFileSync(join(dir, "changes.json"), JSON.stringify(changes));
@@ -208,6 +210,15 @@ function executeStaging(ctx, evidence, changes = {}, routeFamily = "hono") {
       `
       import { readFileSync } from "node:fs";
       const evidence = JSON.parse(readFileSync(process.env.TEST_EVIDENCE, "utf8"));
+      let finalReadTimeouts = evidence.finalReadTimeouts ?? 0;
+      let deadline;
+      if (finalReadTimeouts) {
+        AbortSignal.timeout = (delay) => {
+          if (delay !== 10_000) throw new Error("Unexpected CI read deadline");
+          deadline = new AbortController();
+          return deadline.signal;
+        };
+      }
       globalThis.fetch = async (url, options) => {
         if (evidence.networkError) throw new Error("Stubbed network failure");
         const parsed = new URL(url);
@@ -219,8 +230,14 @@ function executeStaging(ctx, evidence, changes = {}, routeFamily = "hono") {
         } else if (parsed.pathname.endsWith("/runs/42/jobs")) {
           if (parsed.searchParams.get("filter") !== "latest") throw new Error("Stale jobs query");
           data = evidence.jobs;
-        } else if (parsed.pathname.endsWith("/runs/42")) data = evidence.current;
-        else throw new Error("Unexpected API path");
+        } else if (parsed.pathname.endsWith("/runs/42")) {
+          if (finalReadTimeouts > 0) {
+            finalReadTimeouts--;
+            deadline.abort(new DOMException("Fixture deadline expired", "TimeoutError"));
+            options.signal.throwIfAborted();
+          }
+          data = evidence.current;
+        } else throw new Error("Unexpected API path");
         const status = evidence.httpError ?? 200;
         return evidence.invalidJson ? new Response("{", { status }) : Response.json(data, { status });
       };
@@ -256,6 +273,7 @@ function executeStaging(ctx, evidence, changes = {}, routeFamily = "hono") {
           TEST_CALLS: join(dir, "calls"),
           TEST_TRANSITION: join(dir, "transition.mjs"),
           TEST_CHANGES: join(dir, "changes.json"),
+          TEST_WEB_ADMISSION_OUTPUT: webAdmissionOutput,
         },
       },
     );
@@ -265,7 +283,7 @@ function executeStaging(ctx, evidence, changes = {}, routeFamily = "hono") {
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }
-    return { ...result, calls };
+    return { ...result, calls, webAdmission: readFileSync(webAdmissionOutput, "utf8") };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -846,6 +864,28 @@ for (const eventName of ["workflow_run", "workflow_dispatch"]) {
   }
 }
 
+test("the automatic app Worker command retries one timeout after Tail and writes only fresh proof", () => {
+  for (const [eventName, finalReadTimeouts, retry, output] of [
+    ["workflow_run", 1, true, `sha=${sha}\nrun_id=${run.id}\nrun_attempt=${run.run_attempt}\n`],
+    ["workflow_run", 2, true, ""],
+    ["workflow_dispatch", 1, false, ""],
+  ]) {
+    const result = executeStaging(context(eventName), fixture(), {
+      [mutationCalls[2]]: { ...fixture(), finalReadTimeouts },
+    });
+    assert.equal(result.status, output ? 0 : 1, result.stderr);
+    assert.equal(result.webAdmission, output);
+    assert.deepEqual(result.calls, output ? mutationCalls : mutationCalls.slice(0, 3));
+    assert.equal(
+      (result.stderr.match(/Rechecking exact CI evidence once\./g) ?? []).length,
+      retry ? 1 : 0,
+    );
+    if (!output) {
+      assert.match(result.stderr, /Staging gate refused: CI evidence final run read timed out/);
+    }
+  }
+});
+
 test("real Git accepts only the current checkout despite a container owner mismatch", () => {
   const dir = mkdtempSync(
     join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "staging-gate-owner-"),
@@ -1035,6 +1075,148 @@ test("a failed CI jobs HTTP read stops proof collection with a status-only diagn
   assert.equal(jobsFailure.bodyUsed, false);
 });
 
+test("the staging CI timeout retry requires a fresh exact proof and stops after one retry", async (t) => {
+  let controller;
+  t.mock.method(AbortSignal, "timeout", (delay) => {
+    assert.equal(delay, 10_000);
+    controller = new AbortController();
+    return controller.signal;
+  });
+  const paths = {
+    runs: `/workflows/ci.yml/runs?branch=main&event=push&head_sha=${sha}&per_page=100`,
+    jobs: `/runs/${run.id}/jobs?filter=latest&per_page=100`,
+    current: `/runs/${run.id}`,
+  };
+  const { runs, jobs, current } = fixture();
+  const beforeFinalRead = [
+    ["runs", runs],
+    ["jobs", jobs],
+  ];
+  const fullProof = [...beforeFinalRead, ["current", current]];
+  const jobsTimeout = [
+    ["runs", runs],
+    ["jobs", "body timeout"],
+  ];
+  const expectRetry = "CI evidence run jobs read timed out after 10000 ms";
+  const cases = [
+    {
+      name: "final read timeout then exact success",
+      plan: [...beforeFinalRead, ["current", "timeout"], ...fullProof],
+      retry: "CI evidence final run read timed out after 10000 ms",
+    },
+    {
+      name: "jobs body timeout then exact success",
+      plan: [...jobsTimeout, ...fullProof],
+      retry: expectRetry,
+    },
+    {
+      name: "persistent timeout on the fresh final read",
+      plan: [...jobsTimeout, ...beforeFinalRead, ["current", "timeout"]],
+      retry: expectRetry,
+      refusal: /CI evidence final run read timed out after 10000 ms/,
+    },
+    {
+      name: "stale run attempt on the fresh list",
+      plan: [...jobsTimeout, ["runs", { ...runs, workflow_runs: [{ ...run, run_attempt: 2 }] }]],
+      retry: expectRetry,
+      refusal: /Stale or mismatched CI trigger/,
+    },
+    {
+      name: "ambiguous jobs on the fresh read",
+      plan: [
+        ...jobsTimeout,
+        ["runs", runs],
+        ["jobs", { total_count: 3, jobs: [...jobs.jobs, jobs.jobs[1]] }],
+      ],
+      retry: expectRetry,
+      refusal: /Missing or ambiguous check job/,
+    },
+    {
+      name: "replaced run on the fresh final read",
+      plan: [...jobsTimeout, ...beforeFinalRead, ["current", { ...current, id: 43 }]],
+      retry: expectRetry,
+      refusal: /CI changed while checking evidence/,
+    },
+    {
+      name: "provenance change on the first pass",
+      plan: [...beforeFinalRead, ["current", { ...current, run_attempt: 2 }]],
+      refusal: /CI changed while checking evidence/,
+    },
+    {
+      name: "lookalike timeout from a different source",
+      plan: [["runs", new DOMException("Unrelated timeout", "TimeoutError")]],
+      refusal: /Unrelated timeout/,
+    },
+    {
+      name: "oversized evidence is terminal",
+      plan: [["runs", "oversized body"]],
+      refusal: /GitHub metadata response exceeds the byte limit/,
+    },
+    {
+      name: "manual staging is single-pass",
+      eventName: "workflow_dispatch",
+      plan: jobsTimeout,
+      refusal: /CI evidence run jobs read timed out after 10000 ms/,
+    },
+    ...[401, 403, 429, 503].map((status) => ({
+      name: `HTTP ${status} is terminal`,
+      plan: [["runs", status]],
+      refusal: new RegExp(`CI evidence request failed \\(HTTP ${status}\\)`),
+    })),
+  ];
+  for (const { name, plan, retry, refusal, eventName = "workflow_run" } of cases) {
+    const signals = new Set();
+    const retries = [];
+    let index = 0;
+    const verification = requireSuccessfulCi(context(eventName), {
+      token: "offline-stub",
+      onTimeoutRetry: (message) => retries.push(message),
+      fetchImpl: async (url, { signal }) => {
+        assert.ok(index < plan.length, `${name}: unexpected GET`);
+        const [read, result] = plan[index++];
+        assert.equal(url, `https://api.github.com/repos/${repository}/actions${paths[read]}`);
+        assert.equal(signal, controller.signal);
+        assert.equal(signal.aborted, false);
+        signals.add(signal);
+        const timeOut = () => {
+          controller.abort(new DOMException("Fixture deadline expired", "TimeoutError"));
+          signal.throwIfAborted();
+        };
+        if (result === "timeout") timeOut();
+        if (result instanceof Error) throw result;
+        if (typeof result === "number") {
+          return {
+            ok: false,
+            status: result,
+            get body() {
+              assert.fail("HTTP error body was read");
+            },
+          };
+        }
+        if (result === "body timeout") {
+          return new Response(new ReadableStream({ pull: timeOut }, { highWaterMark: 0 }));
+        }
+        if (result === "oversized body") {
+          return new Response(new Uint8Array(1024 * 1024 + 1));
+        }
+        return Response.json(result);
+      },
+    });
+    if (refusal) {
+      await assert.rejects(verification, refusal, name);
+    } else {
+      assert.deepEqual(
+        await verification,
+        { sha, runId: run.id, runAttempt: run.run_attempt },
+        name,
+      );
+    }
+    assert.equal(index, plan.length, name);
+    assert.equal(signals.size, plan.length, name);
+    assert.deepEqual(retries, retry ? [retry] : [], name);
+  }
+});
+
 test("workflow wires the tested gate before both mutations and preserves staging isolation", () => {
   assert.match(
     workflow,
@@ -1085,7 +1267,8 @@ test("workflow wires the tested gate before both mutations and preserves staging
   const gateOffset = workflow.indexOf("- name: Require successful exact-SHA full CI");
   assert.ok(gateOffset < workflow.indexOf("- name: Ensure queues exist"));
   assert.ok(gateOffset < workflow.indexOf("- name: Deploy to Cloudflare Workers"));
-  assert.equal(deployGateCommand, "node ci/staging-deploy-gate.mjs");
+  assert.equal(deployGateCommand, "node ci/staging-deploy-gate.mjs --retry-ci-timeout");
+  assert.equal(workflow.match(/--retry-ci-timeout\b/g)?.length, 1);
   assert.match(
     workflow,
     /- name: Re-verify exact-SHA full CI before Worker deploy\n(?:(?!      - ).*\n)*      - name: Deploy to Cloudflare Workers\n/,

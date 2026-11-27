@@ -6,6 +6,13 @@ import { readGitHubMetadataJson } from "./github-metadata-json.mjs";
 
 const ciPath = ".github/workflows/ci.yml";
 const shaPattern = /^[a-f0-9]{40}$/;
+const ciReadTimeoutMs = 10_000;
+
+class CiReadTimeout extends Error {
+  constructor(read) {
+    super(`CI evidence ${read} read timed out after ${ciReadTimeoutMs} ms`);
+  }
+}
 
 function requireEvidence(condition, message) {
   if (!condition) throw new Error(message);
@@ -44,16 +51,27 @@ export function deploymentTarget({ eventName, event, repository, ref, sha, check
 // could hide pending/failed runs. Incomplete or multiple evidence fails closed.
 // https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-workflow
 // https://docs.github.com/en/rest/actions/workflow-jobs#list-jobs-for-a-workflow-run
-export async function requireSuccessfulCi(context, { token, fetchImpl = fetch } = {}) {
+export async function requireSuccessfulCi(
+  context,
+  { token, fetchImpl = fetch, onTimeoutRetry } = {},
+) {
   const target = deploymentTarget(context);
-  return requireSuccessfulMainPushCi(
-    {
-      repository: context.repository,
-      sha: target,
-      triggeringRun: context.eventName === "workflow_run" ? context.event.workflow_run : undefined,
-    },
-    { token, fetchImpl },
-  );
+  const triggeringRun =
+    context.eventName === "workflow_run" ? context.event.workflow_run : undefined;
+  const verify = () =>
+    requireSuccessfulMainPushCi(
+      { repository: context.repository, sha: target, triggeringRun },
+      { token, fetchImpl },
+    );
+  try {
+    return await verify();
+  } catch (error) {
+    // Only the automatic trigger independently pins the original CI run and attempt.
+    if (!triggeringRun || !onTimeoutRetry || !(error instanceof CiReadTimeout)) throw error;
+    onTimeoutRetry(error.message);
+    // Start at the run list again. No evidence from the timed-out pass can qualify this SHA.
+    return verify();
+  }
 }
 
 // Also used by the trusted manual rollback dispatcher before checking out the
@@ -66,18 +84,24 @@ export async function requireSuccessfulMainPushCi(
   requireEvidence(shaPattern.test(target ?? ""), "Invalid deployment SHA");
   requireEvidence(Boolean(token), "Missing read-only Actions token");
   const base = `https://api.github.com/repos/${repository}/actions`;
-  async function get(path) {
-    const response = await fetchImpl(`${base}${path}`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2026-03-10",
-      },
-      redirect: "error",
-      signal: AbortSignal.timeout(10_000),
-    });
-    requireEvidence(response.ok, `CI evidence request failed (HTTP ${response.status})`);
-    return readGitHubMetadataJson(response.body);
+  async function get(read, path) {
+    const signal = AbortSignal.timeout(ciReadTimeoutMs);
+    try {
+      const response = await fetchImpl(`${base}${path}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2026-03-10",
+        },
+        redirect: "error",
+        signal,
+      });
+      requireEvidence(response.ok, `CI evidence request failed (HTTP ${response.status})`);
+      return await readGitHubMetadataJson(response.body);
+    } catch (error) {
+      if (signal.aborted && error === signal.reason) throw new CiReadTimeout(read);
+      throw error;
+    }
   }
   const query = new URLSearchParams({
     branch: "main",
@@ -85,7 +109,7 @@ export async function requireSuccessfulMainPushCi(
     head_sha: target,
     per_page: "100",
   });
-  const result = await get(`/workflows/ci.yml/runs?${query}`);
+  const result = await get("workflow runs", `/workflows/ci.yml/runs?${query}`);
   requireEvidence(
     result.total_count === 1 && result.workflow_runs?.length === 1,
     "Missing or ambiguous exact-SHA CI evidence",
@@ -119,7 +143,7 @@ export async function requireSuccessfulMainPushCi(
       "Stale or mismatched CI trigger",
     );
   }
-  const evidence = await get(`/runs/${run.id}/jobs?filter=latest&per_page=100`);
+  const evidence = await get("run jobs", `/runs/${run.id}/jobs?filter=latest&per_page=100`);
   requireEvidence(
     Array.isArray(evidence.jobs) && evidence.total_count === evidence.jobs.length,
     "Incomplete CI job evidence",
@@ -149,7 +173,7 @@ export async function requireSuccessfulMainPushCi(
     "CI job run or attempt mismatch",
   );
   // A rerun starting during the query must not reuse a prior attempt's success.
-  const current = await get(`/runs/${run.id}`);
+  const current = await get("final run", `/runs/${run.id}`);
   validateRun(current);
   requireEvidence(
     current.id === run.id && current.run_attempt === run.run_attempt,
@@ -175,7 +199,13 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
           { encoding: "utf8" },
         ).trim(),
       },
-      { token: process.env.GITHUB_TOKEN },
+      {
+        token: process.env.GITHUB_TOKEN,
+        onTimeoutRetry:
+          process.argv[2] === "--retry-ci-timeout"
+            ? (message) => console.warn(`::warning::${message}. Rechecking exact CI evidence once.`)
+            : undefined,
+      },
     );
     console.log(
       `Staging gate passed: ${evidence.sha}, full CI run ${evidence.runId}, attempt ${evidence.runAttempt}`,
