@@ -194,8 +194,6 @@ const caseOnlyPR = { ...retarget.pr, base: { ...retarget.pr.base, ref: "Main" } 
 const combinedEdit = { ...retarget.changes, title: { from: "prior title" } };
 const ignoredNames = ["pr-gates ignored edit (lint)", "pr-gates ignored edit (scan)"];
 
-// Model only the Actions expressions pinned below. Skipped jobs still get
-// check names, so runner admission and the check namespace must agree.
 function planPrGates(context: PrGateContext) {
   const { eventName, action, sha, runId, pr, changes, mergeGroupBase, dispatchNumber } = context;
   const admit =
@@ -219,7 +217,7 @@ function planPrGates(context: PrGateContext) {
 
 describe("PR gate event matrix", () => {
   it("pins both check names, runner conditions, and revision inputs to the workflow", () => {
-    expect(prGates.name).toBe("pr-gates");
+    expect(prGates.name).toBe("pr-gates (source and metadata)");
     expect(Object.keys(prGates.jobs)).toEqual(["pr-lint", "gitleaks"]);
     expect(prGates.on.pull_request).toEqual({
       types: ["opened", "edited", "synchronize", "reopened", "ready_for_review"],
@@ -227,9 +225,9 @@ describe("PR gate event matrix", () => {
     expect(prGates.on.push).toEqual({ branches: ["main"] });
     expect(prGates.on.merge_group).toEqual({ types: ["checks_requested"] });
     expect(normalized(prGates.concurrency.group)).toBe(
-      normalized(`\${{ ${prGatesAdmit} && format('{0}-source-{1}', github.workflow, github.event.pull_request.number || inputs.pr_number || github.sha) ||
-        (${metadataEdit}) && format('{0}-metadata-{1}', github.workflow, github.event.pull_request.number) ||
-        format('{0}-ignored-edit-{1}', github.workflow, github.run_id) }}`),
+      normalized(`\${{ ${prGatesAdmit} && format('pr-gates-source-{0}', github.event.pull_request.number || inputs.pr_number || github.sha) ||
+        (${metadataEdit}) && format('pr-gates-metadata-{0}', github.event.pull_request.number) ||
+        format('pr-gates-ignored-edit-{0}', github.run_id) }}`),
     );
 
     const lint = prGates.jobs["pr-lint"];

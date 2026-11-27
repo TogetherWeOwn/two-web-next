@@ -1,6 +1,6 @@
 # guards: release: exact-main commit lint and full-history scan (required on PRs: pr-lint, gitleaks)
 # guards: metadata-edit: pr-lint
-name: pr-gates
+name: pr-gates (source and metadata) # Admission distinguishes legacy runs by workflow name.
 run-name: >-
   ${{ github.event.action == 'edited' && !github.event.changes.base &&
       (github.event.changes.title != null || github.event.changes.body != null) && 'pr-gates metadata lint' || 'pr-gates' }}
@@ -36,18 +36,16 @@ permissions:
   contents: read
   pull-requests: read # Read PR metadata and commit subjects for pr-lint.
 
-# A typed base-ref delta identifies a retarget, including case-only changes.
-# Title/body edits need fresh lint but must never displace a source scan.
-# Distinct prefixes also isolate user-provided dispatch input from edit groups.
+# Keep source updates, metadata edits, and user-provided dispatch input isolated.
 concurrency:
   group: >-
     ${{ (github.event.action != 'edited' ||
       (startsWith(toJSON(github.event.changes.base.ref.from), '"') && github.event.changes.base.ref.from != '' &&
        startsWith(toJSON(github.event.pull_request.base.ref), '"') && github.event.pull_request.base.ref != '')) &&
-      format('{0}-source-{1}', github.workflow, github.event.pull_request.number || inputs.pr_number || github.sha) ||
+      format('pr-gates-source-{0}', github.event.pull_request.number || inputs.pr_number || github.sha) ||
       (github.event.changes.title != null || github.event.changes.body != null) &&
-      format('{0}-metadata-{1}', github.workflow, github.event.pull_request.number) ||
-      format('{0}-ignored-edit-{1}', github.workflow, github.run_id) }}
+      format('pr-gates-metadata-{0}', github.event.pull_request.number) ||
+      format('pr-gates-ignored-edit-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:

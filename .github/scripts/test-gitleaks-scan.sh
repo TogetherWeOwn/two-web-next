@@ -96,7 +96,6 @@ expect() {
 }
 
 # Exit 1 can also mean a scan error. Require the redacted finding at HEAD.
-# expect_fixture NAME [BASE_REF]
 expect_fixture() {
   local rc fingerprint log="${work}/last-plain.log"
   fingerprint="$(git -C "${repo}" rev-parse HEAD):fixture.txt:github-pat:1"
