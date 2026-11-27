@@ -2,13 +2,25 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { builtinModules, createRequire } from "node:module";
-import { lstatSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  readSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { isAbsolute, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const SCHEMA = "two.worker-bundle-inventory.v1";
 const shaPattern = /^[0-9a-f]{40}$/;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const maxWranglerOutputBytes = 1024 * 1024;
 const nativeExternals = new Set([
   ...builtinModules.map((name) => `node:${name.replace(/^node:/, "")}`),
   "cloudflare:sockets",
@@ -244,11 +256,41 @@ export function packageFinding(inventory, name) {
 
 export function readWranglerOutput(path) {
   assert.ok(typeof path === "string" && path.length > 0, "Wrangler output path required");
-  const raw = readFileSync(path);
-  assert.ok(raw.length <= 1024 * 1024, "Wrangler output too large");
-  const text = raw.toString("utf8").trim();
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+  let raw;
+  try {
+    const stat = fstatSync(fd);
+    assert.ok(stat.isFile(), "Wrangler output must be a regular file");
+    assert.ok(stat.size <= maxWranglerOutputBytes, "Wrangler output too large");
+    // Read one extra byte to detect growth after fstat without buffering the whole file.
+    const buffer = Buffer.alloc(maxWranglerOutputBytes + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const count = readSync(fd, buffer, length, buffer.length - length, null);
+      if (count === 0) break;
+      length += count;
+    }
+    assert.ok(length <= maxWranglerOutputBytes, "Wrangler output too large");
+    raw = buffer.subarray(0, length);
+  } finally {
+    closeSync(fd);
+  }
+  let text;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(raw).trim();
+  } catch {
+    throw new SyntaxError("Wrangler output has invalid UTF-8");
+  }
   assert.ok(text.length > 0, "Wrangler output empty");
-  return text.split("\n").map((line) => JSON.parse(line));
+  return text.split("\n").map((line) => {
+    let record;
+    try {
+      record = JSON.parse(line);
+    } catch {
+      throw new SyntaxError("Wrangler output has invalid JSON");
+    }
+    return object(record, "Wrangler output record");
+  });
 }
 
 export function uploadReceipt(verified, records) {
