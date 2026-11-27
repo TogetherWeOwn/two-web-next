@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 
 const COMMIT = /^[0-9a-f]{40}$/;
 const SKEW_MS = 5 * 60_000;
+const MAX_VERSION_BYTES = 4 * 1024;
 
 /** Why a `/version` body does not prove `expected`, or null when it does. */
 export function versionMismatch(data, expected, now = Date.now()) {
@@ -26,6 +27,32 @@ export function versionMismatch(data, expected, now = Date.now()) {
     return "/version deployedAt is not an ISO 8601 UTC timestamp";
   if (at > now + SKEW_MS) return `/version deployedAt ${data.deployedAt} is in the future`;
   return null;
+}
+
+function cancelBody(stream) {
+  // A cancellation failure or stalled cleanup must not delay the next attempt.
+  void stream?.cancel().catch(() => undefined);
+}
+
+async function readVersionJson(body) {
+  if (!body) throw new SyntaxError("Missing /version body");
+  const bytes = new Uint8Array(MAX_VERSION_BYTES);
+  const reader = body.getReader();
+  let length = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      // Count bytes delivered by fetch, including when Content-Length is absent.
+      if (value.byteLength > bytes.length - length) return undefined;
+      bytes.set(value, length);
+      length += value.byteLength;
+    }
+  } finally {
+    cancelBody(reader);
+    reader.releaseLock();
+  }
+  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, length)));
 }
 
 export async function verifyVersion(
@@ -47,10 +74,15 @@ export async function verifyVersion(
         headers: { "cache-control": "no-cache" },
         signal: AbortSignal.timeout(10_000),
       });
-      if (response.status !== 200) last = `/version answered HTTP ${response.status}`;
-      else {
-        const data = await response.json();
-        last = versionMismatch(data, expected) ?? "";
+      if (response.status !== 200) {
+        cancelBody(response.body);
+        last = `/version answered HTTP ${response.status}`;
+      } else {
+        const data = await readVersionJson(response.body);
+        last =
+          data === undefined
+            ? `/version response exceeds ${MAX_VERSION_BYTES} bytes`
+            : (versionMismatch(data, expected) ?? "");
         if (!last) return data;
       }
     } catch (error) {

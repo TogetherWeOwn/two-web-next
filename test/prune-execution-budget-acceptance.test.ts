@@ -432,11 +432,29 @@ describe.skipIf(!DB)("scheduled retention execution budgets (test Postgres, acce
   it("a cancelled middle table reports zero while earlier and later siblings commit with the holder still parked", async () => {
     const lock = await parked("event_search_logs");
     const failures: Failure[][] = [];
+    let searchFailure: { ok: false; error: unknown } | undefined;
     let counts: PruneCounts | undefined;
     const work = track(
       pgSingleFlight(sweeper)(`budget:${fixture.schemaName}`, async (tx) => {
+        const stores = pgPruneStores(tx);
+        const isolateSearch = stores.searchLog.isolate!;
         counts = await pruneModelTables(
-          { ...pgPruneStores(tx), jobUniqueLocks: pgPruneStores(dispatch).jobUniqueLocks },
+          {
+            ...stores,
+            searchLog: {
+              ...stores.searchLog,
+              isolate: async (drain) => {
+                try {
+                  return await isolateSearch(drain);
+                } catch (error) {
+                  // The savepoint has rolled back before the isolation call rejects.
+                  searchFailure = { ok: false, error };
+                  throw error;
+                }
+              },
+            },
+            jobUniqueLocks: pgPruneStores(dispatch).jobUniqueLocks,
+          },
           now,
           { reportCap: () => {}, reportFailures: (items) => failures.push([...items]) },
         );
@@ -448,22 +466,23 @@ describe.skipIf(!DB)("scheduled retention execution budgets (test Postgres, acce
       witnessed ||= await observed(sweepName, "Lock", lock.pid);
       return witnessed || work.state.settled;
     });
-    const settledWhileParked = await until(() => work.state.settled);
+    expect(witnessed).toBe(true);
+    await until(() => searchFailure !== undefined || work.state.settled);
+    expect(
+      ["55P03", "57014"],
+      "search delete did not cancel while blocked by the holder",
+    ).toContain(errorCode(searchFailure));
+    expect(
+      await until(() => work.state.settled),
+      "flight did not commit after the search delete was cancelled",
+    ).toBe(true);
+    expect(work.state.result).toEqual({ ok: true, value: true });
+
     const committed = {
       joins: await count("join_attempts"),
       boards: await count("board_view_logs"),
       sessions: await count("web_sessions"),
     };
-    lock.release();
-    await work.pending;
-    await lock.pending;
-
-    expect(witnessed).toBe(true);
-    expect(
-      settledWhileParked,
-      "flight waited for the external holder instead of cancelling one table",
-    ).toBe(true);
-    expect(work.state.result).toEqual({ ok: true, value: true });
     expect(committed).toEqual({ joins: 2, boards: 2, sessions: 1 });
     expect(counts).toEqual({
       agentEventAudits: 1,
@@ -477,7 +496,15 @@ describe.skipIf(!DB)("scheduled retention execution budgets (test Postgres, acce
     });
     expect(failures).toHaveLength(1);
     expect(failures[0]!.map((item) => item.table)).toEqual(["searchLog"]);
-    expect(["55P03", "57014"]).toContain((failures[0]![0]!.error as { code: string }).code);
+    expect(failures[0]![0]!.error).toBe(searchFailure?.error);
+    const [holderLock] = await observer<{ held: boolean }[]>`select exists (
+      select 1 from pg_locks where pid = ${lock.pid}
+        and relation = 'event_search_logs'::regclass and mode = 'AccessExclusiveLock' and granted
+    ) as held`;
+    expect(holderLock!.held, "the holder released its lock before the flight committed").toBe(true);
+    lock.release();
+    await lock.pending;
+
     expect(await count("event_search_logs")).toBe(3);
     const retry = await pruneModelTables(pgPruneStores(sweeper), now, { reportCap: () => {} });
     expect(retry.searchLog).toBe(1);

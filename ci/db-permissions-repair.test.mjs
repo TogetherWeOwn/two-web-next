@@ -17,6 +17,87 @@ const workflow = parse(read("../.github/workflows/db-permissions-repair.yml"));
 const shell = (script, env, prefix = "") =>
   spawnSync("/bin/bash", ["-c", `${prefix}\n${script}`], { env, encoding: "utf8" });
 
+test("executor authority replays committed provision and revoke without another write", async () => {
+  const hash = (value) => createHash("sha256").update(value).digest("hex");
+  const executor = "repair_executor";
+  const provisioner = "repair_provisioner";
+  const identity = { database: "postgres", authenticated: provisioner, effective: provisioner };
+  const grantSql =
+    "grant two_web_migrate to ? with admin false, inherit true, set true granted by current_user";
+  const revokeSql = "revoke two_web_migrate from ? granted by current_user restrict";
+  let committed = false;
+
+  for (const [operation, expectedEvents] of [
+    ["provision", ["read absent", "grant", "read present"]],
+    ["provision", ["read present"]],
+    ["revoke", ["read present", "revoke", "read absent"]],
+    ["revoke", ["read absent"]],
+  ]) {
+    const plan = JSON.stringify({
+      operation,
+      executor,
+      identity: hash(`postgres\0${provisioner}`),
+    });
+    const env = {
+      PRODUCTION_DB_EXECUTOR_PLAN: plan,
+      PRODUCTION_DB_EXECUTOR_PLAN_SHA256: hash(plan),
+      PRODUCTION_DB_EXECUTOR_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:synthetic@${PLANETSCALE_PRODUCTION_HOST}/postgres?sslmode=verify-full`,
+    };
+    const events = [];
+    await runExecutorAuthority(operation, env, () => {
+      events.push("connect");
+      return {
+        async begin(_isolation, run) {
+          let pending = committed;
+          await run((strings, ...values) => {
+            if (typeof strings === "string") {
+              assert.equal(strings, executor);
+              return strings;
+            }
+            const sql = strings.join("?").trim().replace(/\s+/g, " ");
+            if (sql.startsWith("set local ")) return [];
+            if (sql.startsWith("select pg_catalog.current_database()")) return [identity];
+            if (sql.startsWith("select pg_try_advisory_xact_lock(")) return [{ acquired: true }];
+            assert.deepEqual(values, [executor]);
+            if (sql === grantSql || sql === revokeSql) {
+              // postgres.js sends the statement only when its query is awaited.
+              return {
+                then(resolve) {
+                  pending = sql === grantSql;
+                  events.push(pending ? "grant" : "revoke");
+                  resolve([]);
+                },
+              };
+            }
+            assert.match(sql, /^select p\.oid::text as provisioner,/);
+            events.push(pending ? "read present" : "read absent");
+            return [
+              {
+                authorized: true,
+                provisioner: "123",
+                member: pending,
+                inherits: pending,
+                can_set: pending,
+                edges: pending ? [["123", false, true, true]] : [],
+              },
+            ];
+          });
+          committed = pending;
+          events.push("commit");
+        },
+        async end(options) {
+          assert.deepEqual(options, { timeout: 5 });
+          events.push("close start");
+          await new Promise((resolve) => setImmediate(resolve));
+          events.push("closed");
+        },
+      };
+    });
+    assert.equal(committed, operation === "provision");
+    assert.deepEqual(events, ["connect", ...expectedEvents, "commit", "close start", "closed"]);
+  }
+});
+
 test("repair dispatch isolates the credential and pins protected main and the same attempt", () => {
   assert.deepEqual(Object.keys(workflow.on), ["workflow_dispatch"]);
   assert.equal(workflow.jobs.preflight.environment, undefined);
@@ -609,4 +690,41 @@ test("executor dispatch scopes its credential and suppresses subprocess output",
       code ? "Executor membership operation did not confirm an outcome.\n" : "",
     );
   }
+});
+
+test("executor authority refuses changed plan bytes before connecting", async (t) => {
+  const hash = (value) => createHash("sha256").update(value).digest("hex");
+  const operation = "provision";
+  const identity = hash("postgres\0repair_provisioner");
+  const plan = JSON.stringify({ operation, executor: "repair_executor", identity });
+  const approvedDigest = hash(plan);
+  const env = {
+    PRODUCTION_DB_EXECUTOR_PLAN: plan,
+    PRODUCTION_DB_EXECUTOR_PLAN_SHA256: approvedDigest,
+    PRODUCTION_DB_EXECUTOR_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:synthetic@${PLANETSCALE_PRODUCTION_HOST}/postgres?sslmode=verify-full`,
+  };
+  const admitted = new Error("Fixture reached the transaction boundary");
+  const connect = t.mock.fn((config) => {
+    assert.equal(config.identity, identity);
+    return {
+      async begin() {
+        throw admitted;
+      },
+      async end() {},
+    };
+  });
+
+  // A trailing space preserves the parsed plan and changes the approved bytes.
+  const changedPlan = `${plan} `;
+  await assert.rejects(
+    runExecutorAuthority(operation, { ...env, PRODUCTION_DB_EXECUTOR_PLAN: changedPlan }, connect),
+    { code: "ERR_ASSERTION", actual: hash(changedPlan), expected: approvedDigest },
+  );
+  assert.equal(connect.mock.callCount(), 0);
+
+  await assert.rejects(
+    runExecutorAuthority(operation, env, connect),
+    (error) => error === admitted,
+  );
+  assert.equal(connect.mock.callCount(), 1);
 });
