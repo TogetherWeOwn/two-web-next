@@ -32,13 +32,8 @@ jobs:
               "gitleaks": "pr-gates ignored edit (scan)",
           }
 
-          def identity(pr):
-              return (pr["number"], *(
-                  (ref["sha"], ref["ref"], ref["repo"]["id"]) for ref in (pr["head"], pr["base"])
-              ))
-
           def current_identity(pr):
-              """Bind a live PR while allowing its base commit to advance."""
+              """Bind a PR and its Actions evidence while allowing its base commit to advance."""
               return (pr["number"], (
                   pr["head"]["sha"], pr["head"]["ref"], pr["head"]["repo"]["id"]
               ), (
@@ -69,7 +64,7 @@ jobs:
                           raise ValueError("Unbound or ambiguous Actions run")
                       if associations[0]["number"] != pr["number"]:
                           continue
-                      if identity(associations[0]) != identity(pr):
+                      if current_identity(associations[0]) != current_identity(pr):
                           return None
                       # The advisory labeler may outlive the size gate. On the first
                       # attempt there are no earlier job verdicts to confuse with it.
