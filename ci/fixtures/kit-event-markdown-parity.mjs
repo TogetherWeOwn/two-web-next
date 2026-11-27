@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { generateSignedCookie } from "hono/cookie";
 import postgres from "postgres";
 import { FIXTURE_SECRETS, SESSION_COOKIE } from "../parity/fixture.mjs";
+import { withFixtureCleanup } from "./kit-worker-lifecycle.mjs";
 
 const keys = {
   published: "01J0000000000000000000A001",
@@ -27,12 +28,35 @@ const wireHeaders = [
   "x-content-type-options",
 ];
 
+export function withEventMarkdownDatabaseCleanup(run, sql, sessionHash, buckets) {
+  const failureMessage = "Event Markdown fixture database cleanup failed";
+  return withFixtureCleanup(
+    run,
+    async () => {
+      try {
+        try {
+          await sql`delete from web_sessions where token_hash = ${sessionHash}`;
+          await sql`delete from events where event_key in ${sql(Object.values(keys))}`;
+          if (buckets.length)
+            await sql`delete from web_throttle_hits where bucket in ${sql(buckets)}`;
+        } finally {
+          await sql.end();
+        }
+      } catch {
+        throw new Error(failureMessage);
+      }
+    },
+    () => console.error(failureMessage),
+  );
+}
+
 export async function assertEventMarkdownParity({
   hono,
   kit,
   startKit,
   assertEventDetail,
   databaseUrl,
+  connectDatabase = postgres,
 }) {
   const [off, on] = await Promise.all(
     ["false", "true"].map((flag) =>
@@ -45,7 +69,7 @@ export async function assertEventMarkdownParity({
       }),
     ),
   );
-  const sql = postgres(databaseUrl, { max: 1 });
+  const sql = connectDatabase(databaseUrl, { max: 1 });
   const token = `two_${randomBytes(32).toString("base64url")}`;
   const sessionHash = createHash("sha256").update(token).digest("hex");
   const buckets = [];
@@ -96,7 +120,7 @@ export async function assertEventMarkdownParity({
     return direct;
   }
 
-  try {
+  const run = async () => {
     for (const [status, key] of Object.entries(keys)) {
       if (status === "missing") continue;
       const starts = status === "past" ? "2020-01-01T18:00:00Z" : "2090-01-01T18:00:00Z";
@@ -285,13 +309,6 @@ export async function assertEventMarkdownParity({
       "PASS installed Worker event Markdown fallback, wire parity, suffix precedence and shared read budget",
     );
     await assertEventDetail({ key: keys.past, title: titleFor("past"), headers: fixtureClient() });
-  } finally {
-    try {
-      await sql`delete from web_sessions where token_hash = ${sessionHash}`;
-      await sql`delete from events where event_key in ${sql(Object.values(keys))}`;
-      if (buckets.length) await sql`delete from web_throttle_hits where bucket in ${sql(buckets)}`;
-    } finally {
-      await sql.end();
-    }
-  }
+  };
+  await withEventMarkdownDatabaseCleanup(run, sql, sessionHash, buckets);
 }
