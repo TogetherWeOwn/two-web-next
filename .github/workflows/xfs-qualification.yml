@@ -142,26 +142,22 @@ jobs:
           --health-cmd "pg_isready -h 127.0.0.1 -U agent_test -d two_web_next"
           --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
-      -
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0 # The recorder identifies the most recent Hono runtime-input commit.
           persist-credentials: false
-      -
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           package-manager-cache: false
-      -
-        name: Check the runner's XFS tool and install locked Node tooling
+      - name: Check the runner's XFS tool and install locked Node tooling
         run: |
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
           sudo mkfs.xfs -V
           npm ci --include=dev --ignore-scripts --no-audit --no-fund
           npm ci --prefix web --include=dev --ignore-scripts --no-audit --no-fund
-      -
-        name: Build stock Kit output
+      - name: Build stock Kit output
         run: npm run build --prefix web
       - name: Install Chromium for the installed Kit homepage proof
         if: github.event_name != 'workflow_dispatch'
@@ -184,13 +180,11 @@ jobs:
           path: artifacts/kit-worker-fatal/
           if-no-files-found: error
           retention-days: 14
-      -
-        name: Prepare disposable runtime role
+      - name: Prepare disposable runtime role
         env:
           DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/two_web_next
         run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f ci/disposable-runtime-role.sql -f ci/disposable-runtime-role.sql
-      -
-        name: Migrate loopback Postgres and check migration history
+      - name: Migrate loopback Postgres and check migration history
         env:
           DATABASE_URL: postgres://agent_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/two_web_next
         run: |
@@ -274,8 +268,7 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 30
-      -
-        name: Verify loopback Postgres stopped
+      - name: Verify loopback Postgres stopped
         if: always()
         shell: bash
         env:
