@@ -614,18 +614,19 @@ describe("shared Discord snapshots", () => {
     };
     expect(decodeDiscordSnapshot(JSON.parse(encodeDiscordSnapshot([input])))).toEqual([input]);
   });
-  it("reserves jsonb separator overhead at the exact stored byte boundary", () => {
+  it.each(["xxxx", "🚀"])("reserves jsonb separator overhead at the byte cap with %s", (prefix) => {
     const rows = discordSnapshotBoundaryRows();
+    rows[0]!.description = `${prefix}${rows[0]!.description!.slice(4)}`;
+    const compactLimit = DISCORD_SNAPSHOT_MAX_BYTES - (14 * rows.length - 1);
     const encoded = encodeDiscordSnapshot(rows);
-    expect(new TextEncoder().encode(encoded).byteLength).toBe(
-      DISCORD_SNAPSHOT_MAX_BYTES - (14 * rows.length - 1),
-    );
+    expect(Buffer.byteLength(encoded)).toBe(compactLimit);
+    expect(decodeDiscordSnapshot(JSON.parse(encoded))).toEqual(rows);
     rows[0]!.title += "x";
-    expect(new TextEncoder().encode(JSON.stringify(rows)).byteLength).toBeLessThan(
-      DISCORD_SNAPSHOT_MAX_BYTES,
-    );
+    const oversized = JSON.stringify(rows);
+    expect(Buffer.byteLength(oversized)).toBe(compactLimit + 1);
+    expect(Buffer.byteLength(oversized)).toBeLessThan(DISCORD_SNAPSHOT_MAX_BYTES);
     expect(() => encodeDiscordSnapshot(rows)).toThrow();
-    expect(() => decodeDiscordSnapshot(JSON.parse(JSON.stringify(rows)))).toThrow();
+    expect(() => decodeDiscordSnapshot(JSON.parse(oversized))).toThrow();
   });
   it("bounds payloads and admits only serialized display fields", () => {
     expect(() =>

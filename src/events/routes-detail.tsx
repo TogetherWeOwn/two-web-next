@@ -32,7 +32,8 @@ import {
   type PublicEvent,
 } from "./reads";
 import { archiveContext } from "./archive-context";
-import { archiveEventHref, authReturnHref } from "./attendee-paths";
+import { archiveEventHref } from "./attendee-paths";
+import { authReturnHref } from "./auth-return.server";
 import { waitlistPosition } from "./waitlist";
 import { recordAccess } from "../admin/store";
 import { EventGonePage, EventPage } from "./pages";
