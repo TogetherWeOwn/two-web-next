@@ -5,7 +5,7 @@ import { adminGuard } from "./guard";
 import { KIT_QUEUE_PREVIEW_ROUTE } from "./kit-serving";
 import { queuePreviewAdmission, type QueuePreviewVars, respondQueuePreview } from "./queue-preview";
 
-const admitModerator = adminGuard(undefined, true);
+const admitModerator = adminGuard(undefined, KIT_QUEUE_PREVIEW_ROUTE.path);
 
 /** The mounted Kit endpoint supplies the matched selector and the hook's request ID. */
 export async function fetchKitQueuePreview(
@@ -23,7 +23,7 @@ export async function fetchKitQueuePreview(
         const denied = await admitModerator(c, async () => {
           await respondQueuePreview(c, selector);
         });
-        if (denied && !c.finalized) c.res = denied;
+        if (denied) c.res = denied;
       },
       selector,
     );

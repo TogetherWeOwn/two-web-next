@@ -228,8 +228,10 @@ on canonical staging or HTTP loopback. With the binding absent or false, Hono
 owns the request. HEAD, other methods, encoded paths, trailing slashes and Kit
 data requests continue through Hono. The queue preview's separate staging-only
 admission, moderator session, dedicated operator check and operational audit
-apply under both owners. Keep the ownership binding unset in deployed Workers
-until a separate qualification.
+apply under both owners. Admission requires both `APP_URL` and the request URL
+origin to be canonical staging, so a loopback-owned request returns 404
+`preview_disabled`. Keep the ownership binding unset in deployed Workers until
+a separate qualification.
 
 ### Security disclosure endpoint
 
