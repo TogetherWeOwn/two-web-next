@@ -273,6 +273,9 @@ describe("gitleaks job wiring", () => {
     expect(scan).toContain("GITLEAKS_BIN: ${{ runner.temp }}/gitleaks");
     expect(scan).toContain("EVENT_NAME: ${{ github.event_name }}");
     expect(scan).toContain("BASE_REF: ${{ github.base_ref || github.event.merge_group.base_ref }}");
+    expect(scan).toContain(
+      "POLICY_REVISION: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha || 'missing policy revision' }}",
+    );
     const runLines = scan.split("\n").filter((line) => line.trim().startsWith("run:"));
     expect(runLines.filter((line) => line.includes("${{"))).toEqual([]);
 
@@ -313,12 +316,13 @@ describe("gitleaks-scan.sh", () => {
     // resolving the fetched base.
     expect(scanScript).toContain('base_ref="${BASE_REF#refs/heads/}"');
     expect(scanScript).toContain('base="refs/remotes/origin/${base_ref}"');
+    expect(scanScript).toContain('"${POLICY_REVISION:-${base}}^{commit}"');
     expect(scanScript).toContain('"${base}:.gitleaks.toml"');
     expect(scanScript).toContain('"${base}:.gitleaksignore"');
     expect(scanScript).toContain("--config");
     expect(scanScript).toContain("--gitleaks-ignore-path");
     // An unfetched base branch fails the scan instead of falling back to the PR's files.
-    expect(scanScript).toMatch(/base branch \$\{base_ref\} is not fetched[\s\S]*exit 2/);
+    expect(scanScript).toMatch(/base policy revision for \$\{base_ref\} is not fetched[\s\S]*exit 2/);
   });
 
   it("unlinks the PR's ignore file before copying the base policy over it", () => {

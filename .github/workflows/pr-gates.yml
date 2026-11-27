@@ -354,7 +354,6 @@ jobs:
           import subprocess
           import time
           from pathlib import Path
-          from urllib.parse import quote
 
 
           def identity(pr):
@@ -383,34 +382,19 @@ jobs:
               raise ValueError("Incomplete PR retarget history")
 
 
-          def legacy_binding(api, pr, associations, started):
-              # The scan predates target receipts. Bind it to the only PR it could have served.
-              if associations:
-                  return identity(associations[0]) == identity(pr)
-              head = pr["head"]
-              label = quote(head["label"], safe="")
-              history = api(f"pulls?state=all&head={label}&per_page=100")
-              if len(history) >= 100:
-                  raise ValueError("Incomplete PR branch history")
-              matches = [other["number"] for other in history
-                         if other["head"]["ref"] == head["ref"]
-                         and (other["head"]["repo"] or {}).get("id") == head["repo"]["id"]
-                         and other["created_at"] <= started <= (other["closed_at"] or started)]
-              return matches == [pr["number"]]
-
-
           def source_scan(api, pr, current_run, retarget, merge_sha):
               head = pr["head"]
               base = pr["base"]
-              target = f"Scan PR {pr['number']} on {base['repo']['id']}:{base['ref']} at "
+              target = f"Scan PR {pr['number']} on {base['repo']['id']}:{base['ref']} at {merge_sha}"
               runs = collection(api, f"actions/workflows/pr-gates.yml/runs?head_sha={head['sha']}", "workflow_runs")
               proof = None
               for run in sorted(runs, key=lambda row: row["run_number"], reverse=True):
-                  run_id = run["id"]
+                  run_id, started = run["id"], run["created_at"]
                   if (run_id == current_run or run["path"] != ".github/workflows/pr-gates.yml"
                           or run["event"] != "pull_request" or run["head_sha"] != head["sha"]
                           or run["head_branch"] != head["ref"]
-                          or (run["head_repository"] or {}).get("id") != head["repo"]["id"]):
+                          or (run["head_repository"] or {}).get("id") != head["repo"]["id"]
+                          or started < max(retarget, pr["created_at"])):
                       continue
                   associations = run["pull_requests"]
                   if len(associations) > 1:
@@ -444,16 +428,7 @@ jobs:
                   if (scan["status"] != "completed" or scan["conclusion"] != "success"
                           or "Scan the full history" not in successful_steps):
                       raise ValueError(f"The latest source scan did not pass: {scan['html_url']}")
-                  started = run["created_at"]
-                  if started < max(retarget, pr["created_at"]):
-                      return None
-                  targets = [step for step in scan["steps"] if step["name"].startswith("Scan PR ")]
-                  if targets:
-                      if (len(targets) != 1 or targets[0]["conclusion"] != "success"
-                              or not targets[0]["name"].startswith(target)
-                              or (started == retarget and targets[0]["name"] != target + merge_sha)):
-                          return None
-                  elif started == retarget or not legacy_binding(api, pr, associations, started):
+                  if target not in successful_steps:
                       return None
                   proof = started, scan["id"], scan["html_url"]
               return proof
@@ -470,8 +445,9 @@ jobs:
 
               def verify_current():
                   live = api(f"pulls/{pr['number']}")
-                  if live["state"] != "open" or identity(live) != identity(pr):
-                      raise ValueError("The pull request head or target changed")
+                  if (live["state"] != "open" or identity(live) != identity(pr)
+                          or live["merge_commit_sha"] != merge_sha):
+                      raise ValueError("The pull request head, target, or merge revision changed")
 
               deadline = time.monotonic() + 360
               while time.monotonic() < deadline:
@@ -484,7 +460,7 @@ jobs:
                       print(f"Verified source scan on {pr['head']['sha']}: {proof[2]}")
                       return
                   time.sleep(15)
-              raise ValueError("Timed out waiting for the latest source scan")
+              raise ValueError("Timed out waiting for a verified source scan of this merge revision")
 
 
           if __name__ == "__main__":
@@ -537,6 +513,7 @@ jobs:
           # branch arrives as merge_group.base_ref (refs/heads/main), which
           # gitleaks-scan.sh strips to the branch name.
           BASE_REF: ${{ github.base_ref || github.event.merge_group.base_ref }}
+          POLICY_REVISION: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.merge_group.base_sha || 'missing policy revision' }}
         # On pull_request and merge_group the base branch's .gitleaks.toml /
         # .gitleaksignore apply, so an allowlist is honoured only after it
         # has merged.

@@ -86,9 +86,9 @@ class AdmissionTest(TestCase):
                     scope["verify_current"](lambda path, candidate=candidate: candidate, event)
 
     def actions_fixture(self):
-        head = {"sha": "a" * 40, "ref": "topic", "label": "fork:topic", "repo": {"id": 1}}
+        head = {"sha": "a" * 40, "ref": "topic", "repo": {"id": 1}}
         pr = {"number": 4, "head": head, "base": {"sha": "b" * 40, "ref": "main", "repo": {"id": 2}},
-              "created_at": "2026-01-01T00:00:00Z", "closed_at": None}
+              "created_at": "2026-01-01T00:00:00Z"}
         runs, jobs = [], {}
 
         def add(workflow, *names):
@@ -105,8 +105,6 @@ class AdmissionTest(TestCase):
             return jobs[run]
 
         def api(path):
-            if path.startswith("pulls?"):
-                return [pr]
             if path.startswith("actions/workflows/"):
                 matches = [run for run in runs if Path(run["path"]).name == path.split("/")[2]]
                 return {"total_count": len(matches), "workflow_runs": matches}
@@ -145,13 +143,11 @@ class AdmissionTest(TestCase):
             return source_scan(api, pr, current, retarget, sha)
 
         self.assertEqual(lookup(), (runs[0]["created_at"], 11, "synthetic"))
-        self.assertIsNone(lookup(runs[1]["created_at"]))
+        self.assertIsNone(lookup(sha="d" * 40))
+        with patch.dict(runs[0], conclusion="cancelled"):
+            self.assertIsNone(lookup(runs[1]["created_at"]))
         with patch.dict(source, steps=steps("main")[:1]):
-            self.assertEqual(lookup(), (runs[0]["created_at"], 11, "synthetic"))
-            self.assertIsNone(lookup(runs[0]["created_at"]))
-            def shared_branch(path):
-                return [pr, dict(pr, number=5)] if path.startswith("pulls?") else api(path)
-            self.assertIsNone(source_scan(shared_branch, pr, current, "", merge_sha))
+            self.assertIsNone(lookup())
 
         newer = add("pr-gates", "pr-lint", "gitleaks")[1]
         for reason in ("failure", "skipped", "cancelled", "success"):
@@ -165,6 +161,10 @@ class AdmissionTest(TestCase):
                 lookup()
 
         newer["steps"] = steps("main")
+        with patch.dict(runs[0], run_attempt=2, updated_at=runs[-1]["created_at"]):
+            with self.assertRaisesRegex(ValueError, "An older source run was retried"):
+                lookup()
+
         pr["base"]["ref"] = "release"
         runs[-1]["pull_requests"] = [deepcopy(pr)]
         self.assertIsNone(lookup())
@@ -173,9 +173,6 @@ class AdmissionTest(TestCase):
         stamp = runs[-1]["created_at"]
         self.assertEqual(lookup(stamp), (stamp, 51, "synthetic"))
         self.assertIsNone(lookup(stamp, sha="d" * 40))
-        with patch.dict(runs[0], run_attempt=2, updated_at=stamp):
-            with self.assertRaisesRegex(ValueError, "An older source run was retried"):
-                lookup(stamp)
 
     def test_evidence_rejects_mismatched_run_association(self):
         pr, runs, add, api = self.actions_fixture()

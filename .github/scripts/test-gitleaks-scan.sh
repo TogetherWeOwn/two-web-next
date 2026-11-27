@@ -278,6 +278,9 @@ for target in main strict-base; do
   test "$(git -C "${repo}" rev-parse HEAD^2)" = "$(git -C "${repo}" rev-parse topic)"
   if [[ "${target}" == main ]]; then
     expect "pr retarget: original base policy accepts the head" 0 "$(scan_rc pull_request main)"
+    git -C "${repo}" update-ref refs/remotes/origin/main strict-base
+    expect "pr: an advanced base ref cannot change the merge revision's policy" 0 \
+      "$(POLICY_REVISION=HEAD^1 scan_rc pull_request main)"
   else
     expect_fixture "pr retarget: new base policy detects the same head on its new merge SHA" strict-base
   fi

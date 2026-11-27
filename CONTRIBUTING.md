@@ -358,9 +358,10 @@ occurrence. A fingerprint scoped to the original commit does not also exempt
 the merge occurrence.
 
 Base retargets rerun both gates. Title and body edits rerun lint in a separate group and
-keep `gitleaks` required by verifying the latest source scan without running another scan.
+keep `gitleaks` required by verifying the latest source scan of the same merge commit.
+If that commit changes or predates scan receipts, a source run must scan it before reuse.
 
-On a pull request the job applies the base branch's
+On a pull request the job applies the merge commit's first parent's
 `.gitleaks.toml` and `.gitleaksignore` and ignores inline `gitleaks:allow`
 comments, so a PR cannot allowlist its own leak. If a change legitimately needs a
 new allowlist entry, merge that entry first as a small, separately reviewed PR;
