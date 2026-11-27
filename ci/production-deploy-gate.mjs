@@ -767,6 +767,8 @@ export function evaluateSoakErrorRate({ staging, production }) {
 }
 
 const SCRIPT_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+// The query returns at most 10,000 rows with two integer sums each.
+const SCRIPT_ERROR_RESPONSE_MAX_BYTES = 1024 * 1024;
 
 export function buildScriptErrorQuery({ accountId, scriptName, versionId, sinceIso, untilIso }) {
   if (!/^[0-9a-f]{32}$/.test(accountId ?? "")) throw new Error("Invalid Cloudflare account id");
@@ -808,6 +810,32 @@ export function sumScriptErrors(payload) {
   return { requests, errors };
 }
 
+async function readScriptErrorResponse(response) {
+  if (!response.body) throw new Error("Workers analytics response has no body");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return JSON.parse(text + decoder.decode());
+      bytes += value.byteLength;
+      if (bytes > SCRIPT_ERROR_RESPONSE_MAX_BYTES) {
+        // Cleanup cannot delay or replace the refusal.
+        void reader.cancel().catch(() => undefined);
+        break;
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } catch {
+    throw new Error("Workers analytics response is not readable JSON");
+  } finally {
+    reader.releaseLock();
+  }
+  throw new Error("Workers analytics response exceeds 1 MiB");
+}
+
 export async function scriptErrorSample(
   { accountId, scriptName, versionId, sinceIso, untilIso, token },
   { fetchImpl = fetch } = {},
@@ -821,7 +849,7 @@ export async function scriptErrorSample(
     signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok) throw new Error(`Workers analytics query failed (HTTP ${response.status})`);
-  return sumScriptErrors(await response.json());
+  return sumScriptErrors(await readScriptErrorResponse(response));
 }
 
 const STAGING_VERSION_PAGE_MAX_BYTES = 1024 * 1024;
