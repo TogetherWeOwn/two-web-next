@@ -1488,20 +1488,13 @@ export async function assertKitQueuePreviewServing({
   const sourceKey = `sync-event:01${randomBytes(12).toString("hex").toUpperCase()}`;
   const sql = postgres(databaseUrl, { max: 1 });
   const requestId = "0123456789abcdef";
-  const contractHeaders = [
-    "cache-control",
-    "content-type",
-    "location",
-    "vary",
-    "etag",
-    "allow",
-    "content-security-policy",
-    "x-frame-options",
-    "x-robots-tag",
-    "referrer-policy",
-  ];
   function contract(result) {
-    return contractHeaders.map((name) => result.headers.get(name));
+    const headers = new Headers(result.headers);
+    headers.delete("date");
+    headers.delete("x-two-renderer");
+    // Keep cookie presence in the header contract. Check rotation and attributes separately.
+    if (headers.has("set-cookie")) headers.set("set-cookie", "");
+    return Object.fromEntries(headers);
   }
 
   try {

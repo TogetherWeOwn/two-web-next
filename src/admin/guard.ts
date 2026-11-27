@@ -103,8 +103,8 @@ export type AdminOverrides = { sessionStore?: SessionStore; db?: import("../db/i
 
 export function adminGuard(
   overrides?: AdminOverrides | SessionStore,
-  // A detached endpoint supplies its exact, already matched read as next().
-  detachedRead?: true,
+  // A detached endpoint supplies its matched handler as next() and its route template for alerts.
+  detachedReadRoute?: string,
 ) {
   return async (
     c: Context<{ Bindings: Env; Variables: { adminActor: Actor; access: AccessDecl } }>,
@@ -231,12 +231,13 @@ export function adminGuard(
           return recordAccess(db, entry);
         },
         async () => {
-          if (detachedRead || c.req.matchedRoutes.length > 1) await next();
+          if (detachedReadRoute || c.req.matchedRoutes.length > 1) await next();
           // Only this guard matched. Render here: Hono's single-middleware path
           // otherwise reassigns/clones a finalized not-found buffer after next().
           else await notFoundHandler(c);
         },
         databaseUnavailable,
+        detachedReadRoute,
       );
       // The authorized GET already rotated the row, so the browser's bearer is
       // grace-only: deliver the replacement on every outcome whose jar the

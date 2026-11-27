@@ -727,6 +727,7 @@ export interface KitResolveOptions {
 
 export interface HookDispatchDeps {
   appUrl: string;
+  // The hook and the native queue preview endpoint must use the same Worker env binding.
   admin?: { env: Env; completeForm: () => never };
   // Signature-only notice peek, independent of the public route's session store.
   sessionSecret?: string;

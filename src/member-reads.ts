@@ -226,8 +226,8 @@ async function releaseAfterAudit(
   }
 }
 
-function metaOf(c: Context): MemberReadMeta {
-  return { method: c.req.method, route: requestRoute(c), requestId: c.get("requestId") };
+function metaOf(c: Context, route?: string): MemberReadMeta {
+  return { method: c.req.method, route: route ?? requestRoute(c), requestId: c.get("requestId") };
 }
 
 export async function memberReadBoundary(
@@ -236,6 +236,7 @@ export async function memberReadBoundary(
   write: AccessSink,
   next: Next,
   unavailable?: UnavailableResponse,
+  route?: string,
 ): Promise<void> {
   const capture: Capture = { subjects: new Set(), failed: false, pending: 0 };
   await captures.run(capture, async () => {
@@ -248,7 +249,7 @@ export async function memberReadBoundary(
       didThrow = true;
       capture.failed = true;
     }
-    const meta = metaOf(c);
+    const meta = metaOf(c, route);
     if (didThrow && !c.error) alertRequestError(thrown, meta);
     if (c.error) capture.failed = true;
     const outage = isDatabaseUnavailable(thrown ?? c.error);
