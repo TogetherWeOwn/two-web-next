@@ -23,6 +23,7 @@ export const EMBER_CUTOVER_VARS = Object.freeze({
 export const ADMIN_STAGING_CHECKS = ["default-denied", "credential-separation", "ownership-undo"];
 const maxFileBytes = 32 * 1024 * 1024;
 const maxPacketBytes = 128 * 1024 * 1024;
+const maxReadinessBytes = 16 * 1024;
 const hex = /^[a-f0-9]{64}$/;
 
 export async function sourceInputs(root = ".") {
@@ -209,7 +210,32 @@ export async function readReady(origin, prefixes, expected, fetchImpl = fetch) {
     redirect: "error",
     signal: AbortSignal.timeout(10_000),
   });
-  const body = await response.json();
+  assert.ok(response.body, "Missing readiness response body");
+  const reader = response.body.getReader();
+  const bytes = new Uint8Array(maxReadinessBytes);
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      assert.ok(
+        value.byteLength <= maxReadinessBytes - size,
+        "Worker readiness response exceeds 16 KiB",
+      );
+      bytes.set(value, size);
+      size += value.byteLength;
+    }
+  } finally {
+    // Stream cancellation can stall or fail after a refusal.
+    void reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+  let body;
+  try {
+    body = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, size)));
+  } catch {
+    throw new Error("Invalid readiness JSON");
+  }
   return verifyReady(response.status, body, prefixes, expected);
 }
 

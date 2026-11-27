@@ -15,6 +15,7 @@ import {
   inventory,
   ledgerPrefixes,
   productionUploadConfig,
+  readReady,
   sourceInputs,
   verifyPackage,
   verifyReady,
@@ -333,6 +334,88 @@ syncBuiltinESMExports();
       if (bytesRead !== undefined)
         assert.equal(await readFile(readCount, "utf8"), String(bytesRead));
     });
+  }
+});
+
+const readyOrigin = "https://cutover.example.invalid";
+const readyPrefixes = ledgerPrefixes(ledgerJournal);
+const readyIdentity = { version: kit, commit: sourceSha, state: "1033" };
+const readyBody = {
+  db: "ok",
+  pending_migrations: 0,
+  migration_ledger: readyPrefixes["1033"],
+  revision: { version_id: kit, commit: sourceSha },
+};
+
+test("readReady admits exact 200 and approved deferred 503 responses", async () => {
+  const jsonAtLimit = JSON.stringify(readyBody).padEnd(16 * 1024);
+  const response = async (url, { headers, redirect, signal }) => {
+    assert.equal(url.href, `${readyOrigin}/up`);
+    assert.deepEqual(headers, { "cache-control": "no-cache" });
+    assert.equal(redirect, "error");
+    assert.ok(signal instanceof AbortSignal && !signal.aborted);
+    return new Response(jsonAtLimit);
+  };
+  assert.equal(await readReady(readyOrigin, readyPrefixes, readyIdentity, response), "1033");
+
+  const deferred = async () =>
+    Response.json({ ...readyBody, pending_migrations: 1 }, { status: 503 });
+  assert.equal(
+    await readReady(
+      readyOrigin,
+      readyPrefixes,
+      { ...readyIdentity, allowDeferred: true },
+      deferred,
+    ),
+    "1033",
+  );
+  await assert.rejects(readReady(readyOrigin, readyPrefixes, readyIdentity, deferred), /readiness/);
+});
+
+test("readReady cancels and refuses an oversized stream without Content-Length", {
+  timeout: 2_000,
+}, async () => {
+  const atLimit = new TextEncoder().encode(JSON.stringify(readyBody).padEnd(16 * 1024));
+  const chunks = [atLimit, Uint8Array.of(0x20)];
+  let pulls = 0;
+  let cancelled = false;
+  const stream = new ReadableStream(
+    {
+      pull(controller) {
+        const chunk = chunks[pulls++];
+        if (chunk) controller.enqueue(chunk);
+        else controller.close();
+      },
+      cancel() {
+        cancelled = true;
+        // An unsettled cleanup must leave the refusal prompt.
+        return new Promise(() => {});
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const response = new Response(stream);
+  assert.equal(response.headers.get("content-length"), null);
+  await assert.rejects(
+    readReady(readyOrigin, readyPrefixes, readyIdentity, async () => response),
+    /readiness response exceeds/,
+  );
+  assert.equal(pulls, 2);
+  assert.equal(cancelled, true);
+  assert.equal(stream.locked, false);
+});
+
+test("readReady refuses empty, invalid or truncated JSON", async () => {
+  await assert.rejects(
+    readReady(readyOrigin, readyPrefixes, readyIdentity, async () => new Response()),
+    /missing readiness response body/i,
+  );
+  const json = JSON.stringify(readyBody);
+  for (const body of ["", `${json} garbage`, json.slice(0, -1)]) {
+    await assert.rejects(
+      readReady(readyOrigin, readyPrefixes, readyIdentity, async () => new Response(body)),
+      /invalid readiness JSON/i,
+    );
   }
 });
 
