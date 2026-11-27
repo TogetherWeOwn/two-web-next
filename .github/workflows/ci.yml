@@ -1203,6 +1203,9 @@ jobs:
       - name: Protected Kit cutover admission selftest (fixtures, no credentials or network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/kit-cutover-evidence.test.mjs ci/kit-cutover-deploy.test.mjs ci/kit-cutover-database.test.mjs
+      - name: Historical Kit cutover provenance fixture (no credentials or network)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/kit-cutover-historical-provenance.test.mjs
       - name: Production ancestry admission selftest (stubbed GitHub API, no network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/production-ancestry.test.mjs

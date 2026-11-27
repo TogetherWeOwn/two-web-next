@@ -15,6 +15,7 @@ import {
   resolveStagingCandidate,
 } from "./staging-provenance.mjs";
 import { stagingReceipt } from "./staging-receipt.mjs";
+import { canAdmitStagingOperation, parseStagingReservation } from "./staging-reservation.mjs";
 import { validateStagingSoakReceipt } from "./staging-soak-receipt.mjs";
 
 const A = "a".repeat(40);
@@ -667,5 +668,128 @@ test("qualification pins every checker, validates ancestry and shares the stagin
     assert.match(child, /staging-provenance\.mjs observe.* after /);
     assert.doesNotMatch(child, /cache: npm|uses: actions\/cache@/);
     assert.match(child, /package-manager-cache: false/);
+  }
+});
+
+const reservation = Object.freeze({
+  sha: "a".repeat(40),
+  allocationId: "11111111-1111-4111-8111-111111111111",
+  ownerId: 12345,
+  issuedAt: "2026-01-01T12:00:00Z",
+  expiresAt: "2026-01-01T13:00:00.000Z",
+});
+const issuedAtMs = Date.parse(reservation.issuedAt);
+const expiresAtMs = Date.parse(reservation.expiresAt);
+const observed = Object.freeze({ sha: reservation.sha, allocationId: reservation.allocationId });
+const mutation = Object.freeze({
+  operation: "mutation",
+  nowMs: issuedAtMs + 1,
+  verifiedOwnerId: reservation.ownerId,
+  observed,
+});
+const e2e = Object.freeze({ ...mutation, operation: "e2e", e2eSha: reservation.sha });
+
+test("staging reservation parses exact identities and a bounded UTC lifetime", () => {
+  assert.deepEqual(parseStagingReservation(reservation), {
+    ...observed,
+    ownerId: reservation.ownerId,
+    issuedAtMs,
+    expiresAtMs,
+  });
+});
+
+test("staging reservation blocks mutations and admits only its qualifying E2E", () => {
+  assert.equal(canAdmitStagingOperation(reservation, { ...mutation, nowMs: issuedAtMs }), false);
+  assert.equal(canAdmitStagingOperation(reservation, { ...e2e, nowMs: issuedAtMs }), true);
+  assert.equal(
+    canAdmitStagingOperation(reservation, { ...mutation, nowMs: expiresAtMs - 1 }),
+    false,
+  );
+  assert.equal(canAdmitStagingOperation(reservation, { ...e2e, nowMs: expiresAtMs - 1 }), true);
+
+  for (const [description, override] of [
+    ["different E2E SHA", { e2eSha: "b".repeat(40) }],
+    ["different serving SHA", { observed: { ...observed, sha: "b".repeat(40) } }],
+    ["missing observation", { observed: undefined }],
+    ["missing allocation", { observed: { sha: reservation.sha } }],
+    ["missing owner verification", { verifiedOwnerId: undefined }],
+    ["different verified owner", { verifiedOwnerId: reservation.ownerId + 1 }],
+    ["coerced owner ID", { verifiedOwnerId: String(reservation.ownerId) }],
+    ["future issue time", { nowMs: issuedAtMs - 1 }],
+  ]) {
+    assert.equal(
+      canAdmitStagingOperation(reservation, { ...e2e, ...override }),
+      false,
+      description,
+    );
+  }
+});
+
+test("staging reservation keeps its mutation hold if the allocation is lost before expiry", () => {
+  const replacement = { ...observed, allocationId: "22222222-2222-4222-8222-222222222222" };
+  assert.equal(
+    canAdmitStagingOperation(reservation, { ...mutation, observed: replacement }),
+    false,
+  );
+  assert.equal(canAdmitStagingOperation(reservation, { ...e2e, observed: replacement }), false);
+  assert.equal(canAdmitStagingOperation(null, { ...mutation, observed: replacement }), true);
+  assert.equal(
+    canAdmitStagingOperation(reservation, { ...e2e, observed: replacement, nowMs: expiresAtMs }),
+    true,
+  );
+});
+
+test("staging reservation opens the gate at verified expiry or explicit absence", () => {
+  const atExpiry = { ...mutation, nowMs: expiresAtMs };
+  assert.equal(canAdmitStagingOperation(reservation, atExpiry), true);
+  assert.equal(canAdmitStagingOperation(reservation, { ...atExpiry, verifiedOwnerId: 1 }), false);
+  assert.equal(canAdmitStagingOperation(null, mutation), true);
+  assert.equal(canAdmitStagingOperation(null, e2e), true);
+  assert.equal(canAdmitStagingOperation(undefined, atExpiry), false);
+  assert.equal(canAdmitStagingOperation(null, { ...mutation, operation: "rollback" }), false);
+  assert.equal(canAdmitStagingOperation(null, { ...e2e, e2eSha: undefined }), false);
+  assert.equal(canAdmitStagingOperation(null), false);
+  for (const nowMs of [NaN, Infinity, -1, 1.5, String(expiresAtMs)]) {
+    assert.equal(canAdmitStagingOperation(reservation, { ...atExpiry, nowMs }), false);
+  }
+});
+
+test("staging reservation rejects malformed records and overlong lifetimes even after they would expire", () => {
+  const malformed = [
+    [],
+    JSON.stringify(reservation),
+    { ...reservation, ignored: true },
+    { ...reservation, [Symbol("ignored")]: true },
+    {
+      ...reservation,
+      get sha() {
+        return reservation.sha;
+      },
+    },
+    { ...reservation, sha: reservation.sha.slice(0, 39) },
+    { ...reservation, sha: `${reservation.sha}\n` },
+    { ...reservation, allocationId: `${reservation.allocationId}\n` },
+    { ...reservation, allocationId: "g1111111-1111-4111-8111-111111111111" },
+    { ...reservation, allocationId: "A1111111-1111-4111-8111-111111111111" },
+    { ...reservation, ownerId: 0 },
+    { ...reservation, ownerId: String(reservation.ownerId) },
+    { ...reservation, ownerId: Number.MAX_SAFE_INTEGER + 1 },
+    { ...reservation, expiresAt: undefined },
+    { ...reservation, expiresAt: Infinity },
+    {
+      ...reservation,
+      issuedAt: "2026-02-30T12:00:00Z",
+      expiresAt: "2026-03-02T13:00:00Z",
+    },
+    { ...reservation, expiresAt: "2026-01-01T12:10:00+00:00" },
+    { ...reservation, expiresAt: "2026-01-01T12:10:00.0001Z" },
+    { ...reservation, expiresAt: "2026-01-01T11:59:00Z" },
+    { ...reservation, expiresAt: reservation.issuedAt },
+    { ...reservation, expiresAt: "2026-01-01T13:00:00.001Z" },
+  ];
+  for (const record of malformed) {
+    assert.throws(() => parseStagingReservation(record));
+    assert.equal(canAdmitStagingOperation(record, e2e), false);
+    assert.equal(canAdmitStagingOperation(record, { ...mutation, nowMs: expiresAtMs + 2 }), false);
   }
 });

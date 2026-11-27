@@ -32,11 +32,18 @@ export async function prepareAdminFixture(worker, entry) {
   await writeFile(
     entry,
     `
+import { AsyncLocalStorage } from "node:async_hooks";
 import worker from ${JSON.stringify(worker)};
 import { env, withEnv } from "cloudflare:workers";
 import { withRecurringCreateProbe } from ${JSON.stringify(recurringProbe)};
+const cancellations = new AsyncLocalStorage();
 const transport = globalThis.fetch;
 globalThis.fetch = async (input, init) => {
+  const capture = cancellations.getStore();
+  if (capture) {
+    capture.unexpectedHttp = true;
+    throw new Error("Unexpected outbound HTTP during fixture cancellation");
+  }
   if (input !== ${JSON.stringify(`${bot}/ops/config`)}) return transport(input, init);
   if (init?.method !== "GET" || init.redirect !== "manual" ||
       new Headers(init.headers).get("authorization") !== "Bearer " + env.OPS_CONTROL_TOKEN) {
@@ -45,16 +52,39 @@ globalThis.fetch = async (input, init) => {
   return Response.json({ epoch: 42, overrides: { label: "Fixture operator value" },
     baseline: {}, enforcement: "fixture" });
 };
-export default withRecurringCreateProbe({
-  ...worker,
-  fetch(request, bindings, context) {
-    if (request.headers.get(${JSON.stringify(unpublishFallback)}) !== "true") {
-      return worker.fetch(request, bindings, context);
+const admin = withRecurringCreateProbe(worker);
+export default {
+  ...admin,
+  fetch(request, bindings, ctx) {
+    if (request.headers.get(${JSON.stringify(unpublishFallback)}) === "true") {
+      const fallback = { ...bindings, KIT_PARITY_FIXTURE_ADMIN_FEATURED_UNPUBLISH: "false" };
+      return withEnv(fallback, () => admin.fetch(request, fallback, ctx));
     }
-    const fallback = { ...bindings, KIT_PARITY_FIXTURE_ADMIN_FEATURED_UNPUBLISH: "false" };
-    return withEnv(fallback, () => worker.fetch(request, fallback, context));
+    if (request.method !== "POST" ||
+        !/^\\/admin\\/events\\/[A-Za-z0-9_-]+\\/cancel$/.test(new URL(request.url).pathname)) {
+      return admin.fetch(request, bindings, ctx);
+    }
+    // Inject the same trap for the Kit form and for its default Hono handoff.
+    const capture = { messages: [], unexpectedHttp: false };
+    const fixtureBindings = {
+      ...bindings,
+      SYNC_EVENT_QUEUE: {
+        async send(message, options) {
+          capture.messages.push({ message, options });
+        },
+      },
+    };
+    if (request.headers.get("x-fixture-admin-off") === "1") delete fixtureBindings.KIT_ROUTE_ADMIN;
+    return cancellations.run(capture, async () => {
+      const response = await withEnv(fixtureBindings, () => admin.fetch(request, fixtureBindings, ctx));
+      if (capture.unexpectedHttp) throw new Error("Fixture cancellation attempted outbound HTTP");
+      const headers = new Headers(response.headers);
+      headers.set("x-fixture-cancel-sync", JSON.stringify(capture.messages));
+      return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+    });
   },
-});
+};
+
 `,
   );
   return {
@@ -1285,6 +1315,15 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
       member,
     });
 
+    const { assertEventCancellation } = await import("./kit-admin-cancellation.mjs");
+    await assertEventCancellation({
+      kit,
+      visit,
+      sql,
+      moderator: await session(sql, moderatorId, true),
+      member,
+      moderatorId,
+    });
     await assertAdminPublish({ kit, off, hono, sql, moderatorId, member });
   } finally {
     try {

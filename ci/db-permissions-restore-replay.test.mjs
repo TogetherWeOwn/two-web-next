@@ -48,6 +48,7 @@ import {
   webRoles,
 } from "./fixtures/db-restore-replay/seed.mjs";
 import { assertServingPostcheckRollback } from "./fixtures/db-restore-replay/serving-postcheck-case.mjs";
+import { assertServingLedgerRelationLock } from "./fixtures/db-restore-replay/serving-relation-lock-case.mjs";
 import {
   prepareServingIsolation,
   probeServingLedger,
@@ -381,6 +382,7 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
     ],
   });
   const { databaseReadiness } = await import(pathToFileURL(outfile).href);
+  const isolationQueries = [];
   const {
     run: isolate,
     version,
@@ -391,7 +393,19 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
       login: app,
       database: "postgres",
       migrationRole: migrator,
-      connect: connectMigrator,
+      connect() {
+        const client = connectMigrator();
+        isolationQueries.length = 0;
+        client.options.debug = (_id, statement, parameters) => {
+          isolationQueries.push({
+            statement,
+            advisoryKey: statement.startsWith("select pg_try_advisory_xact_lock(")
+              ? Number(parameters[0])
+              : undefined,
+          });
+        };
+        return client;
+      },
       firstEnd: originalEnd,
       timestamps: base.timestamps,
     }),
@@ -425,6 +439,18 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
       await botReads(fresh);
       return webReadiness;
     });
+
+  await t.test("competing ledger relation lock refuses isolation before ACL changes", () =>
+    assertServingLedgerRelationLock({
+      admin: restore.admin,
+      isolate,
+      isolationQueries,
+      async fingerprint() {
+        const { digest, state } = await inspect(fresh);
+        return { catalog: digest, ledger: state.ledger };
+      },
+    }),
+  );
 
   const { state: baseline } = await inspect(fresh);
   assert.equal(baseline.migrator_ready, true);
