@@ -1,4 +1,5 @@
 """Exercise the workflow's actual admission logic with synthetic Actions records."""
+import re
 from copy import deepcopy
 from pathlib import Path
 from textwrap import dedent
@@ -8,6 +9,49 @@ from unittest.mock import patch
 yaml = Path(".github/workflows/pr-ci-admission.yml").read_text()
 scope = {"__name__": "admission_fixture"}
 exec(dedent(yaml.split("<<'PYTHON'\n")[1].rsplit("          PYTHON", 1)[0]), scope)
+
+
+class AdmissionConcurrencyTest(TestCase):
+    def setUp(self):
+        match = re.search(
+            r"(?m)^jobs:\n  evidence:\n(?:(?!  \S).*\n)*?^    concurrency:\n((?:      .+\n)+)", yaml
+        )
+        self.assertIsNotNone(match, "jobs.evidence must define concurrency")
+        self.concurrency = match[1]
+
+    def test_evidence_group_is_bounded_per_workflow(self):
+        match = re.search(r"(?m)^      group: >-\n((?:        .+\n)+)", self.concurrency)
+        self.assertIsNotNone(match, "Expected a folded group expression with a lane suffix")
+        group = " ".join(match[1].split())
+        self.assertNotIn("%", group)
+
+        # Require only the caller name and a literal lane in the group key.
+        # Parse just the supported endsWith expression shape to exercise its mapping.
+        digit_check = r"endsWith\(format\('\{0\}', github\.event\.pull_request\.number \|\| 0\), '[0-9]'\)"
+        clause = rf"\((?:{digit_check} \|\| )*{digit_check}\) && '(?P<lane>[0-2])' \|\| "
+        match = re.fullmatch(
+            rf"pr-ci-admission-\$\{{\{{ github\.workflow \}}\}}-"
+            rf"\$\{{\{{ (?P<clauses>(?:{clause}){{3}})'(?P<fallback>3)' \}}\}}",
+            group,
+        )
+        self.assertIsNotNone(match, "Expected workflow scope, three bounded lane clauses, and lane 3 fallback")
+        fallback = match["fallback"]
+        routes = {}
+        for branch in re.finditer(clause, match["clauses"]):
+            for digit in re.findall(r", '([0-9])'\)", branch[0]):
+                self.assertNotIn(digit, routes, "A digit may appear in only one lane clause")
+                routes[digit] = branch["lane"]
+
+        for first_pr in (10, 3000):
+            for offset, lane in enumerate("0001112233"):
+                number = first_pr + offset
+                with self.subTest(number=number):
+                    self.assertEqual(routes.get(str(number)[-1], fallback), lane)
+        self.assertEqual(routes.get("0", fallback), "0", "Missing PR numbers use lane 0")
+
+    def test_evidence_queue_preserves_waiting_jobs(self):
+        self.assertRegex(self.concurrency, r"(?m)^      cancel-in-progress: false$")
+        self.assertRegex(self.concurrency, r"(?m)^      queue: max$")
 
 
 class AdmissionTest(TestCase):

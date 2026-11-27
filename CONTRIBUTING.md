@@ -222,11 +222,10 @@ Counted lines are additions + deletions excluding lockfiles, generated files
 and fixtures. The labeller lives once in the org
 [TogetherWeOwn/.github](https://github.com/TogetherWeOwn/.github) repository
 (`CI-STANDARD.md`, "Advisory PR-size labels"); the workflow here is a thin
-caller pinned to a central SHA and passes only this repo's generated paths.
-The labeller is advisory only: it is not a required check and never blocks a
-merge. The same workflow's `pr-size-gate` job is the required size gate,
-reported as `pr-size-gate / gate` (see Branch protection and required checks
-above). A Monday run of the same workflow
+caller pinned to a central SHA and passes this repo's generated paths.
+The `pr-size-gate` job opts into a best-effort advisory labelling step before
+the required size evaluation, which reports as `pr-size-gate / gate` (see
+Branch protection and required checks above). A Monday run of the same workflow
 prints the weekly tally of merged pull requests per size; the labels are the
 durable record behind it.
 

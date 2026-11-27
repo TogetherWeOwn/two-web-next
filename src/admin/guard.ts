@@ -101,7 +101,11 @@ export type AccessDecl = {
  */
 export type AdminOverrides = { sessionStore?: SessionStore; db?: import("../db/index").Db };
 
-export function adminGuard(overrides?: AdminOverrides | SessionStore) {
+export function adminGuard(
+  overrides?: AdminOverrides | SessionStore,
+  // A detached endpoint supplies its exact, already matched read as next().
+  detachedRead?: true,
+) {
   return async (
     c: Context<{ Bindings: Env; Variables: { adminActor: Actor; access: AccessDecl } }>,
     next: Next,
@@ -227,7 +231,7 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
           return recordAccess(db, entry);
         },
         async () => {
-          if (c.req.matchedRoutes.length > 1) await next();
+          if (detachedRead || c.req.matchedRoutes.length > 1) await next();
           // Only this guard matched. Render here: Hono's single-middleware path
           // otherwise reassigns/clones a finalized not-found buffer after next().
           else await notFoundHandler(c);

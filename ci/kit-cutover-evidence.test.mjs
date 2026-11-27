@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { registerHooks } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { readMigrationFiles } from "drizzle-orm/migrator";
+import { calendarFixtures, joinAction, smokeFixtures } from "../test/fixtures/smoke-routes.mjs";
+import { startSmokeFixture } from "../test/helpers/smoke-http.mjs";
 import {
   LEDGER_STATES,
   STAGING_WORKER,
@@ -12,6 +17,7 @@ import {
   inventory,
   ledgerPrefixes,
   productionUploadConfig,
+  readReady,
   sourceInputs,
   verifyPackage,
   verifyReady,
@@ -20,7 +26,9 @@ import {
 } from "./kit-cutover-evidence.mjs";
 import { packageCutover } from "./kit-cutover-package.mjs";
 import { cloudflare, exercise, verifyServed } from "./kit-cutover-staging.mjs";
+import "./fixtures/kit-cutover-cleanup.mjs";
 import { KIT_ROUTE_FLAGS } from "./production-deploy-gate.mjs";
+import { sha256 } from "./worker-bundle-evidence.mjs";
 
 const sourceSha = "a".repeat(40);
 const digest = "b".repeat(64);
@@ -120,11 +128,14 @@ test("packaging refuses installed Kit asset drift after parity", async (t) => {
   }
 });
 
-async function writePacketFixture(dir) {
+async function writePacketFixture(dir, extraNames = []) {
   for (const profile of ["hono", "kit"]) {
     await mkdir(join(dir, profile, "modules"), { recursive: true });
     await mkdir(join(dir, profile, "assets"));
     await writeFile(join(dir, profile, "assets", ".assetsignore"), "fixture");
+    for (const name of extraNames) {
+      await writeFile(join(dir, profile, name), `${profile}/${name}`);
+    }
   }
   await writeFile(join(dir, "hono/modules/worker.js"), "pure Hono");
   await writeFile(join(dir, "kit/modules/_worker.js"), "facade");
@@ -132,6 +143,305 @@ async function writePacketFixture(dir) {
   const context = { sourceSha, runId: identity.runId, runAttempt: identity.runAttempt };
   return { ...context, digest: await writeManifest(dir, context, inputs) };
 }
+
+test("cutover inventory preserves filenames shared with object properties", async (t) => {
+  const scratch = await mkdtemp(join(tmpdir(), "cutover-inventory-names-test-"));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const names = ["__proto__", "constructor", "hasOwnProperty", "toString", "assets/__proto__"];
+  const pin = await writePacketFixture(scratch, names);
+  const manifest = await verifyPackage(scratch, pin, inputs);
+  for (const profile of ["hono", "kit"]) {
+    const files = await inventory(join(scratch, profile));
+    for (const name of names) {
+      const path = `${profile}/${name}`;
+      const digest = createHash("sha256").update(path).digest("hex");
+      assert.equal(Object.getOwnPropertyDescriptor(files, name)?.value, digest, path);
+    }
+    assert.deepEqual(manifest.files[profile], files);
+  }
+});
+
+test("Ember upload CLI publishes only a valid native Wrangler receipt", async (t) => {
+  const scratch = await mkdtemp(join(tmpdir(), "ember-upload-receipt-"));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const packet = join(scratch, "packet");
+  const { runId, runAttempt, digest: manifest } = await writePacketFixture(packet);
+  const preload = join(scratch, "offline.mjs");
+  await writeFile(
+    preload,
+    `import assert from "node:assert/strict";
+import childProcess from "node:child_process";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+
+const { env } = process;
+const nativeReceipt = env.WRANGLER_OUTPUT_FILE_PATH;
+const { fstatSync, readFileSync, readSync } = fs;
+let receiptStat;
+let bytesRead = 0;
+let receiptGrew = false;
+const isReceipt = (stat) => receiptStat && stat.dev === receiptStat.dev && stat.ino === receiptStat.ino;
+fs.fstatSync = (fd) => {
+  const stat = fstatSync(fd);
+  if (!receiptGrew && env.FIXTURE_RECEIPT_GROWS === "true" && isReceipt(stat)) {
+    fs.appendFileSync(nativeReceipt, " ".repeat(4096));
+    receiptGrew = true;
+  }
+  return stat;
+};
+fs.readSync = (fd, ...args) => {
+  const count = readSync(fd, ...args);
+  if (isReceipt(fstatSync(fd))) bytesRead += count;
+  return count;
+};
+// A readFileSync regression can bypass the exported readSync entirely.
+fs.readFileSync = (file, ...args) => {
+  const isNative = typeof file === "number" ? isReceipt(fstatSync(file)) : file === nativeReceipt;
+  const countedBefore = bytesRead;
+  const content = readFileSync(file, ...args);
+  if (isNative && bytesRead === countedBefore) bytesRead += Buffer.byteLength(content);
+  return content;
+};
+process.on("exit", () => fs.writeFileSync(env.FIXTURE_BYTES_READ, String(bytesRead)));
+globalThis.fetch = async (url) => {
+  assert.equal(url.href, "https://togetherweown.com/up");
+  return Response.json(JSON.parse(env.FIXTURE_READINESS));
+};
+childProcess.execFileSync = (tool, args, options) => {
+  if (tool === "git") {
+    assert.deepEqual(args, ["rev-parse", "HEAD"]);
+    return env.DEPLOY_SHA;
+  }
+  if (tool === "node_modules/.bin/wrangler") {
+    assert.deepEqual(args.slice(0, 3), ["versions", "view", env.ROLLBACK_VERSION_ID]);
+    return env.FIXTURE_UNDO;
+  }
+  assert.equal(tool, "web/node_modules/.bin/wrangler");
+  assert.deepEqual(args.slice(0, 3), ["versions", "upload", "--config"]);
+  const config = JSON.parse(fs.readFileSync(args[3], "utf8"));
+  assert.equal(config.vars.KIT_ROUTE_EMBER_PAGES, "true");
+  assert.equal(options.env.WRANGLER_OUTPUT_FILE_PATH, nativeReceipt);
+  fs.copyFileSync(env.FIXTURE_RECEIPT, nativeReceipt);
+  receiptStat = fs.statSync(nativeReceipt);
+  return "";
+};
+syncBuiltinESMExports();
+`,
+  );
+  const worker = inputs.kit.name;
+  const upload = (overrides = {}) =>
+    JSON.stringify({
+      type: "version-upload",
+      version: 1,
+      worker_name: worker,
+      version_id: kit,
+      ...overrides,
+    });
+  const valid = `${JSON.stringify({ type: "version-upload-start" })}\r\n${upload()}\r\n`;
+  const limit = 1024 * 1024;
+  const atLimit = valid.padEnd(limit);
+  const invalidUtf8 = Buffer.concat([
+    Buffer.from(`${valid}{"message":"`),
+    Buffer.from([0xff]),
+    Buffer.from('"}\n'),
+  ]);
+  const readiness = JSON.stringify({
+    db: "ok",
+    pending_migrations: 0,
+    migration_ledger: ledgerPrefixes(inputs.journal)["1033"],
+    revision: { version_id: hono, commit: sourceSha },
+  });
+  const undo = JSON.stringify({
+    id: hono,
+    annotations: {
+      "workers/tag": `${sourceSha}-1-1`,
+      "workers/message": `two-web-cutover-undo:${manifest}`,
+    },
+  });
+  const cases = [
+    { name: "normal", raw: valid, bytesRead: Buffer.byteLength(valid) },
+    { name: "at the byte limit", raw: atLimit, bytesRead: limit },
+    {
+      name: "over the byte limit",
+      raw: `${atLimit} `,
+      bytesRead: 0,
+      error: /Wrangler output too large/,
+    },
+    {
+      name: "grows past the byte limit",
+      raw: atLimit,
+      grows: true,
+      bytesRead: limit + 1,
+      error: /Wrangler output too large/,
+    },
+    {
+      name: "malformed JSON after upload",
+      raw: `${valid}{fixture-receipt-content}\n`,
+      error: /invalid JSON/,
+    },
+    {
+      name: "non-object after upload",
+      raw: `${valid}42\n`,
+      error: /invalid Wrangler output record/,
+    },
+    { name: "invalid UTF-8 after upload", raw: invalidUtf8, error: /invalid UTF-8/ },
+    { name: "no upload", raw: "{}\n", error: /expected one native version upload/ },
+    {
+      name: "duplicate upload",
+      raw: `${valid}${upload()}\n`,
+      error: /expected one native version upload/,
+    },
+    { name: "wrong target", raw: upload({ worker_name: "other-worker" }), error: /wrong target/ },
+    { name: "wrong schema", raw: upload({ version: 2 }), error: /wrong target/ },
+    {
+      name: "invalid version ID",
+      raw: upload({ version_id: "invalid" }),
+      error: /Worker Version ID/,
+    },
+  ];
+  for (const [index, { name, raw, error, grows, bytesRead }] of cases.entries()) {
+    await t.test(name, async () => {
+      const directory = join(scratch, `case-${index}`);
+      const receipt = join(directory, "fixture.jsonl");
+      const output = join(directory, "github-output");
+      const readCount = join(directory, "receipt-bytes-read");
+      // verifyPackage requires the top-level packet inventory to remain exact.
+      const artifact = join(directory, "artifact");
+      await cp(packet, artifact, { recursive: true });
+      await writeFile(receipt, raw);
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          preload,
+          fileURLToPath(new URL("./kit-cutover-deploy.mjs", import.meta.url)),
+          "upload",
+          artifact,
+        ],
+        {
+          cwd: fileURLToPath(new URL("../", import.meta.url)),
+          encoding: "utf8",
+          timeout: 5_000,
+          env: {
+            CUTOVER_MODE: "ember",
+            CUTOVER_PIN: `${runId}:${runAttempt}:${manifest}`,
+            CUTOVER_UNDO_VERSION: hono,
+            INPUT_SHA: sourceSha,
+            DEPLOY_SHA: sourceSha,
+            GITHUB_EVENT_NAME: "workflow_dispatch",
+            GITHUB_REF: "refs/heads/main",
+            PRODUCTION_AUTO_PROMOTE_DISABLED: "true",
+            ROLLBACK_VERSION_ID: hono,
+            GITHUB_RUN_ID: runId,
+            GITHUB_RUN_ATTEMPT: runAttempt,
+            GITHUB_OUTPUT: output,
+            WRANGLER_OUTPUT_FILE_PATH: join(directory, "native.jsonl"),
+            FIXTURE_READINESS: readiness,
+            FIXTURE_UNDO: undo,
+            FIXTURE_RECEIPT: receipt,
+            FIXTURE_RECEIPT_GROWS: String(Boolean(grows)),
+            FIXTURE_BYTES_READ: readCount,
+          },
+        },
+      );
+      assert.ifError(result.error);
+      if (error) {
+        assert.equal(result.status, 1, result.stdout);
+        assert.match(result.stderr, error);
+        assert.doesNotMatch(result.stderr, /fixture-receipt-content/);
+        assert.doesNotMatch(result.stdout, /Uploaded staged/);
+        await assert.rejects(readFile(output), { code: "ENOENT" });
+      } else {
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(await readFile(output, "utf8"), `version_id=${kit}\n`);
+      }
+      if (bytesRead !== undefined)
+        assert.equal(await readFile(readCount, "utf8"), String(bytesRead));
+    });
+  }
+});
+
+const readyOrigin = "https://cutover.example.invalid";
+const readyPrefixes = ledgerPrefixes(ledgerJournal);
+const readyIdentity = { version: kit, commit: sourceSha, state: "1033" };
+const readyBody = {
+  db: "ok",
+  pending_migrations: 0,
+  migration_ledger: readyPrefixes["1033"],
+  revision: { version_id: kit, commit: sourceSha },
+};
+
+test("readReady admits exact 200 and approved deferred 503 responses", async () => {
+  const jsonAtLimit = JSON.stringify(readyBody).padEnd(16 * 1024);
+  const response = async (url, { headers, redirect, signal }) => {
+    assert.equal(url.href, `${readyOrigin}/up`);
+    assert.deepEqual(headers, { "cache-control": "no-cache" });
+    assert.equal(redirect, "error");
+    assert.ok(signal instanceof AbortSignal && !signal.aborted);
+    return new Response(jsonAtLimit);
+  };
+  assert.equal(await readReady(readyOrigin, readyPrefixes, readyIdentity, response), "1033");
+
+  const deferred = async () =>
+    Response.json({ ...readyBody, pending_migrations: 1 }, { status: 503 });
+  assert.equal(
+    await readReady(
+      readyOrigin,
+      readyPrefixes,
+      { ...readyIdentity, allowDeferred: true },
+      deferred,
+    ),
+    "1033",
+  );
+  await assert.rejects(readReady(readyOrigin, readyPrefixes, readyIdentity, deferred), /readiness/);
+});
+
+test("readReady cancels and refuses an oversized stream without Content-Length", {
+  timeout: 2_000,
+}, async () => {
+  const atLimit = new TextEncoder().encode(JSON.stringify(readyBody).padEnd(16 * 1024));
+  const chunks = [atLimit, Uint8Array.of(0x20)];
+  let pulls = 0;
+  let cancelled = false;
+  const stream = new ReadableStream(
+    {
+      pull(controller) {
+        const chunk = chunks[pulls++];
+        if (chunk) controller.enqueue(chunk);
+        else controller.close();
+      },
+      cancel() {
+        cancelled = true;
+        // An unsettled cleanup must leave the refusal prompt.
+        return new Promise(() => {});
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const response = new Response(stream);
+  assert.equal(response.headers.get("content-length"), null);
+  await assert.rejects(
+    readReady(readyOrigin, readyPrefixes, readyIdentity, async () => response),
+    /readiness response exceeds/,
+  );
+  assert.equal(pulls, 2);
+  assert.equal(cancelled, true);
+  assert.equal(stream.locked, false);
+});
+
+test("readReady refuses empty, invalid or truncated JSON", async () => {
+  await assert.rejects(
+    readReady(readyOrigin, readyPrefixes, readyIdentity, async () => new Response()),
+    /missing readiness response body/i,
+  );
+  const json = JSON.stringify(readyBody);
+  for (const body of ["", `${json} garbage`, json.slice(0, -1)]) {
+    await assert.rejects(
+      readReady(readyOrigin, readyPrefixes, readyIdentity, async () => new Response(body)),
+      /invalid readiness JSON/i,
+    );
+  }
+});
 
 test("cutover packet refuses wrong bytes, package identity, or source config", async (t) => {
   const scratch = await mkdtemp(join(tmpdir(), "cutover-packet-test-"));
@@ -203,6 +513,121 @@ test("isolated qualification refuses changed packet bytes and preserves earlier 
   assert.equal(result.stdout, "");
   assert.deepEqual(await readFile(proofPath), earlierProof);
   assert.deepEqual((await readdir(scratch)).sort(), ["kit-cutover-packet", "proof.json"]);
+});
+
+test("cutover packaging cleans only its own incomplete packet", async (t) => {
+  const scratch = await mkdtemp(join(tmpdir(), "cutover-packet-cleanup-test-"));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const repo = join(scratch, "repo");
+  const wrangler = { version: "1.2.3" };
+  const name = "two-web-next-production";
+  const assets = join(scratch, "installed");
+  const publicAssets = join(repo, "public");
+  const stub = "node_modules/.bin/wrangler";
+  const files = {
+    "wrangler.jsonc": JSON.stringify({ env: { production: { name, main: "src/worker.ts" } } }),
+    "web/wrangler.production.jsonc": JSON.stringify({
+      name,
+      main: ".svelte-kit/cloudflare/_worker.js",
+      assets: { directory: ".svelte-kit/cloudflare" },
+      vars: Object.fromEntries(KIT_ROUTE_FLAGS.map((flag) => [flag, "false"])),
+      triggers: { crons: [] },
+      workers_dev: false,
+      preview_urls: false,
+    }),
+    "drizzle/meta/_journal.json": JSON.stringify({ entries: [] }),
+    "package-lock.json": JSON.stringify({ packages: { "node_modules/wrangler": wrangler } }),
+    "node_modules/wrangler/package.json": JSON.stringify(wrangler),
+    [stub]:
+      '#!/bin/sh\n[ "$5" = --outdir ] || exit 2\nprintf "// synthetic Hono\\n" > "$6/worker.js"\n',
+  };
+  for (const [name, bytes] of Object.entries(files)) {
+    const path = join(repo, name);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, bytes, { mode: name === stub ? 0o700 : 0o600 });
+  }
+  await mkdir(assets);
+  await writeFile(join(assets, "_worker.js"), "// synthetic facade");
+  await writeFile(join(assets, "kit-adapter.js"), "// synthetic Kit adapter");
+  const assetIdentity = {
+    files: Object.fromEntries(
+      Object.entries(await inventory(assets)).map(([name, hash]) => [`cloudflare/${name}`, hash]),
+    ),
+  };
+  const context = { sourceSha, runId: identity.runId, runAttempt: identity.runAttempt };
+  for (const [key, value] of Object.entries({
+    RUNNER_TEMP: scratch,
+    GITHUB_OUTPUT: join(scratch, "output"),
+    GITHUB_STEP_SUMMARY: join(scratch, "summary"),
+  })) {
+    const previous = process.env[key];
+    t.after(() => {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    });
+    process.env[key] = value;
+  }
+  const pack = (packet) => packageCutover(packet, repo, { assets }, assetIdentity, context);
+
+  await t.test("removes the incomplete packet and preserves the original failure", async () => {
+    const packet = join(scratch, "incomplete");
+    // Hono asset inventory fails after the packet has received its Kit assets and modules.
+    await assert.rejects(pack(packet), { code: "ENOENT", path: publicAssets, syscall: "lstat" });
+    await assert.rejects(lstat(packet), { code: "ENOENT" });
+  });
+
+  await t.test("reports the packaging and cleanup errors when removal fails", async (t) => {
+    const { default: fsPromises } = await import("node:fs/promises");
+    const { syncBuiltinESMExports } = await import("node:module");
+    const packet = join(scratch, "cleanup-failure");
+    const cleanupError = Object.assign(new Error("synthetic packet removal refusal"), {
+      code: "EACCES",
+      path: packet,
+    });
+    const remove = fsPromises.rm;
+    const mockedRemove = t.mock.method(fsPromises, "rm", async (path, options) => {
+      if (path === packet) throw cleanupError;
+      return remove(path, options);
+    });
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(pack(packet), (error) => {
+        assert.ok(error instanceof AggregateError);
+        assert.equal(error.errors.length, 2);
+        const [original, cleanup] = error.errors;
+        assert.equal(original.code, "ENOENT");
+        assert.equal(original.path, publicAssets);
+        assert.equal(original.syscall, "lstat");
+        assert.equal(cleanup, cleanupError);
+        return true;
+      });
+    } finally {
+      mockedRemove.mock.restore();
+      syncBuiltinESMExports();
+    }
+  });
+
+  await t.test("removes the packet after manifest verification refuses empty assets", async () => {
+    const packet = join(scratch, "manifest-refusal");
+    await mkdir(publicAssets);
+    await assert.rejects(pack(packet), /missing Worker assets/);
+    await assert.rejects(lstat(packet), { code: "ENOENT" });
+    await rm(publicAssets, { recursive: true, force: true });
+  });
+
+  await t.test("keeps a verified packet and preserves it on admission failure", async () => {
+    await mkdir(publicAssets);
+    await writeFile(join(publicAssets, "fixture.txt"), "synthetic Hono asset");
+    const packet = join(scratch, "complete");
+    await pack(packet);
+    const manifestDigest = sha256(await readFile(join(packet, "manifest.json")));
+    const pin = { ...context, digest: manifestDigest };
+    const fixtureInputs = await sourceInputs(repo);
+    await verifyPackage(packet, pin, fixtureInputs);
+
+    await assert.rejects(pack(packet), { code: "EEXIST", path: packet, syscall: "mkdir" });
+    await verifyPackage(packet, pin, fixtureInputs);
+  });
 });
 
 test("cutover ledger admits exactly 1033 or 1037 and exact version readiness", () => {
@@ -384,6 +809,31 @@ test("isolated Workers API GET bounds and disposes provider responses", async (t
   );
 });
 
+test("isolated cutover counts routes only from the successful retry", async () => {
+  const origin = "https://cutover.example.invalid";
+  const prefixes = ledgerPrefixes(ledgerJournal);
+  const calls = [];
+  let retrying = false;
+  const routeCount = await verifyServed(origin, prefixes, identity, kit, "1037", "kit", {
+    probeReady: async () => {
+      calls.push("readiness");
+    },
+    probeRoutes: async (_origin, { onRoute }) => {
+      calls.push("smoke");
+      onRoute("/up", 0);
+      onRoute("/", retrying ? 0 : 1);
+      if (retrying) onRoute("/events", 0);
+      return retrying;
+    },
+    wait: async () => {
+      calls.push("wait");
+      retrying = true;
+    },
+  });
+  assert.equal(routeCount, 3);
+  assert.deepEqual(calls, ["readiness", "smoke", "wait", "readiness", "smoke"]);
+});
+
 test("isolated cutover repeats readiness and smoke when rollback is still propagating", async () => {
   const origin = "https://cutover.example.invalid";
   const prefixes = ledgerPrefixes(ledgerJournal);
@@ -522,6 +972,70 @@ test("isolated cutover refuses successful smoke with no route checks", async () 
   assert.deepEqual(calls, ["readiness", "smoke"]);
 });
 
+test("isolated cutover refuses a healthy smoke response from the wrong Worker version", async (t) => {
+  const prefixes = ledgerPrefixes(ledgerJournal);
+  let smokeVersion = kit;
+  const observations = [];
+  const { url, requests } = await startSmokeFixture(
+    t,
+    (path, response, headers) => {
+      if (path === "/join") response.body += joinAction;
+      if (path === "/up") {
+        // readReady sends no-cache. The ordinary-traffic smoke makes its own request.
+        const ready = headers["cache-control"] === "no-cache";
+        const version = ready ? hono : smokeVersion;
+        observations.push([ready ? "readiness" : "smoke", version]);
+        response.body = JSON.stringify({
+          ...JSON.parse(response.body),
+          migration_ledger: prefixes[1033],
+          revision: { version_id: version, commit: sourceSha },
+        });
+      }
+    },
+    calendarFixtures,
+  );
+  const log = t.mock.method(console, "log", () => {});
+  const waits = [];
+  const verify = () =>
+    verifyServed(url, prefixes, identity, hono, "1033", "hono", {
+      wait: async (ms) => {
+        waits.push(ms);
+      },
+    });
+
+  await assert.rejects(verify(), /isolated public-route smoke failed/);
+  assert.deepEqual(waits, Array(5).fill(10_000));
+  assert.deepEqual(
+    observations,
+    Array.from({ length: 6 }, () => [
+      ["readiness", hono],
+      ["smoke", kit],
+    ]).flat(),
+  );
+  const failures = log.mock.calls
+    .map(({ arguments: [line] }) => line)
+    .filter((line) => line.startsWith("FAIL "));
+  assert.deepEqual(
+    failures,
+    Array(6).fill(
+      `FAIL /up: expected revision.version_id ${hono}; actual revision.version_id ${kit}`,
+    ),
+  );
+
+  smokeVersion = hono;
+  observations.length = 0;
+  assert.equal(
+    await verify(),
+    Object.keys(smokeFixtures).length + Object.keys(calendarFixtures).length,
+  );
+  assert.deepEqual(observations, [
+    ["readiness", hono],
+    ["smoke", hono],
+  ]);
+  assert.equal(waits.length, 5);
+  assert.ok(requests.every(({ override }) => override === undefined));
+});
+
 test("isolated cutover proof requires both exact versions and six healthy transitions", () => {
   const checks = LEDGER_STATES.flatMap((state) =>
     ["hono", "kit", "undo"].map((step) => ({
@@ -630,6 +1144,75 @@ test("Ember cutover configuration opts in only the Ember documents", () => {
   });
 });
 
+test("all-off Hono fallback retains session settings and restores Hono route ownership", () => {
+  const name = "cutover-fixture-production";
+  const appUrl = "https://cutover.example.invalid";
+  const databaseId = "1".repeat(32);
+  const hyperdrive = [{ binding: "DB", id: databaseId }];
+  const assets = { binding: "ASSETS", run_worker_first: true };
+  const shared = { name, workers_dev: false, preview_urls: false, hyperdrive };
+  const fallbackInputs = {
+    root: {
+      name: "cutover-fixture-staging",
+      vars: { APP_URL: "https://staging.example.invalid" },
+      hyperdrive: [{ binding: "DB", id: "2".repeat(32) }],
+      assets,
+      keep_vars: true,
+      env: {
+        production: {
+          ...shared,
+          vars: { APP_URL: appUrl },
+          routes: [{ pattern: new URL(appUrl).hostname, custom_domain: true }],
+        },
+      },
+    },
+    kit: {
+      ...shared,
+      assets,
+      keep_vars: true,
+      vars: {
+        APP_URL: appUrl,
+        KIT_ROUTE_ARCHIVE: "false",
+        KIT_ROUTE_STATIC: "false",
+        KIT_ROUTE_EVENTS: "false",
+        KIT_ROUTE_HOME: "false",
+        KIT_ROUTE_JOIN: "false",
+        KIT_ROUTE_EMBER_PAGES: "false",
+        KIT_ROUTE_ADMIN: "false",
+      },
+    },
+  };
+
+  const ember = productionUploadConfig("kit", fallbackInputs, "ember");
+  const fallback = productionUploadConfig("hono", fallbackInputs, "all-off");
+
+  assert.equal(ember.main, "modules/_worker.js");
+  assert.equal(fallback.main, "modules/worker.js");
+  assert.deepEqual(
+    Object.entries(ember.vars).filter(
+      ([key, value]) => key.startsWith("KIT_ROUTE_") && value !== "false",
+    ),
+    [["KIT_ROUTE_EMBER_PAGES", "true"]],
+  );
+  assert.equal(
+    Object.keys(fallback.vars).some((key) => key.startsWith("KIT_ROUTE_")),
+    false,
+  );
+  for (const config of [ember, fallback]) {
+    assert.equal(config.name, name);
+    assert.equal(config.vars.APP_URL, appUrl);
+    assert.deepEqual(config.hyperdrive, [{ binding: "DB", id: databaseId }]);
+    assert.equal(config.keep_vars, true);
+    assert.equal(Object.hasOwn(config.vars, "SESSION_SECRET"), false);
+    assert.equal(config.workers_dev, false);
+    assert.equal(config.preview_urls, false);
+    assert.equal(Object.hasOwn(config, "routes"), false);
+    assert.equal(Object.hasOwn(config, "route"), false);
+    assert.equal(config.assets.binding, "ASSETS");
+    assert.equal(config.assets.run_worker_first, true);
+  }
+});
+
 test("isolated database admission fixes the host, database, owner, and run scope", async () => {
   const { fixtureDatabase, fixtureNames } = await import("./kit-cutover-database.mjs");
   const host = "ep-fixture.us-east-2.aws.neon.tech";
@@ -644,6 +1227,107 @@ test("isolated database admission fixes the host, database, owner, and run scope
     login: "two_web_cutover_21_3_runtime",
   });
   assert.throws(() => fixtureNames("21", "03"));
+});
+
+test("isolated fixture setup preserves the setup error and refuses a failed control close", async (t) => {
+  const fixtureModule = new URL("./kit-cutover-database.mjs?close-test", import.meta.url).href;
+  const postgresModule = `data:text/javascript,${encodeURIComponent(`
+    export const clients = new Map();
+    export default function postgres(url) {
+      const name = new URL(url).pathname;
+      if (!clients.has(name)) throw new Error("Unexpected fixture connection");
+      return clients.get(name)();
+    }
+  `)}`;
+  const { clients } = await import(postgresModule);
+  const hooks = registerHooks({
+    resolve(specifier, context, nextResolve) {
+      if (specifier === "postgres" && context.parentURL === fixtureModule) {
+        return { url: postgresModule, shortCircuit: true };
+      }
+      return nextResolve(specifier, context);
+    },
+  });
+  const { createFixture, fixtureDatabase, fixtureNames } = await import(fixtureModule).finally(() =>
+    hooks.deregister(),
+  );
+  const host = "ep-fixture.us-east-2.aws.neon.tech";
+  const url = fixtureDatabase(
+    `postgresql://two_web_cutover_owner:synthetic@${host}/two_web_cutover`,
+    host,
+  );
+  const names = fixtureNames("21", "3");
+  const setupError = new Error("synthetic setup failure");
+  const closeError = new Error("synthetic close failure");
+  const controlSetup = ["control open", "ownership", "freshness", "claim", "revoke", "create"];
+  const allocation = [...controlSetup, "revoke", "login", "grant", "control close"];
+
+  for (const [scenario, stopAt, failedClose, expectedError, expectedCalls] of [
+    [
+      "control operation and close fail",
+      "control",
+      "control",
+      setupError,
+      [...controlSetup, "control close"],
+    ],
+    [
+      "owner operation and close fail",
+      "owner",
+      "owner",
+      setupError,
+      [...allocation, "owner open", "owner setup", "owner close"],
+    ],
+    ["control close alone fails", null, "control", closeError, allocation],
+  ]) {
+    await t.test(scenario, async () => {
+      const calls = [];
+      function connect(client) {
+        calls.push(`${client} open`);
+        async function execute([sql]) {
+          if (sql.startsWith("SELECT current_user")) {
+            calls.push("ownership");
+            return [{ owned: true }];
+          }
+          if (sql.startsWith("SELECT")) {
+            calls.push("freshness");
+            return [{ db: false, login: false }];
+          }
+          const operation = {
+            "REVOKE CONNECT ON DATABASE two_web_cutover FROM PUBLIC": "revoke",
+            "REVOKE CONNECT ON DATABASE": "revoke",
+            "CREATE DATABASE": "create",
+            "CREATE ROLE": "login",
+            "GRANT CONNECT ON DATABASE": "grant",
+          }[sql.trim()];
+          assert.ok(operation, "unexpected fixture operation");
+          calls.push(operation);
+          if (stopAt === "control" && operation === "create") throw setupError;
+        }
+        return Object.assign((query) => (typeof query === "string" ? query : execute(query)), {
+          unsafe: (query) => ({
+            async simple() {
+              assert.equal(client, "owner");
+              assert.ok(query);
+              calls.push("owner setup");
+              if (stopAt === "owner") throw setupError;
+            },
+          }),
+          async end(options) {
+            assert.deepEqual(options, { timeout: 0 });
+            calls.push(`${client} close`);
+            if (failedClose === client) throw closeError;
+          },
+        });
+      }
+      clients.set(url.pathname, () => connect("control"));
+      clients.set(`/${names.db}`, () => connect("owner"));
+      const claim = async () => {
+        calls.push("claim");
+      };
+      await assert.rejects(createFixture(url, names, claim), (error) => error === expectedError);
+      assert.deepEqual(calls, expectedCalls);
+    });
+  }
 });
 
 test("Ember fixture requires the exact 1033 starting prefix before recording 1037 proof", async (t) => {

@@ -7,9 +7,18 @@ jobs:
   evidence:
     runs-on: ubuntu-latest
     timeout-minutes: 9
-    # Keep each caller from occupying multiple runners while its prerequisites wait.
+    # Four lanes per caller cap waiting evidence jobs at eight runners across ci and e2e.
     concurrency:
-      group: pr-ci-admission-${{ github.workflow }}
+      group: >-
+        pr-ci-admission-${{ github.workflow }}-${{
+        (endsWith(format('{0}', github.event.pull_request.number || 0), '0') ||
+        endsWith(format('{0}', github.event.pull_request.number || 0), '1') ||
+        endsWith(format('{0}', github.event.pull_request.number || 0), '2')) && '0' ||
+        (endsWith(format('{0}', github.event.pull_request.number || 0), '3') ||
+        endsWith(format('{0}', github.event.pull_request.number || 0), '4') ||
+        endsWith(format('{0}', github.event.pull_request.number || 0), '5')) && '1' ||
+        (endsWith(format('{0}', github.event.pull_request.number || 0), '6') ||
+        endsWith(format('{0}', github.event.pull_request.number || 0), '7')) && '2' || '3' }}
       cancel-in-progress: false
       queue: max
     steps:

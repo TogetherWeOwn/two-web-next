@@ -77,10 +77,10 @@ export function assertProductionHold(env, { nowMs = Date.now() } = {}) {
 }
 
 // Live production identity: the Cloudflare active version's commit, read from
-// the production apex /up revision marker (the same source the production
-// promoter uses). Returns the 40-hex commit, or null when the marker is
-// absent or unreadable (unknown, never equal).
+// a successful production apex /up response. A 503 can carry a revision
+// for diagnostics. The promoter treats that identity as unknown.
 export const PRODUCTION_ORIGIN = APEX_ORIGIN;
+const PRODUCTION_UP_MAX_BYTES = 16 * 1024;
 
 export async function readLiveProductionCommit({
   origin = PRODUCTION_ORIGIN,
@@ -92,7 +92,32 @@ export async function readLiveProductionCommit({
       headers: { "cache-control": "no-cache" },
       signal: AbortSignal.timeout(10_000),
     });
-    const data = await response.json();
+    const mediaType = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
+    if (response.status !== 200 || response.redirected || mediaType !== "application/json") {
+      void response.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    if (!response.body) return null;
+
+    // Bound the actual response bytes, including bodies without Content-Length.
+    const reader = response.body.getReader();
+    const bytes = new Uint8Array(PRODUCTION_UP_MAX_BYTES);
+    let length = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value.byteLength === 0 || value.byteLength > bytes.length - length) return null;
+        bytes.set(value, length);
+        length += value.byteLength;
+      }
+    } finally {
+      void reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+    }
+    const data = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, length)),
+    );
     const commit = data?.revision?.commit;
     return typeof commit === "string" && /^[0-9a-f]{40}$/.test(commit) ? commit : null;
   } catch {
@@ -107,6 +132,36 @@ export function isAlreadyLive(deploySha, liveSha) {
     deploySha.toLowerCase() === liveSha.toLowerCase() &&
     /^[0-9a-f]{40}$/i.test(deploySha)
   );
+}
+
+// GitHub can include up to 300 file diffs on the first page even with one
+// commit requested. 16 MiB leaves room for those diffs and the commit metadata.
+const MAX_PROMOTION_COMPARE_BYTES = 16 * 1024 * 1024;
+
+async function readPromotionComparison(response) {
+  let reader;
+  try {
+    reader = response.body.getReader();
+    const bytes = new Uint8Array(MAX_PROMOTION_COMPARE_BYTES);
+    let length = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return JSON.parse(new TextDecoder().decode(bytes.subarray(0, length)));
+      if (value.byteLength > bytes.length - length) break;
+      bytes.set(value, length);
+      length += value.byteLength;
+    }
+  } catch {
+    throw new Error("Promotion ancestry lookup returned unreadable JSON");
+  } finally {
+    if (reader) {
+      // Count decoded body bytes independently of the advertised Content-Length.
+      // A slow cancellation must not delay a refusal.
+      void reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+    }
+  }
+  throw new Error("Promotion ancestry response exceeds 16 MiB");
 }
 
 // Default selection is monotonic even when staging eligibility falls back to
@@ -138,7 +193,7 @@ export async function checkPromotionAncestry(env, { fetchImpl = fetch, refusal }
   }
   if (!env.GITHUB_TOKEN) throw new Error("Promotion ancestry requires GITHUB_TOKEN");
   const response = await fetchImpl(
-    `https://api.github.com/repos/${env.GITHUB_REPOSITORY}/compare/${liveSha}...${targetSha}`,
+    `https://api.github.com/repos/${env.GITHUB_REPOSITORY}/compare/${liveSha}...${targetSha}?per_page=1`,
     {
       headers: {
         Authorization: `Bearer ${env.GITHUB_TOKEN}`,
@@ -152,7 +207,7 @@ export async function checkPromotionAncestry(env, { fetchImpl = fetch, refusal }
   if (!response.ok) {
     throw new Error(`Promotion ancestry lookup failed (HTTP ${response.status})`);
   }
-  const comparison = await response.json();
+  const comparison = await readPromotionComparison(response);
   // Exact SHA refs bind the requested head. Require the base and merge-base
   // identities plus consistent counts, not a status string alone. Do not use
   // the commits array: GitHub can paginate/truncate it for large comparisons.
@@ -712,6 +767,8 @@ export function evaluateSoakErrorRate({ staging, production }) {
 }
 
 const SCRIPT_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+// The query returns at most 10,000 rows with two integer sums each.
+const SCRIPT_ERROR_RESPONSE_MAX_BYTES = 1024 * 1024;
 
 export function buildScriptErrorQuery({ accountId, scriptName, versionId, sinceIso, untilIso }) {
   if (!/^[0-9a-f]{32}$/.test(accountId ?? "")) throw new Error("Invalid Cloudflare account id");
@@ -753,6 +810,32 @@ export function sumScriptErrors(payload) {
   return { requests, errors };
 }
 
+async function readScriptErrorResponse(response) {
+  if (!response.body) throw new Error("Workers analytics response has no body");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return JSON.parse(text + decoder.decode());
+      bytes += value.byteLength;
+      if (bytes > SCRIPT_ERROR_RESPONSE_MAX_BYTES) {
+        // Cleanup cannot delay or replace the refusal.
+        void reader.cancel().catch(() => undefined);
+        break;
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } catch {
+    throw new Error("Workers analytics response is not readable JSON");
+  } finally {
+    reader.releaseLock();
+  }
+  throw new Error("Workers analytics response exceeds 1 MiB");
+}
+
 export async function scriptErrorSample(
   { accountId, scriptName, versionId, sinceIso, untilIso, token },
   { fetchImpl = fetch } = {},
@@ -766,7 +849,7 @@ export async function scriptErrorSample(
     signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok) throw new Error(`Workers analytics query failed (HTTP ${response.status})`);
-  return sumScriptErrors(await response.json());
+  return sumScriptErrors(await readScriptErrorResponse(response));
 }
 
 const STAGING_VERSION_PAGE_MAX_BYTES = 1024 * 1024;
@@ -904,6 +987,30 @@ export async function verifyAllocationSoak(env, { fetchImpl = fetch, now = Date.
   );
 }
 
+async function readPassiveLedgerZip(body) {
+  if (!body) throw new Error("Passive ledger zip has no body");
+  const bytes = Buffer.alloc(PASSIVE_LEDGER_MAX_BYTES);
+  const reader = body.getReader();
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read().catch(() => {
+        throw new Error("Passive ledger zip could not be read");
+      });
+      if (done) return bytes.subarray(0, size);
+      if (size + value.byteLength > PASSIVE_LEDGER_MAX_BYTES) {
+        // Request cancellation immediately. A storage failure must not delay or mask refusal.
+        void reader.cancel().catch(() => undefined);
+        throw new Error(`Passive ledger zip is over the ${PASSIVE_LEDGER_MAX_BYTES}-byte limit`);
+      }
+      bytes.set(value, size);
+      size += value.byteLength;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 // The candidate's staging passive ledgers: the artifact of the newest
 // e2e-staging run titled for the candidate, which must name the candidate.
 export async function fetchPassiveLedgers(
@@ -991,14 +1098,14 @@ export async function fetchPassiveLedgers(
   if (redirect.status !== 302 || !location?.startsWith("https://")) {
     throw new Error(`Passive ledger download failed (HTTP ${redirect.status})`);
   }
-  const zip = await fetchImpl(location, { redirect: "error", signal: AbortSignal.timeout(60_000) });
+  const zip = await fetchImpl(location, {
+    redirect: "error",
+    signal: AbortSignal.timeout(60_000),
+  }).catch(() => {
+    throw new Error("Passive ledger download failed");
+  });
   if (!zip.ok) throw new Error(`Passive ledger download failed (HTTP ${zip.status})`);
-  const bytes = Buffer.from(await zip.arrayBuffer());
-  if (bytes.byteLength > PASSIVE_LEDGER_MAX_BYTES) {
-    throw new Error(
-      `Passive ledger zip is ${bytes.byteLength} bytes, over the ${PASSIVE_LEDGER_MAX_BYTES}-byte limit`,
-    );
-  }
+  const bytes = await readPassiveLedgerZip(zip.body);
   mkdirSync(dir, { recursive: true });
   const zipPath = join(dir, "ledger.zip");
   writeFileSync(zipPath, bytes);

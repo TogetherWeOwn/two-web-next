@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import { PLANETSCALE_PRODUCTION_BRANCH_ID, PLANETSCALE_PRODUCTION_HOST } from "./db-migrate.mjs";
 import { runRepair } from "./db-permissions-repair.mjs";
+import { runExecutorAuthority } from "./db-repair-executor.mjs";
 import { runServingIsolation } from "./db-serving-ledger-isolation.mjs";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
@@ -294,6 +295,84 @@ test("database repair recovery pins an unchanged dispatcher and a main ancestor"
   assert.ok(directory.changedPaths.includes(nestedPath));
 });
 
+test("executor authority refuses mismatched membership before any write", async () => {
+  const hash = (value) => createHash("sha256").update(value).digest("hex");
+  const executor = "repair_executor";
+  const provisioner = "repair_provisioner";
+  const identity = { database: "postgres", authenticated: provisioner, effective: provisioner };
+  const plan = JSON.stringify({
+    operation: "revoke",
+    executor,
+    identity: hash(`postgres\0${provisioner}`),
+  });
+  const env = {
+    PRODUCTION_DB_EXECUTOR_PLAN: plan,
+    PRODUCTION_DB_EXECUTOR_PLAN_SHA256: hash(plan),
+    PRODUCTION_DB_EXECUTOR_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:synthetic@${PLANETSCALE_PRODUCTION_HOST}/postgres?sslmode=verify-full`,
+  };
+  const approvedEdge = ["123", false, true, true];
+
+  for (const edge of [["456", false, true, true], ["123", true, true, true], approvedEdge]) {
+    const events = [];
+    const attempt = runExecutorAuthority("revoke", env, () => ({
+      async begin(_isolation, run) {
+        let present = true;
+        try {
+          await run((strings, ...values) => {
+            if (typeof strings === "string") {
+              assert.equal(strings, executor);
+              return strings;
+            }
+            const sql = strings.join("?").trim().replace(/\s+/g, " ");
+            if (sql.startsWith("set local ")) return [];
+            if (sql.startsWith("select pg_catalog.current_database()")) return [identity];
+            if (sql.startsWith("select pg_try_advisory_xact_lock(")) return [{ acquired: true }];
+            assert.deepEqual(values, [executor]);
+            if (/^(grant|revoke)\b/i.test(sql)) {
+              events.push("write");
+              assert.equal(sql, "revoke two_web_migrate from ? granted by current_user restrict");
+              present = false;
+              return [];
+            }
+            assert.match(sql, /^select p\.oid::text as provisioner,/);
+            events.push(present ? "read present" : "read absent");
+            return [
+              {
+                authorized: true,
+                provisioner: "123",
+                member: present,
+                inherits: present,
+                can_set: present,
+                edges: present ? [edge] : [],
+              },
+            ];
+          });
+          events.push("commit");
+        } catch (error) {
+          events.push("rollback");
+          throw error;
+        }
+      },
+      async end(options) {
+        assert.deepEqual(options, { timeout: 5 });
+        events.push("close");
+      },
+    }));
+
+    if (edge === approvedEdge) {
+      await attempt;
+      assert.deepEqual(events, ["read present", "write", "read absent", "commit", "close"]);
+    } else {
+      await assert.rejects(attempt, {
+        code: "ERR_ASSERTION",
+        actual: [edge],
+        expected: [approvedEdge],
+      });
+      assert.deepEqual(events, ["read present", "rollback", "close"]);
+    }
+  }
+});
+
 test("repair refuses missing plan provenance and stale live identity before a write", async () => {
   const hash = (value) => createHash("sha256").update(value).digest("hex");
   const inventory = JSON.parse(read("db-permissions-repair-inventory.json"));
@@ -349,6 +428,7 @@ test("serving isolation refuses duplicate ACL entries in a digest-matched plan",
   const acl = { column: "", grantor: "fixture_owner", grantable: false };
   const plan = {
     identity: hash("postgres\0fixture_owner"),
+    servingRole: "two_web_app",
     version: "00000000-0000-4000-8000-000000000001",
     artifact: { sourceSha: "a".repeat(40), digest: "b".repeat(64) },
     before: "c".repeat(64),
@@ -390,6 +470,96 @@ test("serving isolation refuses duplicate ACL entries in a digest-matched plan",
     assert.equal(connect.mock.callCount(), 0);
   }
   assert.equal(fetchImpl.mock.callCount(), 0);
+});
+
+test("executor rolls back a grant or revoke when the post-write membership query fails", async () => {
+  const hash = (value) => createHash("sha256").update(value).digest("hex");
+  const executor = "repair_executor";
+  const provisioner = "repair_provisioner";
+  const identity = { database: "postgres", authenticated: provisioner, effective: provisioner };
+  const refusal = new Error("Synthetic post-write membership query failure");
+
+  for (const [operation, wanted, write] of [
+    [
+      "provision",
+      true,
+      "grant two_web_migrate to ? with admin false, inherit true, set true granted by current_user",
+    ],
+    ["revoke", false, "revoke two_web_migrate from ? granted by current_user restrict"],
+  ]) {
+    const plan = JSON.stringify({
+      operation,
+      executor,
+      identity: hash(`postgres\0${provisioner}`),
+    });
+    const env = {
+      PRODUCTION_DB_EXECUTOR_PLAN: plan,
+      PRODUCTION_DB_EXECUTOR_PLAN_SHA256: hash(plan),
+      PRODUCTION_DB_EXECUTOR_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:synthetic@${PLANETSCALE_PRODUCTION_HOST}/postgres?sslmode=verify-full`,
+    };
+
+    for (const failPostWrite of [true, false]) {
+      const before = !wanted;
+      let committed = before;
+      const membershipReads = [];
+      const lifecycle = [];
+      const attempt = runExecutorAuthority(operation, env, () => ({
+        async begin(_isolation, run) {
+          let pending = committed;
+          // Publish changes only when the transaction callback resolves.
+          await run((strings, ...values) => {
+            if (typeof strings === "string") {
+              assert.equal(strings, executor);
+              return strings;
+            }
+            const sql = strings.join("?").trim().replace(/\s+/g, " ");
+            if (sql.startsWith("set local ")) return [];
+            if (sql.startsWith("select pg_catalog.current_database()")) return [identity];
+            if (sql.startsWith("select pg_try_advisory_xact_lock(")) return [{ acquired: true }];
+            assert.deepEqual(values, [executor]);
+            if (sql === write) {
+              // postgres.js executes the write when its query is awaited.
+              return {
+                then(resolve) {
+                  lifecycle.push("write");
+                  pending = wanted;
+                  resolve([]);
+                },
+              };
+            }
+            assert.match(sql, /^select p\.oid::text as provisioner,/);
+            membershipReads.push(pending);
+            if (failPostWrite && pending === wanted) return Promise.reject(refusal);
+            return [
+              {
+                authorized: true,
+                provisioner: "123",
+                member: pending,
+                inherits: pending,
+                can_set: pending,
+                edges: pending ? [["123", false, true, true]] : [],
+              },
+            ];
+          });
+          committed = pending;
+          lifecycle.push("commit");
+        },
+        async end(options) {
+          assert.deepEqual(options, { timeout: 5 });
+          lifecycle.push("close");
+        },
+      }));
+
+      if (failPostWrite) await assert.rejects(attempt, (error) => error === refusal);
+      else await attempt;
+      assert.deepEqual(membershipReads, [before, wanted]);
+      assert.equal(committed, failPostWrite ? before : wanted);
+      assert.deepEqual(
+        lifecycle,
+        failPostWrite ? ["write", "close"] : ["write", "commit", "close"],
+      );
+    }
+  }
 });
 
 test("executor dispatch scopes its credential and suppresses subprocess output", () => {
@@ -439,4 +609,41 @@ test("executor dispatch scopes its credential and suppresses subprocess output",
       code ? "Executor membership operation did not confirm an outcome.\n" : "",
     );
   }
+});
+
+test("executor authority refuses changed plan bytes before connecting", async (t) => {
+  const hash = (value) => createHash("sha256").update(value).digest("hex");
+  const operation = "provision";
+  const identity = hash("postgres\0repair_provisioner");
+  const plan = JSON.stringify({ operation, executor: "repair_executor", identity });
+  const approvedDigest = hash(plan);
+  const env = {
+    PRODUCTION_DB_EXECUTOR_PLAN: plan,
+    PRODUCTION_DB_EXECUTOR_PLAN_SHA256: approvedDigest,
+    PRODUCTION_DB_EXECUTOR_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:synthetic@${PLANETSCALE_PRODUCTION_HOST}/postgres?sslmode=verify-full`,
+  };
+  const admitted = new Error("Fixture reached the transaction boundary");
+  const connect = t.mock.fn((config) => {
+    assert.equal(config.identity, identity);
+    return {
+      async begin() {
+        throw admitted;
+      },
+      async end() {},
+    };
+  });
+
+  // A trailing space preserves the parsed plan and changes the approved bytes.
+  const changedPlan = `${plan} `;
+  await assert.rejects(
+    runExecutorAuthority(operation, { ...env, PRODUCTION_DB_EXECUTOR_PLAN: changedPlan }, connect),
+    { code: "ERR_ASSERTION", actual: hash(changedPlan), expected: approvedDigest },
+  );
+  assert.equal(connect.mock.callCount(), 0);
+
+  await assert.rejects(
+    runExecutorAuthority(operation, env, connect),
+    (error) => error === admitted,
+  );
+  assert.equal(connect.mock.callCount(), 1);
 });

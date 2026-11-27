@@ -42,6 +42,8 @@ function fixture() {
       total_count: 2,
       jobs: ["a11y", "check"].map((name) => ({
         name,
+        run_id: run.id,
+        run_attempt: run.run_attempt,
         head_sha: sha,
         status: "completed",
         conclusion: "success",
@@ -668,6 +670,33 @@ for (const eventName of ["workflow_run", "workflow_dispatch"]) {
   });
 }
 
+test("a successful prior CI attempt cannot supply jobs for the selected attempt", () => {
+  const ctx = context("workflow_run");
+  const evidence = fixture();
+  ctx.event.workflow_run.run_attempt = 2;
+  evidence.runs.workflow_runs[0].run_attempt = 2;
+  evidence.current.run_attempt = 2;
+  for (const job of evidence.jobs.jobs) job.run_attempt = 2;
+
+  // A later workflow definition SHA still deploys the CI source when its jobs match.
+  const accepted = executeStaging(ctx, evidence);
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.deepEqual(accepted.calls, mutationCalls);
+  assert.match(
+    accepted.stdout,
+    new RegExp(`Staging gate passed: ${sha}, full CI run 42, attempt 2`),
+  );
+
+  const check = evidence.jobs.jobs[1];
+  for (const mismatch of [{ run_attempt: 1 }, { run_id: 43 }, { run_attempt: undefined }]) {
+    evidence.jobs.jobs[1] = { ...check, ...mismatch };
+    const refused = executeStaging(ctx, evidence);
+    assert.equal(refused.status, 1, refused.stdout);
+    assert.deepEqual(refused.calls, []);
+    assert.match(refused.stderr, /CI job run or attempt mismatch/);
+  }
+});
+
 const mutationCalls = [
   "wrangler queues create two-sync-event",
   "wrangler queues create two-internal-action",
@@ -693,6 +722,29 @@ test("truncated CI jobs after preparation stop staging before the first queue", 
   const accepted = executeStaging(ctx, complete, { afterPreparation: complete });
   assert.equal(accepted.status, 0, accepted.stderr);
   assert.deepEqual(accepted.calls, mutationCalls);
+});
+
+test("a failed duplicate required job makes same-attempt CI evidence ambiguous", () => {
+  const ctx = context("workflow_run");
+  const evidence = fixture();
+  evidence.jobs.jobs = evidence.jobs.jobs.map((job, index) => ({ ...job, id: 101 + index }));
+
+  const accepted = executeStaging(ctx, evidence);
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.deepEqual(accepted.calls, mutationCalls);
+  assert.match(
+    accepted.stdout,
+    new RegExp(`Staging gate passed: ${sha}, full CI run ${run.id}, attempt ${run.run_attempt}`),
+  );
+
+  const check = evidence.jobs.jobs[1];
+  evidence.jobs.jobs.push({ ...check, id: 103, conclusion: "failure" });
+  evidence.jobs.total_count = evidence.jobs.jobs.length;
+
+  const refused = executeStaging(ctx, evidence);
+  assert.equal(refused.status, 1, refused.stderr);
+  assert.deepEqual(refused.calls, []);
+  assert.match(refused.stderr, /^Staging gate refused: Missing or ambiguous check job$/m);
 });
 
 for (const [family, archiveFlag, staticFlag, eventsFlag, homeFlag, joinFlag] of [
@@ -900,6 +952,33 @@ test("a stale automatic run ID/attempt or missing token refuses before Cloudflar
     }),
     /Missing read-only/,
   );
+});
+
+test("a failed CI jobs HTTP read stops proof collection with a status-only diagnostic", async () => {
+  const evidence = fixture();
+  const jobsFailure = Response.json(
+    { ...evidence.jobs, message: "Synthetic provider response detail\n".repeat(100) },
+    { status: 503 },
+  );
+  const requests = [];
+  const base = `https://api.github.com/repos/${repository}/actions`;
+  const runsUrl = `${base}/workflows/ci.yml/runs?branch=main&event=push&head_sha=${sha}&per_page=100`;
+  const jobsUrl = `${base}/runs/${run.id}/jobs?filter=latest&per_page=100`;
+
+  await assert.rejects(
+    requireSuccessfulCi(context("workflow_run"), {
+      token: "offline-stub",
+      fetchImpl: async (url) => {
+        requests.push(url);
+        if (url === runsUrl) return Response.json(evidence.runs);
+        if (url === jobsUrl) return jobsFailure;
+        assert.fail(`Unexpected CI evidence request: ${url}`);
+      },
+    }),
+    { name: "Error", message: "CI evidence request failed (HTTP 503)" },
+  );
+  assert.deepEqual(requests, [runsUrl, jobsUrl]);
+  assert.equal(jobsFailure.bodyUsed, false);
 });
 
 test("workflow wires the tested gate before both mutations and preserves staging isolation", () => {
