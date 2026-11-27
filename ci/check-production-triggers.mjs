@@ -94,8 +94,27 @@ async function getJson({ accountId, token, path, fetchImpl }) {
     headers: { authorization: `Bearer ${token}` },
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
-  const text = await response.text();
-  if (text.length > MAX_BODY_BYTES) throw new Error(`oversized response from ${path}`);
+  if (!response.body) throw new Error(`unreadable response from ${path}`);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_BODY_BYTES) throw new Error(`oversized response from ${path}`);
+      text += decoder.decode(value, { stream: true });
+    }
+    text += decoder.decode();
+  } catch (error) {
+    // Cancellation must not delay or replace the probe failure.
+    void reader.cancel().catch(() => undefined);
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
   let data;
   try {
     data = JSON.parse(text);

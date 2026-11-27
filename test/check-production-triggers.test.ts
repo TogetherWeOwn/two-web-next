@@ -197,21 +197,16 @@ describe("partial-success fixtures", () => {
 });
 
 describe("live state reads", () => {
-  const ok = (result: unknown) => ({
-    status: 200,
-    text: async () => JSON.stringify({ success: true, result }),
-  });
+  const ok = (result: unknown) => Response.json({ success: true, result });
   const schedulesResponse = (crons: string[]) =>
     ok({ schedules: crons.map((cron) => ({ cron, created_on: "2026-10-21T00:00:00Z" })) });
 
-  const stubFetch =
-    (routes: Record<string, { status: number; text: () => Promise<string> }>) =>
-    async (url: string) => {
-      const path = url.replace("https://api.cloudflare.com/client/v4/accounts/test-acct", "");
-      const route = routes[path];
-      if (!route) throw new Error(`unexpected live call: ${path}`);
-      return route;
-    };
+  const stubFetch = (routes: Record<string, Response>) => async (url: string) => {
+    const path = url.replace("https://api.cloudflare.com/client/v4/accounts/test-acct", "");
+    const route = routes[path];
+    if (!route) throw new Error(`unexpected live call: ${path}`);
+    return route;
+  };
 
   const healthyRoutes = () => ({
     [`/workers/scripts/${triggersProbe.WEB_SCRIPT}/schedules`]: schedulesResponse([]),
@@ -257,10 +252,10 @@ describe("live state reads", () => {
 
   it("reads a missing schedules endpoint as undeployed, not clean", async () => {
     const routes = healthyRoutes();
-    routes[`/workers/scripts/${triggersProbe.JOBS_SCRIPT}/schedules`] = {
-      status: 404,
-      text: async () => JSON.stringify({ success: false, errors: [{ code: 10090 }] }),
-    };
+    routes[`/workers/scripts/${triggersProbe.JOBS_SCRIPT}/schedules`] = Response.json(
+      { success: false, errors: [{ code: 10090 }] },
+      { status: 404 },
+    );
     const live = await triggersProbe.fetchLiveState({
       accountId: "test-acct",
       token: "test-token",
@@ -276,15 +271,15 @@ describe("live state reads", () => {
       triggersProbe.fetchLiveState({ ...base, accountId: "", fetchImpl: stubFetch({}) }),
     ).rejects.toThrow("CF_ACCOUNT_ID and CLOUDFLARE_API_TOKEN are required");
     const failing = healthyRoutes();
-    failing["/queues?per_page=100"] = {
-      status: 403,
-      text: async () => JSON.stringify({ success: false, errors: [{ code: 10000 }] }),
-    };
+    failing["/queues?per_page=100"] = Response.json(
+      { success: false, errors: [{ code: 10000 }] },
+      { status: 403 },
+    );
     await expect(
       triggersProbe.fetchLiveState({ ...base, fetchImpl: stubFetch(failing) }),
     ).rejects.toThrow("queue list unreadable");
     const malformed = healthyRoutes();
-    malformed[`/queues/q-sync/consumers`] = { status: 200, text: async () => "not json" };
+    malformed[`/queues/q-sync/consumers`] = new Response("not json");
     await expect(
       triggersProbe.fetchLiveState({ ...base, fetchImpl: stubFetch(malformed) }),
     ).rejects.toThrow("unreadable response");
@@ -296,15 +291,11 @@ describe("live state reads", () => {
       triggersProbe.fetchLiveState({ ...base, fetchImpl: stubFetch(cronless) }),
     ).rejects.toThrow("unreadable schedules");
     const truncated = healthyRoutes();
-    truncated["/queues?per_page=100"] = {
-      status: 200,
-      text: async () =>
-        JSON.stringify({
-          success: true,
-          result: [{ queue_id: "q-sync", queue_name: SYNC }],
-          result_info: { total_count: 101, page: 1, per_page: 100 },
-        }),
-    };
+    truncated["/queues?per_page=100"] = Response.json({
+      success: true,
+      result: [{ queue_id: "q-sync", queue_name: SYNC }],
+      result_info: { total_count: 101, page: 1, per_page: 100 },
+    });
     await expect(
       triggersProbe.fetchLiveState({ ...base, fetchImpl: stubFetch(truncated) }),
     ).rejects.toThrow("queue list truncated");

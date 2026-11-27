@@ -22,6 +22,7 @@ const SYNC = "two-web-next-production-sync-event";
 const INTERNAL = "two-web-next-production-internal-action";
 const WEB_SCRIPT = "two-web-next-production";
 const JOBS_SCRIPT = "two-web-jobs-production";
+const BODY_CEILING = 1_048_576;
 
 const readConfig = (path) =>
   readWranglerConfig(readFileSync(new URL(path, import.meta.url), "utf8"));
@@ -78,6 +79,7 @@ const crons = (...entries) => ({
   success: true,
   result: { schedules: entries.map((cron) => ({ cron })) },
 });
+const paddedSchedules = { ...crons(), padding: "ééé" };
 const consumers = (script) => ({
   success: true,
   result: [
@@ -116,7 +118,7 @@ const DRIFTED = {
   "/queues/fixture-queue-internal/consumers": { body: consumers(WEB_SCRIPT) },
 };
 
-function cliWithStubbedFetch(responses, { env = {} } = {}) {
+function cliWithStubbedFetch(responses) {
   const scratch = mkdtempSync(
     join(
       process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(),
@@ -133,7 +135,29 @@ globalThis.fetch = async (input) => {
   const key = url.pathname.replace(/^\\/client\\/v4\\/accounts\\/[^/]+/, "");
   const hit = responses[key];
   if (!hit) throw new Error("unexpected fetch: " + url.pathname);
-  return { status: hit.status ?? 200, text: async () => JSON.stringify(hit.body) };
+  const init = { status: hit.status ?? 200 };
+  const json = hit.body === null ? null : JSON.stringify(hit.body);
+  if (!hit.chunkEnds) return new Response(json, init);
+
+  const padding = hit.bytes === undefined ? "" : " ".repeat(hit.bytes - Buffer.byteLength(json));
+  const bytes = new TextEncoder().encode(json + padding);
+  const ends = [...hit.chunkEnds, bytes.byteLength];
+  let offset = 0;
+  let nextChunk = 0;
+  return new Response(new ReadableStream({
+    pull(controller) {
+      if (nextChunk === ends.length) {
+        controller.close();
+        return;
+      }
+      const end = ends[nextChunk++];
+      controller.enqueue(bytes.subarray(offset, end));
+      offset = end;
+    },
+    cancel() {
+      console.error("fixture stream cancelled after " + nextChunk + " chunks");
+    },
+  }, { highWaterMark: 0 }), init);
 };
 `,
       { mode: 0o600 },
@@ -145,11 +169,9 @@ globalThis.fetch = async (input) => {
         encoding: "utf8",
         timeout: 30_000,
         env: {
-          ...process.env,
           CF_ACCOUNT_ID: "fixture-account-id",
           CLOUDFLARE_API_TOKEN: "fixture-token-never-real",
           STUB_RESPONSES: JSON.stringify(responses),
-          ...env,
         },
       },
     );
@@ -165,6 +187,49 @@ test("CLI exits 0 with a clean report when live triggers match the reviewed conf
   assert.equal(result.status, 0);
   assert.match(result.stdout, /no drift/);
   assert.equal(result.stderr, "");
+});
+
+test("CLI accepts valid JSON at the exact 1 MiB byte ceiling", () => {
+  const result = cliWithStubbedFetch({
+    ...CLEAN,
+    [schedules(WEB_SCRIPT)]: {
+      body: paddedSchedules,
+      bytes: BODY_CEILING,
+      chunkEnds: [BODY_CEILING - 1],
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /no drift/);
+  assert.equal(result.stderr, "");
+});
+
+for (const remaining of [0, 1]) {
+  const boundary = remaining ? "before the final byte" : "on the final byte";
+  test(`CLI refuses and cancels an oversized stream ${boundary}`, () => {
+    const result = cliWithStubbedFetch({
+      ...CLEAN,
+      [schedules(WEB_SCRIPT)]: {
+        body: paddedSchedules,
+        bytes: BODY_CEILING + 1 + remaining,
+        chunkEnds: remaining ? [BODY_CEILING, BODY_CEILING + 1] : [BODY_CEILING],
+      },
+    });
+    assert.equal(result.status, 2, result.stdout || result.stderr);
+    assert.equal(result.stdout, "");
+    assert.equal(
+      result.stderr,
+      `fixture stream cancelled after 2 chunks\n::error::oversized response from ${schedules(WEB_SCRIPT)}\n`,
+    );
+  });
+}
+
+test("CLI exits 2 when a schedules response has no body", () => {
+  const result = cliWithStubbedFetch({
+    [schedules(WEB_SCRIPT)]: { body: null },
+  });
+  assert.equal(result.status, 2);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, `::error::unreadable response from ${schedules(WEB_SCRIPT)}\n`);
 });
 
 test("CLI exits 1 naming the drift on the pre-transfer web-owned topology", () => {
@@ -192,13 +257,16 @@ test("CLI exits 2 without credentials and performs no live read", () => {
 });
 
 test("CLI exits 2 when the live schedules read is unreadable", () => {
+  const body = { success: false, errors: [{ code: 7000, message: "fixture café outage" }] };
   const result = cliWithStubbedFetch({
     [schedules(WEB_SCRIPT)]: {
       status: 500,
-      body: { success: false, errors: [{ code: 7000, message: "fixture schedules outage" }] },
+      body,
+      chunkEnds: [Buffer.from(JSON.stringify(body)).indexOf("é") + 1],
     },
   });
   assert.equal(result.status, 2);
   assert.equal(result.stdout, "");
   assert.match(result.stderr, new RegExp(`schedules unreadable for ${WEB_SCRIPT}`));
+  assert.match(result.stderr, /fixture café outage/);
 });
