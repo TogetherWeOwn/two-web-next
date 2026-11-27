@@ -228,6 +228,8 @@ test("staging receipts follow the served candidate through an out-of-order main 
   assert.ok(matched.includes(`actions/runs/200/attempts/1), workflow head \`${B}\``));
   assert.match(matched, /actions\/runs\/300\/attempts\/1/);
   assert.match(matched, /Pending successful qualification and 30-minute soak/);
+  assert.match(matched, /^- Identity receipt matched at observation$/m);
+  assert.match(matched, /Production checks run history separately\.$/m);
   assert.doesNotMatch(matched, /private response/);
 
   const disagreement = await e2e({}, fetchOrigins(B, A));
@@ -244,11 +246,28 @@ test("staging receipts follow the served candidate through an out-of-order main 
   assert.doesNotMatch(malformed, /private response/);
   assert.match(malformed, /Identity receipt refused/);
 
-  assert.match(await e2e({ STAGING_SKIP_E2E: "true" }, fetchOrigins(A, A)), /scope-skipped/);
+  const skipped = await e2e({ STAGING_SKIP_E2E: "true" }, fetchOrigins(A, A));
+  assert.match(skipped, /scope-skipped/);
+  assert.match(skipped, /^- Identity receipt matched at observation$/m);
+  assert.match(
+    skipped,
+    /^- \*\*Soak eligibility\*\* This E2E run is ineligible \(journeys scope-skipped\)$/m,
+  );
+  assert.doesNotMatch(skipped, /Pending successful qualification/);
   assert.match(
     await e2e({ GITHUB_RUN_ATTEMPT: "2" }, fetchOrigins(A, A)),
     /rerun disqualifies the commit and blocks candidates with older runs/,
   );
+  const skippedRerun = await e2e(
+    { GITHUB_RUN_ATTEMPT: "2", STAGING_SKIP_E2E: "true" },
+    fetchOrigins(A, A),
+  );
+  assert.match(skippedRerun, /^- Identity receipt matched at observation$/m);
+  assert.match(
+    skippedRerun,
+    /^- \*\*Soak eligibility\*\* This E2E rerun disqualifies the commit and blocks candidates with older runs$/m,
+  );
+  assert.doesNotMatch(skippedRerun, /journeys scope-skipped|Pending successful qualification/);
   const refused = await e2e({ STAGING_CANDIDATE: C, expectedProbes: [] }, fetchOrigins(C, C));
   assert.match(refused, /Candidate source unavailable/);
   assert.match(refused, /Identity receipt refused \(no observation\)/);
