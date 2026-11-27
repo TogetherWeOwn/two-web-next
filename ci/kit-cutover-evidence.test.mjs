@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import { calendarFixtures, joinAction, smokeFixtures } from "../test/fixtures/smoke-routes.mjs";
 import { startSmokeFixture } from "../test/helpers/smoke-http.mjs";
+import { stagingConfig } from "./kit-cutover-database.mjs";
 import {
   LEDGER_STATES,
   STAGING_WORKER,
@@ -25,7 +26,12 @@ import {
   writeManifest,
 } from "./kit-cutover-evidence.mjs";
 import { packageCutover } from "./kit-cutover-package.mjs";
-import { cloudflare, exercise, verifyServed } from "./kit-cutover-staging.mjs";
+import {
+  cloudflare,
+  exercise,
+  verifyServed,
+  verifyStagedBindings,
+} from "./kit-cutover-staging.mjs";
 import "./fixtures/kit-cutover-cleanup.mjs";
 import { KIT_ROUTE_FLAGS } from "./production-deploy-gate.mjs";
 import { sha256 } from "./worker-bundle-evidence.mjs";
@@ -963,6 +969,36 @@ test("isolated cutover counts routes only from the successful retry", async () =
   });
   assert.equal(routeCount, 3);
   assert.deepEqual(calls, ["readiness", "smoke", "wait", "readiness", "smoke"]);
+});
+
+test("isolated Ember bindings reject duplicate names without exposing binding contents", () => {
+  const config = stagingConfig(
+    "kit",
+    inputs,
+    STAGING_WORKER,
+    "https://cutover.example.invalid",
+    "ember",
+  );
+  const bindings = [
+    ...Object.entries(config.vars).map(([name, text]) => ({ name, type: "plain_text", text })),
+    { name: "DATABASE_URL", type: "secret_text" },
+    { name: "SESSION_SECRET", type: "secret_text" },
+    { name: "DISCORD_CLIENT_SECRET", type: "secret_text" },
+    { name: "DISCORD_BOT_TOKEN", type: "secret_text" },
+    { name: "CF_VERSION_METADATA", type: "version_metadata" },
+  ];
+  verifyStagedBindings({ id: kit, resources: { bindings } }, kit, config);
+
+  const conflictingFlag = { name: "KIT_ROUTE_EMBER_PAGES", type: "plain_text", text: "false" };
+  assert.throws(
+    () =>
+      verifyStagedBindings(
+        { id: kit, resources: { bindings: [conflictingFlag, ...bindings] } },
+        kit,
+        config,
+      ),
+    { message: "staged bindings contain duplicate names" },
+  );
 });
 
 test("isolated cutover repeats readiness and smoke when rollback is still propagating", async () => {

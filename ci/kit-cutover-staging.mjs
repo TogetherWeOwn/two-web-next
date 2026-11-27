@@ -153,12 +153,16 @@ export async function verifyServed(
   }
 }
 
-function verifyStagedBindings(version, id, config) {
+export function verifyStagedBindings(version, id, config) {
   assert.ok(
     version?.id === id && Array.isArray(version.resources?.bindings),
     "staged bindings unavailable",
   );
-  const bindings = new Map(version.resources.bindings.map((binding) => [binding.name, binding]));
+  const bindings = new Map();
+  for (const binding of version.resources.bindings) {
+    if (bindings.has(binding.name)) throw new Error("staged bindings contain duplicate names");
+    bindings.set(binding.name, binding);
+  }
   for (const name of ["DB", "BOT_DB", "SYNC_EVENT_QUEUE", "INTERNAL_ACTION_QUEUE"]) {
     assert.ok(!bindings.has(name), "isolated staging has an external binding");
   }
