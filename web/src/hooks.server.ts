@@ -2,6 +2,7 @@ import { captureRefusal, captureResponse } from "../../src/render-clock";
 import { redirect } from "@sveltejs/kit";
 import { type Handle, sequence } from "@sveltejs/kit/hooks";
 import { env } from "cloudflare:workers";
+import { kitQueueRedispatchFamily } from "../../src/admin/kit-queue-redispatch";
 import { KIT_SOURCE_EVIDENCE_ROUTES } from "../../src/admin/kit-source-evidence-route";
 import { refuseSourceEvidenceOrigin } from "../../src/admin/source-evidence";
 import { renderNotFoundDocument } from "../../src/error-pages";
@@ -125,6 +126,7 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
       },
       kitOpsFamily(),
       kitAgentEventsFamily(),
+      kitQueueRedispatchFamily(env),
       {
         flag: env.KIT_ROUTE_EVENT_WRITES,
         routes: KIT_EVENT_WRITE_ROUTES,

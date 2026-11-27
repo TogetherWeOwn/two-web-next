@@ -15,6 +15,8 @@ import { bufferedMemberJson } from "../member-reads";
 import { QA_IDENTITIES, STAGING_APP_URL } from "../qa";
 import type { QueuePreviewVars } from "./queue-preview";
 
+export const QUEUE_REDISPATCH_PATH = "/queue/failed/:id/redispatch";
+
 /**
  * The one dedicated principal allowed past the moderator gate for queue
  * operations. A bare snowflake shape is not enough: QA identities can never

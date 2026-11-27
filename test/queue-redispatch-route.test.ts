@@ -3,12 +3,17 @@
 import { Hono } from "hono";
 import { serializeSigned } from "hono/utils/cookie";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  fetchKitQueueRedispatch,
+  kitQueueRedispatchFamily,
+} from "../src/admin/kit-queue-redispatch";
 import { adminApp } from "../src/admin/routes";
 import type { RedispatchDeps } from "../src/admin/queue-redispatch";
 import type { Env } from "../src/env";
 import * as previews from "../src/jobs/preview";
 import type { FailedJobReplayCandidate } from "../src/jobs/preview";
 import { QA_IDENTITIES, STAGING_APP_URL } from "../src/qa";
+import { dispatchHookRequest } from "../src/route-ownership";
 import { fetchApp } from "./helpers/fetch-app";
 import {
   createMemorySessionStore,
@@ -125,6 +130,109 @@ describe("staging one-row guarded re-dispatch admission", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.resetAllMocks();
+  });
+
+  it("opts in the exact Kit POST and applies the shared origin refusal before resolving", async () => {
+    const path = "/admin/queue/failed/7/redispatch";
+    const routeId = "/admin/queue/failed/[id]/redispatch";
+    const requestId = "0123456789abcdef";
+    const enabled = { ...env, KIT_ROUTE_ADMIN_QUEUE_REDISPATCH: "true" };
+    const loadCandidate = vi.fn(async () => replayCandidate);
+    const dispatch = vi.fn(async () => true);
+    const store = createMemorySessionStore();
+    const bindings = {
+      ...enabled,
+      SESSION_STORE: store,
+      THROTTLE_STORE: throttleStore,
+      REDISPATCH_DEPS: { loadCandidate, dispatch },
+    };
+    const bearer = await cookie(store);
+    const resolve = vi.fn(async ({ request }: { request: Request }) =>
+      fetchKitQueueRedispatch(request, bindings, requestId),
+    );
+
+    async function throughHook(
+      pathname: string,
+      configuration: Env,
+      method = "POST",
+      origin = configuration.APP_URL,
+    ) {
+      const url = new URL(pathname, configuration.APP_URL);
+      const input = new Request(url, {
+        method,
+        headers: { accept: "application/json", origin, cookie: bearer, "cf-ray": requestId },
+      });
+      return dispatchHookRequest(
+        { request: input, url, route: { id: routeId }, locals: {} },
+        {
+          appUrl: configuration.APP_URL,
+          apiFamilies: [kitQueueRedispatchFamily(configuration)],
+          honoFetch: async () => new Response(null, { status: 204 }),
+          resolve,
+        },
+      );
+    }
+
+    for (const [pathname, configuration, method] of [
+      [path, env, "POST"],
+      [path, { ...enabled, APP_URL: "https://outside.invalid" }, "POST"],
+      [path, enabled, "GET"],
+      [path.replace("/7/", "/%37/"), enabled, "POST"],
+      [path.replace("/7/", "/7.1/"), enabled, "POST"],
+      [path.replace("/redispatch", "/preview"), enabled, "POST"],
+    ] as const) {
+      const fallback = await throughHook(pathname, configuration, method);
+      expect(fallback.status).toBe(204);
+      expect(fallback.headers.get("x-two-renderer")).toBeNull();
+    }
+    const crossOrigin = await throughHook(path, enabled, "POST", "https://outside.invalid");
+    expect(crossOrigin.status).toBe(403);
+    expect(await crossOrigin.json()).toEqual({ error: "cross_origin", request_id: requestId });
+    expect(resolve).not.toHaveBeenCalled();
+    expect(loadCandidate).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+
+    const admitted = await throughHook(path, enabled);
+    expect(admitted.status).toBe(200);
+    expect(admitted.headers.get("x-two-renderer")).toBe("kit");
+    expect(admitted.headers.get("x-request-id")).toBe(requestId);
+    expect(await admitted.json()).toEqual({ redispatched: true, ...replayCandidate.preview });
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(loadCandidate).toHaveBeenCalledExactlyOnceWith(bindings, 7);
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith(replayCandidate.eventKey, expect.any(String));
+    expect(mocks.audit).toHaveBeenCalledTimes(1);
+  });
+
+  it("correlates an unexpected Kit adapter failure without loading or dispatching the row", async () => {
+    const store = createMemorySessionStore();
+    const loadCandidate = vi.fn();
+    const dispatch = vi.fn();
+    const requestId = "0123456789abcdef";
+    const input = new Request(`${STAGING_APP_URL}/admin/queue/failed/7/redispatch`, {
+      method: "POST",
+      body: "a locked action body",
+      headers: {
+        accept: "application/json",
+        cookie: await cookie(store),
+        origin: STAGING_APP_URL,
+      },
+    });
+    const reader = input.body!.getReader();
+    try {
+      const bindings = {
+        ...env,
+        SESSION_STORE: store,
+        REDISPATCH_DEPS: { loadCandidate, dispatch },
+      };
+      const response = await fetchKitQueueRedispatch(input, bindings, requestId);
+      expect(response.status).toBe(500);
+      expect(await response.text()).toContain(requestId);
+      expect(loadCandidate).not.toHaveBeenCalled();
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(mocks.audit).not.toHaveBeenCalled();
+    } finally {
+      reader.releaseLock();
+    }
   });
 
   it.each([undefined, "false", "1", "TRUE", "true "])(

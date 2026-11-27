@@ -333,6 +333,11 @@
       "route": "GET /admin/featured/:id",
       "binding": "web/src/routes/admin/featured/[id]/+page.server.ts",
       "reads": "featured view (audited)"
+    },
+    {
+      "route": "POST /admin/queue/failed/:id/redispatch",
+      "binding": "web/src/routes/admin/queue/failed/[id]/redispatch/+server.ts",
+      "reads": "staging operator only (audited one-row reconciliation)"
     }
   ],
   "outOfScope": [

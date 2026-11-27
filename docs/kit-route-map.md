@@ -206,6 +206,15 @@ Kit form to the shared Hono controller and checks moderator admission, the
 action body cap, the list redirect, the saved state and its activity receipt,
 and replay or a missing target through both owners.
 
+On canonical staging, `KIT_ROUTE_ADMIN_QUEUE_REDISPATCH=true` selects Kit
+for `POST /admin/queue/failed/:id/redispatch` with a literal path and a single
+selector segment. Clearing the flag returns the POST to Hono. Each owner
+requires the existing queue operational flag, an explicit same-origin
+header and the configured moderator operator. Both use the same 4 KiB
+action cap, admin-write throttle, one-row source reconciliation and
+audit-before-dispatch contract. The installed Worker fixture checks both
+owners with disposable Postgres and a stub queue.
+
 The exact `GET /admin/events/create` endpoint also has a disabled manifest
 entry. When enabled within the admin dispatcher, it requires a moderator and
 returns `301 Location: /admin/events/new` with no query. HEAD uses the same
