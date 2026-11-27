@@ -13,6 +13,7 @@ on:
       - "ci/db-readiness-projection.mjs"
       - "ci/db-serving-ledger-isolation.mjs"
       - "ci/db-serving-ledger-isolation-cli.mjs"
+      - "ci/db-serving-ledger-isolation-undo.test.mjs"
       - "ci/fixtures/web-serving-isolation.mjs"
       - "ci/migration-runtime-rights.mjs"
       - "ci/production-deploy-gate.mjs"
@@ -48,5 +49,7 @@ jobs:
           node-version: 24
           package-manager-cache: false
       - run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+      - name: Verify the serving ledger undo rolls back after a failed postcheck
+        run: gosu postgres node --test --test-timeout=120000 ci/db-serving-ledger-isolation-undo.test.mjs
       - name: Run the disposable source and restore clusters
         run: gosu postgres node --test --test-timeout=120000 ci/db-permissions-restore-replay.test.mjs
