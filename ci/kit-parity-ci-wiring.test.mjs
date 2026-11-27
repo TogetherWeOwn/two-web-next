@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { parse } from "@babel/parser";
 import {
   KIT_VIEWER_ROW_NAME,
   normalizeKitViewerRow,
@@ -59,6 +60,11 @@ test("fixture boundaries await closure of completed Workers and retain shared Wo
 
 test("parity runner awaits phase cleanup before later fixtures", () => {
   const runner = readFileSync(new URL("./kit-worker-e2e.mjs", import.meta.url), "utf8");
+  const parity = parse(runner, { sourceType: "module" }).program.body.find(
+    (node) => node.type === "FunctionDeclaration" && node.id?.name === "runWorkerParity",
+  );
+  assert.ok(parity, "expected the parity runner function");
+  const statements = parity.body.body.map(({ start, end }) => runner.slice(start, end));
   const boundaries = [
     ["await runInstalledLive();", "kit, hono", "const archive = await fetch("],
     [
@@ -79,9 +85,9 @@ test("parity runner awaits phase cleanup before later fixtures", () => {
     ["return { appUrl, direct, enabled };", "kitWithSession", 'startWorker("kit-auth"'],
   ];
   for (const [after, keep, before] of boundaries) {
-    const start = runner.indexOf(after);
-    const cleanup = runner.indexOf(`await stopCompletedWorkers(workers, [${keep}]);`, start);
-    const next = runner.indexOf(before, start);
+    const start = statements.findIndex((statement) => statement.includes(after));
+    const cleanup = statements.indexOf(`await stopCompletedWorkers(workers, [${keep}]);`);
+    const next = statements.findIndex((statement) => statement.includes(before));
     assert.ok(
       start >= 0 && start < cleanup && cleanup < next,
       `confirm Worker closure before ${before}`,
