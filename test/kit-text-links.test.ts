@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
+import { html, parse } from "parse5";
 import { expect, it } from "vitest";
+import { attr, elements, textOf } from "./helpers/kit-edit-controls";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
@@ -54,19 +56,19 @@ export const body = render(Fixture).body;`,
       ],
     });
     const { body } = (await import(pathToFileURL(outfile).href)) as { body: string };
-    const links = Array.from(
-      body.matchAll(/<!--[\s\S]*?-->|<a\b[^>]*>[\s\S]*?<\/a>/g),
-      (match) => match[0],
-    ).filter((match) => match.startsWith("<a"));
+    const links = elements(parse(body)).filter(
+      (node) => node.tagName === "a" && node.namespaceURI === html.NS.HTML,
+    );
     expect(links).toHaveLength(3);
-    expect(links[0]).toContain('href="/events"');
-    expect(links[0]).toContain("Events");
-    expect(links[1]).toContain('href="/members"');
-    expect(links[1]).toMatch(/class="[^"]*\bvalue\b/);
-    expect(links[1]).toContain("Members");
-    expect(links[2]).toContain('href="/join"');
-    expect(links[2]).toMatch(/class="[^"]*\bbutton\b/);
-    expect(links[2]).toContain("Join");
+    const [inline, value, button] = links;
+    expect(inline && attr(inline, "href")).toBe("/events");
+    expect(inline && textOf(inline).trim()).toBe("Events");
+    expect(value && attr(value, "href")).toBe("/members");
+    expect(value && attr(value, "class")?.split(/[\t\n\f\r ]+/)).toContain("value");
+    expect(value && textOf(value).trim()).toBe("Members");
+    expect(button && attr(button, "href")).toBe("/join");
+    expect(button && attr(button, "class")?.split(/[\t\n\f\r ]+/)).toContain("button");
+    expect(button && textOf(button).trim()).toBe("Join");
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }

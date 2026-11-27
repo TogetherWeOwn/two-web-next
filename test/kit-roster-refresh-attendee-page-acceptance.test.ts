@@ -19,15 +19,16 @@
 //   are unchanged, and guests/non-members still get no roster, no refresh
 //   link, and no attendee read at any ?attendees= value.
 //
-// Assertions read only the rendered anchor href and the pre-existing
-// attendeesPaging model, so the builder may carry the page through any
-// validated model/render channel. Hono behaviour is out of scope here.
+// Assertions read the rendered roster and the pre-existing attendeesPaging
+// model, so the builder may carry the page through any validated model/render
+// channel. Hono behaviour is out of scope here.
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
+import { type DefaultTreeAdapterMap, html as htmlConstants, parse } from "parse5";
 import { describe, expect, it, vi } from "vitest";
 import type { Db } from "../src/db/index";
 import { events } from "../src/db/admin-schema";
@@ -42,6 +43,8 @@ import type {
 } from "../src/events/reads";
 import type { SuggestedEvent } from "../src/events/suggestions";
 import type { KitRequestSession } from "../src/kit-session";
+import { attr, elements, textOf } from "./helpers/kit-edit-controls";
+import { decodedOutput } from "./helpers/refused-edit-roster";
 
 const APP_URL = "https://next.example.test";
 const KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -214,15 +217,17 @@ async function renderMember(search: string, store?: KitEventDetailStore) {
   return { model, html: renderDetail(model) };
 }
 
-// Every rendered refresh anchor's href, in document order. Attribute order
-// is deliberately not assumed.
-function refreshHrefs(html: string): (string | null)[] {
-  const hrefs: (string | null)[] = [];
-  for (const m of html.matchAll(/<a\b[^>]*>/g)) {
-    if (!m[0].includes('data-testid="event-attendees-refresh"')) continue;
-    hrefs.push(m[0].match(/\bhref="([^"]*)"/)?.[1] ?? null);
-  }
-  return hrefs;
+function refreshLinks(page: DefaultTreeAdapterMap["document"]) {
+  return elements(page).filter(
+    (node) =>
+      node.tagName === "a" &&
+      node.namespaceURI === htmlConstants.NS.HTML &&
+      attr(node, "data-testid") === "event-attendees-refresh",
+  );
+}
+
+function refreshHrefs(html: string) {
+  return refreshLinks(parse(html)).map((link) => attr(link, "href") ?? null);
 }
 
 function attendeePageOf(href: string | null): string | null {
@@ -234,13 +239,15 @@ describe("Kit roster refresh link keeps the attendee page", () => {
   it.each([2, 3])("keeps page %i on the refresh link at a middle attendee page", async (page) => {
     const { model, html } = await renderMember(`?attendees=${page}`);
     expect(model.attendeesPaging.page).toBe(page);
-    expect(html).toContain(">Refresh attendees<");
-    const hrefs = refreshHrefs(html);
-    expect(hrefs).toHaveLength(1);
-    expect(hrefs[0]).toBe(`${PATH}?attendees=${page}`);
-    expect(attendeePageOf(hrefs[0] ?? null)).toBe(String(page));
+    const links = refreshLinks(parse(html));
+    expect(links).toHaveLength(1);
+    const [refresh] = links;
+    expect(refresh && textOf(refresh).trim()).toBe("Refresh attendees");
+    const href = refresh && attr(refresh, "href");
+    expect(href).toBe(`${PATH}?attendees=${page}`);
+    expect(attendeePageOf(href ?? null)).toBe(String(page));
     // Same-origin, same event: never an absolute or protocol-relative URL.
-    expect(hrefs[0]).not.toMatch(/^(?:[a-z][a-z0-9+.-]*:)?\/\//i);
+    expect(href).not.toMatch(/^(?:[a-z][a-z0-9+.-]*:)?\/\//i);
   });
 
   it("keeps the resolved page on a past-end page, matching attendeesPaging.page", async () => {
@@ -300,10 +307,25 @@ describe("Kit roster refresh link keeps the attendee page", () => {
       prevHref: PATH,
       nextHref: `${PATH}?attendees=3`,
     });
-    expect(html).toContain('data-testid="event-attendees-prev"');
-    expect(html).toContain('data-testid="event-attendees-next"');
-    expect(html).toContain(`href="${PATH}?attendees=3"`);
-    expect(html).not.toContain("refresh-attendee-100"); // lookahead never rendered
+    const nodes = elements(parse(html));
+    const roster = nodes.find(
+      (node) => node.tagName === "section" && attr(node, "data-testid") === "event-attendees",
+    );
+    const pager =
+      roster &&
+      elements(roster).find(
+        (node) => node.tagName === "nav" && attr(node, "aria-label") === "Attendee pages",
+      );
+    const links = pager ? elements(pager).filter((node) => node.tagName === "a") : [];
+    expect(links.map((link) => attr(link, "data-testid"))).toEqual([
+      "event-attendees-prev",
+      "event-attendees-next",
+    ]);
+    expect(links.map((link) => attr(link, "href"))).toEqual([PATH, `${PATH}?attendees=3`]);
+    expect(links.map((link) => attr(link, "rel"))).toEqual(["prev", "next"]);
+    expect(decodedOutput(html)).not.toContain("refresh-attendee-100");
+    // Keep the source tripwire for a lookahead value in parser-discarded bytes.
+    expect(html).not.toContain("refresh-attendee-100");
   });
 
   it.each([
@@ -320,10 +342,16 @@ describe("Kit roster refresh link keeps the attendee page", () => {
       bundlePromise ??= buildKitBundle();
       const { renderDetail } = await bundlePromise;
       const html = renderDetail(model);
+      const page = parse(html);
+      const testIds = elements(page).map((node) => attr(node, "data-testid"));
+      expect(testIds).not.toContain("event-attendees");
+      expect(testIds).not.toContain("event-attendees-refresh");
+      expect(refreshLinks(page)).toHaveLength(0);
+      expect(decodedOutput(html)).not.toContain("refresh-attendee-000");
+      // Source tripwires also cover bytes outside the element walk, including duplicate attributes.
       expect(html).not.toContain('data-testid="event-attendees"');
       expect(html).not.toContain('data-testid="event-attendees-refresh"');
       expect(html).not.toContain("refresh-attendee-000");
-      expect(refreshHrefs(html)).toHaveLength(0);
     },
   );
 });
