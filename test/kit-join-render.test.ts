@@ -1,15 +1,15 @@
 import { createRequire } from "node:module";
 import { serializeSigned } from "hono/utils/cookie";
-import { type DefaultTreeAdapterMap, Parser, type Token } from "parse5";
+import * as parse5 from "parse5";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { HOME_JOIN_RESULT_COPY, JOIN_INTRO } from "../src/home-copy";
 import { applyJoinPageResponsePolicy } from "../src/join/kit-page";
 import { JOIN_RESULT_COOKIE } from "../src/return-journey";
-import { attr } from "./helpers/kit-edit-controls";
+import { attr, textOf } from "./helpers/kit-edit-controls";
 import { createKitSsrRenderer, type RenderPage } from "./helpers/kit-ssr-render";
 
-type Node = DefaultTreeAdapterMap["node"];
-type Element = DefaultTreeAdapterMap["element"];
+type Node = parse5.DefaultTreeAdapterMap["node"];
+type Element = parse5.DefaultTreeAdapterMap["element"];
 
 const require = createRequire(import.meta.url);
 const { renderedElements, renderedText } = require("../ci/rendered-page.mjs") as {
@@ -24,12 +24,12 @@ let renderPage: RenderPage;
 let cleanup: (() => void) | undefined;
 
 function parseResponse(html: string) {
-  const parser = new Parser<DefaultTreeAdapterMap>({
+  const parser = new parse5.Parser<parse5.DefaultTreeAdapterMap>({
     scriptingEnabled: false,
     onParseError: ({ code }) => expect(code).toBe("missing-doctype"),
   });
   // Capture decoded tokens before HTML tree correction can discard them.
-  const tags: Token.TagToken[] = [];
+  const tags: parse5.Token.TagToken[] = [];
   const text: string[] = [];
   const observe =
     <T>(record: (token: T) => void, handle: (token: T) => void) =>
@@ -37,7 +37,7 @@ function parseResponse(html: string) {
       record(token);
       handle.call(parser, token);
     };
-  const recordText = ({ chars }: Token.CharacterToken) => text.push(chars);
+  const recordText = ({ chars }: parse5.Token.CharacterToken) => text.push(chars);
   parser.onStartTag = observe((token) => tags.push(token), parser.onStartTag);
   parser.onCharacter = observe(recordText, parser.onCharacter);
   parser.onWhitespaceCharacter = observe(recordText, parser.onWhitespaceCharacter);
@@ -45,16 +45,15 @@ function parseResponse(html: string) {
   parser.onDoctype = () => expect.unreachable("The renderer emits head and body only");
   parser.tokenizer.write(html, true);
   const attrs = tags.flatMap((tag) => tag.attrs);
-  const tagText = ({ tagName, attrs }: Token.TagToken) =>
+  const tagText = ({ tagName, attrs }: parse5.Token.TagToken) =>
     [tagName, ...attrs.map(({ name, value }) => `${name} ${value}`)].join(" ");
   const content = [text.join(""), ...tags.map(tagText)].join("\n");
   // Opaque token values can carry markup for client-side use.
-  for (const match of content.matchAll(/(?=(href|aria-label|data-testid)="([^"]*)")/g)) {
-    attrs.push({ name: match[1]!, value: match[2]! });
-  }
-  const values = (name: string) =>
-    attrs.filter((attr) => attr.name.endsWith(name)).map((attr) => attr.value);
-  return { page: parser.document, values, content };
+  const testIds = [
+    ...attrs.filter(({ name }) => name.endsWith("data-testid")).map(({ value }) => value),
+    ...Array.from(content.matchAll(/(?=data-testid="([^"]*)")/g), (match) => match[1]!),
+  ];
+  return { page: parser.document, testIds, content };
 }
 
 function joinData(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -93,17 +92,16 @@ afterAll(() => cleanup?.());
 
 describe("Kit join SSR", () => {
   it("renders the safe handoff and invite fallback without a widget", () => {
-    const { page, values } = parseResponse(renderPage(joinData()));
+    const { page, testIds } = parseResponse(renderPage(joinData()));
     expectJoinLinks(page);
     const fallback = findByTestId(page, "p", "join-widget-fallback");
     expect(fallback && renderedText(fallback)).toContain("Live server preview is unavailable");
-    expect(values("data-testid")).not.toContain("join-widget-members");
+    expect(testIds).not.toContain("join-widget-members");
   });
 
   it("shows a failed-start notice while keeping both join options available", () => {
     const { page, content } = parseResponse(renderPage(joinData({ notice: "start-failed" })));
     const notice = findByTestId(page, "p", "join-start-notice");
-    expect(notice).toBeDefined();
     expect(notice && renderedText(notice)).toContain("The Discord approval failed to start");
     expectJoinLinks(page);
     expect(content).not.toContain("start-failed&");
@@ -111,13 +109,13 @@ describe("Kit join SSR", () => {
 
   it("renders the restored-write notice before a consumed join flash", () => {
     const data = joinData({ restoredWrite: true, joinResult: "added" });
-    const { page, values } = parseResponse(renderPage(data));
+    const { page, testIds } = parseResponse(renderPage(data));
     const noticeIds = ["auth-error", "join-result"];
     const notices = [...renderedElements(page, {})].filter((element) =>
       noticeIds.includes(testId(element) ?? ""),
     );
     expect(notices.map(testId)).toEqual(noticeIds);
-    expect(values("data-testid").filter((id) => noticeIds.includes(id))).toEqual(noticeIds);
+    expect(testIds.filter((id) => noticeIds.includes(id))).toEqual(noticeIds);
     const [restored, result] = notices;
     expect(restored && renderedText(restored)).toContain("Your earlier changes were not saved");
     expect(result && renderedText(result)).toContain(HOME_JOIN_RESULT_COPY.added);
@@ -170,11 +168,12 @@ describe("Kit join SSR", () => {
 
     // The next request represents the browser after applying the cookie deletion.
     const next = parseResponse(await renderRequest(new Request(url)));
-    expect(next.values("data-testid")).not.toContain("join-result");
+    expect(next.testIds).not.toContain("join-result");
     expect(cookies.delete).toHaveBeenCalledTimes(1);
   });
 
   it("renders small presence counts literally without member names", () => {
+    const textarea = parse5.defaultTreeAdapter.createElement("textarea", parse5.html.NS.HTML, []);
     for (const presenceCount of [0, 1, 2]) {
       const html = renderPage(
         joinData({
@@ -195,8 +194,9 @@ describe("Kit join SSR", () => {
       expect(online && renderedText(online).replace(/\s+/g, " ").trim()).toBe(
         `${presenceCount} ${members}`,
       );
-      // Member names must stay out of attributes and inert markup as well as visible text.
-      expect(content.replace(/\s+/g, " ")).not.toMatch(/private member name/i);
+      // Decode references that originate inside raw text, such as a script-held HTML fragment.
+      const decoded = textOf(parse5.parseFragment(textarea, content, {}));
+      expect(decoded.replace(/\s+/g, " ")).not.toMatch(/private member name/i);
     }
   });
 });

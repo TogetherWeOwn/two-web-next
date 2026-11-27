@@ -9,7 +9,7 @@ type Element = DefaultTreeAdapterMap["element"];
 
 const require = createRequire(import.meta.url);
 const { renderedElements, renderedText } = require("../ci/rendered-page.mjs") as {
-  renderedElements: (root: Node, selector: { tag?: string }) => Iterable<Element>;
+  renderedElements: (root: Node, selector: { tag?: string; id?: string }) => Iterable<Element>;
   renderedText: (root: Node) => string;
 };
 
@@ -93,7 +93,9 @@ describe("Ember shell", () => {
     expect(hrefs(current)).toContain("/events");
     expect(hrefs(links)).toContain("/leaderboards/members");
     expect(hrefs(links)).toContain("/auth/discord?next=%2Fevents");
-    // The bar and sheet each contain a join link. Styles switch between them.
+    const [panel] = renderedElements(page, { tag: "div", id: "kit-menu-panel" });
+    expect(hrefs(links.filter((link) => link.parentNode === header))).toContain("/join");
+    expect(panel && hrefs(renderedElements(panel, { tag: "a" }))).toContain("/join");
     expect(values("href").filter((href) => href === "/join")).toHaveLength(2);
     expect(hrefs(links)).toContain("/about");
     expect(content.replace(/\s+/g, " ")).not.toMatch(/welcome, guest/i);
