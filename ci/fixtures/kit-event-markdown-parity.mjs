@@ -28,7 +28,7 @@ const wireHeaders = [
   "x-content-type-options",
 ];
 
-export function withEventMarkdownDatabaseCleanup(run, sql, sessionHash, buckets) {
+function withEventMarkdownDatabaseCleanup(run, sql, sessionHash, buckets) {
   const failureMessage = "Event Markdown fixture database cleanup failed";
   return withFixtureCleanup(
     run,
@@ -56,6 +56,7 @@ export async function assertEventMarkdownParity({
   startKit,
   assertEventDetail,
   databaseUrl,
+  connectDatabase = postgres,
 }) {
   const [off, on] = await Promise.all(
     ["false", "true"].map((flag) =>
@@ -68,7 +69,7 @@ export async function assertEventMarkdownParity({
       }),
     ),
   );
-  const sql = postgres(databaseUrl, { max: 1 });
+  const sql = connectDatabase(databaseUrl, { max: 1 });
   const token = `two_${randomBytes(32).toString("base64url")}`;
   const sessionHash = createHash("sha256").update(token).digest("hex");
   const buckets = [];

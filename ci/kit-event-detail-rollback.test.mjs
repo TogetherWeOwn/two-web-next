@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { setImmediate } from "node:timers/promises";
 import { assertEventDetailRollback } from "./fixtures/kit-event-detail-rollback.mjs";
-import { withEventMarkdownDatabaseCleanup } from "./fixtures/kit-event-markdown-parity.mjs";
+import { assertEventMarkdownParity } from "./fixtures/kit-event-markdown-parity.mjs";
 import { cleanUpWorkers, withWorkerCleanup } from "./fixtures/kit-worker-lifecycle.mjs";
 import { startLoopbackWorker } from "./kit-worker-loopback.mjs";
 
@@ -219,22 +219,25 @@ test("the first startup failure survives a later sibling launch failure", async 
   await assertCleanup();
 });
 
-test("database teardown preserves the phase error without exposing cleanup details", async (t) => {
-  const phaseError = new Error("Event detail rollback phase failed: readiness");
+test("the Markdown fixture preserves a proof error through database teardown", async (t) => {
+  const proofError = new Error("Synthetic proof failure");
   const report = t.mock.method(console, "error", () => {});
   const rejectCleanup = () => Promise.reject(new Error(privateDetail));
-  const sql = Object.assign(rejectCleanup, { end: t.mock.fn(rejectCleanup) });
-  const run = (proof) => withEventMarkdownDatabaseCleanup(proof, sql, "synthetic", []);
-  const rejectProof = () => Promise.reject(phaseError);
-  await assert.rejects(run(rejectProof), (error) => error === phaseError);
-  const message = "Event Markdown fixture database cleanup failed";
+  const sql = Object.assign(t.mock.fn(rejectCleanup), { end: t.mock.fn(rejectCleanup) });
+  sql.mock.mockImplementationOnce(() => Promise.reject(proofError));
   await assert.rejects(
-    run(() => Promise.resolve()),
-    { message },
+    assertEventMarkdownParity({
+      hono: { origin: "http://127.0.0.1:1" },
+      startKit: async () => {},
+      databaseUrl: "postgres://127.0.0.1:1/fixture",
+      connectDatabase: () => sql,
+    }),
+    (error) => error === proofError,
   );
-  assert.equal(sql.end.mock.callCount(), 2);
+  assert.equal(sql.mock.callCount(), 2);
+  assert.equal(sql.end.mock.callCount(), 1);
   const diagnostics = report.mock.calls.map((call) => call.arguments);
-  assert.deepEqual(diagnostics, [[message]]);
+  assert.deepEqual(diagnostics, [["Event Markdown fixture database cleanup failed"]]);
 });
 
 test("a bind timeout marks only the final attempt and redacts all Worker output", async (t) => {
