@@ -13,6 +13,7 @@ import { STAGING_STATIC_DOCUMENT_READY } from "../src/kit-staging-static.ts";
 import { prepareAdminDuplicateProbe } from "./fixtures/kit-admin-duplicate.mjs";
 import { assertAdminEventRosterParity } from "./fixtures/kit-admin-event-roster.mjs";
 import {
+  assertFeaturedLegacyRedirects,
   assertFeaturedUnpublishParity,
   assertInstalledJoinAttemptDetail,
   assertKitAdminServing,
@@ -1103,6 +1104,27 @@ export default {
       },
     });
     await runAdminRsvpControls();
+
+    const featuredLegacy = await startWorker("kit-featured-legacy", worker, assets, secret, {
+      KIT_ROUTE_ADMIN: "true",
+      KIT_PARITY_FIXTURE_ADMIN_FEATURED_REDIRECTS: "true",
+    });
+    await listen(featuredLegacy.child, featuredLegacy.origin, () => featuredLegacy.log);
+    const featuredRollback = await startWorker(
+      "kit-featured-legacy-rollback",
+      worker,
+      assets,
+      secret,
+      { KIT_PARITY_FIXTURE_ADMIN_FEATURED_REDIRECTS: "true" },
+    );
+    await listen(featuredRollback.child, featuredRollback.origin, () => featuredRollback.log);
+    await assertFeaturedLegacyRedirects({
+      on: featuredLegacy,
+      off: admin,
+      rollback: featuredRollback,
+      hono: honoWithSession,
+      databaseUrl,
+    });
 
     async function observeDataRedirect(worker, path) {
       const response = await fetch(`${worker.origin}${path}`, { redirect: "manual" });

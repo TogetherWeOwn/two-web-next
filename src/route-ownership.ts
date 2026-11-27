@@ -61,6 +61,7 @@ import {
   usesKitDefaultAction,
 } from "./admin/kit-serving";
 import { fetchKitAdminForm } from "./admin/kit-form-fetch";
+import { KIT_ADMIN_FEATURED_LEGACY_ROUTES } from "./admin/kit-featured-legacy-routes";
 import type { Env } from "./env";
 import { fixtureRequest } from "./fixture-origin";
 
@@ -133,8 +134,7 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   // Moderator featured list: member data, so the Kit branch renders
   // inside the member-read boundary with this declaration and the bridged
   // viewer. Off until the enablement review: the Hono panel answers meanwhile.
-  // The new/edit POST siblings and the guarded /admin/featured-contents
-  // legacy redirects stay Hono-owned; the manifest carries GET entries only.
+  // The new/edit POST siblings have their own ownership contract.
   {
     method: "GET",
     path: "/admin/featured",
@@ -147,8 +147,7 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   // src/admin/routes.tsx). Only this GET migrates: POST /admin/featured
   // stays Hono-owned, so the ported form keeps submitting to the unchanged
   // create handler (parseFeaturedForm + createFeatured, 422/303) during
-  // mixed mode, and the guarded /admin/featured-contents/create legacy
-  // redirect stays Hono-owned. Off until the enablement review.
+  // mixed mode. Off until the enablement review.
   {
     method: "GET",
     path: "/admin/featured/new",
@@ -161,9 +160,8 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   // src/admin/routes.tsx). Only this GET migrates: POST /admin/featured/:id
   // and POST /admin/featured/:id/delete stay Hono-owned, so the edit form,
   // the 422 re-render with preserved values, the 303s and the delete action
-  // keep one authority until a later write slice lands, and the guarded
-  // /admin/featured-contents/:id/edit legacy redirect stays Hono-owned. Off
-  // until the enablement review.
+  // keep one authority until a later write slice lands. Off until the
+  // enablement review.
   {
     method: "GET",
     path: "/admin/featured/:id",
@@ -1186,6 +1184,30 @@ async function dispatchOwnedRequest(
           (deps.appUrl === PRODUCTION_APP_URL || ISOLATED_CUTOVER_ORIGIN.test(deps.appUrl)),
       ))
   ) {
+    const featuredLegacy = familyRouteFor(event, ROUTE_MANIFEST, [
+      {
+        flag:
+          !queuePreview && fixtureRequest(event.request, deps.appUrl)
+            ? admin.env.KIT_PARITY_FIXTURE_ADMIN_FEATURED_REDIRECTS
+            : undefined,
+        routes: KIT_ADMIN_FEATURED_LEGACY_ROUTES,
+      },
+    ]);
+    if (featuredLegacy) {
+      const started = performance.now();
+      const requestId = safeRequestId(event.request.headers.get("cf-ray")) ?? newRequestId();
+      setReleaseMetadata(deps.versionMetadata);
+      event.locals = { ...(event.locals as object), requestId };
+      const response = await finishKitResponse(await deps.resolve(event), event, deps, requestId);
+      writeHttpRequestLog(
+        event.request,
+        requestId,
+        featuredLegacy.route.path,
+        response.status,
+        started,
+      );
+      return response;
+    }
     const response = await dispatchKitAdminRequest(event, deps, admin, queuePreview || undefined);
     if (response) return response;
   }

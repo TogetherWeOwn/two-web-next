@@ -23,8 +23,7 @@ import type { PageServerLoad } from "./$types";
 // Hono-owned: the manifest lists only this GET, so both ported forms keep
 // submitting to the unchanged Hono controllers (parseFeaturedForm +
 // updateFeatured/deleteFeatured, 422 re-render / 303 redirect) during mixed
-// mode. The guarded /admin/featured-contents/:id/edit legacy redirect stays
-// Hono-owned too.
+// mode.
 export const csr = false;
 
 export const load: PageServerLoad = async ({ parent, params, setHeaders }) => {
