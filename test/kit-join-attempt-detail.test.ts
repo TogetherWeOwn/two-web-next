@@ -5,17 +5,20 @@
 import { readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { parse } from "parse5";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   parseJoinAttemptId,
   resolveKitJoinAttemptDetail,
 } from "../src/admin/kit-join-attempt-detail";
+import { attr, elements, textOf } from "./helpers/kit-edit-controls";
+import { createKitSsrRenderer } from "./helpers/kit-ssr-render";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p: string): string => readFileSync(join(root, p), "utf8");
 
 const load = () => read("web/src/routes/admin/join-attempts/[id]/+page.server.ts");
-const page = () => read("web/src/routes/admin/join-attempts/[id]/+page.svelte");
+const pagePath = "web/src/routes/admin/join-attempts/[id]/+page.svelte";
 
 describe("Kit join-attempt detail manifest: Kit-owned since the enablement review", () => {
   it("registers GET /admin/join-attempts/:id as a join_attempts view member read, Kit-served", () => {
@@ -180,42 +183,69 @@ describe("Kit join-attempt detail load: the shared read, nothing new", () => {
 });
 
 describe("Kit join-attempt detail page: the Hono markup contract, no JavaScript", () => {
+  const view = { id: 7, outcome: "added", createdAt: "2026-10-01T12:34:56.789Z" };
+  const missing = { source: null, requestId: null, discordId: null };
+  let renderer: Awaited<ReturnType<typeof createKitSsrRenderer>>;
+  beforeAll(async () => {
+    renderer = await createKitSsrRenderer(pagePath);
+  });
+  afterAll(() => renderer?.cleanup());
+
+  const render = (trace: Record<string, string | null> = missing, id = view.id) => {
+    const html = renderer.renderPage({ view: { ...view, ...trace, id } });
+    return elements(parse(html, { scriptingEnabled: false }));
+  };
+
   it("keeps the back navigation and the Outcome/Trace definition lists", () => {
-    const html = page();
-    expect(html).toContain('href="/admin/join-attempts">Back to join attempts</a>');
-    expect(html).toContain("<h2>Outcome</h2>");
-    expect(html).toContain("<h2>Trace</h2>");
-    for (const term of [
-      "<dt>Outcome</dt>",
-      "<dt>Source</dt>",
-      "<dt>Attempted at (UTC)</dt>",
-      "<dt>Request ID</dt>",
-      "<dt>Discord ID</dt>",
-    ]) {
-      expect(html).toContain(term);
-    }
-    expect(html).toContain("Attempted at and trace identifiers are shown as recorded.");
+    const nodes = render();
+    const back = nodes.find((el) => el.tagName === "a" && textOf(el) === "Back to join attempts");
+    expect(back && attr(back, "href")).toBe("/admin/join-attempts");
+    expect(nodes.filter((el) => el.tagName === "h2").map(textOf)).toEqual(["Outcome", "Trace"]);
+    expect(nodes.filter((el) => el.tagName === "dl")).toHaveLength(2);
+    const terms = nodes.filter((el) => el.tagName === "dt").map(textOf);
+    expect(terms).toEqual(["Outcome", "Source", "Attempted at (UTC)", "Request ID", "Discord ID"]);
+    const hint = nodes.find((el) => el.tagName === "p" && attr(el, "class") === "hint");
+    const note = "Attempted at and trace identifiers are shown as recorded.";
+    expect(hint && textOf(hint)).toContain(note);
   });
 
   it("renders the UTC instant in a <time datetime> and em dashes for missing fields", () => {
-    const html = page();
-    expect(html).toContain("<time datetime={view.createdAt}>{view.createdAt}</time>");
-    expect(html.match(/\?\? "—"/g)).toHaveLength(3);
+    const trace = { source: "join", requestId: "request&7", discordId: "100000000000000201" };
+    const fixtures = [
+      [missing, view.createdAt, ["—", "—", "—"]],
+      [trace, "2026-11-01T04:05:06.789Z", ["join", "request&7", "100000000000000201"]],
+    ] as const;
+    for (const [fields, date, [source, requestId, discordId]] of fixtures) {
+      const nodes = render({ ...fields, createdAt: date });
+      const time = nodes.find((el) => el.tagName === "time");
+      expect(time && attr(time, "datetime")).toBe(date);
+      expect(time && textOf(time)).toBe(date);
+      const values = nodes.filter((el) => el.tagName === "dd").map((el) => textOf(el).trim());
+      expect(values).toEqual(["added", source, date, requestId, discordId]);
+    }
   });
 
-  it("renders inside the admin chrome with the attempt title and ships no JavaScript", () => {
-    const html = page();
-    expect(html).toContain("AdminShell");
-    expect(html).toContain("Join attempt {view.id}");
+  it.each([7, 3000000000])("renders attempt %d in the admin chrome", (id) => {
+    const nodes = render(missing, id);
+    const heading = `Join attempt ${id}`;
+    const titles = nodes.filter((el) => el.tagName === "title");
+    expect(titles.map(textOf)).toEqual([`${heading} — TWO admin`]);
+    expect(nodes.filter((el) => el.tagName === "h1").map(textOf)).toEqual([heading]);
+    const scripts = nodes.filter((el) => el.tagName === "script");
+    expect(scripts.map((el) => attr(el, "src"))).toEqual(["/islands/auth-status.js"]);
+    expect(nodes.filter((el) => ["form", "input", "button"].includes(el.tagName))).toEqual([]);
     // The one <script lang="ts"> block is the component's types-only props
     // derivation: it compiles away, and csr=false means no hydration bundle
     // ships that the CSP would block.
-    expect(html).not.toMatch(/<script src|islands\/|on:click|onClick|addEventListener/);
-    expect(html).not.toContain("{@html");
-    expect(html).not.toMatch(/<form|<input|<button/);
+    const source = read(pagePath);
+    expect(source).not.toMatch(/<script src|islands\/|on:click|onClick|addEventListener/);
+    expect(source).not.toContain("{@html");
+    expect(source).not.toMatch(/<form|<input|<button/);
   });
 
   it("never indexes moderator trace data: admin chrome carries noindex", () => {
-    expect(read("web/src/lib/AdminShell.svelte")).toContain("noindex");
+    const robots = render().filter((el) => el.tagName === "meta" && attr(el, "name") === "robots");
+    const directives = robots.map((el) => [el.parentNode?.nodeName, attr(el, "content")]);
+    expect(directives).toEqual([["head", "noindex, nofollow"]]);
   });
 });

@@ -5,13 +5,18 @@
 import { readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { parse } from "parse5";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { joinAttemptsUrl } from "../src/admin/table-list";
+import { JOIN_OUTCOMES } from "../src/join/service";
+import { attr, elements, textOf } from "./helpers/kit-edit-controls";
+import { createKitSsrRenderer } from "./helpers/kit-ssr-render";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p: string): string => readFileSync(join(root, p), "utf8");
 
 const load = () => read("web/src/routes/admin/join-attempts/+page.server.ts");
-const page = () => read("web/src/routes/admin/join-attempts/+page.svelte");
+const pagePath = "web/src/routes/admin/join-attempts/+page.svelte";
 
 describe("Kit join-attempts manifest: Kit-owned since the enablement review", () => {
   it("registers GET /admin/join-attempts as a join_attempts list member read, Kit-served", () => {
@@ -75,76 +80,121 @@ describe("Kit join-attempts load: the shared read, nothing new", () => {
 });
 
 describe("Kit join-attempts page: the Hono markup contract, no JavaScript", () => {
+  const query = { q: '*request&"7', outcome: "added", page: 2 };
+  const row = { id: 7, outcome: "added", source: "join", createdAt: "2026-10-01T12:00:00Z" };
+  let renderer: Awaited<ReturnType<typeof createKitSsrRenderer>>;
+  beforeAll(async () => {
+    renderer = await createKitSsrRenderer(pagePath);
+  });
+  afterAll(() => renderer?.cleanup());
+
+  const data = { outcomes: JOIN_OUTCOMES, retentionDays: 30, hasNext: true };
+  const render = (rows = [row], page = query.page) => {
+    const filters = { ...query, page };
+    const prevUrl = joinAttemptsUrl(filters, page - 1);
+    const nextUrl = joinAttemptsUrl(filters, page + 1);
+    const html = renderer.renderPage({ ...data, query: filters, rows, prevUrl, nextUrl });
+    return elements(parse(html));
+  };
+
   it("keeps the filter grammar: GET form, exact-search copy, bounded outcome allowlist", () => {
-    const html = page();
-    expect(html).toContain('<form method="get" action="/admin/join-attempts" class="filters">');
-    expect(html).toContain("Search is an exact Discord id or request id.");
-    expect(html).toContain('for="q">Discord id or request id</label>');
-    expect(html).toContain('id="q" name="q" type="search"');
-    expect(html).toContain('id="outcome" name="outcome"');
-    // The All option renders from the shared outcome list at runtime; the
-    // source carries the label expression, not the literal bytes.
-    expect(html).toContain('? "All" : o');
-    expect(html).toContain("</option>");
-    expect(html).toContain(">Filter</button>");
-    // No wildcard expansion: the options come from the shared outcome list,
-    // and no substring/pattern control is added to the form.
-    expect(html).not.toMatch(/ilike|contains|startsWith|pattern=|wildcard/i);
+    const nodes = render();
+    const form = nodes.find((el) => el.tagName === "form");
+    if (!form) throw new Error("no filter form rendered");
+    expect(attr(form, "method")).toBe("get");
+    expect(attr(form, "action")).toBe("/admin/join-attempts");
+    expect(attr(form, "class")).toBe("filters");
+    const paragraphs = nodes.filter((el) => el.tagName === "p").map(textOf);
+    expect(paragraphs.join(" ")).toContain("Search is an exact Discord id or request id.");
+    const fields = elements(form);
+    const labels = fields.filter((el) => el.tagName === "label");
+    expect(labels.map((el) => attr(el, "for"))).toEqual(["q", "outcome"]);
+    expect(labels.map(textOf)).toEqual(["Discord id or request id", "Outcome"]);
+    const controlTags = ["input", "textarea", "select", "button"];
+    const controls = fields.filter((el) => controlTags.includes(el.tagName));
+    const names = ["id", "name", "type"];
+    const attributes = controls.map((el) => [el.tagName, ...names.map((name) => attr(el, name))]);
+    expect(attributes).toEqual([
+      ["input", "q", "q", "search"],
+      ["select", "outcome", "outcome", undefined],
+      ["button", undefined, undefined, "submit"],
+    ]);
+    const [input] = controls;
+    expect(input && attr(input, "value")).toBe(query.q);
+    expect(controls.some((el) => attr(el, "pattern") !== undefined)).toBe(false);
+    expect(read(pagePath)).not.toMatch(/ilike|contains|startsWith|pattern=|wildcard/i);
+    expect(fields.filter((el) => el.tagName === "button").map(textOf)).toEqual(["Filter"]);
+    const options = fields.filter((el) => el.tagName === "option");
+    expect(options.map((el) => attr(el, "value"))).toEqual(["", ...JOIN_OUTCOMES]);
+    expect(options.map(textOf)).toEqual(["All", ...JOIN_OUTCOMES]);
+    const selected = options.filter((el) => attr(el, "selected") !== undefined);
+    expect(selected.map(textOf)).toEqual([query.outcome]);
   });
 
   it("keeps the accessible scroll region, scoped headers, testids and empty state", () => {
-    const html = page();
-    // Attribute-per-line in source, one region on the wire: pin each fragment.
-    for (const needle of [
-      'class="admin-table-scroll"',
-      'role="region"',
-      'aria-label="Join attempts list"',
-      'aria-describedby="join-attempts-scroll-hint"',
-      'id="join-attempts-scroll-hint"',
-      "Scroll horizontally to see all columns on smaller screens.",
-    ]) {
-      expect(html).toContain(needle);
+    const nodes = render([]);
+    const scroll = nodes.find((el) => attr(el, "data-testid") === "join-attempts-table-scroll");
+    if (!scroll) throw new Error("no scroll region rendered");
+    expect(attr(scroll, "class")).toBe("admin-table-scroll");
+    expect(attr(scroll, "role")).toBe("region");
+    expect(attr(scroll, "aria-label")).toBe("Join attempts list");
+    expect(attr(scroll, "aria-describedby")).toBe("join-attempts-scroll-hint");
+    expect(attr(scroll, "tabindex")).toBe("0");
+    const hint = nodes.find((el) => attr(el, "id") === "join-attempts-scroll-hint");
+    expect(hint && textOf(hint)).toBe("Scroll horizontally to see all columns on smaller screens.");
+    const table = elements(scroll).find((el) => attr(el, "data-testid") === "join-attempts-table");
+    if (!table || table.tagName !== "table") throw new Error("no attempts table rendered");
+    const cells = elements(table);
+    for (const page of [nodes, render()]) {
+      const headers = page.filter((el) => el.tagName === "th");
+      expect(headers.map((el) => attr(el, "scope"))).toEqual(Array(5).fill("col"));
     }
-    expect(html).toContain("tabindex={0}");
-    expect(html).toContain('data-testid="join-attempts-table-scroll"');
-    expect(html).toContain('data-testid="join-attempts-table"');
-    expect(html).toContain('data-testid="join-attempts-empty"');
-    expect(html).toContain("No join attempts.");
-    expect(html.match(/<th scope="col">/g)).toHaveLength(5);
-    expect(html.match(/<th\b(?![^>]*scope="col")/g)).toBeNull();
+    const empty = cells.find((el) => attr(el, "data-testid") === "join-attempts-empty");
+    expect(empty && textOf(empty)).toBe("No join attempts.");
   });
 
-  it("links rows to the Kit-owned detail pages with the same accessible names", () => {
-    const html = page();
-    expect(html).toContain("`/admin/join-attempts/${r.id}`");
-    expect(html).toContain("View join attempt");
+  it.each([7, 3000000000])("links row %d to its detail page with an accessible name", (id) => {
+    const href = `/admin/join-attempts/${id}`;
+    const links = render([{ ...row, id }]).filter((el) => el.tagName === "a");
+    const detail = links.find((el) => attr(el, "href") === href);
+    expect(detail && attr(detail, "aria-label")).toBe(`View join attempt ${id}: added`);
+    expect(detail && textOf(detail)).toBe("added");
   });
 
-  it("keeps paging accessible: labelled nav, page counter, filter-preserving prev/next", () => {
-    const html = page();
-    expect(html).toContain('<nav aria-label="Join attempt pages" class="actions">');
-    expect(html).toContain("Page {query.page}");
-    expect(html).toContain('rel="prev"');
-    expect(html).toContain('rel="next"');
-    expect(html).toContain("prevUrl");
-    expect(html).toContain("nextUrl");
+  it.each([2, 5])("labels pagination on page %d and preserves both filters", (page) => {
+    const navs = render([row], page).filter((el) => el.tagName === "nav");
+    const nav = navs.find((el) => attr(el, "aria-label") === "Join attempt pages");
+    if (!nav) throw new Error("no pagination rendered");
+    expect(attr(nav, "class")).toBe("actions");
+    const counter = elements(nav).find((el) => el.tagName === "span");
+    expect(counter && textOf(counter)).toBe(`Page ${page}`);
+    const links = elements(nav).filter((el) => el.tagName === "a");
+    const url = (n: number) => `/admin/join-attempts?page=${n}&outcome=added&q=*request%26%227`;
+    expect(links.map((el) => [attr(el, "rel"), attr(el, "href")])).toEqual([
+      ["prev", url(page - 1)],
+      ["next", url(page + 1)],
+    ]);
     // The hrefs are built by the shared URL helper in the load, so paging
     // keeps every filter exactly like the Hono viewer.
     expect(load()).toContain("joinAttemptsUrl(query, query.page - 1)");
     expect(load()).toContain("joinAttemptsUrl(query, query.page + 1)");
   });
 
-  it("ships no JavaScript: no island, no script src, no event handler, no CSR", () => {
-    const html = page();
+  it("adds no page JavaScript and keeps CSR disabled", () => {
+    const scripts = render().filter((el) => el.tagName === "script");
+    expect(scripts.map((el) => attr(el, "src"))).toEqual(["/islands/auth-status.js"]);
     // The one <script lang="ts"> block is the component's types-only props
     // derivation: it compiles away, and the group layout sets csr=false so
     // no hydration bundle ships that the CSP would block.
-    expect(html).not.toMatch(/<script src|islands\/|on:click|onClick|addEventListener/);
-    expect(html).not.toContain("{@html");
+    const source = read(pagePath);
+    expect(source).not.toMatch(/<script src|islands\/|on:click|onClick|addEventListener/);
+    expect(source).not.toContain("{@html");
     expect(read("web/src/routes/admin/+layout.server.ts")).toContain("csr = false");
   });
 
   it("never indexes moderator trace data: admin chrome carries noindex", () => {
-    expect(read("web/src/lib/AdminShell.svelte")).toContain("noindex");
+    const robots = render().filter((el) => el.tagName === "meta" && attr(el, "name") === "robots");
+    const directives = robots.map((el) => [el.parentNode?.nodeName, attr(el, "content")]);
+    expect(directives).toEqual([["head", "noindex, nofollow"]]);
   });
 });
