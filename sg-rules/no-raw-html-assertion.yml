@@ -45,12 +45,10 @@ rule:
                     field: condition
                   stopBy:
                     not:
-                      any:
-                        - kind: parenthesized_expression
-                        - kind: binary_expression
-                          has:
-                            field: operator
-                            regex: '^(?:&&|\|\|)$'
+                      matches: boolean-expression
+            stopBy:
+              not:
+                matches: boolean-expression
         - not:
             inside:
               matches: raw-query-context
@@ -89,6 +87,13 @@ constraints:
   NEEDLE:
     matches: markup
 utils:
+  boolean-expression:
+    any:
+      - kind: parenthesized_expression
+      - kind: binary_expression
+        has:
+          field: operator
+          regex: '^(?:&&|\|\|)$'
   # Restrict the rule to response-shaped operands. This avoids comparing CLI
   # help, source text, fixture inputs, and selector strings as if they were HTML.
   response-body:
