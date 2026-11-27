@@ -54,6 +54,11 @@ describe("workflow concurrency", () => {
       "env.REUSE_SCAN != 'true' && github.event_name == 'pull_request'",
     ]);
     expect(scan.steps[0].run).toContain("python3 - <<'VERIFY_SOURCE'");
+    expect(scan.steps[1].with).toEqual({
+      ref: "${{ github.sha }}",
+      "fetch-depth": 0,
+      "persist-credentials": false,
+    });
   });
 
   it("cancels superseded runs of every pull_request workflow", () => {
