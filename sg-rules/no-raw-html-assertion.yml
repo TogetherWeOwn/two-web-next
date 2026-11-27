@@ -4,6 +4,7 @@ language: TypeScript
 severity: warning
 message: Use the shared DOM queries in ci/rendered-page.mjs or a Playwright locator for rendered HTML assertions.
 files:
+  - "e2e/kit-parity/**/*.{ts,mts,cts,js,mjs,cjs}"
   - "{bin,ci,e2e,test,web}/**/{smoke,probe,probes,parity}/**/*.{ts,mts,cts,js,mjs,cjs}"
   - "{bin,ci,e2e,test,web}/**/{smoke,probe,probes,parity}[-._]*.{ts,mts,cts,js,mjs,cjs}"
   - "{bin,ci,e2e,test,web}/**/*[-._]{smoke,probe,probes,parity}.{ts,mts,cts,js,mjs,cjs}"
@@ -50,12 +51,16 @@ rule:
             inside:
               matches: raw-query-context
               stopBy: end
-        - has:
-            field: function
-            kind: member_expression
-            has:
-              field: property
-              regex: "^(?:match|matchAll)$"
+        - any:
+            - inside:
+                kind: variable_declarator
+                field: value
+            - has:
+                field: function
+                kind: member_expression
+                has:
+                  field: property
+                  regex: "^(?:match|matchAll)$"
 constraints:
   MATCHER:
     regex: "^(?:toContain|toMatch|toBe|toEqual|toStrictEqual|match|equal|strictEqual|deepEqual|deepStrictEqual)$"
@@ -82,7 +87,7 @@ utils:
           - pattern: new RegExp($SOURCE, $FLAGS)
       # Common HTML structure and attributes. XML tags, CLI placeholders,
       # CSS attribute selectors and escaped markup do not match by themselves.
-      - regex: '(?i)(?:<(?:\\?/)?(?:a|article|aside|body|button|details|div|fieldset|footer|form|h[1-6]|head|header|html|iframe|img|input|label|li|link|main|meta|nav|ol|option|p|script|section|select|span|style|summary|table|tbody|td|template|textarea|th|time|title|tr|ul)(?:[\s>/\[\\]|["\x27`])|(?:^|[\s"\x27`/]|\\b)(?:aria-[\w-]+|data-[\w-]+|class|href|id|role|src)\s*=)'
+      - regex: '(?i)(?:<(?:\\?/)?(?:a|article|aside|body|button|details|div|fieldset|footer|form|h[1-6]|head|header|html|iframe|img|input|label|li|link|main|meta|nav|ol|option|p|script|section|select|span|style|summary|table|tbody|td|template|textarea|th|time|title|tr|ul)(?:[\s>/\[\\]|["\x27`])|(?:^|[\s"\x27`/]|\\b)(?:aria-[\w-]+|data-[\w-]+|action|class|href|id|name|rel|role|src|type)\s*=)'
   string-query:
     # Bind operands through the call so markup in messages and other arguments
     # cannot look like the expected HTML fragment.

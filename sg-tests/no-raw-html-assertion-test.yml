@@ -16,6 +16,8 @@ valid:
   - expect(html).not.toContain("<script");
   - assert.doesNotMatch(html, /<iframe\b/);
   - assert.ok(!html.includes('<a href="/members/private">'));
+  - const safe = !html.includes("<script");
+  - const hasXmlRoot = body.includes("<urlset>");
   - assert.equal(html.length, 0, 'body must omit <div id="private">');
   - assert.equal(kitHomeHeadingText(html + '<div id="home-heading"></div>'), "");
   - const mutant = html.replace('<h1 id="home-heading">', '<h2 id="home-heading">');
@@ -29,6 +31,11 @@ invalid:
   - expect(html.includes("<form")).toBe(true);
   - if (!html.includes('aria-label="Primary"')) failures.push("missing navigation");
   - const heading = html.match(new RegExp(`<h1 id="${id}">([^<]*)`));
+  - const hasWidget = body.includes('data-testid="join-widget-load"');
+  - const hasTable = /<table[\s>]/.test(html);
+  - expect(body).toContain('rel="canonical"');
+  - expect(body).toMatch(/action="\/events"/);
+  - expect(html).toContain('name="duration" type="number"');
   - |
     expect(body).toContain(
       '<p role="status">Ready</p>',

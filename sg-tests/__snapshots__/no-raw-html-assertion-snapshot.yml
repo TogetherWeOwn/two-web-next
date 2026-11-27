@@ -40,20 +40,36 @@ snapshots:
       style: secondary
       start: 9
       end: 76
+  const hasTable = /<table[\s>]/.test(html);:
+    labels:
+    - source: /<table[\s>]/.test(html)
+      style: primary
+      start: 17
+      end: 41
+    - source: hasTable = /<table[\s>]/.test(html)
+      style: secondary
+      start: 6
+      end: 41
+  const hasWidget = body.includes('data-testid="join-widget-load"');:
+    labels:
+    - source: body.includes('data-testid="join-widget-load"')
+      style: primary
+      start: 18
+      end: 65
+    - source: hasWidget = body.includes('data-testid="join-widget-load"')
+      style: secondary
+      start: 6
+      end: 65
   const heading = html.match(new RegExp(`<h1 id="${id}">([^<]*)`));:
     labels:
     - source: html.match(new RegExp(`<h1 id="${id}">([^<]*)`))
       style: primary
       start: 16
       end: 64
-    - source: match
+    - source: heading = html.match(new RegExp(`<h1 id="${id}">([^<]*)`))
       style: secondary
-      start: 21
-      end: 26
-    - source: html.match
-      style: secondary
-      start: 16
-      end: 26
+      start: 6
+      end: 64
   expect(await response.text(), "Join link").toContain(`href="${joinPath}"`);:
     labels:
     - source: expect(await response.text(), "Join link").toContain(`href="${joinPath}"`)
@@ -72,12 +88,30 @@ snapshots:
       style: primary
       start: 0
       end: 57
+  expect(body).toContain('rel="canonical"');:
+    labels:
+    - source: expect(body).toContain('rel="canonical"')
+      style: primary
+      start: 0
+      end: 41
   expect(body).toMatch(/<main\b[^>]*>/i);:
     labels:
     - source: expect(body).toMatch(/<main\b[^>]*>/i)
       style: primary
       start: 0
       end: 38
+  expect(body).toMatch(/action="\/events"/);:
+    labels:
+    - source: expect(body).toMatch(/action="\/events"/)
+      style: primary
+      start: 0
+      end: 41
+  expect(html).toContain('name="duration" type="number"');:
+    labels:
+    - source: expect(html).toContain('name="duration" type="number"')
+      style: primary
+      start: 0
+      end: 55
   expect(html.includes("<form")).toBe(true);:
     labels:
     - source: html.includes("<form")
