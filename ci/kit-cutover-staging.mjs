@@ -297,6 +297,19 @@ export async function exercise(
   if (admin) proof.adminChecks = ADMIN_STAGING_CHECKS;
 }
 
+export async function finalizeIsolatedCutover(owner, scratch, publishProof) {
+  try {
+    try {
+      await owner?.end({ timeout: 0 });
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+  } catch {
+    throw new Error("Cutover staging failed during local fixture finalization");
+  }
+  await publishProof?.();
+}
+
 async function qualify(dir, proofPath, ctx) {
   const { identity, worker, names, claim } = ctx;
   const inputs = await sourceInputs();
@@ -319,6 +332,7 @@ async function qualify(dir, proofPath, ctx) {
     bindingCheck: `isolated-and-${cutoverProfile}`,
   };
   let owner;
+  let publishProof;
   let phase = "synthetic database setup";
   try {
     const fixture = await createFixture(database, names, () =>
@@ -335,16 +349,17 @@ async function qualify(dir, proofPath, ctx) {
     await deployPacket(dir, scratch, proof, origin, inputs, api, secrets);
     phase = "exact readiness, route smoke and guarded undo";
     await exercise(proof, prefixes, owner, names, origin, dir, secrets);
+    publishProof = async () => {
+      verifyStagingProof(proof, { ...identity, mode: admin ? "admin" : ember ? "ember" : "kit" });
+      await writeFile(proofPath, JSON.stringify(proof), { flag: "wx" });
+    };
   } catch (error) {
     // Report only the operation and numeric provider code from Wrangler.
     const detail = error instanceof WranglerOperationError ? ` (${error.message})` : "";
     throw new Error(`Cutover staging failed during ${phase}${detail}`);
   } finally {
-    await owner?.end({ timeout: 0 });
-    await rm(scratch, { recursive: true, force: true });
+    await finalizeIsolatedCutover(owner, scratch, publishProof);
   }
-  verifyStagingProof(proof, { ...identity, mode: admin ? "admin" : ember ? "ember" : "kit" });
-  await writeFile(proofPath, JSON.stringify(proof), { flag: "wx" });
   console.info(
     `Isolated ${cutoverProfile} pin ${identity.runId}:${identity.runAttempt}:${identity.digest}, baseline ${proof[baseline]}, candidate ${proof.kit}`,
   );
