@@ -27,6 +27,7 @@ import {
 import { runRepair } from "./db-permissions-repair.mjs";
 import { runExecutorAuthority } from "./db-repair-executor.mjs";
 import { rehearseProjection } from "./fixtures/web-readiness-projection.mjs";
+import { assertReadinessResponseBounds } from "./fixtures/web-readiness-response.mjs";
 import { OwnershipRefusal, assertMigratorOwnership } from "./migration-ownership.mjs";
 import {
   DefaultAclRefusal,
@@ -58,6 +59,11 @@ const productionEnv = {
 };
 const identityHash = (database, role) =>
   createHash("sha256").update(database).update(Buffer.of(0)).update(role).digest("hex");
+
+test(
+  "readiness traffic accepts the byte limit and cancels an oversized stream",
+  assertReadinessResponseBounds,
+);
 
 test("permissions repair rejects an unpinned plan before opening a client", async () => {
   await assert.rejects(
