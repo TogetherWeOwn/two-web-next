@@ -21,6 +21,7 @@ import { build } from "esbuild";
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { serializeSigned } from "hono/utils/cookie";
+import { parse, type DefaultTreeAdapterMap } from "parse5";
 import { beforeAll, describe, expect, it } from "vitest";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
@@ -42,6 +43,7 @@ import type {
 } from "../src/events/reads";
 import type { SuggestedEvent } from "../src/events/suggestions";
 import app from "./app";
+import { attr, elements, textOf } from "./helpers/kit-edit-controls";
 
 /** H4 model contract: the exact fields the carry-over adds to KitEventDetailModel. */
 interface KitEventHostJoinFields {
@@ -279,27 +281,51 @@ function withHostJoin(
   return withEventDetailHtml(next) as unknown as Record<string, unknown>;
 }
 
-/** Decode the HTML entities SSR attribute/text escaping can produce (&amp; last). */
-function decodeHtml(value: string): string {
-  return value
-    .replace(/&#x([0-9a-fA-F]+);/g, (_match, hex: string) =>
-      String.fromCodePoint(Number.parseInt(hex, 16)),
-    )
-    .replace(/&#(\d+);/g, (_match, dec: string) => String.fromCodePoint(Number.parseInt(dec, 10)))
-    .replaceAll("&quot;", '"')
-    .replaceAll("&apos;", "'")
-    .replaceAll("&lt;", "<")
-    .replaceAll("&gt;", ">")
-    .replaceAll("&amp;", "&");
+type Element = DefaultTreeAdapterMap["element"];
+
+function elementText(node: Element | undefined): string | undefined {
+  return node && textOf(node).trim();
 }
 
-/** The complete joining destination a member would navigate to, HTML-decoded
- * from the joining anchor's href; null when no joining anchor is rendered. */
-function joiningHref(html: string): string | null {
-  const anchor = html.match(/<a\b[^>]*data-testid="event-public-join-link"[^>]*>/);
-  if (!anchor) return null;
-  const href = anchor[0].match(/\bhref="([^"]*)"/);
-  return href ? decodeHtml(href[1]!) : null;
+function detailPage(html: string) {
+  const document = elements(parse(html));
+  const nodes = [...document, ...elements(parse(html, { scriptingEnabled: false }))];
+  for (const node of nodes) {
+    if ("content" in node)
+      nodes.push(...elements((node as DefaultTreeAdapterMap["template"]).content));
+  }
+  const byTestId = (id: string) => document.find((node) => attr(node, "data-testid") === id);
+  const hasTestId = (id: string) => nodes.some((node) => attr(node, "data-testid") === id);
+  const hasHref = (href: string) => nodes.some((node) => attr(node, "href") === href);
+  const text = (id: string) => elementText(byTestId(id));
+  return { nodes, byTestId, hasTestId, hasHref, text };
+}
+
+function assertPublishedJoin(page: ReturnType<typeof detailPage>, hostLabel: string) {
+  const organizer = page.byTestId("event-organizer");
+  const parent = organizer?.parentNode;
+  const row = parent && "parentNode" in parent ? parent.parentNode : null;
+  const labels = row?.childNodes.filter((node) => node.nodeName === "dt");
+  expect(labels?.map(textOf)).toEqual([hostLabel]);
+  expect(elementText(organizer)).toBe(ORGANIZER);
+  const details = page.byTestId("event-join-details");
+  expect(details?.tagName).toBe("section");
+  const section = elements(details!);
+  const heading = section.find(
+    (node) => node.tagName === "h2" && attr(node, "id") === "event-join-details-heading",
+  );
+  expect(elementText(heading)).toBe("How to join");
+  expect(attr(details!, "aria-labelledby")).toBe("event-join-details-heading");
+  const link = page.byTestId("event-public-join-link");
+  expect(link?.tagName).toBe("a");
+  expect(section.filter((node) => node.tagName === "a")).toEqual([link]);
+  expect(link?.namespaceURI).toBe("http://www.w3.org/1999/xhtml");
+  expect(elementText(link)).toBe("Open the public joining link");
+  expect(attr(link!, "href")).toBe(JOIN_URL);
+  const instructions = page.byTestId("event-join-instructions");
+  expect(instructions?.tagName).toBe("p");
+  expect(section).toContain(instructions);
+  expect(elementText(instructions)).toBe(JOIN_INSTRUCTIONS);
 }
 
 // svelte lives in the web workspace only; the root workspace never sees its
@@ -385,23 +411,19 @@ describe("H4 host/join acceptance: Hono rendering contract", () => {
         join_instructions: JOIN_INSTRUCTIONS,
       }).request()
     ).text();
-    expect(html).toContain("Hosted by");
-    expect(html).toContain(`data-testid="event-organizer">${ORGANIZER}`);
-    expect(html).toContain('data-testid="event-join-details"');
-    expect(html).toContain('<h2 id="event-join-details-heading">How to join</h2>');
-    expect(html).toContain('data-testid="event-public-join-link"');
-    expect(html).toContain("Open the public joining link");
-    expect(html).toContain(`href="${JOIN_URL}"`);
-    expect(html).toContain(`data-testid="event-join-instructions">${JOIN_INSTRUCTIONS}`);
+    const page = detailPage(html);
+    expect(page.byTestId("event-organizer")?.parentNode?.nodeName).toBe("dd");
+    assertPublishedJoin(page, "Hosted by");
   });
 
   it("detail without host/join fields renders no host or joining sections", async () => {
     const html = await (await honoFixture().request()).text();
-    expect(html).toContain('data-testid="event-venue">The lobby');
-    expect(html).not.toContain('data-testid="event-organizer"');
-    expect(html).not.toContain('data-testid="event-join-details"');
-    expect(html).not.toContain('data-testid="event-public-join-link"');
-    expect(html).not.toContain('data-testid="event-join-instructions"');
+    const page = detailPage(html);
+    expect(page.text("event-venue")).toBe("The lobby");
+    expect(page.hasTestId("event-organizer")).toBe(false);
+    expect(page.hasTestId("event-join-details")).toBe(false);
+    expect(page.hasTestId("event-public-join-link")).toBe(false);
+    expect(page.hasTestId("event-join-instructions")).toBe(false);
   });
 
   it("draft shows the organizer and instructions but no public link to moderators", async () => {
@@ -415,12 +437,19 @@ describe("H4 host/join acceptance: Hono rendering contract", () => {
     const response = await source.request(PATH, await source.cookie(true));
     const html = await response.text();
     expect(response.status).toBe(200);
-    expect(html).toContain('data-testid="event-draft">Draft');
-    expect(html).toContain('data-testid="event-organizer">Draft organizer');
-    expect(html).toContain('data-testid="event-join-details"');
-    expect(html).toContain("Public joining link: https://meet.example.test/draft-room");
-    expect(html).not.toContain('data-testid="event-public-join-link"');
-    expect(html).toContain('data-testid="event-join-instructions">Draft instructions');
+    const page = detailPage(html);
+    expect(page.text("event-draft")).toBe("Draft");
+    expect(page.text("event-organizer")).toBe("Draft organizer");
+    const details = page.byTestId("event-join-details");
+    expect(elementText(details)).toContain(
+      "Public joining link: https://meet.example.test/draft-room",
+    );
+    const section = elements(details!);
+    expect(section).toContain(page.byTestId("event-join-instructions"));
+    expect(page.hasHref("https://meet.example.test/draft-room")).toBe(false);
+    expect(section.some((node) => node.tagName === "a")).toBe(false);
+    expect(page.hasTestId("event-public-join-link")).toBe(false);
+    expect(page.text("event-join-instructions")).toBe("Draft instructions");
   });
 
   it("past detail keeps the organizer but drops the join section", async () => {
@@ -432,10 +461,12 @@ describe("H4 host/join acceptance: Hono rendering contract", () => {
         join_instructions: "Past instructions",
       }).request()
     ).text();
-    expect(html).toContain('data-testid="event-organizer">Past organizer');
-    expect(html).not.toContain('data-testid="event-join-details"');
-    expect(html).not.toContain('data-testid="event-public-join-link"');
-    expect(html).not.toContain('data-testid="event-join-instructions"');
+    const page = detailPage(html);
+    expect(page.text("event-organizer")).toBe("Past organizer");
+    expect(page.hasHref("https://meet.example.test/past-room")).toBe(false);
+    expect(page.hasTestId("event-join-details")).toBe(false);
+    expect(page.hasTestId("event-public-join-link")).toBe(false);
+    expect(page.hasTestId("event-join-instructions")).toBe(false);
   });
 
   it("escapes hostile host and joining text", async () => {
@@ -446,12 +477,14 @@ describe("H4 host/join acceptance: Hono rendering contract", () => {
         join_instructions: HOSTILE_INSTRUCTIONS,
       }).request()
     ).text();
-    expect(html).toContain('data-testid="event-organizer"');
-    expect(html).toContain("Riley &lt;img");
-    expect(html).not.toContain("<img src=x");
-    expect(html).toContain("Lobby &lt;b");
-    expect(html).not.toContain("<b>rules</b>");
-    expect(html).toContain("&amp; friends");
+    const page = detailPage(html);
+    expect(page.text("event-organizer")).toBe(HOSTILE_ORGANIZER);
+    expect(page.text("event-join-instructions")).toBe(HOSTILE_INSTRUCTIONS);
+    expect(page.nodes.some((node) => node.tagName === "img" && attr(node, "src") === "x")).toBe(
+      false,
+    );
+    expect(page.nodes.some((node) => node.tagName === "b" && textOf(node) === "rules")).toBe(false);
+    expect(page.nodes.some((node) => attr(node, "onerror") !== undefined)).toBe(false);
   });
 
   it("renders overlong and malformed joining values safely when stored", async () => {
@@ -465,12 +498,13 @@ describe("H4 host/join acceptance: Hono rendering contract", () => {
       }).request()
     ).text();
     // Legacy malformed URLs remain visible as text, never active links.
-    expect(html).toContain('data-testid="event-join-details"');
-    expect(html).not.toContain('data-testid="event-public-join-link"');
-    expect(html).not.toContain('href="https://"');
-    expect(html).toContain("Public joining link: https://");
-    expect(html).toContain(longOrganizer);
-    expect(html).toContain(longInstructions);
+    const page = detailPage(html);
+    expect(page.byTestId("event-join-details")).toBeDefined();
+    expect(page.hasTestId("event-public-join-link")).toBe(false);
+    expect(page.hasHref("https://")).toBe(false);
+    expect(page.text("event-join-details")).toContain("Public joining link: https://");
+    expect(page.text("event-organizer")).toBe(longOrganizer);
+    expect(page.text("event-join-instructions")).toBe(longInstructions);
   });
 
   it("attribute-escapes a hostile joining link", async () => {
@@ -481,9 +515,11 @@ describe("H4 host/join acceptance: Hono rendering contract", () => {
         join_instructions: null,
       }).request()
     ).text();
-    expect(html).toContain('data-testid="event-public-join-link"');
-    expect(joiningHref(html)).toBe('https://meet.example.test/"onmouseover="alert(1)');
-    expect(html).not.toContain('"onmouseover="');
+    const page = detailPage(html);
+    const link = page.byTestId("event-public-join-link");
+    expect(link?.tagName).toBe("a");
+    expect(attr(link!, "href")).toBe('https://meet.example.test/"onmouseover="alert(1)');
+    expect(page.nodes.some((node) => attr(node, "onmouseover") !== undefined)).toBe(false);
   });
 });
 
@@ -530,16 +566,9 @@ describe("H4 host/join acceptance: Kit presentation legs (RED at base)", () => {
       joinInstructions: JOIN_INSTRUCTIONS,
     });
     const html = renderDetail(model);
-    expect(html).toMatch(/<dt\b[^>]*>Host<\/dt>/);
-    expect(html).toContain('data-testid="event-organizer"');
-    expect(html).toContain(ORGANIZER);
-    expect(html).toContain('data-testid="event-join-details"');
-    expect(html).toContain("How to join");
-    expect(html).toContain('data-testid="event-public-join-link"');
-    expect(html).toContain("Open the public joining link");
-    expect(html).toContain(`href="${JOIN_URL}"`);
-    expect(html).toContain('data-testid="event-join-instructions"');
-    expect(html).toContain(JOIN_INSTRUCTIONS);
+    const page = detailPage(html);
+    expect(page.byTestId("event-organizer")?.parentNode?.nodeName).toBe("dd");
+    assertPublishedJoin(page, "Host");
   });
 
   it("detail without host/join fields renders no host or joining sections", async () => {
@@ -550,12 +579,13 @@ describe("H4 host/join acceptance: Kit presentation legs (RED at base)", () => {
       joinInstructions: null,
     });
     const html = renderDetail(model);
-    expect(html).toContain('data-testid="event-venue"');
-    expect(html).toContain("The lobby");
-    expect(html).not.toContain('data-testid="event-organizer"');
-    expect(html).not.toContain('data-testid="event-join-details"');
-    expect(html).not.toContain('data-testid="event-public-join-link"');
-    expect(html).not.toContain('data-testid="event-join-instructions"');
+    const page = detailPage(html);
+    expect(page.byTestId("event-venue")).toBeDefined();
+    expect(page.text("event-venue")).toBe("The lobby");
+    expect(page.hasTestId("event-organizer")).toBe(false);
+    expect(page.hasTestId("event-join-details")).toBe(false);
+    expect(page.hasTestId("event-public-join-link")).toBe(false);
+    expect(page.hasTestId("event-join-instructions")).toBe(false);
   });
 
   it("draft shows the organizer and instructions but no public link to moderators", async () => {
@@ -566,14 +596,21 @@ describe("H4 host/join acceptance: Kit presentation legs (RED at base)", () => {
       joinInstructions: "Draft instructions",
     });
     const html = renderDetail(model);
-    expect(html).toContain('data-testid="event-draft"');
-    expect(html).toContain('data-testid="event-organizer"');
-    expect(html).toContain("Draft organizer");
-    expect(html).toContain('data-testid="event-join-details"');
-    expect(html).toContain("Public joining link: https://meet.example.test/draft-room");
-    expect(html).not.toContain('data-testid="event-public-join-link"');
-    expect(html).toContain('data-testid="event-join-instructions"');
-    expect(html).toContain("Draft instructions");
+    const page = detailPage(html);
+    expect(page.text("event-draft")).toBe("Draft");
+    expect(page.byTestId("event-organizer")).toBeDefined();
+    expect(page.text("event-organizer")).toBe("Draft organizer");
+    const details = page.byTestId("event-join-details");
+    expect(elementText(details)).toContain(
+      "Public joining link: https://meet.example.test/draft-room",
+    );
+    const section = elements(details!);
+    expect(section).toContain(page.byTestId("event-join-instructions"));
+    expect(page.hasHref("https://meet.example.test/draft-room")).toBe(false);
+    expect(section.some((node) => node.tagName === "a")).toBe(false);
+    expect(page.hasTestId("event-public-join-link")).toBe(false);
+    expect(page.byTestId("event-join-instructions")).toBeDefined();
+    expect(page.text("event-join-instructions")).toBe("Draft instructions");
   });
 
   it("past detail keeps the organizer but drops the join section", async () => {
@@ -584,11 +621,13 @@ describe("H4 host/join acceptance: Kit presentation legs (RED at base)", () => {
       joinInstructions: "Past instructions",
     });
     const html = renderDetail(model);
-    expect(html).toContain('data-testid="event-organizer"');
-    expect(html).toContain("Past organizer");
-    expect(html).not.toContain('data-testid="event-join-details"');
-    expect(html).not.toContain('data-testid="event-public-join-link"');
-    expect(html).not.toContain('data-testid="event-join-instructions"');
+    const page = detailPage(html);
+    expect(page.byTestId("event-organizer")).toBeDefined();
+    expect(page.text("event-organizer")).toBe("Past organizer");
+    expect(page.hasHref("https://meet.example.test/past-room")).toBe(false);
+    expect(page.hasTestId("event-join-details")).toBe(false);
+    expect(page.hasTestId("event-public-join-link")).toBe(false);
+    expect(page.hasTestId("event-join-instructions")).toBe(false);
   });
 
   it("escapes hostile host and joining text", async () => {
@@ -598,12 +637,14 @@ describe("H4 host/join acceptance: Kit presentation legs (RED at base)", () => {
       joinInstructions: HOSTILE_INSTRUCTIONS,
     });
     const html = renderDetail(model);
-    expect(html).toContain('data-testid="event-organizer"');
-    expect(html).toContain("Riley &lt;img");
-    expect(html).not.toContain("<img src=x");
-    expect(html).toContain("Lobby &lt;b");
-    expect(html).not.toContain("<b>rules</b>");
-    expect(html).toContain("&amp; friends");
+    const page = detailPage(html);
+    expect(page.text("event-organizer")).toBe(HOSTILE_ORGANIZER);
+    expect(page.text("event-join-instructions")).toBe(HOSTILE_INSTRUCTIONS);
+    expect(page.nodes.some((node) => node.tagName === "img" && attr(node, "src") === "x")).toBe(
+      false,
+    );
+    expect(page.nodes.some((node) => node.tagName === "b" && textOf(node) === "rules")).toBe(false);
+    expect(page.nodes.some((node) => attr(node, "onerror") !== undefined)).toBe(false);
   });
 
   it("renders overlong and malformed joining values with the Hono structure", async () => {
@@ -615,12 +656,13 @@ describe("H4 host/join acceptance: Kit presentation legs (RED at base)", () => {
       joinInstructions: longInstructions,
     });
     const html = renderDetail(model);
-    expect(html).toContain('data-testid="event-join-details"');
-    expect(html).not.toContain('data-testid="event-public-join-link"');
-    expect(html).not.toContain('href="https://"');
-    expect(html).toContain("Public joining link: https://");
-    expect(html).toContain(longOrganizer);
-    expect(html).toContain(longInstructions);
+    const page = detailPage(html);
+    expect(page.byTestId("event-join-details")).toBeDefined();
+    expect(page.hasTestId("event-public-join-link")).toBe(false);
+    expect(page.hasHref("https://")).toBe(false);
+    expect(page.text("event-join-details")).toContain("Public joining link: https://");
+    expect(page.text("event-organizer")).toBe(longOrganizer);
+    expect(page.text("event-join-instructions")).toBe(longInstructions);
   });
 
   it("attribute-escapes a hostile joining link", async () => {
@@ -630,9 +672,11 @@ describe("H4 host/join acceptance: Kit presentation legs (RED at base)", () => {
       joinInstructions: null,
     });
     const html = renderDetail(model);
-    expect(html).toContain('data-testid="event-public-join-link"');
-    expect(joiningHref(html)).toBe('https://meet.example.test/"onmouseover="alert(1)');
-    expect(html).not.toContain('"onmouseover="');
+    const page = detailPage(html);
+    const link = page.byTestId("event-public-join-link");
+    expect(link?.tagName).toBe("a");
+    expect(attr(link!, "href")).toBe('https://meet.example.test/"onmouseover="alert(1)');
+    expect(page.nodes.some((node) => attr(node, "onmouseover") !== undefined)).toBe(false);
   });
 });
 
@@ -652,22 +696,11 @@ describe("H4 host/join acceptance: cross-renderer parity (RED at base)", () => {
         joinInstructions: JOIN_INSTRUCTIONS,
       }),
     );
-    expect(honoHtml).toContain("Hosted by");
-    expect(kitHtml).toMatch(/<dt\b[^>]*>Host<\/dt>/);
-    const pins = [
-      'data-testid="event-organizer"',
-      ORGANIZER,
-      'data-testid="event-join-details"',
-      "How to join",
-      'data-testid="event-public-join-link"',
-      "Open the public joining link",
-      JOIN_URL,
-      'data-testid="event-join-instructions"',
-      JOIN_INSTRUCTIONS,
-    ];
-    for (const pin of pins) {
-      expect(honoHtml, pin).toContain(pin);
-      expect(kitHtml, pin).toContain(pin);
+    for (const [html, label] of [
+      [honoHtml, "Hosted by"],
+      [kitHtml, "Host"],
+    ] as const) {
+      assertPublishedJoin(detailPage(html), label);
     }
   });
 });
@@ -708,17 +741,28 @@ describe("stored joining URL policy at both render boundaries", () => {
     expect((kitModel as ModelWithHostJoin).joinUrl).toBe(joinUrl);
     const kitHtml = renderDetail(kitModel as unknown as Record<string, unknown>);
     for (const html of [honoHtml, kitHtml]) {
-      expect(html).toContain('data-testid="event-join-details"');
-      expect(html).toContain(JOIN_INSTRUCTIONS);
+      const page = detailPage(html);
+      const details = page.byTestId("event-join-details");
+      expect(details?.tagName).toBe("section");
+      const section = elements(details!);
+      const instructions = page.byTestId("event-join-instructions");
+      expect(section).toContain(instructions);
+      expect(elementText(instructions)).toBe(JOIN_INSTRUCTIONS);
+      const link = page.byTestId("event-public-join-link");
       if (clickable) {
-        expect(html).toContain('data-testid="event-public-join-link"');
-        expect(html).toContain("Open the public joining link");
-        expect(joiningHref(html)).toBe(joinUrl);
+        expect(link?.tagName).toBe("a");
+        expect(section.filter((node) => node.tagName === "a")).toEqual([link]);
+        expect(elementText(link)).toBe("Open the public joining link");
+        expect(attr(link!, "href")).toBe(joinUrl);
       } else {
-        expect(html).not.toContain('data-testid="event-public-join-link"');
-        expect(joiningHref(html)).toBeNull();
-        expect(html).not.toContain(`href="${joinUrl}"`);
-        expect(decodeHtml(html)).toContain(`Public joining link: ${joinUrl}`);
+        expect(page.hasTestId("event-public-join-link")).toBe(false);
+        expect(page.hasHref(joinUrl)).toBe(false);
+        expect(section.some((node) => node.tagName === "a")).toBe(false);
+        const fallback = section.find(
+          (node) => node.tagName === "p" && elementText(node) === `Public joining link: ${joinUrl}`,
+        );
+        expect(fallback).toBeDefined();
+        expect(elements(fallback!)).toEqual([fallback]);
       }
     }
   });
