@@ -9,6 +9,7 @@
 import { serializeSigned } from "hono/utils/cookie";
 import { describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
+import { parseGamesText } from "../src/profiles/composition";
 import { profilesApp } from "../src/profiles/routes";
 import { createMemoryProfileStore } from "../src/profiles/store";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
@@ -35,6 +36,14 @@ const gamesOverLimit = Array.from({ length: 21 }, (_, i) => `game${i}`);
 const BIO_ERROR = "Keep your bio to 1000 characters or fewer.";
 const GAME_NAME_ERROR = "Keep each game name to 80 characters or fewer.";
 const GAME_COUNT_ERROR = "Add no more than 20 games.";
+
+it("flags only trimmed game names over 80 code points in composition feedback", () => {
+  expect(parseGamesText(`  ${gameAtLimit}\r\n${gameOverLimit}  `)).toEqual({
+    names: [gameAtLimit, gameOverLimit],
+    raw: 167,
+    overlong: [2],
+  });
+});
 
 async function setup(options: { limited?: boolean } = {}) {
   const sessions = createMemorySessionStore();
@@ -202,6 +211,22 @@ describe("profile length limits at the route (in-memory fixtures only)", () => {
     expect(cleared.status).toBe(303);
     expect(empty.store.rows.get(ALICE)?.bio).toBeNull();
     expect(empty.store.rows.get(ALICE)?.games).toEqual([]);
+  });
+
+  it("form POST bounds raw games text at 1700 code points before trimming", async () => {
+    const { formPost, store, save } = await setup();
+    const gamesText = gameAtLimit + " ".repeat(1620);
+    const accepted = await formPost({ games_text: gamesText }, "application/json");
+    expect(accepted.status).toBe(200);
+    expect(store.rows.get(ALICE)?.games).toEqual([gameAtLimit]);
+
+    const rejected = await formPost({ games_text: gamesText + " " }, "application/json");
+    expect(rejected.status).toBe(422);
+    expect(await rejected.json()).toEqual({
+      error: "invalid",
+      fields: { games: "Games list is too long." },
+    });
+    expect(save).toHaveBeenCalledTimes(1);
   });
 
   it.each(["PATCH", "POST"] as const)(
