@@ -6,7 +6,6 @@ message: Use the shared byte-limit helpers in src/http/length-limit.ts.
 files:
   - "**/*.{js,mjs}"
   - "{src,web/src,assets}/**/*.{ts,mts,cts,cjs}"
-  - "web/src/**/*.svelte"
 ignores:
   - src/http/length-limit.ts
   - "public/**"

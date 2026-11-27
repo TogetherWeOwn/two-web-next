@@ -61,7 +61,7 @@ function checkByteLengthRuleCoverage() {
     );
     writeFileSync(
       join(directory, "web/src/fallback.svelte"),
-      `<script lang="legacy">${unsafe}</script>\n`,
+      `<script lang="legacy">const marker = "</SCRIPTURE>"; ${unsafe}</script>\n<svelte:head><script>${unsafe}</script></svelte:head>\n`,
     );
 
     for (const file of ["src/probe.tsx", "src/probe.jsx"]) {
@@ -81,6 +81,7 @@ function checkByteLengthRuleCoverage() {
       cpSync(join(root, path), join(directory, path), { recursive: true });
     }
     symlinkSync(join(root, "node_modules"), join(directory, "node_modules"));
+    symlinkSync(join(root, "web/node_modules"), join(directory, "web/node_modules"));
     const event = join(directory, "event.json");
     writeFileSync(event, "{}");
     const lint = (ref, actions = "") =>
@@ -95,6 +96,7 @@ function checkByteLengthRuleCoverage() {
       "src/probe.tsx:2",
       `${jsPath}:1`,
       "web/src/fallback.svelte:1",
+      "web/src/fallback.svelte:3",
       `${sveltePath}:2`,
       `${sveltePath}:6`,
     ];

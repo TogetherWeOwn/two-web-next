@@ -155,12 +155,13 @@ not fail) unless marked HARD. All of them run on the existing runners only.
 - **Raw byte-length comparisons (HARD):** Use the shared predicates in
   `src/http/length-limit.ts` for byte limits. The scan covers authored
   application code, Node `.mjs` and `.js` scripts, and `<script>` bodies in
-  `web/src/**/*.svelte`. The TypeScript grammar parses Svelte scripts
-  regardless of their `lang` attribute. The Node tooling
-  ratchet and the attendee-path check compare exact expressions and counts
-  per file against the tested base commit. Removed comparisons fall out of
+  `web/src/**/*.svelte`. The Kit compiler locates each script body for a
+  separate TypeScript AST scan. The Node tooling and attendee-path checks
+  compare exact expressions and counts per file against the tested base.
+  Removed comparisons fall out of
   the baseline when merged. `npm run scan:fetch-await` includes tracked
   files matched by ignore globs and treats inline suppressions as inert.
+  For local scans, install the Kit dependencies with `npm ci --prefix web --include=dev`.
 
 ## Pull-request CI selection
 
