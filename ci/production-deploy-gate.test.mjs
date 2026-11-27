@@ -170,7 +170,7 @@ function stubProductionApi(evidence, seen = {}) {
     const parsed = new URL(url);
     if (parsed.pathname.endsWith("/environments/production")) {
       seen.environment = (seen.environment ?? 0) + 1;
-      return { ok: true, json: async () => protectedEnvironment };
+      return Response.json(protectedEnvironment);
     }
     if (/\/commits\/[0-9a-f]{40}$/.test(parsed.pathname)) {
       return {
@@ -212,6 +212,82 @@ test("allows only an enabled main dispatch with verified protection and green ex
   assert.deepEqual(evidence, { sha: dispatchSha, runId: 42, runAttempt: 1 });
   assert.equal(seen.environment, 1);
   assert.equal(seen.ci, 3);
+});
+
+const productionEnvironmentLimit = 64 * 1024;
+
+test("production Environment response at exactly 64 KiB advances to CI", async () => {
+  const body = JSON.stringify(protectedEnvironment).padEnd(productionEnvironmentLimit);
+  assert.equal(Buffer.byteLength(body), productionEnvironmentLimit);
+  const seen = {};
+  const evidence = await checkProductionGate(greenEnv, async () => new Response(body), {
+    checkoutSha: dispatchSha,
+    fetchCi: stubProductionApi(ciEvidence(), seen),
+  });
+  assert.deepEqual(evidence, { sha: dispatchSha, runId: 42, runAttempt: 1 });
+  assert.equal(seen.ci, 3);
+});
+
+test("oversized production Environment response cancels before further API calls", async () => {
+  const protection = new TextEncoder().encode(JSON.stringify(protectedEnvironment));
+  const padding = new Uint8Array(productionEnvironmentLimit + 1 - protection.byteLength);
+  const chunks = [protection, padding.fill(0x20)];
+  let reads = 0;
+  let cancelled = false;
+  const response = new Response(
+    new ReadableStream(
+      {
+        pull(controller) {
+          const chunk = chunks[reads++];
+          if (chunk) controller.enqueue(chunk);
+          else controller.close();
+        },
+        cancel() {
+          cancelled = true;
+        },
+      },
+      { highWaterMark: 0 },
+    ),
+    { headers: { "Content-Length": String(protection.byteLength) } },
+  );
+  const seen = [];
+  await assert.rejects(
+    checkProductionGate(
+      greenEnv,
+      async (url) => {
+        seen.push(new URL(url).pathname);
+        return response;
+      },
+      { checkoutSha: dispatchSha },
+    ),
+    { message: "Cannot verify production Environment protection (response exceeds 64 KiB)" },
+  );
+  assert.deepEqual(seen, ["/repos/fixture/repo/environments/production"]);
+  assert.equal(reads, 2);
+  assert.equal(cancelled, true);
+});
+
+test("unreadable production Environment response fails with a sanitized error", async () => {
+  const responses = [
+    new Response(null),
+    new Response("synthetic provider diagnostic"),
+    new Response(
+      new ReadableStream({
+        pull() {
+          throw new Error("synthetic stream diagnostic");
+        },
+      }),
+    ),
+  ];
+  for (const response of responses) {
+    await assert.rejects(
+      checkProductionGate(greenEnv, async () => response, {
+        checkoutSha: dispatchSha,
+        fetchCi: noNetwork,
+      }),
+      { message: "Cannot verify production Environment protection (unreadable JSON response)" },
+    );
+  }
 });
 
 for (const [name, pattern, mutate] of [
@@ -1567,7 +1643,7 @@ function stubAutoApi(staging, environment = autoEnvironment, seen = {}) {
     const parsed = new URL(url);
     if (parsed.pathname.endsWith("/environments/production")) {
       seen.environment = (seen.environment ?? 0) + 1;
-      return { ok: true, json: async () => environment };
+      return Response.json(environment);
     }
     if (/\/commits\/[0-9a-f]{40}$/.test(parsed.pathname)) {
       return {
