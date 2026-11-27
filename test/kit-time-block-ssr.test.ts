@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import { type DefaultTreeAdapterMap, parse } from "parse5";
 import { afterAll, assert, beforeAll, describe, expect, it } from "vitest";
-import { attr, textOf } from "./helpers/kit-edit-controls";
+import { attr, elements, textOf } from "./helpers/kit-edit-controls";
 import { createKitSsrRenderer, type RenderPage } from "./helpers/kit-ssr-render";
 
 type Node = DefaultTreeAdapterMap["node"];
@@ -169,7 +169,9 @@ describe("TimeBlock server output", () => {
       (span) => attr(span, "data-live-fresh") === "" && renderedText(span) === "Live",
     );
     expect(liveBadge).toBeDefined();
-    expect([...renderedElements(missingEnd, { id: "kit-live-refresh" })]).toHaveLength(1);
+    const targets = elements(missingEnd).filter((el) => attr(el, "id") === "kit-live-refresh");
+    expect(targets).toHaveLength(1);
+    expect([...renderedElements(missingEnd, { id: "kit-live-refresh" })]).toEqual(targets);
     expect(markupText(missingEnd)).not.toContain("Ends");
   });
 
