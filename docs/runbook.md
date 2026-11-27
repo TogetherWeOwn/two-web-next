@@ -712,9 +712,21 @@ Rehearse provision, forward, undo and revoke together on the isolated restore.
 Derive each target's repair pins after provisioning under its approved executor.
 The snapshot hashes the membership row OID. Recreating the edge changes the
 digest, so retain the same edge through the recovery window.
-Keep the repair credential separate. If a membership run is uncertain, use its
-same approved operation to confirm the state. An unexpected edge refuses without
-writes. Approve and dispatch `revoke` after recovery is no longer needed.
+Keep the repair credential separate. If closing the connection fails after
+transaction acknowledgement, the executor CLI exits `20` for confirmed
+membership after `provision` or `21` for confirmed absence after `revoke`.
+Treat other nonzero exits as unconfirmed. The protected workflow reports a
+generic failure for every nonzero exit, so a failed run can leave the grant in place.
+
+After that failure, stop writes and have the authorized operator check the
+approved database, provisioner and executor in a read-only catalog transaction.
+Compare the grantor and edge flags with the approved provisioner's single edge
+(`ADMIN` false, `INHERIT` and `SET` true) and check effective `MEMBER`, `USAGE` and
+`SET` rights. Expected absence means no direct edge and all three effective
+rights false. Stop on an unexpected or inconclusive state. Preserve a confirmed
+edge while recovery still needs it. Once recovery ends, use a separately approved
+`revoke` and verify absence. Reconcile the readback before approving another
+write. Keep automatic retries disabled for `provision`.
 
 Rehearse both directions of the [permissions repair](../.github/workflows/db-permissions-repair.yml) under the production release gate with catalog `MAINTAIN`.
 Use the approved executor login for every snapshot. Run `ci/db-permissions-repair-state.sql` read-only with `search_path = pg_catalog`. Use production Environment secrets.

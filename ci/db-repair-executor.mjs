@@ -61,6 +61,8 @@ async function membership(tx, executor) {
   return present;
 }
 
+class ExecutorCloseError extends Error {}
+
 export async function runExecutorAuthority(operation, env, connect = migrationClient) {
   const plan = approvedPlan(operation, env);
   const config = migrationConnectionConfig(
@@ -70,6 +72,7 @@ export async function runExecutorAuthority(operation, env, connect = migrationCl
   );
   assert.equal(config.url.pathname, "/postgres");
   const client = connect(config);
+  let closeFailed = false;
   try {
     await client.begin("isolation level read committed", async (tx) => {
       await tx`set local search_path = pg_catalog`;
@@ -91,14 +94,27 @@ export async function runExecutorAuthority(operation, env, connect = migrationCl
       assert.equal(await membership(tx, plan.executor), wanted);
     });
   } finally {
-    await client.end({ timeout: 5 });
+    try {
+      await client.end({ timeout: 5 });
+    } catch {
+      closeFailed = true;
+    }
+  }
+  // Only reached when begin() acknowledged the checked transaction.
+  if (closeFailed) {
+    throw new ExecutorCloseError("Executor connection cleanup failed after acknowledgement.");
   }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const operation = process.argv[2];
   try {
-    await runExecutorAuthority(process.argv[2], process.env);
-  } catch {
+    await runExecutorAuthority(operation, process.env);
+  } catch (error) {
     process.exitCode = 1;
+    if (error instanceof ExecutorCloseError) {
+      // Use statuses outside Node's runtime exit codes.
+      process.exitCode = operation === "provision" ? 20 : 21;
+    }
   }
 }
