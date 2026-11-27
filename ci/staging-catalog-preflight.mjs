@@ -138,10 +138,13 @@ export function validateStagingUrl(raw) {
   ) {
     refuse("Preflight requires the pinned staging endpoint with TLS; value withheld.");
   }
+  // URLSearchParams.get reads the first value, while postgres.js parses the last.
+  const sslModes = url.searchParams.getAll("sslmode");
   if (
     !url.username ||
     !url.password ||
-    !["require", "verify-full"].includes(url.searchParams.get("sslmode")) ||
+    sslModes.length !== 1 ||
+    !["require", "verify-full"].includes(sslModes[0]) ||
     [...url.searchParams.keys()].some((key) => !["sslmode", "channel_binding"].includes(key))
   ) {
     refuse("Preflight requires a direct endpoint with TLS; value withheld.");
@@ -150,9 +153,8 @@ export function validateStagingUrl(raw) {
   if (bindings.some((value) => !["require", "prefer", "disable"].includes(value))) {
     refuse("Invalid channel binding option; value withheld.");
   }
-  // postgres.js forwards unknown URL options as startup settings, not libpq
-  // flags, and does not implement SCRAM channel binding. Strip the
-  // libpq-only flag here; TLS stays enforced via sslmode + rejectUnauthorized.
+  // Strip channel_binding to preserve the preflight's connector policy.
+  // The explicit TLS options below enforce server verification.
   url.searchParams.delete("channel_binding");
   url.port = "5432";
   return url;

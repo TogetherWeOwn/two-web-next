@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { STAGING_ORIGIN } from "../../ci/operator-constants.mjs";
 import fixture from "./staging-soak-receipt.json" with { type: "json" };
 
@@ -130,23 +131,50 @@ export function trustedReads({ fetchImpl }, { deployments, run, skipped = false 
   };
 }
 
-export function installSoakCliReads() {
+export function installSoakCliReads({ finalReadUnavailable }) {
   Date.now = () => Date.parse(fixture.receipt.floorAt);
+  const reads = [];
+  let allocationReads = 0;
   globalThis.fetch = trustedReads(
     {
       fetchImpl: async (input) => {
         const url = String(input);
-        if (url === `${STAGING_ORIGIN}/version`) return Response.json({ sha, deployedAt });
+        const trackedResponse = (body, init) => {
+          const response = Response.json(body, init);
+          const reader = url === `${STAGING_ORIGIN}/version` ? "text" : "json";
+          const readBody = response[reader].bind(response);
+          response[reader] = async () => {
+            await setImmediate();
+            const payload = await readBody();
+            reads.push(url);
+            return payload;
+          };
+          return response;
+        };
+        if (url === `${STAGING_ORIGIN}/version`) return trackedResponse({ sha, deployedAt });
         if (url === `${STAGING_ORIGIN}/up`) {
-          return Response.json(
-            { revision: { commit: sha, version_id: workerVersion } },
+          const payload = { revision: { commit: sha, version_id: workerVersion } };
+          // Record consumption when the revision reader pulls, even without .json().
+          const body = new ReadableStream(
             {
-              headers: { "x-two-origin": "two-web-next", "cache-control": "no-store" },
+              pull(controller) {
+                controller.enqueue(new TextEncoder().encode(JSON.stringify(payload)));
+                reads.push(url);
+                controller.close();
+              },
             },
+            { highWaterMark: 0 },
           );
+          return new Response(body, {
+            headers: {
+              "content-type": "application/json",
+              "x-two-origin": "two-web-next",
+              "cache-control": "no-store",
+            },
+          });
         }
         assert.equal(url, "https://api.cloudflare.com/client/v4/graphql");
-        return Response.json({
+        return trackedResponse({
           data: {
             viewer: {
               accounts: [
@@ -164,14 +192,35 @@ export function installSoakCliReads() {
         });
       },
     },
-    { deployments: () => [first], run: preRollback },
+    {
+      deployments: () => {
+        reads.push("deployments");
+        allocationReads += 1;
+        if (finalReadUnavailable && allocationReads === 2) {
+          throw new Error("synthetic private provider transport detail");
+        }
+        return [first];
+      },
+      run: preRollback,
+    },
   );
+  // Check outside the transport so the provider error handler cannot hide a fixture failure.
+  process.once("exit", () => {
+    const serving = [`${STAGING_ORIGIN}/version`, `${STAGING_ORIGIN}/up`];
+    assert.deepEqual(reads, [
+      "deployments",
+      ...serving,
+      "https://api.cloudflare.com/client/v4/graphql",
+      ...serving,
+      "deployments",
+    ]);
+  });
 }
 
-export function assertSoakCli() {
+export function assertSoakCli({ finalReadUnavailable = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "staging-soak-cli-"));
   const output = join(dir, "outputs");
-  const preload = `import { installSoakCliReads } from ${JSON.stringify(import.meta.url)}; installSoakCliReads();`;
+  const preload = `import { installSoakCliReads } from ${JSON.stringify(import.meta.url)}; installSoakCliReads({ finalReadUnavailable: ${finalReadUnavailable} });`;
   try {
     const result = spawnSync(
       process.execPath,
@@ -193,10 +242,18 @@ export function assertSoakCli() {
         },
       },
     );
+    if (finalReadUnavailable) {
+      assert.equal(result.status, 1, result.error?.message ?? result.stderr);
+      assert.equal(result.stdout, "");
+      assert.equal(result.stderr, "::error::Cannot read staging provider evidence\n");
+      assert.deepEqual(readdirSync(dir), []);
+      return;
+    }
     assert.equal(result.status, 0, result.error?.message ?? result.stderr);
     const receipt = JSON.parse(readFileSync(join(dir, "staging-soak.json"), "utf8"));
     assert.equal(receipt.schema, "staging-soak/2");
     assert.equal(receipt.allocationId, first.id);
+    assert.deepEqual(receipt.sample, fixture.receipt.sample);
     assert.equal(
       readFileSync(output, "utf8"),
       "requests=250\nerrors=2\ne2e_run_id=101\nsoak_attempt=1\n",
