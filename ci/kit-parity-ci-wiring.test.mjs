@@ -4,11 +4,13 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { parse } from "@babel/parser";
 import {
   KIT_VIEWER_ROW_NAME,
   normalizeKitViewerRow,
 } from "../e2e/kit-parity/member-board-viewer-row.mjs";
 import {
+  stopCompletedWorkers,
   withPublicVoiceBrowserWorkers,
   withWorkerCleanup,
 } from "./fixtures/kit-worker-lifecycle.mjs";
@@ -19,6 +21,75 @@ const repo = fileURLToPath(new URL("../", import.meta.url));
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const job = workflow.split("\n  check:\n")[1]?.split(/\n  [\w-]+:\n/)[0] ?? "";
 const e2eWorkflow = readFileSync(new URL("../.github/workflows/e2e.yml", import.meta.url), "utf8");
+
+test("fixture boundaries await closure of completed Workers and retain shared Workers", async () => {
+  const signals = [];
+  function fixture(name, stopped = false) {
+    const { promise, resolve } = Promise.withResolvers();
+    const worker = {
+      name,
+      stopped,
+      closed: promise,
+      child: {
+        kill(signal) {
+          signals.push([name, signal]);
+          setImmediate(() => {
+            worker.stopped = true;
+            resolve();
+          });
+        },
+      },
+    };
+    if (stopped) resolve();
+    return worker;
+  }
+  const shared = fixture("shared");
+  const completed = fixture("completed");
+  const closed = fixture("closed", true);
+  const workers = [shared, completed, closed];
+  await stopCompletedWorkers(workers, [shared]);
+  assert.deepEqual(signals, [["completed", "SIGTERM"]]);
+  assert.equal(completed.stopped, true);
+  assert.equal(shared.stopped, false);
+  assert.deepEqual(workers, [shared, completed, closed], "retain Worker records for final cleanup");
+});
+
+test("parity runner awaits phase cleanup before later fixtures", () => {
+  const runner = readFileSync(new URL("./kit-worker-e2e.mjs", import.meta.url), "utf8");
+  const parity = parse(runner, { sourceType: "module" }).program.body.find(
+    (node) => node.type === "FunctionDeclaration" && node.id?.name === "runWorkerParity",
+  );
+  assert.ok(parity, "expected the parity runner function");
+  const statements = parity.body.body.map(({ start, end }) => runner.slice(start, end));
+  const boundaries = [
+    ["await runInstalledLive();", "kit, hono", "const archive = await fetch("],
+    [
+      "PASS installed Worker preserves Kit-owned data redirects",
+      "kit, hono, kitWithSession, honoWithSession",
+      "const pagePaths = [",
+    ],
+    [
+      "PASS generated Worker reserved method/path parity with API families off",
+      "kitWithSession, honoWithSession",
+      'startKit("kit-event-writes-on"',
+    ],
+    [
+      "await assertEventReadsParity({",
+      "kitWithSession, honoWithSession, feedOn",
+      "await assertStaticFeedParity({",
+    ],
+    ["return { appUrl, direct, enabled };", "kitWithSession", 'startWorker("kit-auth"'],
+  ];
+  for (const [after, keep, before] of boundaries) {
+    const start = statements.findIndex((statement) => statement.includes(after));
+    const cleanup = statements.indexOf(`await stopCompletedWorkers(workers, [${keep}]);`);
+    const next = statements.findIndex((statement) => statement.includes(before));
+    assert.ok(
+      start >= 0 && start < cleanup && cleanup < next,
+      `confirm Worker closure before ${before}`,
+    );
+  }
+});
 
 test("public voice browser Worker lifecycle", async (t) => {
   const ready = ["start off", "ready off", "start enabled", "ready enabled"];
