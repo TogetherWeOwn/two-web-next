@@ -26,8 +26,13 @@ replacement build if the original candidate would undo a live fix.
 
 ## Match the staging evidence to the release
 
-Dispatch [XFS qualification](../.github/workflows/xfs-qualification.yml) from
-`main` with `qualify_cutover: true` and the intended `cutover_profile`.
+Select the intended release candidate SHA. While it is the tip of `main`,
+dispatch [XFS qualification](../.github/workflows/xfs-qualification.yml) from
+`main` with `qualify_cutover: true` and the intended `cutover_profile`. The
+protected workflow builds the `main` SHA resolved at dispatch. Start
+isolated qualification in parallel with ordinary shared staging qualification
+where possible.
+
 Parity runs with all Kit route families off and replays the packaged Kit
 facade, adapter and assets. The packet also includes a separately compiled pure
 Hono build. The manifest binds both file trees to the source SHA, configuration
@@ -57,23 +62,28 @@ Record the successful isolated job and cleanup, the proof's ledger states and
 version UUIDs, and the packet and proof from the same run attempt. Those
 artifacts are retained for 30 days. The production `cutover_pin` has the form
 `run_id:run_attempt:manifest_sha256`, using the manifest digest from the proof.
-To retry, select **Re-run all jobs** so isolated staging uses that attempt's
-packet.
+To retry, select **Re-run all jobs** on the original dispatch. GitHub keeps
+the original SHA and ref, and isolated staging uses the new attempt's packet.
 
 Pair the isolated packet evidence with the
 [shared staging deploy, smoke, E2E and soak](../CONTRIBUTING.md#merge-and-production-staging-evidence)
-for the same candidate SHA. Use the deployed revision recorded by the jobs
-when the Actions run header identifies the trigger context. Match the
-`sha` and `deployedAt` in the staging E2E before and after receipts to the
-commit tag and upload time of the Cloudflare Worker version identified by
-`/up`'s version UUID. This distinguishes separate uploads of the same SHA.
+by matching the packet manifest's `sourceSha` to the deployed `sha` in the
+scoped staging E2E receipts. The Actions run header can show a different SHA
+because it records the workflow trigger. If `main` has advanced, reuse an
+already valid matching packet or retry an existing dispatch for that SHA and
+profile. If neither yields a valid packet, qualify a successor through the
+same process.
+
+Match the `sha` and `deployedAt` in the staging E2E before and after receipts
+to the commit tag and upload time of the Cloudflare Worker version identified
+by `/up`'s version UUID. This distinguishes separate uploads of the same SHA.
 Use Cloudflare deployment history for that UUID and the staging E2E completion
 time to verify the version served through the required soak. A replacement
 before the soak finishes leaves the prior candidate unqualified. The isolated
 job exercises the exact packaged bytes, the selected renderer profile and
 its undo.
 
-On pull requests and pushes to `main`, the
+On pull requests that touch its qualification inputs, the
 [XFS qualification job](../.github/workflows/xfs-qualification.yml) runs the
 [installed Worker browser fixture](../ci/fixtures/kit-ember-cutover-browser.mjs).
 It keeps Ember Home open in Chromium while the same loopback origin switches
@@ -139,3 +149,42 @@ For Ember or all-off Kit, set
 admin-off Ember UUID. Verify the restored UUID and commit, database readiness,
 and the fallback renderer ownership. The admin undo returns Admin to Hono
 while keeping Ember's public pages on Kit.
+
+## Optional offline Ember input readback
+
+Before constructing the Ember workflow inputs, compare the selected candidate
+and serving Hono undo recorded in the reviewed release evidence. Add this
+section once to the evidence packet as a Markdown heading and text block,
+keeping the field names and order. The helper skips headings inside fenced
+examples and HTML comment blocks.
+Use the approved Ember qualification SHA and pin for the candidate fields.
+Use the protected Hono dispatch's SHA and pin for the next two fields. Copy
+the UUID from the recorded 100% serving readback into `hono_serving_version`.
+Copy the version ID, tag and message annotation from that version's recorded
+metadata into the last three fields.
+
+````markdown
+## Ember release input readback
+
+```text
+candidate_sha=<approved Ember SHA>
+candidate_pin=<Ember run:attempt:manifest SHA-256>
+hono_sha=<protected Hono dispatch SHA>
+hono_pin=<protected Hono dispatch pin>
+hono_serving_version=<recorded serving Hono UUID>
+hono_version_id=<Hono version metadata ID>
+hono_tag=<workers/tag>
+hono_annotation=<workers/message>
+```
+````
+
+```sh
+node ci/read-ember-release-evidence.mjs < release-evidence.md
+```
+
+The command prints the mode, candidate SHA, pin, Hono undo UUID and bound
+manifest digest after checking that the recorded values agree. It reads up to
+512 KiB of local evidence. Copy `mode` to `cutover_mode`, `candidateSha` to
+`sha`, `qualificationPin` to `cutover_pin`, and `honoUndoVersion` to
+`cutover_undo_version`. Keep `cutover_undo_digest` empty for Ember. Follow the
+protected release steps for live verification, approval and dispatch.

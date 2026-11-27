@@ -68,9 +68,10 @@ and matcher precedence require separate behavioral tests.
 
 The `/e/:file{.+\\.md}` target remains unresolved. Terminal matched-rest routes
 rank below required `[key]` routes. The dormant per-event ICS endpoint uses
-`/events/[key].ics` for the single-segment form and retains Hono's handling of
-multisegment requests. The snapshot test checks inventory drift and the hosted
-Worker fixture checks the mounted ICS route and its neighbors.
+`/events/[key].ics` for the single-segment form. With feeds enabled, the hook
+also dispatches the remaining Hono-matched ICS paths to the shared calendar
+handler. The snapshot test checks inventory drift and the hosted Worker fixture
+checks both ICS branches and their neighbors.
 
 ## Current-main source checkpoint
 
@@ -187,14 +188,30 @@ qualifies through the [production release gate](../CONTRIBUTING.md#production-re
 ### Admin serving
 
 `KIT_ROUTE_ADMIN=true` enables moderator pages, native admin form POSTs, and
-the operator overrides endpoint on canonical staging or HTTP loopback. The
-operator endpoint uses its bearer independently of the moderator cookie. The
+the operator overrides endpoint on canonical staging or HTTP loopback.
+
+Featured deletion (`POST /admin/featured/:id/delete`) stays on Hono even
+with Admin ownership enabled. The installed Worker fixture can opt in on its
+configured HTTP loopback origin with `KIT_PARITY_FIXTURE_ADMIN_FEATURED_DELETE=true`.
+Both paths use the same moderator-only Hono action, including its list redirect,
+missing-item response and transactional deletion audit.
+
+The operator endpoint uses its bearer independently of the moderator cookie. The
 existing Hono guard serves legacy redirects and other unowned admin paths.
 The exact `GET /admin/events/create` endpoint also has a disabled manifest
 entry. When enabled within the admin dispatcher, it requires a moderator and
 returns `301 Location: /admin/events/new` with no query. HEAD uses the same
 redirect without rotating the session. The disabled entry still takes
 precedence over the parameterized edit form.
+
+The event editor's `POST /admin/events/:key/duplicate` has an exact dispatcher
+entry gated by `KIT_ROUTE_ADMIN`. With that flag enabled, Kit invokes the
+shared moderator copy-to-draft controller and returns its redirect or source
+validation response. Hono handles the same POST by default.
+
+The `POST /admin/events/:key/rsvp-pause` and `POST /admin/events/:key/rsvp-reopen`
+endpoints use the shared Hono moderator guard and transition controller. With
+Admin ownership off, the Hono app serves both POSTs directly.
 
 ### Security disclosure endpoint
 
@@ -210,9 +227,20 @@ or session access.
 `KIT_ROUTE_PROFILE_WRITES=true` admits PATCH and the default form POST on
 `/members/:user`. The shared host and origin gates precede the body cap, then
 the shared signed session, per-viewer throttle and owner checks. The native
-POST retains the `_method=PATCH` form contract. GET and HEAD use their existing
-owners, including the frozen `/members` and `/members/` 404s. Leave the flag
-unset in deployed configuration until activation is qualified.
+POST retains the `_method=PATCH` form contract. GET and HEAD on `/members/:user`
+stay on Hono. Leave the flag unset in deployed configuration until activation is
+qualified.
+
+### Retired members directory paths
+
+`KIT_ROUTE_MEMBERS_NOT_FOUND=true` lets the Kit Worker return the shared branded
+404 for trusted GET and HEAD on the literal `/members` and `/members/` paths.
+It serves the same private, no-store error for each viewer, with only public
+event suggestions on GET and an empty body on HEAD. The terminal response
+bypasses Kit page loads, session reads and member-data admission. The directory
+stays unmounted. Aliases, Kit data URLs, unsafe methods and `/members/:user`
+retain their current routing and guards. Clearing the binding restores Hono's
+404s. Keep it unset in deployed configuration until separately qualified.
 
 ### Search indexing endpoints
 
@@ -252,8 +280,12 @@ The hosted installed Worker fixture exercises both owners without member data.
 and `/events/<key>.ics`, plus the session-gated `/events.json` collection.
 An absent or false binding leaves ownership with Hono.
 The per-event route requires the literal mount and suffix with a single key
-segment. Encoded key bytes follow Hono's parameter decoding. Trailing slashes,
-encoded mount or suffix aliases and multisegment forms go to Hono.
+segment for its mounted endpoint. A separate GET and HEAD selector covers
+raw multisegment paths and encoded mount or suffix aliases when Hono would
+match the calendar handler. Both selectors retain Hono's parameter decoding.
+Slash-containing keys use the branded 404. A valid alias retains the normal
+calendar or canonical redirect response, including the redirect's query.
+Trailing slashes, data requests and other methods retain their existing dispatch.
 
 The shared handlers charge the `events-read` bucket before reading events.
 Kit supplies the request ID, global response headers and completion log.
@@ -437,6 +469,8 @@ The Kit archive parity job sets `KIT_RETIREMENT_GUARD=report` and requires the
 build's report. It lists Hono dependencies in the emitted SSR graph and legacy
 method/path pairs without native Kit coverage. The check reuses the mounted
 inventory, proposed targets, and synthetic parity samples, including multisegment paths.
+The installed Worker fixture checks hook-dispatched legacy ICS paths. The
+static check still lists them when they lack a mounted Kit endpoint.
 The `unownedByFamily` field groups the same findings by the route map's family
 and exact legacy method, including `ALL` for wildcard method fallbacks. Entries
 without a family, including page cutover rows, appear under `unresolved`.

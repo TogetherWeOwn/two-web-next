@@ -31,6 +31,7 @@ import { newRequestId, safeRequestId, writeHttpRequestLog } from "./request-log"
 import { setReleaseMetadata } from "./release-tag";
 import { withStreamedBody } from "./html-stream";
 import { applySingleValidator } from "./http/conditional";
+import { brandedNotFoundFallback } from "./http/not-found";
 import { PRODUCTION_APEX } from "./http/robots";
 import { EVENTS_CALENDAR_ISLAND } from "./islands/contracts-calendar";
 import { KIT_HOTZONE_SIGNAL_ROUTE } from "./hotzones/kit-signal-route";
@@ -50,6 +51,7 @@ import { isTrustedHost } from "./trust-hosts";
 import {
   adminFormPath,
   admitsKitAdmin,
+  isKitAdminRsvpForm,
   kitAdminAdmission,
   KIT_ADMIN_OPS_ROUTES,
   privateAdminResponse,
@@ -244,8 +246,8 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   },
   { method: "GET", path: "/auth/recover", enabled: true, reads: "public" },
   // Profile reads: one Svelte view/model behind both Hono handlers. Native
-  // rendering stays off until edit parity reviews enablement; write siblings
-  // and the retired /members directory have no entries and stay Hono-owned.
+  // rendering stays off until edit parity reviews enablement. The retired
+  // directory's terminal 404s are handled separately from these reads.
   {
     method: "GET",
     path: "/profile",
@@ -734,6 +736,10 @@ export interface HookDispatchDeps {
   kitRouteHome?: string;
   kitRouteJoin?: string;
   kitRouteEmberPages?: string;
+  membersNotFound?: {
+    flag: string | undefined;
+    render: (path: string) => Promise<string>;
+  };
   featuredImageHosts?: string;
   honoFetch: (request: Request) => Promise<Response>;
   resolve: (event: HookEventLike, opts?: KitResolveOptions) => Promise<Response>;
@@ -1126,6 +1132,25 @@ async function dispatchOwnedRequest(
   if (!isTrustedHost(deps.appUrl, [event.request.headers.get("host"), event.url.host])) {
     return deps.honoFetch(event.request);
   }
+  const members = deps.membersNotFound;
+  if (
+    members?.flag === "true" &&
+    !event.isDataRequest &&
+    (event.request.method === "GET" || event.request.method === "HEAD")
+  ) {
+    const url = new URL(event.request.url);
+    const path = url.pathname;
+    // Read the original literal path before Kit can normalize it or run loads.
+    if ((path === "/members" || path === "/members/") && isTrustedHost(deps.appUrl, [url.host])) {
+      const started = performance.now();
+      const requestId = safeRequestId(event.request.headers.get("cf-ray")) ?? newRequestId();
+      setReleaseMetadata(deps.versionMetadata);
+      const response = await brandedNotFoundFallback(event.request, () => members.render(path));
+      const result = await finishKitResponse(response, event, deps, requestId);
+      writeHttpRequestLog(event.request, requestId, path, result.status, started);
+      return result;
+    }
+  }
   const admin = deps.admin;
   if (
     admin &&
@@ -1208,8 +1233,9 @@ async function dispatchKitAdminRequest(
   // The static endpoint shadows [key] in Kit's route IDs. POST to the
   // bookmark still selects the existing parameterized form controller.
   const formPath =
-    request.method === "POST" &&
-    adminFormPath(url.pathname, legacyCreate ? "/admin/events/[key]" : routeId);
+    request.method === "POST"
+      ? adminFormPath(url.pathname, legacyCreate ? "/admin/events/[key]" : routeId)
+      : undefined;
   const fixture =
     env.KIT_PARITY_FIXTURE_ADMIN_EVENT_CREATE_REDIRECT === "true" &&
     fixtureRequest(request, deps.appUrl);
@@ -1219,6 +1245,13 @@ async function dispatchKitAdminRequest(
   // Keep fixture-only reconciliation in its manifest and pass the other
   // unowned routes to their existing Hono guards.
   if (!route) return null;
+  if (
+    formPath === "/admin/featured/:id/delete" &&
+    (env.KIT_PARITY_FIXTURE_ADMIN_FEATURED_DELETE !== "true" ||
+      !fixtureRequest(request, deps.appUrl))
+  ) {
+    return null;
+  }
 
   const started = performance.now();
   const requestId = safeRequestId(request.headers.get("cf-ray")) ?? newRequestId();
@@ -1240,6 +1273,11 @@ async function dispatchKitAdminRequest(
   const originRefused = await sameOrigin(context, async () => {});
   if (originRefused) return finish(originRefused);
   if (operator) return finish(await deps.resolve(event));
+  if (isKitAdminRsvpForm(formPath)) {
+    // The endpoint delegates moderator admission and the write to Hono.
+    event.locals = { ...(event.locals as object), requestId };
+    return finish(await deps.resolve(event));
+  }
 
   const admission = await kitAdminAdmission(context, () => deps.sessionFor?.(event));
   if (admission.kind === "refused") return finish(admission.response);
@@ -1285,7 +1323,9 @@ async function dispatchFromManifest(
   if (route && !eventMarkdownShadowsPage(event, route))
     return dispatchKitRequest(event, deps, route);
   const selection = familyRouteFor(event, manifest, deps.apiFamilies);
-  if (!selection) return deps.honoFetch(event.request);
+  if (!selection) {
+    return (await dispatchLegacySuffixRead(event, deps, manifest)) ?? deps.honoFetch(event.request);
+  }
   const { route: apiRoute, family } = selection;
   const started = performance.now();
   setReleaseMetadata(deps.versionMetadata);
@@ -1632,6 +1672,11 @@ interface KitApiFamily {
   flag: string | undefined;
   routes: readonly KitApiRoute[];
   crossOriginRefusal?: (request: Request, requestId: string) => Response | Promise<Response>;
+  legacySuffix?: {
+    path: string;
+    keyFor: (request: Request, raw: string, decoded: string | null) => string | undefined;
+    read: (request: Request, key: string, requestId: string) => Promise<Response | null>;
+  };
 }
 
 interface KitApiRoute extends OwnedRoute {
@@ -1650,6 +1695,53 @@ function eventMarkdownShadowsPage(event: HookEventLike, page: OwnedRoute): boole
   // separation even with only the Kit HTML page enabled: declined Markdown
   // requests must fall through to Hono instead of entering the page boundary.
   return page.path === "/e/:key" && event.route?.id === EVENT_MARKDOWN_ENDPOINT_ID;
+}
+
+async function dispatchLegacySuffixRead(
+  event: HookEventLike,
+  deps: HookDispatchDeps,
+  manifest: OwnedRoute[],
+): Promise<Response | undefined> {
+  const { request } = event;
+  if (
+    (request.method !== "GET" && request.method !== "HEAD") ||
+    event.isDataRequest ||
+    !deps.apiFamilies?.some(({ flag, legacySuffix }) => flag === "true" && legacySuffix)
+  )
+    return;
+
+  const { pathname } = new URL(request.url);
+  const decoded = normalizePath(pathname, false);
+  // Kit can call the hook with no route ID after a decoding failure. A
+  // suffix registration still has to match Hono's original request path.
+  const path = decoded ?? decodeTwinPath(pathname);
+  if (isReservedPath(path) || path.endsWith(DATA_SUFFIX) || isInNamespace(path, KIT_ASSET_ROOT)) {
+    return;
+  }
+  let selected: { route: NonNullable<KitApiFamily["legacySuffix"]>; key: string } | undefined;
+  for (const { flag, legacySuffix } of deps.apiFamilies) {
+    if (flag !== "true" || !legacySuffix) continue;
+    const key = legacySuffix.keyFor(request, pathname, decoded);
+    if (key === undefined) continue;
+    if (selected) return;
+    selected = { route: legacySuffix, key };
+  }
+  if (!selected) return;
+  const { route, key } = selected;
+  const overlaps = (entry: OwnedRoute) =>
+    entry.method.toUpperCase() === "GET" &&
+    matchPattern(entry.path, path) &&
+    !(route.path === EVENT_MARKDOWN_PATH && entry.path === "/e/:key");
+  if (manifest.some(overlaps) || ROUTE_MANIFEST.some(overlaps)) return;
+
+  const started = performance.now();
+  setReleaseMetadata(deps.versionMetadata);
+  const requestId = safeRequestId(request.headers.get("cf-ray")) ?? newRequestId();
+  const response = await route.read(request, key, requestId);
+  if (!response) return;
+  const decorated = await finishKitResponse(response, event, deps, requestId);
+  writeHttpRequestLog(request, requestId, route.path, decorated.status, started);
+  return decorated;
 }
 
 function familyRouteFor(

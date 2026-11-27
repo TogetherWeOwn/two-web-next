@@ -29,8 +29,7 @@ concurrency:
 jobs:
   dryrun:
     name: dryrun
-    # Public repo: standard GitHub-hosted runners only — never paid larger
-    # runners or Blacksmith.
+    # Keep this staging-secret job on a GitHub-hosted runner.
     runs-on: ubuntu-latest
     timeout-minutes: 25
     environment: staging

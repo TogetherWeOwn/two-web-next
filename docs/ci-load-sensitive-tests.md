@@ -1,8 +1,10 @@
 # Load-sensitive tests in `check`
 
-`check` runs the full coverage suite serially on GitHub-hosted Linux in both
-repository visibilities. The existing timeouts also account for host load; a
-wall-clock limit written for a laptop can fail under normal CI load.
+`check` uses the included 2-vCPU Blacksmith runner for same-repository pull
+requests while capacity is enabled. GitHub-hosted `ubuntu-latest` handles other
+events and serves as the fallback at quota cutoff. The existing `check` limit
+covers runner and workload variation. Vitest runs test files serially within
+each coverage shard.
 
 ## Budgets
 

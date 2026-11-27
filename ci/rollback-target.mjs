@@ -16,6 +16,7 @@
 // drill is green.
 //
 // CLIs read `wrangler ... --json` from stdin and never echo it.
+import { addAbortListener } from "node:events";
 import { appendFileSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { APEX_ORIGIN, STAGING_ORIGIN } from "./operator-constants.mjs";
@@ -191,15 +192,50 @@ export async function rollbackCompatibility({
   return { added, unsafe };
 }
 
+// Match the readiness probe's limit for the small /up metadata envelope.
+const LIVE_REVISION_BYTES = 16 * 1024;
+
 // /up names the serving version and its commit. The preflight trusts the
 // commit only when /up reports the same version the deployments list does.
 export async function readLiveRevision({ origin, fetchImpl = fetch }) {
+  const signal = AbortSignal.timeout(10_000);
   const response = await fetchImpl(new URL("/up", origin), {
     redirect: "manual",
     headers: { "cache-control": "no-cache" },
-    signal: AbortSignal.timeout(10_000),
+    signal,
   });
-  const body = await response.json();
+  // A deferred migration can return 503 with valid serving revision metadata.
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("Missing /up response body");
+  const cancel = () => {
+    // Close pending reads without waiting for the source's cleanup.
+    void reader.cancel().catch(() => undefined);
+  };
+  const deadline = addAbortListener(signal, cancel);
+  const bytes = new Uint8Array(LIVE_REVISION_BYTES);
+  let length = 0;
+  try {
+    signal.throwIfAborted();
+    for (;;) {
+      const { done, value } = await reader.read();
+      signal.throwIfAborted();
+      if (done) break;
+      if (value.byteLength > bytes.length - length) throw new Error("/up response too large");
+      bytes.set(value, length);
+      length += value.byteLength;
+    }
+  } finally {
+    deadline[Symbol.dispose]();
+    cancel();
+    reader.releaseLock();
+  }
+
+  let body;
+  try {
+    body = JSON.parse(new TextDecoder().decode(bytes.subarray(0, length)));
+  } catch {
+    throw new Error("Invalid /up JSON");
+  }
   const versionId = body?.revision?.version_id;
   const commit = body?.revision?.commit;
   return {
@@ -275,7 +311,14 @@ export async function assertRollbackDrillGreen({ repository, token, fetchImpl = 
   );
   if (response.status === 404) return null;
   if (!response.ok) throw new Error(`Rollback drill lookup failed (HTTP ${response.status})`);
-  const runs = ((await response.json()).workflow_runs ?? []).filter(
+  const history = (await response.json())?.workflow_runs;
+  if (!Array.isArray(history)) {
+    throw new Error("Malformed rollback drill response: expected workflow_runs array");
+  }
+  if (history.some((run) => !Number.isSafeInteger(run?.id) || run.id <= 0)) {
+    throw new Error("Malformed rollback drill response: invalid run ID");
+  }
+  const runs = history.filter(
     (run) => run.conclusion !== "cancelled" && run.conclusion !== "skipped",
   );
   if (!runs.length) return null;

@@ -1,20 +1,28 @@
+import "./fixtures/staging-reservation-store.mjs";
+
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+import soakFixture from "../test/fixtures/staging-soak-receipt.json" with { type: "json" };
+import { isRedStagingRun } from "./resolve-promotion-sha.mjs";
 import {
   deploySmokeWasScoped,
   observeStaging,
   resolveStagingCandidate,
 } from "./staging-provenance.mjs";
 import { stagingReceipt } from "./staging-receipt.mjs";
+import { canAdmitStagingOperation, parseStagingReservation } from "./staging-reservation.mjs";
+import { validateStagingSoakReceipt } from "./staging-soak-receipt.mjs";
 
 const A = "a".repeat(40);
 const B = "b".repeat(40);
 const C = "c".repeat(40);
 const repository = "example/site";
+const provenanceScript = fileURLToPath(new URL("./staging-provenance.mjs", import.meta.url));
 const deployedAt = "2026-11-01T10:00:00.000Z";
 const now = Date.parse("2026-11-01T11:00:00.000Z");
 const run = {
@@ -76,6 +84,7 @@ test("staging receipts follow the served candidate through an out-of-order main 
   assert.ok(deploy.includes(`Live /up source \`${A}\`, Worker version \`${worker}\``));
   assert.ok(deploy.includes(`Live /version source \`${A}\`, deployed at \`${deployedAt}\``));
   assert.match(deploy, /Identity receipt matched at observation/);
+  assert.match(deploy, /^- \*\*Soak eligibility\*\* Pending a qualifying staging E2E run$/m);
   assert.deepEqual(calls.splice(0), ["/up", "/version"]);
 
   const failedDeploy = await stagingReceipt(
@@ -87,6 +96,25 @@ test("staging receipts follow the served candidate through an out-of-order main 
   assert.match(failedDeploy, /Identity receipt matched at observation/);
   assert.match(failedDeploy, /This deploy run is ineligible \(deploy job failed\)/);
   assert.deepEqual(calls.splice(0), ["/up", "/version"]);
+
+  for (const jobStatus of ["cancelled", "skipped", "", undefined, "<private response>"]) {
+    const ineligible = await stagingReceipt(
+      "deploy",
+      { ...env, STAGING_JOB_STATUS: jobStatus },
+      {},
+      { fetchImpl: fetchOrigins(A, A), now },
+    );
+    assert.ok(ineligible.includes(`Live /up source \`${A}\`, Worker version \`${worker}\``));
+    assert.ok(ineligible.includes(`Live /version source \`${A}\`, deployed at \`${deployedAt}\``));
+    assert.match(ineligible, /^- Identity receipt matched at observation$/m);
+    assert.match(
+      ineligible,
+      /^- \*\*Soak eligibility\*\* This deploy run is ineligible \(deploy job did not succeed\)$/m,
+      `job status ${JSON.stringify(jobStatus)}`,
+    );
+    assert.doesNotMatch(ineligible, /private response|Pending a qualifying staging E2E run/);
+    assert.deepEqual(calls.splice(0), ["/up", "/version"]);
+  }
 
   const failedUpload = await stagingReceipt(
     "deploy",
@@ -164,6 +192,94 @@ test("untrusted, failed, non-main and missing deploy events fail closed", () => 
   assert.throws(() => resolveStagingCandidate({ eventName: "push", sha: A, repository }));
 });
 
+test("candidate CLI refuses a failed deploy workflow even with successful smoke-skip proof", (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "staging-candidate-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const event = join(directory, "event.json");
+  const output = join(directory, "output");
+  const requests = join(directory, "requests");
+  const preload = join(directory, "fetch.mjs");
+  const script = fileURLToPath(new URL("./staging-provenance.mjs", import.meta.url));
+  const trigger = {
+    ...run,
+    id: 55,
+    run_attempt: 2,
+    status: "completed",
+    event: "workflow_run",
+    path: ".github/workflows/deploy.yml",
+  };
+  writeFileSync(
+    join(directory, "jobs.json"),
+    JSON.stringify({
+      total_count: 1,
+      jobs: [
+        {
+          name: "deploy-staging",
+          run_id: trigger.id,
+          run_attempt: trigger.run_attempt,
+          head_sha: trigger.head_sha,
+          status: "completed",
+          conclusion: "success",
+          steps: [
+            {
+              name: "Record adjacent staging smoke skip",
+              status: "completed",
+              conclusion: "success",
+            },
+          ],
+        },
+      ],
+    }),
+  );
+  writeFileSync(
+    preload,
+    `import { appendFileSync, readFileSync } from "node:fs";
+const jobs = readFileSync(new URL("./jobs.json", import.meta.url), "utf8");
+globalThis.fetch = async (url) => {
+  appendFileSync(new URL("./requests", import.meta.url), url + "\\n");
+  return new Response(jobs);
+};
+`,
+  );
+
+  const execute = (conclusion) => {
+    writeFileSync(event, JSON.stringify({ workflow_run: { ...trigger, conclusion } }));
+    writeFileSync(output, "");
+    writeFileSync(requests, "");
+    const result = spawnSync(process.execPath, ["--import", preload, script, "candidate"], {
+      cwd: directory,
+      env: {
+        GITHUB_EVENT_NAME: "workflow_run",
+        GITHUB_EVENT_PATH: event,
+        GITHUB_OUTPUT: output,
+        GITHUB_REPOSITORY: repository,
+        GITHUB_SHA: A,
+      },
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    assert.ifError(result.error);
+    return result;
+  };
+
+  const success = execute("success");
+  assert.equal(success.status, 0, success.stderr);
+  assert.equal(readFileSync(output, "utf8"), `sha=${A}\ndeploy_smoke_scoped=true\n`);
+  assert.equal(
+    readFileSync(requests, "utf8"),
+    `https://api.github.com/repos/${repository}/actions/runs/55/attempts/2/jobs?per_page=100\n`,
+  );
+
+  const failure = execute("failure");
+  assert.equal(failure.status, 1, failure.stderr);
+  assert.equal(
+    failure.stderr,
+    "::error::Staging provenance refused; qualification is not evidence\n",
+  );
+  assert.equal(readFileSync(output, "utf8"), "");
+  assert.equal(readFileSync(requests, "utf8"), "");
+});
+
 test("manual qualification uses the exact main dispatch revision, not a deploy title", () => {
   assert.equal(
     resolveStagingCandidate({
@@ -187,7 +303,7 @@ test("manual qualification uses the exact main dispatch revision, not a deploy t
   );
 });
 
-test("a smoke skip is proof only on the exact successful deploy attempt", async () => {
+function deploySmokeFixture() {
   const trigger = {
     ...run,
     id: 55,
@@ -210,6 +326,11 @@ test("a smoke skip is proof only on the exact successful deploy attempt", async 
     conclusion: "success",
     steps: [proof],
   };
+  return { trigger, proof, job };
+}
+
+test("a smoke skip is proof only on the exact successful deploy attempt", async () => {
+  const { trigger, proof, job } = deploySmokeFixture();
   const check = (changes = {}) =>
     deploySmokeWasScoped(trigger, repository, async (url, options) => {
       assert.equal(new URL(url).pathname, "/repos/example/site/actions/runs/55/attempts/2/jobs");
@@ -220,14 +341,37 @@ test("a smoke skip is proof only on the exact successful deploy attempt", async 
 
   assert.equal(await check(), true);
   for (const changes of [
+    { name: undefined },
     { run_id: 56 },
     { run_attempt: 1 },
     { head_sha: A },
     { status: "in_progress" },
+    { conclusion: "failure" },
+    { steps: undefined },
     { steps: [] },
     { steps: [proof, proof] },
   ]) {
-    assert.equal(await check(changes), false);
+    assert.equal(await check(changes), false, "invalid deploy job metadata must run full E2E");
+  }
+  for (const conclusion of ["skipped", "failure"]) {
+    assert.equal(
+      await check({ steps: [{ ...proof, conclusion }] }),
+      false,
+      `a ${conclusion} smoke marker must run full E2E`,
+    );
+  }
+  for (const [scenario, payload] of [
+    ["missing job count", { jobs: [job] }],
+    ["missing job", { total_count: 0, jobs: [] }],
+    ["multiple jobs reported", { total_count: 2, jobs: [job] }],
+    ["multiple jobs returned", { total_count: 1, jobs: [job, job] }],
+    ["malformed jobs collection", { total_count: 1, jobs: job }],
+  ]) {
+    assert.equal(
+      await deploySmokeWasScoped(trigger, repository, async () => Response.json(payload)),
+      false,
+      `${scenario} must run full E2E`,
+    );
   }
   assert.equal(
     await deploySmokeWasScoped(
@@ -236,6 +380,19 @@ test("a smoke skip is proof only on the exact successful deploy attempt", async 
       async () => new Response(null, { status: 403 }),
     ),
     false,
+    "an HTTP refusal must run full E2E",
+  );
+  assert.equal(
+    await deploySmokeWasScoped(trigger, repository, async () => new Response("{")),
+    false,
+    "invalid JSON must run full E2E",
+  );
+  assert.equal(
+    await deploySmokeWasScoped(trigger, repository, async () => {
+      throw new TypeError("synthetic fetch refusal");
+    }),
+    false,
+    "a rejected metadata request must run full E2E",
   );
 });
 
@@ -255,6 +412,63 @@ test("qualification observes the fixed staging endpoint once without redirects o
   assert.equal(calls[0][1].redirect, "error");
   assert.equal(calls[0][1].headers["cache-control"], "no-cache");
   assert.ok(calls[0][1].signal instanceof AbortSignal);
+});
+
+test("qualification bounds the staging identity stream and accepts matching evidence", async () => {
+  const encoder = new TextEncoder();
+  const candidate = { sha: A, deployedAt };
+  const observeBody = (body) => observe({}, { fetchImpl: async () => new Response(body) });
+  const maxPadding = 2048 - JSON.stringify({ ...candidate, padding: "" }).length;
+  for (const [prefix, padding] of [
+    ["", "€"],
+    ["\uFEFF\uFEFF", "€".repeat(maxPadding)],
+  ]) {
+    const bytes = encoder.encode(prefix + JSON.stringify({ ...candidate, padding }));
+    const split = bytes.indexOf(0xe2) + 1;
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(bytes.subarray(0, 4));
+        controller.enqueue(bytes.subarray(4, split));
+        controller.enqueue(bytes.subarray(split));
+        controller.close();
+      },
+    });
+    assert.deepEqual(await observeBody(body), candidate);
+  }
+
+  await assert.rejects(observeBody(`\uFEFF\uFEFF\uFEFF${JSON.stringify(candidate)}`), {
+    message: "Staging identity is not JSON",
+  });
+
+  for (const chunks of [
+    [
+      encoder.encode(JSON.stringify({ ...candidate, padding: " ".repeat(maxPadding) })),
+      encoder.encode(" "),
+    ],
+    // An incomplete UTF-8 sequence exceeds the byte cap before it emits another code unit.
+    [encoder.encode(`\uFEFF\uFEFF${"€".repeat(2048)}`), Uint8Array.of(0xe2)],
+  ]) {
+    let pulls = 0;
+    let cancelled = false;
+    const body = new ReadableStream(
+      {
+        pull(controller) {
+          const chunk = chunks[pulls++];
+          if (chunk) controller.enqueue(chunk);
+          else controller.close();
+        },
+        cancel() {
+          cancelled = true;
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    await assert.rejects(observeBody(body), {
+      message: "Staging identity response too large",
+    });
+    assert.equal(cancelled, true);
+    assert.equal(pulls, 2);
+  }
 });
 
 test("identity evidence files retain only validated SHA and timestamp, never response data", () => {
@@ -279,15 +493,7 @@ test("identity evidence files retain only validated SHA and timestamp, never res
     for (const phase of ["before", "after"]) {
       const output = execFileSync(
         process.execPath,
-        [
-          "--import",
-          mock,
-          new URL("./staging-provenance.mjs", import.meta.url).pathname,
-          "observe",
-          A,
-          phase,
-          "staging-identity/critical",
-        ],
+        ["--import", mock, provenanceScript, "observe", A, phase, "staging-identity/critical"],
         { cwd: directory, encoding: "utf8", timeout: 10_000 },
       );
       assert.ok(!output.includes(canary), "response data must not reach diagnostics");
@@ -324,6 +530,135 @@ test("a replacement during journeys refuses the after observation", async () => 
   await assert.rejects(observe({ sha: B, deployedAt }, { previous }));
   await assert.rejects(observe({ sha: A, deployedAt: "2026-11-01T10:30:00.000Z" }, { previous }));
   assert.deepEqual(await observe({ sha: A, deployedAt }, { previous }), previous);
+});
+
+test("a passing journey ledger cannot replace the after identity in staging evidence", (t) => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/e2e-staging.yml", import.meta.url),
+    "utf8",
+  );
+  const job = workflow.match(/^  staging-journeys:\n(?:.*\n)*?(?=^  [\w-]+:)/m)?.[0] ?? "";
+  const steps = job.split("\n      - name: ");
+  const names = steps.map((step) => step.split("\n", 1)[0]);
+  const beforeIndex = names.indexOf("Staging identity before critical journeys");
+  assert.ok(beforeIndex > 0);
+  const [beforeStep, runnerStep, afterStep, ledgerStep] = steps.slice(beforeIndex);
+  for (const identityStep of [beforeStep, afterStep]) {
+    assert.match(
+      identityStep,
+      /\n {8}env:\n {10}CANDIDATE_SHA: \$\{\{ needs\.scope\.outputs\.sha \}\}\n/,
+    );
+  }
+  assert.match(beforeStep, /\n {8}id: identity-before\n/);
+  assert.match(
+    beforeStep,
+    /\n {8}run: node ci\/staging-provenance\.mjs observe "\$CANDIDATE_SHA" before staging-identity\/critical\n?$/,
+  );
+  assert.match(runnerStep, /^Staging critical journeys\n {8}run: npm run e2e:staging\n/);
+  assert.match(afterStep, /^Staging identity after critical journeys\n/);
+  assert.match(
+    afterStep,
+    /\n {8}if: \$\{\{ !cancelled\(\) && steps\.identity-before\.outcome == 'success' \}\}\n/,
+  );
+  assert.match(
+    afterStep,
+    /\n {8}run: node ci\/staging-provenance\.mjs observe "\$CANDIDATE_SHA" after staging-identity\/critical\n?$/,
+  );
+  assert.doesNotMatch(job, /\n +continue-on-error:/);
+  assert.match(ledgerStep, /\n {8}if: always\(\)\n {8}run: node ci\/check-staging-journeys\.mjs\n/);
+
+  const { evidence, receipt } = soakFixture;
+  const directory = mkdtempSync(join(tmpdir(), "staging-journey-identity-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const mock = join(directory, "fetch.mjs");
+  writeFileSync(
+    mock,
+    `globalThis.fetch = async (url) => {
+      if (url !== "https://next.togetherweown.com/version") throw new Error("Unexpected fetch");
+      return new Response(process.env.FIXTURE_IDENTITY);
+    };`,
+  );
+  for (const matches of [true, false]) {
+    const cwd = join(directory, matches ? "exact" : "replaced");
+    mkdirSync(join(cwd, "test-results"), { recursive: true });
+    writeFileSync(
+      join(cwd, "test-results/staging-journeys.json"),
+      JSON.stringify({
+        suites: [
+          {
+            specs: [
+              {
+                file: "e2e/staging/fixture.spec.ts",
+                title: "synthetic journey",
+                tests: [{ projectName: "chromium", status: "expected", results: [] }],
+              },
+            ],
+          },
+        ],
+        errors: [],
+      }),
+    );
+    const runCli = (file, args = [], env = {}) =>
+      spawnSync(
+        process.execPath,
+        ["--import", mock, fileURLToPath(new URL(file, import.meta.url)), ...args],
+        { cwd, env, encoding: "utf8", timeout: 10_000 },
+      );
+    const canary = "synthetic-origin-body";
+    const observeIdentity = (phase, identity) =>
+      runCli(
+        "./staging-provenance.mjs",
+        ["observe", evidence.sha, phase, "staging-identity/critical"],
+        { FIXTURE_IDENTITY: JSON.stringify({ ...identity, extra: canary }) },
+      );
+    const readIdentity = (phase) =>
+      JSON.parse(readFileSync(join(cwd, `staging-identity/critical.${phase}.json`), "utf8"));
+    const beforeResult = observeIdentity("before", evidence.e2e.before);
+    assert.equal(beforeResult.status, 0, beforeResult.stderr);
+    const before = readIdentity("before");
+    assert.deepEqual(before, evidence.e2e.before);
+
+    const afterResult = observeIdentity("after", {
+      ...evidence.e2e.after,
+      deployedAt: matches ? evidence.e2e.after.deployedAt : "2026-01-01T10:01:00.000Z",
+    });
+    assert.equal(afterResult.status, matches ? 0 : 1, afterResult.stderr);
+    assert.ok(!(afterResult.stdout + afterResult.stderr).includes(canary));
+    const ledger = runCli("./check-staging-journeys.mjs", [], {
+      GITHUB_SHA: C,
+      GITHUB_RUN_ID: String(evidence.e2e.runId),
+      GITHUB_RUN_ATTEMPT: String(evidence.e2e.attempt),
+    });
+    assert.equal(ledger.status, 0, ledger.stderr);
+    const diagnostic = JSON.parse(
+      readFileSync(join(cwd, "test-results/staging-journey-ledger.json"), "utf8"),
+    );
+    assert.equal(diagnostic.verdict, "pass");
+    assert.deepEqual(diagnostic.counts, { passed: 1, skipped: 0, failed: 0, flaky: 0, total: 1 });
+
+    const conclusion = afterResult.status === 0 ? "success" : "failure";
+    assert.equal(isRedStagingRun({ run_attempt: 1, status: "completed", conclusion }), !matches);
+    const after = existsSync(join(cwd, "staging-identity/critical.after.json"))
+      ? readIdentity("after")
+      : undefined;
+    const e2e = { ...evidence.e2e, conclusion, before, after };
+    const validate = (input) =>
+      validateStagingSoakReceipt({ ...evidence, e2e: input }, receipt, {
+        nowMs: Date.parse(receipt.floorAt),
+      });
+    if (matches) {
+      assert.deepEqual(after, evidence.e2e.after);
+      assert.deepEqual(validate(e2e), receipt);
+    } else {
+      assert.match(afterResult.stderr, /Staging provenance refused; qualification is not evidence/);
+      assert.equal(after, undefined);
+      assert.throws(() => validate(e2e), /successful first-attempt E2E evidence/);
+      assert.throws(
+        () => validate({ ...e2e, conclusion: "success" }),
+        /Staging identities do not prove the candidate/,
+      );
+    }
+  }
 });
 
 test("an HTTP error or network failure is never retried into green", async () => {
@@ -394,6 +729,13 @@ test("scope never skips candidate helpers using a later revision's import invent
     const script = block[2].replace(/^          /gm, "");
     assert.doesNotMatch(script, /\$\{\{/);
     assert.match(script, /\[ "\$EVENT_NAME" = workflow_dispatch \]/);
+    const readOutput = (path) =>
+      Object.fromEntries(
+        readFileSync(join(directory, path), "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => line.split("=")),
+      );
     const evaluate = (head, trusted, event = "workflow_run", scope = "true", command = script) => {
       write("output", "");
       execFileSync("bash", ["-c", command], {
@@ -411,12 +753,7 @@ test("scope never skips candidate helpers using a later revision's import invent
         },
         timeout: 10_000,
       });
-      return Object.fromEntries(
-        readFileSync(join(directory, "output"), "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => line.split("=")),
-      );
+      return readOutput("output");
     };
     // C removed A's import. C's inventory alone would wrongly skip A's helper change.
     assert.equal(evaluate(deployed, workflowSha).skip_e2e, "false");
@@ -431,6 +768,43 @@ test("scope never skips candidate helpers using a later revision's import invent
     assert.equal(evaluate(prose, prose, "workflow_run", "false").skip_e2e, "false");
     assert.equal(evaluate(prose, prose, "workflow_dispatch").skip_e2e, "false");
     assert.equal(evaluate(base, base).skip_e2e, "false");
+
+    const { trigger, job } = deploySmokeFixture();
+    write(
+      "event.json",
+      JSON.stringify({ workflow_run: { ...trigger, display_title: `deploy ${prose}` } }),
+    );
+    write(
+      "fetch.mjs",
+      'import { readFileSync } from "node:fs";\nconst text = readFileSync(new URL("./jobs.json", import.meta.url), "utf8");\nglobalThis.fetch = async () => new Response(text);\n',
+    );
+    for (const [steps, expected] of [
+      [job.steps, "true"],
+      [[], "false"],
+    ]) {
+      write("jobs.json", JSON.stringify({ total_count: 1, jobs: [{ ...job, steps }] }));
+      write("candidate-output", "");
+      execFileSync(
+        process.execPath,
+        ["--import", join(directory, "fetch.mjs"), provenanceScript, "candidate"],
+        {
+          cwd: directory,
+          env: {
+            GITHUB_EVENT_NAME: "workflow_run",
+            GITHUB_EVENT_PATH: join(directory, "event.json"),
+            GITHUB_OUTPUT: join(directory, "candidate-output"),
+            GITHUB_REPOSITORY: repository,
+            GITHUB_SHA: prose,
+          },
+          timeout: 10_000,
+        },
+      );
+      const result = readOutput("candidate-output");
+      assert.deepEqual(result, { sha: prose, deploy_smoke_scoped: expected });
+      const scope = evaluate(result.sha, prose, "workflow_run", result.deploy_smoke_scoped);
+      assert.equal(scope.docs_only, expected);
+      assert.equal(scope.skip_e2e, expected);
+    }
 
     const deploy = readFileSync(
       new URL("../.github/workflows/deploy.yml", import.meta.url),
@@ -513,4 +887,245 @@ test("qualification pins every checker, validates ancestry and shares the stagin
     assert.doesNotMatch(child, /cache: npm|uses: actions\/cache@/);
     assert.match(child, /package-manager-cache: false/);
   }
+});
+
+const reservation = Object.freeze({
+  sha: "a".repeat(40),
+  allocationId: "11111111-1111-4111-8111-111111111111",
+  ownerId: 12345,
+  issuedAt: "2026-01-01T12:00:00Z",
+  expiresAt: "2026-01-01T13:00:00.000Z",
+});
+const issuedAtMs = Date.parse(reservation.issuedAt);
+const expiresAtMs = Date.parse(reservation.expiresAt);
+const observed = Object.freeze({ sha: reservation.sha, allocationId: reservation.allocationId });
+const mutation = Object.freeze({
+  operation: "mutation",
+  nowMs: issuedAtMs + 1,
+  verifiedOwnerId: reservation.ownerId,
+  observed,
+});
+const e2e = Object.freeze({ ...mutation, operation: "e2e", e2eSha: reservation.sha });
+
+test("staging reservation parses exact identities and a bounded UTC lifetime", () => {
+  assert.deepEqual(parseStagingReservation(reservation), {
+    ...observed,
+    ownerId: reservation.ownerId,
+    issuedAtMs,
+    expiresAtMs,
+  });
+});
+
+test("staging reservation blocks mutations and admits only its qualifying E2E", () => {
+  assert.equal(canAdmitStagingOperation(reservation, { ...mutation, nowMs: issuedAtMs }), false);
+  assert.equal(canAdmitStagingOperation(reservation, { ...e2e, nowMs: issuedAtMs }), true);
+  assert.equal(
+    canAdmitStagingOperation(reservation, { ...mutation, nowMs: expiresAtMs - 1 }),
+    false,
+  );
+  assert.equal(canAdmitStagingOperation(reservation, { ...e2e, nowMs: expiresAtMs - 1 }), true);
+
+  for (const [description, override] of [
+    ["different E2E SHA", { e2eSha: "b".repeat(40) }],
+    ["different serving SHA", { observed: { ...observed, sha: "b".repeat(40) } }],
+    ["missing observation", { observed: undefined }],
+    ["missing allocation", { observed: { sha: reservation.sha } }],
+    ["missing owner verification", { verifiedOwnerId: undefined }],
+    ["different verified owner", { verifiedOwnerId: reservation.ownerId + 1 }],
+    ["coerced owner ID", { verifiedOwnerId: String(reservation.ownerId) }],
+    ["future issue time", { nowMs: issuedAtMs - 1 }],
+  ]) {
+    assert.equal(
+      canAdmitStagingOperation(reservation, { ...e2e, ...override }),
+      false,
+      description,
+    );
+  }
+});
+
+test("staging reservation keeps its mutation hold if the allocation is lost before expiry", () => {
+  const replacement = { ...observed, allocationId: "22222222-2222-4222-8222-222222222222" };
+  assert.equal(
+    canAdmitStagingOperation(reservation, { ...mutation, observed: replacement }),
+    false,
+  );
+  assert.equal(canAdmitStagingOperation(reservation, { ...e2e, observed: replacement }), false);
+  assert.equal(canAdmitStagingOperation(null, { ...mutation, observed: replacement }), true);
+  assert.equal(
+    canAdmitStagingOperation(reservation, { ...e2e, observed: replacement, nowMs: expiresAtMs }),
+    true,
+  );
+});
+
+test("staging reservation opens the gate at verified expiry or explicit absence", () => {
+  const atExpiry = { ...mutation, nowMs: expiresAtMs };
+  assert.equal(canAdmitStagingOperation(reservation, atExpiry), true);
+  assert.equal(canAdmitStagingOperation(reservation, { ...atExpiry, verifiedOwnerId: 1 }), false);
+  assert.equal(canAdmitStagingOperation(null, mutation), true);
+  assert.equal(canAdmitStagingOperation(null, e2e), true);
+  assert.equal(canAdmitStagingOperation(undefined, atExpiry), false);
+  assert.equal(canAdmitStagingOperation(null, { ...mutation, operation: "rollback" }), false);
+  assert.equal(canAdmitStagingOperation(null, { ...e2e, e2eSha: undefined }), false);
+  assert.equal(canAdmitStagingOperation(null), false);
+  for (const nowMs of [NaN, Infinity, -1, 1.5, String(expiresAtMs)]) {
+    assert.equal(canAdmitStagingOperation(reservation, { ...atExpiry, nowMs }), false);
+  }
+});
+
+test("staging reservation rejects malformed records and overlong lifetimes even after they would expire", () => {
+  const malformed = [
+    [],
+    JSON.stringify(reservation),
+    { ...reservation, ignored: true },
+    { ...reservation, [Symbol("ignored")]: true },
+    {
+      ...reservation,
+      get sha() {
+        return reservation.sha;
+      },
+    },
+    { ...reservation, sha: reservation.sha.slice(0, 39) },
+    { ...reservation, sha: `${reservation.sha}\n` },
+    { ...reservation, allocationId: `${reservation.allocationId}\n` },
+    { ...reservation, allocationId: "g1111111-1111-4111-8111-111111111111" },
+    { ...reservation, allocationId: "A1111111-1111-4111-8111-111111111111" },
+    { ...reservation, ownerId: 0 },
+    { ...reservation, ownerId: String(reservation.ownerId) },
+    { ...reservation, ownerId: Number.MAX_SAFE_INTEGER + 1 },
+    { ...reservation, expiresAt: undefined },
+    { ...reservation, expiresAt: Infinity },
+    {
+      ...reservation,
+      issuedAt: "2026-02-30T12:00:00Z",
+      expiresAt: "2026-03-02T13:00:00Z",
+    },
+    { ...reservation, expiresAt: "2026-01-01T12:10:00+00:00" },
+    { ...reservation, expiresAt: "2026-01-01T12:10:00.0001Z" },
+    { ...reservation, expiresAt: "2026-01-01T11:59:00Z" },
+    { ...reservation, expiresAt: reservation.issuedAt },
+    { ...reservation, expiresAt: "2026-01-01T13:00:00.001Z" },
+  ];
+  for (const record of malformed) {
+    assert.throws(() => parseStagingReservation(record));
+    assert.equal(canAdmitStagingOperation(record, e2e), false);
+    assert.equal(canAdmitStagingOperation(record, { ...mutation, nowMs: expiresAtMs + 2 }), false);
+  }
+});
+test("exact-attempt jobs streaming preserves proof and falls back to full smoke on size or read failure", async (t) => {
+  const trigger = {
+    ...run,
+    id: 55,
+    run_attempt: 2,
+    status: "completed",
+    event: "workflow_run",
+    path: ".github/workflows/deploy.yml",
+  };
+  const payload = JSON.stringify({
+    total_count: 1,
+    jobs: [
+      {
+        name: "deploy-staging",
+        run_id: trigger.id,
+        run_attempt: trigger.run_attempt,
+        head_sha: trigger.head_sha,
+        status: "completed",
+        conclusion: "success",
+        steps: [
+          {
+            name: "Record adjacent staging smoke skip",
+            status: "completed",
+            conclusion: "success",
+          },
+        ],
+      },
+    ],
+  });
+  const encoder = new TextEncoder();
+  const budget = 64 * 1024;
+  const atLimit = encoder.encode(payload.padEnd(budget));
+  const check = (body) => deploySmokeWasScoped(trigger, repository, async () => new Response(body));
+  const workflow = readFileSync(
+    new URL("../.github/workflows/e2e-staging.yml", import.meta.url),
+    "utf8",
+  );
+  const scope = workflow.match(
+    /DEPLOY_SMOKE_SCOPED: [^\n]+\n        run: \|\n((?: {10}[^\n]*\n)+)/,
+  );
+  assert.ok(scope);
+  const directory = mkdtempSync(join(tmpdir(), "staging-jobs-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const output = join(directory, "scope-output");
+  const assertFullSmoke = (scoped) => {
+    assert.equal(scoped, false);
+    writeFileSync(output, "");
+    execFileSync("bash", ["-c", scope[1]], {
+      cwd: directory,
+      env: {
+        EVENT_NAME: "workflow_run",
+        HEAD_SHA: B,
+        WORKFLOW_SHA: B,
+        DEPLOY_SMOKE_SCOPED: String(scoped),
+        GITHUB_OUTPUT: output,
+      },
+      timeout: 10_000,
+    });
+    assert.equal(readFileSync(output, "utf8"), "docs_only=false\nskip_e2e=false\n");
+  };
+
+  const bounded = new ReadableStream({
+    start(controller) {
+      controller.enqueue(atLimit.subarray(0, 64));
+      controller.enqueue(atLimit.subarray(64));
+      controller.close();
+    },
+  });
+  assert.equal(await check(bounded), true);
+
+  for (const cancelTransport of [
+    () => new Promise(() => {}),
+    () => Promise.reject(new Error("synthetic cancellation refusal")),
+  ]) {
+    let pulls = 0;
+    let cancelled = false;
+    const oversized = new ReadableStream(
+      {
+        pull(controller) {
+          pulls++;
+          if (pulls === 1) controller.enqueue(atLimit);
+          else if (pulls === 2) controller.enqueue(encoder.encode(" "));
+          else controller.close();
+        },
+        cancel() {
+          cancelled = true;
+          return cancelTransport();
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    // The synthetic stream runs in microtasks. A pending verdict at the next
+    // event-loop turn means the reader waited for the stalled cancellation.
+    const overflowVerdict = await Promise.race([
+      check(oversized),
+      new Promise((resolve) => setImmediate(() => resolve("cancellation stalled the verdict"))),
+    ]);
+    assertFullSmoke(overflowVerdict);
+    assert.equal(pulls, 2);
+    assert.equal(cancelled, true);
+    assert.equal(oversized.locked, false);
+  }
+
+  const interrupted = new ReadableStream(
+    {
+      start(controller) {
+        controller.enqueue(encoder.encode(payload));
+      },
+      pull(controller) {
+        controller.error(new Error("synthetic interruption after proof bytes"));
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  assertFullSmoke(await check(interrupted));
+  assert.equal(interrupted.locked, false);
+  assertFullSmoke(await check(new Uint8Array()));
 });

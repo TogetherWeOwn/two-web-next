@@ -37,16 +37,62 @@ const cutoverProfile = process.env.CUTOVER_PROFILE || "all-off";
 const ember = cutoverProfile === "ember";
 const admin = cutoverProfile === "admin";
 const baseline = admin ? "ember" : "hono";
+const MAX_WORKERS_GET_BYTES = 1024 * 1024;
 
-function cloudflare() {
-  const account = process.env.CLOUDFLARE_ACCOUNT_ID;
-  const token = process.env.CLOUDFLARE_API_TOKEN;
+function cancelBody(stream) {
+  // Disposal can fail after an abort. Keep the status or reader error authoritative.
+  void stream?.cancel().catch(() => undefined);
+}
+
+async function readWorkersGet(response) {
+  if (!response.ok) {
+    cancelBody(response.body);
+    if (response.status === 404) return null;
+    throw new Error("staging Workers API refused the request");
+  }
+
+  assert.ok(response.body, "staging Workers API response body missing");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_WORKERS_GET_BYTES) break;
+      text += decoder.decode(value, { stream: true });
+    }
+  } catch {
+    throw new Error("staging Workers API response could not be read");
+  } finally {
+    cancelBody(reader);
+    reader.releaseLock();
+  }
+  assert.ok(bytes <= MAX_WORKERS_GET_BYTES, "staging Workers API response too large");
+
+  let body;
+  try {
+    body = JSON.parse(text + decoder.decode());
+  } catch {
+    throw new Error("staging Workers API response was not valid JSON");
+  }
+  assert.ok(body?.success === true, "staging Workers API returned an error");
+  return body.result;
+}
+
+export function cloudflare({
+  account = process.env.CLOUDFLARE_ACCOUNT_ID,
+  token = process.env.CLOUDFLARE_API_TOKEN,
+  fetchImpl = fetch,
+} = {}) {
   assert.ok(
     /^[a-f0-9]{32}$/.test(account ?? "") && token,
     "missing staging Cloudflare credentials",
   );
   return async (path, method = "GET") => {
-    const response = await fetch(
+    const response = await fetchImpl(
       `https://api.cloudflare.com/client/v4/accounts/${account}/workers/${path}`,
       {
         method,
@@ -55,6 +101,7 @@ function cloudflare() {
         signal: AbortSignal.timeout(10_000),
       },
     );
+    if (method === "GET") return readWorkersGet(response);
     if (response.status === 404) return null;
     assert.ok(response.ok, "staging Workers API refused the request");
     const body = await response.json();
@@ -239,17 +286,35 @@ async function deployPacket(dir, scratch, proof, origin, inputs, api, credential
   }
 }
 
-async function exercise(proof, prefixes, owner, names, origin, dir, secrets) {
+export async function exercise(
+  proof,
+  prefixes,
+  owner,
+  names,
+  origin,
+  dir,
+  secrets,
+  {
+    profile = cutoverProfile,
+    runWrangler = wrangler,
+    serve = verifyServed,
+    ready = readReady,
+    wait = delay,
+  } = {},
+) {
+  const admin = profile === "admin";
+  const ember = profile === "ember";
+  const baseline = admin ? "ember" : "hono";
   const { identity, kit, checks } = proof;
   const fallback = proof[baseline];
   const config = join(dir, admin ? "kit/wrangler.ember.json" : "hono/wrangler.json");
-  const run = (...args) => wrangler(admin ? "kit" : "hono", [...args, "--config", config]);
+  const run = (...args) => runWrangler(admin ? "kit" : "hono", [...args, "--config", config]);
   const deployments = () => JSON.parse(run("deployments", "list", "--json"));
   const capture = async (state, step, version) => {
     assert.equal(liveVersion(deployments()), version);
     let renderer = admin || (ember && step === "kit") ? "kit" : "hono";
     if (admin && step === "kit") renderer = "admin";
-    const routes = await verifyServed(origin, prefixes, identity, version, state, renderer);
+    const routes = await serve(origin, prefixes, identity, version, state, renderer);
     proof.routeCount ??= routes;
     assert.equal(routes, proof.routeCount, "staged smoke route coverage changed");
     checks.push({ state, step, version, status: 200, pending: 0, smoke: "passed" });
@@ -257,15 +322,17 @@ async function exercise(proof, prefixes, owner, names, origin, dir, secrets) {
     if (admin) await assertStagedAdminServing({ origin, owner, secrets, enabled: step === "kit" });
   };
   for (const state of admin ? ["1037"] : LEDGER_STATES) {
-    if (!admin && state === "1037") await advanceFixture(owner, prefixes[state], names.login);
+    if (!admin && state === "1037") {
+      await advanceFixture(owner, prefixes[state], names.login, prefixes[1033].length);
+    }
     await capture(state, baseline, fallback);
     assert.equal(liveVersion(deployments()), fallback);
     run("versions", "deploy", `${kit}@100%`, "--yes");
     try {
       await capture(state, "kit", kit);
       for (let i = 0; i < 3; i++) {
-        await delay(20_000);
-        await readReady(origin, prefixes, { version: kit, commit: identity.sourceSha, state });
+        await wait(20_000);
+        await ready(origin, prefixes, { version: kit, commit: identity.sourceSha, state });
         proof.kitReadinessSamples += 1;
       }
     } finally {
@@ -275,6 +342,19 @@ async function exercise(proof, prefixes, owner, names, origin, dir, secrets) {
     await capture(state, "undo", fallback);
   }
   if (admin) proof.adminChecks = ADMIN_STAGING_CHECKS;
+}
+
+export async function finalizeIsolatedCutover(owner, scratch, publishProof) {
+  try {
+    try {
+      await owner?.end({ timeout: 0 });
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+  } catch {
+    throw new Error("Cutover staging failed during local fixture finalization");
+  }
+  await publishProof?.();
 }
 
 async function qualify(dir, proofPath, ctx) {
@@ -299,13 +379,14 @@ async function qualify(dir, proofPath, ctx) {
     bindingCheck: `isolated-and-${cutoverProfile}`,
   };
   let owner;
+  let publishProof;
   let phase = "synthetic database setup";
   try {
     const fixture = await createFixture(database, names, () =>
       writeFile(claim, worker, { flag: "wx", mode: 0o600 }),
     );
     owner = fixture.owner;
-    await advanceFixture(owner, prefixes[admin ? "1037" : "1033"], names.login);
+    await advanceFixture(owner, prefixes[admin ? "1037" : "1033"], names.login, 0);
     const secrets = {
       runtimeUrl: fixture.runtimeUrl,
       SESSION_SECRET: randomUUID(),
@@ -315,16 +396,17 @@ async function qualify(dir, proofPath, ctx) {
     await deployPacket(dir, scratch, proof, origin, inputs, api, secrets);
     phase = "exact readiness, route smoke and guarded undo";
     await exercise(proof, prefixes, owner, names, origin, dir, secrets);
+    publishProof = async () => {
+      verifyStagingProof(proof, { ...identity, mode: admin ? "admin" : ember ? "ember" : "kit" });
+      await writeFile(proofPath, JSON.stringify(proof), { flag: "wx" });
+    };
   } catch (error) {
     // Report only the operation and numeric provider code from Wrangler.
     const detail = error instanceof WranglerOperationError ? ` (${error.message})` : "";
     throw new Error(`Cutover staging failed during ${phase}${detail}`);
   } finally {
-    await owner?.end({ timeout: 0 });
-    await rm(scratch, { recursive: true, force: true });
+    await finalizeIsolatedCutover(owner, scratch, publishProof);
   }
-  verifyStagingProof(proof, { ...identity, mode: admin ? "admin" : ember ? "ember" : "kit" });
-  await writeFile(proofPath, JSON.stringify(proof), { flag: "wx" });
   console.info(
     `Isolated ${cutoverProfile} pin ${identity.runId}:${identity.runAttempt}:${identity.digest}, baseline ${proof[baseline]}, candidate ${proof.kit}`,
   );

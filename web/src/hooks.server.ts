@@ -5,6 +5,7 @@ import { env } from "cloudflare:workers";
 import { KIT_SOURCE_EVIDENCE_ROUTES } from "../../src/admin/kit-source-evidence-route";
 import { refuseSourceEvidenceOrigin } from "../../src/admin/source-evidence";
 import { KIT_EVENT_MARKDOWN_ROUTES } from "../../src/ai-friendly/kit-event-markdown-routes";
+import { renderNotFoundDocument } from "../../src/error-pages";
 import { recordBoardView, recordQueuedBoardView } from "../../src/hotzones/board-log";
 import { KIT_HOTZONE_SIGNAL_ROUTE } from "../../src/hotzones/kit-signal-route";
 import { prepareKitHomePanels } from "../../src/kit-home-panels";
@@ -13,6 +14,7 @@ import { KIT_SEO_ROUTES } from "../../src/kit-seo-routes";
 import { KIT_STATIC_TEXT_ROUTES } from "../../src/static-public";
 import { kitAccessSink } from "../../src/kit-access-sink";
 import { preserveHonoDataResponse } from "../../src/kit-worker-facade";
+import { cachedNotFoundSuggestions } from "../../src/not-found-suggestions";
 import {
   kitAdminRenewalFor,
   kitAuthStatusCookieFor,
@@ -23,7 +25,12 @@ import {
 } from "../../src/kit-session";
 import { dispatchHookRequest } from "../../src/route-ownership";
 import { dispatchEventDetailRequest } from "../../src/events/kit-detail";
-import { KIT_EVENT_CALENDAR_ROUTE } from "../../src/events/kit-event-calendar-route";
+import {
+  EVENT_CALENDAR_ROUTE,
+  KIT_EVENT_CALENDAR_ROUTE,
+  kitLegacyEventCalendarKey,
+} from "../../src/events/kit-event-calendar-route";
+import { fetchKitFeed } from "../../src/events/kit-feed-fetch";
 import { KIT_EVENT_COLLECTION_ROUTE, KIT_EVENT_JSON_ROUTE } from "../../src/events/kit-json-routes";
 import { KIT_STATIC_FEED_ROUTES } from "../../src/events/kit-static-feed-routes";
 import { KIT_EVENT_WRITE_ROUTES } from "../../src/events/kit-event-write-routes";
@@ -74,6 +81,10 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
     kitRouteHome: env.KIT_ROUTE_HOME,
     kitRouteJoin: env.KIT_ROUTE_JOIN,
     kitRouteEmberPages: env.KIT_ROUTE_EMBER_PAGES,
+    membersNotFound: {
+      flag: env.KIT_ROUTE_MEMBERS_NOT_FOUND,
+      render: async (path) => renderNotFoundDocument(await cachedNotFoundSuggestions(env, path)),
+    },
     // End Kit's action before it starts another layout or page load. The
     // dispatcher returns the controller's native HTTP response in its place.
     admin: { env, completeForm: () => redirect(303, "/admin") },
@@ -86,6 +97,12 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
       {
         flag: env.KIT_ROUTE_FEEDS,
         routes: [...KIT_STATIC_FEED_ROUTES, KIT_EVENT_CALENDAR_ROUTE, KIT_EVENT_COLLECTION_ROUTE],
+        legacySuffix: {
+          path: EVENT_CALENDAR_ROUTE,
+          keyFor: kitLegacyEventCalendarKey,
+          read: (request, key, requestId) =>
+            fetchKitFeed(request, env, { kind: "event-calendar", key }, requestId),
+        },
       },
       { flag: env.KIT_ROUTE_STATIC_TEXT, routes: KIT_STATIC_TEXT_ROUTES },
       { flag: env.KIT_ROUTE_EVENT_JSON, routes: [KIT_EVENT_JSON_ROUTE] },

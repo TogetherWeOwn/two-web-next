@@ -37,9 +37,19 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'merge_group' }}
 
 jobs:
+  pr-admission:
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.id == github.event.pull_request.base.repo.id
+    permissions: { actions: read, contents: read, pull-requests: read }
+    uses: ./.github/workflows/pr-ci-admission.yml
+
   join-evidence-source:
     name: join-evidence-source
-    runs-on: ubuntu-latest
+    runs-on: >-
+      ${{ github.event_name == 'pull_request'
+      && github.repository
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'
+      && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -55,7 +65,12 @@ jobs:
 
   bot-contract-drift:
     name: bot-contract-drift
-    runs-on: ubuntu-latest
+    runs-on: >-
+      ${{ github.event_name == 'pull_request'
+      && github.repository
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'
+      && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -90,7 +105,14 @@ jobs:
   # would leave it missing and block the PR, so it is deliberately not used).
   scope:
     name: scope
-    runs-on: ubuntu-latest
+    needs: pr-admission
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.draft == true || github.event.pull_request.head.repo.id != github.event.pull_request.base.repo.id || needs.pr-admission.result == 'success') }}
+    runs-on: >-
+      ${{ github.event_name == 'pull_request'
+      && github.repository
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'
+      && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}
     # Includes the pinned stock source build and upstream test inventory.
     timeout-minutes: 15
     outputs:
@@ -100,10 +122,12 @@ jobs:
       db: ${{ steps.scope.outputs.db }}
       full: ${{ steps.scope.outputs.full }}
       draft: ${{ steps.scope.outputs.draft }}
+      isolated: ${{ steps.scope.outputs.isolated }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: github.event_name == 'pull_request'
         with:
+          fetch-depth: 2
           persist-credentials: false
       # Token boundary: this is the only step that holds GH_TOKEN, and it runs
       # no repository code. It fetches the changed-file list and the scope
@@ -114,12 +138,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate \
-            --jq '.[] | "\(.filename)\t\(.previous_filename // "")"' > "$RUNNER_TEMP/pr-files.tsv"
+          if [ "$(git show -s --format=%P HEAD)" = "$BASE_SHA $HEAD_SHA" ]; then
+            git diff --no-ext-diff --no-textconv --name-status -M "$BASE_SHA" HEAD |
+              awk -F'\t' '{if ($1 ~ /^R/) print $3 "\t" $2; else print $2 "\t"}' > "$RUNNER_TEMP/pr-files.tsv"
+          else
+            : > "$RUNNER_TEMP/pr-files.tsv"
+          fi
           mkdir -p "$RUNNER_TEMP/trusted-scope"
           for script in ci/change-scope.sh ci/e2e-test-helpers.mjs; do
             gh api "repos/$REPO/contents/$script?ref=$BASE_SHA" \
@@ -133,6 +161,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+          SAME_REPO: ${{ github.event.pull_request.head.repo.id == github.event.pull_request.base.repo.id }}
           DRAFT: ${{ github.event.pull_request.draft }}
         run: |
           set -euo pipefail
@@ -147,10 +176,11 @@ jobs:
               echo "db=true"
               echo "full=true"
               echo "draft=false"
+              echo "isolated=false"
             } >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          bash "$RUNNER_TEMP/trusted-scope/change-scope.sh" "$RUNNER_TEMP/pr-files.tsv" "$CHANGED_FILES" > "$RUNNER_TEMP/scope-verdict.txt"
+          PR_SUITE_SCOPE=true bash "$RUNNER_TEMP/trusted-scope/change-scope.sh" "$RUNNER_TEMP/pr-files.tsv" "$CHANGED_FILES" > "$RUNNER_TEMP/scope-verdict.txt"
           keys="docs_only skip_e2e app worker db full draft"
           for key in $keys; do
             count=$(grep -c "^$key=" "$RUNNER_TEMP/scope-verdict.txt") || count=0
@@ -172,10 +202,15 @@ jobs:
           fi
           docs_only=$verdict_docs_only
           full=$verdict_full
+          isolated=$verdict_skip_e2e
           while IFS=$'\t' read -r name previous || [ -n "$name" ]; do
             for path in "$name" ${previous:+"$previous"}; do
               case "$path" in
-                .github/*|ci/change-scope.sh|ci/e2e-test-helpers.mjs) full=true ;;
+                ci/join-state-evidence-source.mjs|ci/join-state-evidence-source.test.mjs|\
+                ci/kit-css-evidence.mjs|ci/kit-css-evidence.test.mjs) ;;
+                ci/check-migration-*|ci/check-snapshot-chain*|ci/db-migrate*) isolated=false ;;
+                .github/*|src/*|ci/*) full=true; isolated=false ;;
+                *) isolated=false ;;
               esac
               case "$path" in
                 docs/*) ;;
@@ -185,6 +220,12 @@ jobs:
               esac
             done
           done < "$RUNNER_TEMP/pr-files.tsv"
+          if [ "${SAME_REPO:-true}" = false ] || [ ! -s "$RUNNER_TEMP/pr-files.tsv" ] ||
+             [ "$(wc -l < "$RUNNER_TEMP/pr-files.tsv")" != "$CHANGED_FILES" ]; then
+            docs_only=false
+            isolated=false
+            full=true
+          fi
           if [ "$docs_only" != "$verdict_docs_only" ] || [ "$full" != "$verdict_full" ]; then
             echo "::warning::scope verdict disagreed with the changed-file list; publishing the conservative verdict."
           fi
@@ -196,6 +237,8 @@ jobs:
             echo "db=$verdict_db"
             echo "full=$full"
             echo "draft=$verdict_draft"
+            if [ "$full$verdict_app$verdict_db$verdict_worker$docs_only" != falsefalsefalsefalsefalse ]; then isolated=false; fi
+            echo "isolated=$isolated"
           } >> "$GITHUB_OUTPUT"
       # Tier 0 (pipeline review 2026-10-10): workflow logic was the largest class of review
       # findings a linter catches. scope gates ci-ok (fails closed), so a red lint blocks merge.
@@ -204,9 +247,15 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
+      - name: PR admission evidence fixtures
+        if: github.event_name == 'pull_request'
+        run: python3 -B ci/pr-ci-admission-test.py
       - name: Install-hook inventory and asset boundary tests
         if: github.event_name == 'pull_request'
         run: node --test ci/install-hook-inventory.test.mjs ci/asset-output-boundary.test.mjs
+      - name: Local promotion-path fixtures
+        if: github.event_name == 'pull_request'
+        run: node --test ci/promotion-path.test.mjs
       - name: Kit CSS collector and evidence selftests
         if: github.event_name == 'pull_request'
         run: node --test ci/kit-css-collect.test.mjs ci/kit-css-evidence.test.mjs ci/kit-activity-log-overlay.test.mjs ci/kit-activity-log-png.test.mjs ci/kit-activity-log-visual.test.mjs
@@ -226,7 +275,7 @@ jobs:
           echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $lint_dir/actionlint.tgz" | sha256sum -c -
           tar -xzf "$lint_dir/actionlint.tgz" -C "$lint_dir" actionlint
           export ACTIONLINT="$lint_dir/actionlint"
-          node --test ci/workflow-lint.test.mjs ci/actionlint-wiring.test.mjs
+          node --test ci/workflow-lint.test.mjs ci/actionlint-wiring.test.mjs ci/xfs-qualification-workflow.test.mjs
           node ci/workflow-lint.mjs "$ACTIONLINT"
       - name: Verify stock actionlint inventory
         if: github.event_name == 'pull_request'
@@ -237,12 +286,18 @@ jobs:
   queue-syntax-smoke:
     name: queue-syntax-smoke
     needs: scope
+    if: ${{ !cancelled() && needs.scope.result == 'success' }}
     concurrency:
       group: queue-syntax-${{ github.run_id }}-${{ github.run_attempt }}
       cancel-in-progress: false
       queue: max
     permissions: {}
-    runs-on: ubuntu-latest
+    runs-on: >-
+      ${{ github.event_name == 'pull_request'
+      && github.repository
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'
+      && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}
     timeout-minutes: 2
     steps:
       - run: "true"
@@ -251,7 +306,13 @@ jobs:
   docs-links:
     name: docs-links
     needs: scope
-    runs-on: ubuntu-latest
+    if: ${{ !cancelled() && needs.scope.result == 'success' }}
+    runs-on: >-
+      ${{ github.event_name == 'pull_request'
+      && github.repository
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'
+      && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -301,9 +362,13 @@ jobs:
     # Audit the served surface when it or its inputs changed (app covers
     # test/helpers via the fixtures; db covers the migrations the fixtures
     # run). Drafts skip: undrafting re-runs via ready_for_review.
-    if: needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.db == 'true')
-    # This workflow uses hosted runners for every event and repository visibility.
-    runs-on: ubuntu-latest
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.db == 'true') }}
+    runs-on: >-
+      ${{ github.event_name == 'pull_request'
+      && github.repository
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'
+      && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}
     timeout-minutes: 25
     # Self-hosted runners share one Docker host, so a published 5432 (and
     # wrangler's dev ports) collide across concurrent jobs. A job container has
@@ -555,7 +620,12 @@ jobs:
     if: ${{ !cancelled() }}
     permissions:
       contents: read
-    runs-on: ubuntu-latest
+    runs-on: >-
+      ${{ github.event_name == 'pull_request'
+      && github.repository
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'
+      && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}
     # Two lockfiles can each exhaust three 120s attempts plus backoff.
     timeout-minutes: 20
     steps:
@@ -602,7 +672,12 @@ jobs:
     needs: [scope, dependency-admission]
     # `!cancelled()`, not `always()`: see the note on ci-ok.
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: >-
+      ${{ github.event_name == 'pull_request'
+      && github.repository
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'
+      && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}
     # Container setup and serial SQL coverage takes 17-20m on the slowest shared
     # runners, so 20m cancelled green runs (TOG-12177). The full suite now
     # runs 29-38m on main; 40m left no headroom for runner noise, so the
@@ -658,9 +733,6 @@ jobs:
       - name: Kit retirement guard fixtures
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/kit-retirement-build.test.mjs
-      - name: Disposable migration role wiring fixtures
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: node --test ci/disposable-runtime-role.test.mjs
       - name: Job-private localhost:5432 forward to the Postgres service
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: |
@@ -710,6 +782,9 @@ jobs:
         run: node --test ci/incident-issue-lifecycle.test.mjs
       - run: npm ci --no-audit --no-fund
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+      - name: Disposable migration role wiring fixtures
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/disposable-runtime-role.test.mjs
       - name: Design-kit provenance and adapter drift
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run check:design-kit-drift:selftest && npm run check:design-kit-drift && npm run check:ember-sync:selftest && npm run check:ember-sync
@@ -1130,7 +1205,10 @@ jobs:
         run: node --test ci/production-deploy-gate.test.mjs
       - name: Protected Kit cutover admission selftest (fixtures, no credentials or network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: node --test ci/kit-cutover-evidence.test.mjs ci/kit-cutover-deploy.test.mjs
+        run: node --test ci/kit-cutover-evidence.test.mjs ci/kit-cutover-deploy.test.mjs ci/kit-cutover-database.test.mjs
+      - name: Historical Kit cutover provenance fixture (no credentials or network)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/kit-cutover-historical-provenance.test.mjs
       - name: Production ancestry admission selftest (stubbed GitHub API, no network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/production-ancestry.test.mjs
@@ -1231,7 +1309,12 @@ jobs:
   static-check:
     needs: [scope, dependency-admission]
     if: ${{ !cancelled() && needs.scope.result == 'success' && needs.dependency-admission.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: >-
+      ${{ github.event_name == 'pull_request'
+      && github.repository
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'
+      && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1251,8 +1334,13 @@ jobs:
   coverage-shard:
     name: coverage-shard (${{ matrix.shard }})
     needs: [scope, dependency-admission]
-    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.dependency-admission.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' }}
-    runs-on: ubuntu-latest
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.dependency-admission.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && needs.scope.outputs.isolated != 'true' }}
+    runs-on: >-
+      ${{ github.event_name == 'pull_request'
+      && github.repository
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'
+      && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1307,8 +1395,13 @@ jobs:
 
   coverage-merge:
     needs: [scope, dependency-admission, coverage-shard]
-    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.dependency-admission.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' }}
-    runs-on: ubuntu-latest
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.dependency-admission.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && needs.scope.outputs.isolated != 'true' }}
+    runs-on: >-
+      ${{ github.event_name == 'pull_request'
+      && github.repository
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'
+      && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}
     timeout-minutes: 10
     container:
       image: node:24-bookworm@sha256:9d266751ca3d7fdbe651c878ffd5ad0a42fed49a18c283509267c97f025b7496 # 24.22.3-bookworm; match shard paths.
@@ -1371,8 +1464,13 @@ jobs:
   node22-shard:
     name: node22-shard (${{ matrix.shard }})
     needs: [scope]
-    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' }}
-    runs-on: ubuntu-latest
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && needs.scope.outputs.isolated != 'true' }}
+    runs-on: >-
+      ${{ github.event_name == 'pull_request'
+      && github.repository
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'
+      && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -1459,7 +1557,12 @@ jobs:
     needs: [scope, node22-shard]
     # Always report a verdict unless the workflow itself was cancelled.
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: >-
+      ${{ github.event_name == 'pull_request'
+      && github.repository
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'
+      && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}
     timeout-minutes: 5
     # Keep the shard checkout path and exact Node floor for Vitest's replay.
     container:
@@ -1469,28 +1572,28 @@ jobs:
         env:
           SCOPE_RESULT: ${{ needs.scope.result }}
         run: test "$SCOPE_RESULT" = success
-      - name: Docs-only fast pass (no code changed)
-        if: needs.scope.outputs.docs_only == 'true' || needs.scope.outputs.draft == 'true'
-        run: echo "Docs-only or draft change per the scope job; Node 22 compatibility leg passes without the suite."
+      - name: Scope fast pass
+        if: needs.scope.outputs.docs_only == 'true' || needs.scope.outputs.draft == 'true' || needs.scope.outputs.isolated == 'true'
+        run: echo "Scope excluded the unit suite; Node 22 compatibility leg passes without the suite."
       - name: Require every selected Node 22 shard to succeed
-        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true'
+        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && needs.scope.outputs.isolated != 'true'
         env:
           SHARD_RESULT: ${{ needs.node22-shard.result }}
         run: test "$SHARD_RESULT" = success
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true'
+        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && needs.scope.outputs.isolated != 'true'
         with:
           persist-credentials: false
       - run: npm ci --no-audit --no-fund
-        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true'
+        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && needs.scope.outputs.isolated != 'true'
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true'
+        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && needs.scope.outputs.isolated != 'true'
         with:
           pattern: node22-vitest-*
           path: vitest-blob
           merge-multiple: true
       - name: Merge Node 22 Vitest reports
-        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true'
+        if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && needs.scope.outputs.isolated != 'true'
         run: |
           # Vitest can replay valid blobs that omit test files.
           set -- vitest-blob/*
@@ -1503,8 +1606,13 @@ jobs:
     name: bundle-budget
     needs: scope
     # Budgets only observe the served assets (app). Drafts skip.
-    if: needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
-    runs-on: ubuntu-latest
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true') }}
+    runs-on: >-
+      ${{ github.event_name == 'pull_request'
+      && github.repository
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'
+      && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1545,8 +1653,13 @@ jobs:
     name: lighthouse
     needs: scope
     # Fixture worker serves the app over fixed routes (app only). Drafts skip.
-    if: needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
-    runs-on: ubuntu-latest
+    if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true') }}
+    runs-on: >-
+      ${{ github.event_name == 'pull_request'
+      && github.repository
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'
+      && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}
     # A private namespace keeps Wrangler's fixed audit port off the shared host.
     container:
       image: node:24-bookworm@sha256:9d266751ca3d7fdbe651c878ffd5ad0a42fed49a18c283509267c97f025b7496 # 24.22.3-bookworm
@@ -1619,7 +1732,12 @@ jobs:
     name: kit-browser-fixture
     needs: [scope]
     if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true') }}
-    runs-on: ubuntu-latest
+    runs-on: >-
+      ${{ github.event_name == 'pull_request'
+      && github.repository
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'
+      && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}
     timeout-minutes: 30
     container:
       image: node:24-bookworm@sha256:e7add2a490bb17d97b485b8641bd88455fff7839ade0f5eba493c3508124d413
@@ -1649,7 +1767,14 @@ jobs:
     name: kit-browser-calendar
     needs: [scope]
     if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true') }}
-    runs-on: ubuntu-latest
+    # Merge groups can include fork changes. Only same-repo PR events with both
+    # actors on Boat's public CI allowlist may use the included capacity.
+    runs-on: >-
+      ${{ github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && contains(fromJSON('["Rick7C2", "togetherweown[bot]"]'), github.actor)
+      && contains(fromJSON('["Rick7C2", "togetherweown[bot]"]'), github.triggering_actor)
+      && vars.CI_HEAVY_RUNNER == 'boat' && vars.CI_HEAVY_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 30
     container:
       image: node:24-bookworm@sha256:e7add2a490bb17d97b485b8641bd88455fff7839ade0f5eba493c3508124d413
@@ -1677,7 +1802,12 @@ jobs:
     name: kit-browser-lifeline
     needs: [scope]
     if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true') }}
-    runs-on: ubuntu-latest
+    runs-on: >-
+      ${{ github.event_name == 'pull_request'
+      && github.repository
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'
+      && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}
     timeout-minutes: 30
     container:
       image: node:24-bookworm@sha256:e7add2a490bb17d97b485b8641bd88455fff7839ade0f5eba493c3508124d413
@@ -1755,7 +1885,12 @@ jobs:
         join-evidence-source,
       ]
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: >-
+      ${{ github.event_name == 'pull_request'
+      && github.repository
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'
+      && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       # The result gates that used to sit in `check`, unchanged: a failing,
@@ -1794,7 +1929,11 @@ jobs:
         env:
           STATIC_RESULT: ${{ needs.static-check.result }}
           COVERAGE_RESULT: ${{ needs.coverage-merge.result }}
-        run: test "$STATIC_RESULT" = success && test "$COVERAGE_RESULT" = success
+          ISOLATED: ${{ needs.scope.outputs.isolated }}
+        run: >-
+          test "$STATIC_RESULT" = success &&
+          { { test "$ISOLATED" = true && test "$COVERAGE_RESULT" = skipped; } ||
+          { test "$ISOLATED" = false && test "$COVERAGE_RESULT" = success; }; }
       - name: Require successful accessibility audit
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         env:
