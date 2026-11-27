@@ -1058,7 +1058,10 @@ function stagingRunsApi(runs, { status = 200 } = {}) {
     const page = Number(parsed.searchParams.get("page"));
     return {
       ok: true,
-      json: async () => ({ workflow_runs: runs.slice((page - 1) * 100, page * 100) }),
+      json: async () => ({
+        total_count: runs.length,
+        workflow_runs: runs.slice((page - 1) * 100, page * 100),
+      }),
     };
   };
 }
