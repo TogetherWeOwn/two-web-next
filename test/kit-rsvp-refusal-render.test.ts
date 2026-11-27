@@ -25,6 +25,7 @@ import {
   elements,
   parseRenderedPage,
   renderedAttribute,
+  responseValues,
   text,
 } from "./helpers/rendered-dom.mjs";
 
@@ -42,6 +43,24 @@ let renderHtml: RenderRefusal;
 
 function renderRefusal(props: RsvpRefusalModel) {
   return parseRenderedPage(renderHtml(props));
+}
+
+function guestChrome(html: string) {
+  const page = parseRenderedPage(html, { scriptingEnabled: false });
+  const fallbackCopy = documentElements(page, "noscript").map((node) =>
+    node.childNodes.map(text).join(""),
+  );
+  return {
+    accountNav: documentElements(page, "nav").some(
+      (nav) => renderedAttribute(nav, "aria-label") === "Account",
+    ),
+    guestCaption: [text(page), ...responseValues(page, html), ...fallbackCopy].some((value) =>
+      value.includes("Welcome, guest"),
+    ),
+    joinLink: documentElements(page, "a").some((link) =>
+      renderedAttribute(link, "href")?.startsWith("/join/discord"),
+    ),
+  };
 }
 
 beforeAll(async () => {
@@ -145,16 +164,22 @@ describe("Kit RSVP refusal presentation", () => {
   });
 
   it("keeps the served shell chrome: event theme, no account area, skip link", () => {
-    const page = renderRefusal(
+    const html = renderHtml(
       rsvpRefusalModelFor({ status: 503, retryAfter: null, eventKey: "EVT" }),
     );
+    const page = parseRenderedPage(html);
     expect(elements(page, "div", { "data-theme": "event" })).toHaveLength(1);
-    expect(elements(page, "nav", { "aria-label": "Account" })).toEqual([]);
-    expect(text(page)).not.toContain("Welcome, guest");
-    expect(elements(page, "a").map((link) => renderedAttribute(link, "href"))).not.toContainEqual(
-      expect.stringMatching(/^\/join\/discord/),
-    );
+    const chrome = guestChrome(html);
+    expect(chrome.accountNav).toBe(false);
+    expect(chrome.guestCaption).toBe(false);
+    expect(chrome.joinLink).toBe(false);
     expect(text(element(page, "a", { href: "#main" }))).toBe("Skip to content");
     expect(elements(page, "main", { id: "main" })).toHaveLength(1);
+  });
+
+  it("detects guest chrome in a no-script fallback", () => {
+    const html = `<body><noscript><nav aria-label="Account">Welcome, <!---->guest
+      <a href="/join/discord">Join</a></nav></noscript></body>`;
+    expect(guestChrome(html)).toEqual({ accountNav: true, guestCaption: true, joinLink: true });
   });
 });

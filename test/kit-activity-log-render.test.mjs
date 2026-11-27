@@ -193,14 +193,17 @@ describe("Kit activity-log rendered output", () => {
     expect(payload).not.toContainEqual(expect.stringContaining(afterValue));
   });
 
-  it("detects payload values in attributes the parser discards", () => {
-    const html = '<p data-value="public" data-value="private fixture marker">copy</p>';
-    const page = parseRenderedPage(html);
-    expect(renderedAttribute(element(page, "p"), "data-value")).toBe("public");
-    expect(responseValues(page, html)).toContainEqual(
-      expect.stringContaining("private fixture marker"),
-    );
-  });
+  it.each(["private fixture marker", "private&#32;fixture marker"])(
+    "detects discarded attribute value %s",
+    (value) => {
+      const html = `<p data-value="public" data-value="${value}">copy</p>`;
+      const page = parseRenderedPage(html);
+      expect(renderedAttribute(element(page, "p"), "data-value")).toBe("public");
+      expect(responseValues(page, html)).toContainEqual(
+        expect.stringContaining("private fixture marker"),
+      );
+    },
+  );
 
   it("preserves active subject and causer filters in previous and next page links", () => {
     const page = activityPage();

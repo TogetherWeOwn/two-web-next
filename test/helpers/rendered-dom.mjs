@@ -1,5 +1,10 @@
 import { expect } from "vitest";
-import { renderedAttribute, renderedElements, renderedText } from "../../ci/rendered-page.mjs";
+import {
+  parseRenderedPage,
+  renderedAttribute,
+  renderedElements,
+  renderedText,
+} from "../../ci/rendered-page.mjs";
 
 export { parseRenderedPage, renderedAttribute } from "../../ci/rendered-page.mjs";
 
@@ -55,5 +60,7 @@ export function responseValues(root, html) {
     if ("data" in node) return [node.data];
     return [];
   });
-  return [html, ...decoded];
+  // Decode character references even in attributes the tree builder discards.
+  const sourceText = renderedText(parseRenderedPage(`<body>${html.replaceAll("<", "&lt;")}`));
+  return [html, sourceText, ...decoded];
 }
