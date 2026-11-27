@@ -4,6 +4,9 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { first, preRollback, soakEnv, trustedReads } from "../test/fixtures/staging-soak-http.mjs";
+import soakFixture from "../test/fixtures/staging-soak-receipt.json" with { type: "json" };
+import { STAGING_ORIGIN } from "./operator-constants.mjs";
 import {
   PASSIVE_LEDGER_MAX_BYTES,
   SOAK_ERROR_RATE_FLOOR,
@@ -20,6 +23,7 @@ import {
   stagingCandidateVersions,
   stagingSoakSample,
   sumScriptErrors,
+  verifyAllocationSoak,
 } from "./production-deploy-gate.mjs";
 
 const SHA = "a".repeat(40);
@@ -312,6 +316,84 @@ test("regression check refuses an elevated staging soak error rate and a missing
     regression(green, {}, async () => ({ ok: false, status: 403 })),
     /Workers analytics query failed \(HTTP 403\)/,
   );
+});
+
+test("the regression gate refuses a recorded staging soak with elevated errors", async () => {
+  const { sha, workerVersion, deployedAt, floorAt } = soakFixture.receipt;
+  const nowMs = Date.parse(floorAt);
+  const env = soakEnv({ accountId: ACCOUNT, token: "fixture-only" });
+  const capture = (errors) =>
+    verifyAllocationSoak(env, {
+      now: () => nowMs,
+      fetchImpl: trustedReads(
+        {
+          fetchImpl: async (input, init) => {
+            const url = String(input);
+            if (url === `${STAGING_ORIGIN}/version`) return Response.json({ sha, deployedAt });
+            if (url === `${STAGING_ORIGIN}/up`) {
+              return Response.json(
+                { revision: { commit: sha, version_id: workerVersion } },
+                { headers: { "x-two-origin": "two-web-next", "cache-control": "no-store" } },
+              );
+            }
+            assert.equal(url, "https://api.cloudflare.com/client/v4/graphql");
+            assert.deepEqual(JSON.parse(init.body).variables, {
+              accountTag: ACCOUNT,
+              scriptName: "two-web-next",
+              versionId: workerVersion,
+              since: preRollback.run_started_at,
+              until: floorAt,
+            });
+            const row = {
+              dimensions: { scriptVersion: workerVersion },
+              sum: { requests: 100, errors },
+            };
+            return Response.json({
+              data: { viewer: { accounts: [{ workersInvocationsAdaptive: [row] }] } },
+            });
+          },
+        },
+        { deployments: () => [first], run: preRollback },
+      ),
+    });
+  const qualify = ({ sample }) =>
+    checkRegression(
+      regressionEnv(green, {
+        STAGING_SOAK_REQUESTS: String(sample.requests),
+        STAGING_SOAK_ERRORS: String(sample.errors),
+      }),
+      {
+        readJson: (path) => structuredClone(green[path]),
+        fetchImpl: analytics(10_000, 100),
+        nowMs,
+      },
+    );
+
+  const elevated = await capture(2);
+  await assert.rejects(qualify(elevated), /staging error rate 0\.0200 exceeds the limit 0\.0150/);
+  const clean = await capture(0);
+  const result = await qualify(clean);
+  assert.equal(result.verdict, "pass");
+  assert.deepEqual(result.staging, { requests: 100, errors: 0 });
+
+  assert.deepEqual(elevated, {
+    schema: "staging-soak/2",
+    sha,
+    allocationId: first.id,
+    allocationStartedAt: "2026-01-01T10:01:00.123456000Z",
+    workerVersion,
+    e2e: {
+      runId: preRollback.id,
+      startedAt: preRollback.run_started_at,
+      completedAt: preRollback.updated_at,
+    },
+    deployedAt,
+    e2eCompletedAt: "2026-01-01T10:09:00.000Z",
+    floorAt,
+    status: "sampled",
+    sample: { observedAt: floorAt, workerVersion, requests: 100, errors: 2 },
+  });
+  assert.deepEqual(clean, { ...elevated, sample: { ...elevated.sample, errors: 0 } });
 });
 
 function versionsApi(pages, seen = []) {
@@ -627,6 +709,10 @@ test("deploy-production runs the regression check before the deploy job", () => 
   assert.match(regression, /needs: \[preflight, staging-soak\]/);
   assert.match(job("preflight", "staging-soak"), /INPUT_SHA: \$\{\{ inputs\.sha \}\}/);
   assert.match(
+    job("staging-soak", "regression"),
+    /\n {6}errors: \$\{\{ steps\.soak\.outputs\.errors \}\}\n/,
+  );
+  assert.match(
     regression,
     /STAGING_E2E_RUN_ID: \$\{\{ needs\.staging-soak\.outputs\.e2e_run_id \}\}/,
   );
@@ -671,6 +757,7 @@ test("deploy-production runs the regression check before the deploy job", () => 
     regression,
     /STAGING_SOAK_REQUESTS: \$\{\{ needs\.staging-soak\.outputs\.requests \}\}/,
   );
+  assert.match(regression, /STAGING_SOAK_ERRORS: \$\{\{ needs\.staging-soak\.outputs\.errors \}\}/);
   // The gate runs from the tip, the checkers from the candidate.
   assert.match(regression, /ref: \$\{\{ needs\.preflight\.outputs\.sha \}\}/);
   assert.match(regression, /ref: \$\{\{ github\.sha \}\}\n {10}path: gate-tip\n/);

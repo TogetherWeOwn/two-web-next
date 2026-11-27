@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 import { STAGING_STATIC_DOCUMENT_READY } from "../src/kit-staging-static.ts";
 import { prepareAdminDuplicateProbe } from "./fixtures/kit-admin-duplicate.mjs";
+import { assertAdminEventRosterParity } from "./fixtures/kit-admin-event-roster.mjs";
 import {
   assertInstalledJoinAttemptDetail,
   assertKitAdminServing,
@@ -26,6 +27,7 @@ import {
 } from "./fixtures/kit-admin-rsvp-controls.mjs";
 import { assertEventReadsParity } from "./fixtures/kit-event-reads-parity.mjs";
 import { assertEventCreateFormParity } from "./fixtures/kit-event-create-form-parity.mjs";
+import { assertFeaturedDeleteParity } from "./fixtures/kit-featured-delete-parity.mjs";
 import { assertResponseContracts } from "./fixtures/kit-response-contracts.mjs";
 import { assertStaticFeedParity } from "./fixtures/kit-static-feed-parity.mjs";
 import { startLoopbackWorker, tail } from "./kit-worker-loopback.mjs";
@@ -1008,6 +1010,7 @@ export default {
         listen(instance.child, instance.origin, () => instance.log),
       ),
     );
+    await assertAdminEventRosterParity({ kit: admin, fallback: kitWithSession, databaseUrl });
     await assertKitAdminServing({
       kit: admin,
       nativeCreate,
@@ -1016,6 +1019,12 @@ export default {
       hono: honoWithSession,
       databaseUrl,
     });
+    const deleteFixture = await startWorker("kit-featured-delete", worker, assets, secret, {
+      KIT_ROUTE_ADMIN: "true",
+      KIT_PARITY_FIXTURE_ADMIN_FEATURED_DELETE: "true",
+    });
+    await listen(deleteFixture.child, deleteFixture.origin, () => deleteFixture.log);
+    await assertFeaturedDeleteParity({ kit: deleteFixture, off: admin, databaseUrl });
 
     await assertInstalledJoinAttemptDetail({
       worker,

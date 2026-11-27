@@ -131,6 +131,18 @@ test("both loopback parity workers inject the same healthy-empty Discord seam", 
   );
 });
 
+test("the featured delete fixture switch is absent from deployed Worker configs", () => {
+  for (const file of [
+    "wrangler.jsonc",
+    "web/wrangler.jsonc",
+    "web/wrangler.staging.jsonc",
+    "web/wrangler.production.jsonc",
+  ]) {
+    const deployed = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+    assert.doesNotMatch(deployed, /KIT_PARITY_FIXTURE_ADMIN_FEATURED_DELETE/, file);
+  }
+});
+
 for (const [arrival, timely] of [
   [9_999, true],
   [10_000, false],
