@@ -24,7 +24,14 @@ function ciResponses(sha, id, status, conclusion) {
     path: ".github/workflows/ci.yml",
     head_repository: { full_name: repository },
   };
-  const jobs = ["check", "a11y"].map((name) => ({ name, head_sha: sha, status, conclusion }));
+  const jobs = ["check", "a11y"].map((name) => ({
+    name,
+    run_id: run.id,
+    run_attempt: run.run_attempt,
+    head_sha: sha,
+    status,
+    conclusion,
+  }));
   return [
     {
       match: `/actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=${sha}&per_page=100`,

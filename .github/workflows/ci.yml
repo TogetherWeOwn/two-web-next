@@ -253,6 +253,9 @@ jobs:
       - name: Install-hook inventory and asset boundary tests
         if: github.event_name == 'pull_request'
         run: node --test ci/install-hook-inventory.test.mjs ci/asset-output-boundary.test.mjs
+      - name: Local promotion-path fixtures
+        if: github.event_name == 'pull_request'
+        run: node --test ci/promotion-path.test.mjs
       - name: Kit CSS collector and evidence selftests
         if: github.event_name == 'pull_request'
         run: node --test ci/kit-css-collect.test.mjs ci/kit-css-evidence.test.mjs ci/kit-activity-log-overlay.test.mjs ci/kit-activity-log-png.test.mjs ci/kit-activity-log-visual.test.mjs
@@ -272,7 +275,7 @@ jobs:
           echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $lint_dir/actionlint.tgz" | sha256sum -c -
           tar -xzf "$lint_dir/actionlint.tgz" -C "$lint_dir" actionlint
           export ACTIONLINT="$lint_dir/actionlint"
-          node --test ci/workflow-lint.test.mjs ci/actionlint-wiring.test.mjs
+          node --test ci/workflow-lint.test.mjs ci/actionlint-wiring.test.mjs ci/xfs-qualification-workflow.test.mjs
           node ci/workflow-lint.mjs "$ACTIONLINT"
       - name: Verify stock actionlint inventory
         if: github.event_name == 'pull_request'
@@ -730,9 +733,6 @@ jobs:
       - name: Kit retirement guard fixtures
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/kit-retirement-build.test.mjs
-      - name: Disposable migration role wiring fixtures
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: node --test ci/disposable-runtime-role.test.mjs
       - name: Job-private localhost:5432 forward to the Postgres service
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: |
@@ -782,6 +782,9 @@ jobs:
         run: node --test ci/incident-issue-lifecycle.test.mjs
       - run: npm ci --no-audit --no-fund
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+      - name: Disposable migration role wiring fixtures
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/disposable-runtime-role.test.mjs
       - name: Design-kit provenance and adapter drift
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run check:design-kit-drift:selftest && npm run check:design-kit-drift && npm run check:ember-sync:selftest && npm run check:ember-sync
@@ -1203,6 +1206,9 @@ jobs:
       - name: Protected Kit cutover admission selftest (fixtures, no credentials or network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/kit-cutover-evidence.test.mjs ci/kit-cutover-deploy.test.mjs ci/kit-cutover-database.test.mjs
+      - name: Historical Kit cutover provenance fixture (no credentials or network)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/kit-cutover-historical-provenance.test.mjs
       - name: Production ancestry admission selftest (stubbed GitHub API, no network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/production-ancestry.test.mjs

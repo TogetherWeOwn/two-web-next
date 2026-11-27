@@ -42,6 +42,8 @@ function fixture() {
       total_count: 2,
       jobs: ["a11y", "check"].map((name) => ({
         name,
+        run_id: run.id,
+        run_attempt: run.run_attempt,
         head_sha: sha,
         status: "completed",
         conclusion: "success",
@@ -668,12 +670,60 @@ for (const eventName of ["workflow_run", "workflow_dispatch"]) {
   });
 }
 
+test("a successful prior CI attempt cannot supply jobs for the selected attempt", () => {
+  const ctx = context("workflow_run");
+  const evidence = fixture();
+  ctx.event.workflow_run.run_attempt = 2;
+  evidence.runs.workflow_runs[0].run_attempt = 2;
+  evidence.current.run_attempt = 2;
+  for (const job of evidence.jobs.jobs) job.run_attempt = 2;
+
+  // A later workflow definition SHA still deploys the CI source when its jobs match.
+  const accepted = executeStaging(ctx, evidence);
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.deepEqual(accepted.calls, mutationCalls);
+  assert.match(
+    accepted.stdout,
+    new RegExp(`Staging gate passed: ${sha}, full CI run 42, attempt 2`),
+  );
+
+  const check = evidence.jobs.jobs[1];
+  for (const mismatch of [{ run_attempt: 1 }, { run_id: 43 }, { run_attempt: undefined }]) {
+    evidence.jobs.jobs[1] = { ...check, ...mismatch };
+    const refused = executeStaging(ctx, evidence);
+    assert.equal(refused.status, 1, refused.stdout);
+    assert.deepEqual(refused.calls, []);
+    assert.match(refused.stderr, /CI job run or attempt mismatch/);
+  }
+});
+
 const mutationCalls = [
   "wrangler queues create two-sync-event",
   "wrangler queues create two-internal-action",
   "wrangler deploy --config tail/wrangler.jsonc",
   `wrangler deploy --config web/wrangler.staging.jsonc --tag ${sha} --var KIT_ROUTE_ARCHIVE:false --var KIT_ROUTE_STATIC:false --var KIT_ROUTE_EVENTS:false --var KIT_ROUTE_HOME:false --var KIT_ROUTE_JOIN:false`,
 ];
+
+test("truncated CI jobs after preparation stop staging before the first queue", () => {
+  const ctx = context("workflow_run");
+  const complete = fixture();
+  const truncated = structuredClone(complete);
+  truncated.jobs.total_count = truncated.jobs.jobs.length + 1;
+
+  const refused = executeStaging(ctx, complete, { afterPreparation: truncated });
+  assert.equal(refused.status, 1, refused.stderr);
+  assert.equal(
+    refused.stdout.trim(),
+    `Staging gate passed: ${sha}, full CI run ${run.id}, attempt ${run.run_attempt}`,
+  );
+  assert.match(refused.stderr, /^Staging gate refused: Incomplete CI job evidence$/m);
+  assert.deepEqual(refused.calls, []);
+
+  const accepted = executeStaging(ctx, complete, { afterPreparation: complete });
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.deepEqual(accepted.calls, mutationCalls);
+});
+
 for (const [family, archiveFlag, staticFlag, eventsFlag, homeFlag, joinFlag] of [
   ["archive", "true", "false", "false", "false", "false"],
   ["archive-static", "true", "true", "false", "false", "false"],

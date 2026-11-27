@@ -71,10 +71,14 @@ describe("workflow supply-chain hardening", () => {
     expect(step).toContain("node ci/semgrep-warn-selftest.mjs");
     expect(step).toContain("--strict --error --config ci/semgrep-rules.yml");
   });
-  it("finds the workflows and their action refs", () => {
+  it("finds the workflows and parses every action ref", () => {
     expect(workflows.length).toBeGreaterThan(0);
-    for (const { name, lines } of workflows)
-      expect(usesRefs(lines).length, name).toBeGreaterThan(0);
+    expect(workflows.flatMap(({ lines }) => usesRefs(lines)).length).toBeGreaterThan(0);
+    // A workflow may run only inline scripts, but every `uses:` key must parse to a ref.
+    for (const { name, lines } of workflows) {
+      const keys = lines.filter((line) => !isComment(line) && /^\s*(?:-\s+)?uses\s*:/.test(line));
+      expect(usesRefs(lines).length, name).toBe(keys.length);
+    }
   });
 
   it("pins every action to a full commit SHA", () => {

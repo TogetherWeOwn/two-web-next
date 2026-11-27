@@ -1261,6 +1261,13 @@ async function dispatchKitAdminRequest(
   // Keep fixture-only reconciliation in its manifest and pass the other
   // unowned routes to their existing Hono guards.
   if (!route) return null;
+  if (
+    formPath === "/admin/featured/:id/delete" &&
+    (env.KIT_PARITY_FIXTURE_ADMIN_FEATURED_DELETE !== "true" ||
+      !fixtureRequest(request, deps.appUrl))
+  ) {
+    return null;
+  }
 
   const started = performance.now();
   const requestId = safeRequestId(request.headers.get("cf-ray")) ?? newRequestId();

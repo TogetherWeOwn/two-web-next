@@ -188,8 +188,15 @@ qualifies through the [production release gate](../CONTRIBUTING.md#production-re
 ### Admin serving
 
 `KIT_ROUTE_ADMIN=true` enables moderator pages, native admin form POSTs, and
-the operator overrides endpoint on canonical staging or HTTP loopback. The
-operator endpoint uses its bearer independently of the moderator cookie. The
+the operator overrides endpoint on canonical staging or HTTP loopback.
+
+Featured deletion (`POST /admin/featured/:id/delete`) stays on Hono even
+with Admin ownership enabled. The installed Worker fixture can opt in on its
+configured HTTP loopback origin with `KIT_PARITY_FIXTURE_ADMIN_FEATURED_DELETE=true`.
+Both paths use the same moderator-only Hono action, including its list redirect,
+missing-item response and transactional deletion audit.
+
+The operator endpoint uses its bearer independently of the moderator cookie. The
 existing Hono guard serves legacy redirects and other unowned admin paths.
 The exact `GET /admin/events/create` endpoint also has a disabled manifest
 entry. When enabled within the admin dispatcher, it requires a moderator and
