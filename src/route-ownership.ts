@@ -1179,10 +1179,10 @@ async function dispatchOwnedRequest(
   ) {
     const featuredLegacy = familyRouteFor(event, ROUTE_MANIFEST, [
       {
-        // Queue preview has its own admission and cannot opt in to bookmarks.
-        flag: !queuePreview && fixtureRequest(event.request, deps.appUrl)
-          ? admin.env.KIT_PARITY_FIXTURE_ADMIN_FEATURED_REDIRECTS
-          : undefined,
+        flag:
+          !queuePreview && fixtureRequest(event.request, deps.appUrl)
+            ? admin.env.KIT_PARITY_FIXTURE_ADMIN_FEATURED_REDIRECTS
+            : undefined,
         routes: KIT_ADMIN_FEATURED_LEGACY_ROUTES,
       },
     ]);
