@@ -24,9 +24,10 @@ import { attr, elements, textOf } from "./helpers/kit-edit-controls";
 type Element = DefaultTreeAdapterMap["element"];
 type Node = DefaultTreeAdapterMap["node"];
 
-const { parseRenderedPage, renderedAttribute, renderedElements, renderedText } = createRequire(
-  import.meta.url,
-)("../ci/rendered-page.mjs") as {
+const requireHere = createRequire(import.meta.url);
+const { parseRenderedPage, renderedAttribute, renderedElements, renderedText } = requireHere(
+  "../ci/rendered-page.mjs",
+) as {
   parseRenderedPage: typeof parse;
   renderedAttribute: (element: Element, name: string) => string | undefined;
   renderedElements: (
