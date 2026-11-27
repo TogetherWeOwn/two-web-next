@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -472,12 +472,12 @@ test("a redeployed candidate sums every tagged version, oldest first", async () 
   );
 });
 
-function githubArtifacts({ runs, artifacts, commit = SHA, seen = {} }) {
+function githubArtifacts({ runs, artifacts, commit = SHA, zipResponse, seen = {} }) {
   return async (url, init = {}) => {
     const parsed = new URL(url);
     if (parsed.hostname === "blob.example") {
       seen.blobAuth = init.headers?.Authorization;
-      return { ok: true, arrayBuffer: async () => new TextEncoder().encode(commit).buffer };
+      return zipResponse ?? new Response(commit);
     }
     assert.equal(init.headers.Authorization, "Bearer fixture-only");
     if (parsed.pathname.endsWith("/actions/workflows/e2e-staging.yml/runs")) {
@@ -502,7 +502,7 @@ function githubArtifacts({ runs, artifacts, commit = SHA, seen = {} }) {
 }
 
 function fetchLedgers(options, unzipSeen = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "passive-"));
+  const dir = options.dir ?? mkdtempSync(join(tmpdir(), "passive-"));
   return fetchPassiveLedgers(
     {
       repository: "fixture/repo",
@@ -946,28 +946,94 @@ test("a passive ledger run without an integer id is refused", async () => {
   );
 });
 
-test("an oversized passive ledger zip is refused before it touches disk", async () => {
+test("an oversized passive ledger zip is refused before it touches disk", async (t) => {
   assert.equal(PASSIVE_LEDGER_MAX_BYTES, 8 * 1024 * 1024);
+  const root = mkdtempSync(join(tmpdir(), "passive-ledger-overflow-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const dir = join(root, "unpublished");
+  const unzipSeen = {};
+  let pulls = 0;
+  let cancelled = false;
+  const body = new ReadableStream(
+    {
+      pull(controller) {
+        pulls += 1;
+        if (pulls === 1) controller.enqueue(new Uint8Array(PASSIVE_LEDGER_MAX_BYTES));
+        else if (pulls === 2) controller.enqueue(new Uint8Array(1));
+        else controller.close();
+      },
+      cancel() {
+        cancelled = true;
+      },
+    },
+    { highWaterMark: 0 },
+  );
   await assert.rejects(
-    fetchLedgers({
-      runs: [e2eRun(9)],
-      artifacts: [{ id: 77, name: "staging-passive-ledger-9", expired: false }],
-      commit: "x".repeat(PASSIVE_LEDGER_MAX_BYTES + 1),
-    }),
+    fetchLedgers(
+      {
+        runs: [e2eRun(9)],
+        artifacts: [{ id: 77, name: "staging-passive-ledger-9", expired: false }],
+        dir,
+        zipResponse: new Response(body, { headers: { "content-length": "1" } }),
+      },
+      unzipSeen,
+    ),
     /over the 8388608-byte limit/,
   );
+  assert.equal(cancelled, true);
+  assert.equal(pulls, 2);
+  assert.equal(unzipSeen.zip, undefined);
+  assert.equal(existsSync(dir), false);
 });
 
-test("a passive ledger zip exactly at the size limit is accepted", async () => {
-  // The inclusive boundary: the guard rejects over the limit, not at it.
-  // Trailing spaces survive the stub unzip and trim away, so the payload is
-  // exactly the limit while still naming the candidate.
+test("a passive ledger zip read failure is refused without exposing provider data", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "passive-ledger-read-error-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const dir = join(root, "unpublished");
+  const unzipSeen = {};
+  const body = new ReadableStream({
+    pull(controller) {
+      controller.error(new Error("synthetic storage diagnostic"));
+    },
+  });
+  await assert.rejects(
+    fetchLedgers(
+      {
+        runs: [e2eRun(9)],
+        artifacts: [{ id: 77, name: "staging-passive-ledger-9", expired: false }],
+        dir,
+        zipResponse: new Response(body),
+      },
+      unzipSeen,
+    ),
+    { message: "Passive ledger zip could not be read" },
+  );
+  assert.equal(unzipSeen.zip, undefined);
+  assert.equal(existsSync(dir), false);
+});
+
+test("a passive ledger zip exactly at the size limit is accepted", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "passive-ledger-limit-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  // Split the candidate SHA across chunks. Trailing spaces fill the exact limit
+  // and survive the stub unzip before the gate trims the commit file.
+  const bytes = Buffer.from(SHA.padEnd(PASSIVE_LEDGER_MAX_BYTES));
+  const split = SHA.length / 2;
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(bytes.subarray(0, split));
+      controller.enqueue(bytes.subarray(split));
+      controller.close();
+    },
+  });
   const result = await fetchLedgers({
     runs: [e2eRun(9)],
     artifacts: [{ id: 77, name: "staging-passive-ledger-9", expired: false }],
-    commit: `${SHA}${" ".repeat(PASSIVE_LEDGER_MAX_BYTES - SHA.length)}`,
+    dir,
+    zipResponse: new Response(body),
   });
   assert.deepEqual(result, { runId: 9, artifactId: 77 });
+  assert.ok(readFileSync(join(dir, "ledger.zip")).equals(bytes));
 });
 
 test("legacy staging soak requires complete bounded history across pages", async () => {

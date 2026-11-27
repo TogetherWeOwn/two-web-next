@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { registerHooks } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -25,6 +27,7 @@ import {
 import { packageCutover } from "./kit-cutover-package.mjs";
 import { cloudflare, exercise, verifyServed } from "./kit-cutover-staging.mjs";
 import { KIT_ROUTE_FLAGS } from "./production-deploy-gate.mjs";
+import { sha256 } from "./worker-bundle-evidence.mjs";
 
 const sourceSha = "a".repeat(40);
 const digest = "b".repeat(64);
@@ -124,11 +127,14 @@ test("packaging refuses installed Kit asset drift after parity", async (t) => {
   }
 });
 
-async function writePacketFixture(dir) {
+async function writePacketFixture(dir, extraNames = []) {
   for (const profile of ["hono", "kit"]) {
     await mkdir(join(dir, profile, "modules"), { recursive: true });
     await mkdir(join(dir, profile, "assets"));
     await writeFile(join(dir, profile, "assets", ".assetsignore"), "fixture");
+    for (const name of extraNames) {
+      await writeFile(join(dir, profile, name), `${profile}/${name}`);
+    }
   }
   await writeFile(join(dir, "hono/modules/worker.js"), "pure Hono");
   await writeFile(join(dir, "kit/modules/_worker.js"), "facade");
@@ -136,6 +142,23 @@ async function writePacketFixture(dir) {
   const context = { sourceSha, runId: identity.runId, runAttempt: identity.runAttempt };
   return { ...context, digest: await writeManifest(dir, context, inputs) };
 }
+
+test("cutover inventory preserves filenames shared with object properties", async (t) => {
+  const scratch = await mkdtemp(join(tmpdir(), "cutover-inventory-names-test-"));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const names = ["__proto__", "constructor", "hasOwnProperty", "toString", "assets/__proto__"];
+  const pin = await writePacketFixture(scratch, names);
+  const manifest = await verifyPackage(scratch, pin, inputs);
+  for (const profile of ["hono", "kit"]) {
+    const files = await inventory(join(scratch, profile));
+    for (const name of names) {
+      const path = `${profile}/${name}`;
+      const digest = createHash("sha256").update(path).digest("hex");
+      assert.equal(Object.getOwnPropertyDescriptor(files, name)?.value, digest, path);
+    }
+    assert.deepEqual(manifest.files[profile], files);
+  }
+});
 
 test("Ember upload CLI publishes only a valid native Wrangler receipt", async (t) => {
   const scratch = await mkdtemp(join(tmpdir(), "ember-upload-receipt-"));
@@ -491,6 +514,121 @@ test("isolated qualification refuses changed packet bytes and preserves earlier 
   assert.deepEqual((await readdir(scratch)).sort(), ["kit-cutover-packet", "proof.json"]);
 });
 
+test("cutover packaging cleans only its own incomplete packet", async (t) => {
+  const scratch = await mkdtemp(join(tmpdir(), "cutover-packet-cleanup-test-"));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const repo = join(scratch, "repo");
+  const wrangler = { version: "1.2.3" };
+  const name = "two-web-next-production";
+  const assets = join(scratch, "installed");
+  const publicAssets = join(repo, "public");
+  const stub = "node_modules/.bin/wrangler";
+  const files = {
+    "wrangler.jsonc": JSON.stringify({ env: { production: { name, main: "src/worker.ts" } } }),
+    "web/wrangler.production.jsonc": JSON.stringify({
+      name,
+      main: ".svelte-kit/cloudflare/_worker.js",
+      assets: { directory: ".svelte-kit/cloudflare" },
+      vars: Object.fromEntries(KIT_ROUTE_FLAGS.map((flag) => [flag, "false"])),
+      triggers: { crons: [] },
+      workers_dev: false,
+      preview_urls: false,
+    }),
+    "drizzle/meta/_journal.json": JSON.stringify({ entries: [] }),
+    "package-lock.json": JSON.stringify({ packages: { "node_modules/wrangler": wrangler } }),
+    "node_modules/wrangler/package.json": JSON.stringify(wrangler),
+    [stub]:
+      '#!/bin/sh\n[ "$5" = --outdir ] || exit 2\nprintf "// synthetic Hono\\n" > "$6/worker.js"\n',
+  };
+  for (const [name, bytes] of Object.entries(files)) {
+    const path = join(repo, name);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, bytes, { mode: name === stub ? 0o700 : 0o600 });
+  }
+  await mkdir(assets);
+  await writeFile(join(assets, "_worker.js"), "// synthetic facade");
+  await writeFile(join(assets, "kit-adapter.js"), "// synthetic Kit adapter");
+  const assetIdentity = {
+    files: Object.fromEntries(
+      Object.entries(await inventory(assets)).map(([name, hash]) => [`cloudflare/${name}`, hash]),
+    ),
+  };
+  const context = { sourceSha, runId: identity.runId, runAttempt: identity.runAttempt };
+  for (const [key, value] of Object.entries({
+    RUNNER_TEMP: scratch,
+    GITHUB_OUTPUT: join(scratch, "output"),
+    GITHUB_STEP_SUMMARY: join(scratch, "summary"),
+  })) {
+    const previous = process.env[key];
+    t.after(() => {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    });
+    process.env[key] = value;
+  }
+  const pack = (packet) => packageCutover(packet, repo, { assets }, assetIdentity, context);
+
+  await t.test("removes the incomplete packet and preserves the original failure", async () => {
+    const packet = join(scratch, "incomplete");
+    // Hono asset inventory fails after the packet has received its Kit assets and modules.
+    await assert.rejects(pack(packet), { code: "ENOENT", path: publicAssets, syscall: "lstat" });
+    await assert.rejects(lstat(packet), { code: "ENOENT" });
+  });
+
+  await t.test("reports the packaging and cleanup errors when removal fails", async (t) => {
+    const { default: fsPromises } = await import("node:fs/promises");
+    const { syncBuiltinESMExports } = await import("node:module");
+    const packet = join(scratch, "cleanup-failure");
+    const cleanupError = Object.assign(new Error("synthetic packet removal refusal"), {
+      code: "EACCES",
+      path: packet,
+    });
+    const remove = fsPromises.rm;
+    const mockedRemove = t.mock.method(fsPromises, "rm", async (path, options) => {
+      if (path === packet) throw cleanupError;
+      return remove(path, options);
+    });
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(pack(packet), (error) => {
+        assert.ok(error instanceof AggregateError);
+        assert.equal(error.errors.length, 2);
+        const [original, cleanup] = error.errors;
+        assert.equal(original.code, "ENOENT");
+        assert.equal(original.path, publicAssets);
+        assert.equal(original.syscall, "lstat");
+        assert.equal(cleanup, cleanupError);
+        return true;
+      });
+    } finally {
+      mockedRemove.mock.restore();
+      syncBuiltinESMExports();
+    }
+  });
+
+  await t.test("removes the packet after manifest verification refuses empty assets", async () => {
+    const packet = join(scratch, "manifest-refusal");
+    await mkdir(publicAssets);
+    await assert.rejects(pack(packet), /missing Worker assets/);
+    await assert.rejects(lstat(packet), { code: "ENOENT" });
+    await rm(publicAssets, { recursive: true, force: true });
+  });
+
+  await t.test("keeps a verified packet and preserves it on admission failure", async () => {
+    await mkdir(publicAssets);
+    await writeFile(join(publicAssets, "fixture.txt"), "synthetic Hono asset");
+    const packet = join(scratch, "complete");
+    await pack(packet);
+    const manifestDigest = sha256(await readFile(join(packet, "manifest.json")));
+    const pin = { ...context, digest: manifestDigest };
+    const fixtureInputs = await sourceInputs(repo);
+    await verifyPackage(packet, pin, fixtureInputs);
+
+    await assert.rejects(pack(packet), { code: "EEXIST", path: packet, syscall: "mkdir" });
+    await verifyPackage(packet, pin, fixtureInputs);
+  });
+});
+
 test("cutover ledger admits exactly 1033 or 1037 and exact version readiness", () => {
   const prefixes = ledgerPrefixes(ledgerJournal);
   assert.throws(
@@ -527,6 +665,118 @@ test("cutover ledger admits exactly 1033 or 1037 and exact version readiness", (
       /canonical/,
     );
   }
+});
+
+test("isolated Worker settings and deletion readback uses bounded offline streams", async (t) => {
+  const account = "a".repeat(32);
+  const token = "synthetic";
+  const script = "scripts/synthetic-worker";
+  const settings = `${script}/settings`;
+  const base = `https://api.cloudflare.com/client/v4/accounts/${account}/workers/`;
+  const limit = 1024 * 1024;
+  const result = { bindings: [{ name: "FIXTURE", type: "plain_text", text: "Épreuve" }] };
+  const encode = (value) => new TextEncoder().encode(JSON.stringify(value));
+  const envelope = encode({ success: true, result });
+  const split = envelope.indexOf(0xc3) + 1;
+  const chunks = [envelope.subarray(0, split), envelope.subarray(split)];
+  const padding = new Uint8Array(limit - envelope.byteLength).fill(32);
+  const fixture = (chunks, status = 200) => {
+    let pulls = 0;
+    let cancelled = false;
+    const body = new ReadableStream(
+      {
+        pull(controller) {
+          const chunk = chunks[pulls++];
+          if (chunk) controller.enqueue(chunk);
+          else controller.close();
+        },
+        cancel() {
+          cancelled = true;
+          // A stalled cancellation must never delay a verdict.
+          return new Promise(() => {});
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    return {
+      response: new Response(body, { status }),
+      state: () => ({ pulls, cancelled, locked: body.locked }),
+    };
+  };
+  const offlineApi = (method, path, respond) =>
+    cloudflare({
+      account,
+      token,
+      fetchImpl: async (url, options) => {
+        assert.equal(url, `${base}${path}`);
+        assert.equal(options.method, method);
+        assert.equal(options.headers.Authorization, `Bearer ${token}`);
+        assert.equal(options.redirect, "error");
+        assert.ok(options.signal instanceof AbortSignal);
+        return respond(options.signal);
+      },
+    });
+
+  const timeout = t.mock.method(AbortSignal, "timeout");
+  const existing = fixture([...chunks, padding]);
+  assert.deepEqual(await offlineApi("GET", settings, () => existing.response)(settings), result);
+  const deleted = fixture([encode({ success: true, result: null })]);
+  assert.equal(await offlineApi("DELETE", script, () => deleted.response)(script, "DELETE"), null);
+
+  for (const [method, path] of [
+    ["DELETE", script],
+    ["GET", settings],
+  ]) {
+    const request = (respond) => offlineApi(method, path, respond)(path, method);
+    const oversized = fixture([...chunks, padding, Uint8Array.of(32)]);
+    await assert.rejects(
+      request(() => oversized.response),
+      {
+        message: "staging Workers API response too large",
+      },
+    );
+    assert.deepEqual(oversized.state(), { pulls: 4, cancelled: true, locked: false });
+
+    const missing = fixture([], 404);
+    assert.equal(await request(() => missing.response), null);
+    assert.deepEqual(missing.state(), { pulls: 0, cancelled: true, locked: false });
+
+    const refused = fixture([], 502);
+    for (const [response, message] of [
+      [fixture([]).response, "staging Workers API response was not valid JSON"],
+      [
+        fixture([new TextEncoder().encode("synthetic private response")]).response,
+        "staging Workers API response was not valid JSON",
+      ],
+      [fixture([Uint8Array.of(0xff)]).response, "staging Workers API response could not be read"],
+      [refused.response, "staging Workers API refused the request"],
+      [
+        fixture([encode({ success: "synthetic private response" })]).response,
+        "staging Workers API returned an error",
+      ],
+    ]) {
+      await assert.rejects(
+        request(() => response),
+        { message },
+      );
+    }
+    assert.deepEqual(refused.state(), { pulls: 0, cancelled: true, locked: false });
+    await assert.rejects(
+      request(() => {
+        throw new Error("synthetic private transport error");
+      }),
+      { message: "staging Workers API request failed" },
+    );
+  }
+  assert.deepEqual(existing.state(), { pulls: 4, cancelled: false, locked: false });
+  assert.deepEqual(deleted.state(), { pulls: 2, cancelled: false, locked: false });
+
+  const missingResult = fixture([encode({ success: true, result: null })]);
+  await assert.rejects(offlineApi("GET", settings, () => missingResult.response)(settings), {
+    message: "staging Workers API returned invalid settings",
+  });
+  assert.ok(timeout.mock.calls.length > 0);
+  for (const call of timeout.mock.calls) assert.deepEqual(call.arguments, [10_000]);
 });
 
 test("isolated Workers API GET bounds and disposes provider responses", async (t) => {
@@ -670,116 +920,29 @@ test("isolated Workers API GET bounds and disposes provider responses", async (t
   );
 });
 
-test("isolated Worker settings and deletion readback uses bounded offline streams", async (t) => {
-  const account = "a".repeat(32);
-  const token = "synthetic";
-  const script = "scripts/synthetic-worker";
-  const settings = `${script}/settings`;
-  const base = `https://api.cloudflare.com/client/v4/accounts/${account}/workers/`;
-  const limit = 1024 * 1024;
-  const result = { bindings: [{ name: "FIXTURE", type: "plain_text", text: "Épreuve" }] };
-  const encode = (value) => new TextEncoder().encode(JSON.stringify(value));
-  const envelope = encode({ success: true, result });
-  const split = envelope.indexOf(0xc3) + 1;
-  const chunks = [envelope.subarray(0, split), envelope.subarray(split)];
-  const padding = new Uint8Array(limit - envelope.byteLength).fill(32);
-  const fixture = (chunks, status = 200) => {
-    let pulls = 0;
-    let cancelled = false;
-    const body = new ReadableStream(
-      {
-        pull(controller) {
-          const chunk = chunks[pulls++];
-          if (chunk) controller.enqueue(chunk);
-          else controller.close();
-        },
-        cancel() {
-          cancelled = true;
-          // A stalled cancellation must never delay a verdict.
-          return new Promise(() => {});
-        },
-      },
-      { highWaterMark: 0 },
-    );
-    return {
-      response: new Response(body, { status }),
-      state: () => ({ pulls, cancelled, locked: body.locked }),
-    };
-  };
-  const offlineApi = (method, path, respond) =>
-    cloudflare({
-      account,
-      token,
-      fetchImpl: async (url, options) => {
-        assert.equal(url, `${base}${path}`);
-        assert.equal(options.method, method);
-        assert.equal(options.headers.Authorization, `Bearer ${token}`);
-        assert.equal(options.redirect, "error");
-        assert.ok(options.signal instanceof AbortSignal);
-        return respond(options.signal);
-      },
-    });
-
-  const timeout = t.mock.method(AbortSignal, "timeout");
-  const existing = fixture([...chunks, padding]);
-  assert.deepEqual(await offlineApi("GET", settings, () => existing.response)(settings), result);
-  const deleted = fixture([encode({ success: true, result: null })]);
-  assert.equal(await offlineApi("DELETE", script, () => deleted.response)(script, "DELETE"), null);
-
-  for (const [method, path] of [
-    ["DELETE", script],
-    ["GET", settings],
-  ]) {
-    const request = (respond) => offlineApi(method, path, respond)(path, method);
-    const oversized = fixture([...chunks, padding, Uint8Array.of(32)]);
-    await assert.rejects(
-      request(() => oversized.response),
-      {
-        message: "staging Workers API response too large",
-      },
-    );
-    assert.deepEqual(oversized.state(), { pulls: 4, cancelled: true, locked: false });
-
-    const missing = fixture([], 404);
-    assert.equal(await request(() => missing.response), null);
-    assert.deepEqual(missing.state(), { pulls: 0, cancelled: true, locked: false });
-
-    const refused = fixture([], 502);
-    for (const [response, message] of [
-      [fixture([]).response, "staging Workers API response was not valid JSON"],
-      [
-        fixture([new TextEncoder().encode("synthetic private response")]).response,
-        "staging Workers API response was not valid JSON",
-      ],
-      [fixture([Uint8Array.of(0xff)]).response, "staging Workers API response could not be read"],
-      [refused.response, "staging Workers API refused the request"],
-      [
-        fixture([encode({ success: "synthetic private response" })]).response,
-        "staging Workers API returned an error",
-      ],
-    ]) {
-      await assert.rejects(
-        request(() => response),
-        { message },
-      );
-    }
-    assert.deepEqual(refused.state(), { pulls: 0, cancelled: true, locked: false });
-    await assert.rejects(
-      request(() => {
-        throw new Error("synthetic private transport error");
-      }),
-      { message: "staging Workers API request failed" },
-    );
-  }
-  assert.deepEqual(existing.state(), { pulls: 4, cancelled: false, locked: false });
-  assert.deepEqual(deleted.state(), { pulls: 2, cancelled: false, locked: false });
-
-  const missingResult = fixture([encode({ success: true, result: null })]);
-  await assert.rejects(offlineApi("GET", settings, () => missingResult.response)(settings), {
-    message: "staging Workers API returned invalid settings",
+test("isolated cutover counts routes only from the successful retry", async () => {
+  const origin = "https://cutover.example.invalid";
+  const prefixes = ledgerPrefixes(ledgerJournal);
+  const calls = [];
+  let retrying = false;
+  const routeCount = await verifyServed(origin, prefixes, identity, kit, "1037", "kit", {
+    probeReady: async () => {
+      calls.push("readiness");
+    },
+    probeRoutes: async (_origin, { onRoute }) => {
+      calls.push("smoke");
+      onRoute("/up", 0);
+      onRoute("/", retrying ? 0 : 1);
+      if (retrying) onRoute("/events", 0);
+      return retrying;
+    },
+    wait: async () => {
+      calls.push("wait");
+      retrying = true;
+    },
   });
-  assert.ok(timeout.mock.calls.length > 0);
-  for (const call of timeout.mock.calls) assert.deepEqual(call.arguments, [10_000]);
+  assert.equal(routeCount, 3);
+  assert.deepEqual(calls, ["readiness", "smoke", "wait", "readiness", "smoke"]);
 });
 
 test("isolated cutover repeats readiness and smoke when rollback is still propagating", async () => {
@@ -1106,6 +1269,107 @@ test("isolated database admission fixes the host, database, owner, and run scope
     login: "two_web_cutover_21_3_runtime",
   });
   assert.throws(() => fixtureNames("21", "03"));
+});
+
+test("isolated fixture setup preserves the setup error and refuses a failed control close", async (t) => {
+  const fixtureModule = new URL("./kit-cutover-database.mjs?close-test", import.meta.url).href;
+  const postgresModule = `data:text/javascript,${encodeURIComponent(`
+    export const clients = new Map();
+    export default function postgres(url) {
+      const name = new URL(url).pathname;
+      if (!clients.has(name)) throw new Error("Unexpected fixture connection");
+      return clients.get(name)();
+    }
+  `)}`;
+  const { clients } = await import(postgresModule);
+  const hooks = registerHooks({
+    resolve(specifier, context, nextResolve) {
+      if (specifier === "postgres" && context.parentURL === fixtureModule) {
+        return { url: postgresModule, shortCircuit: true };
+      }
+      return nextResolve(specifier, context);
+    },
+  });
+  const { createFixture, fixtureDatabase, fixtureNames } = await import(fixtureModule).finally(() =>
+    hooks.deregister(),
+  );
+  const host = "ep-fixture.us-east-2.aws.neon.tech";
+  const url = fixtureDatabase(
+    `postgresql://two_web_cutover_owner:synthetic@${host}/two_web_cutover`,
+    host,
+  );
+  const names = fixtureNames("21", "3");
+  const setupError = new Error("synthetic setup failure");
+  const closeError = new Error("synthetic close failure");
+  const controlSetup = ["control open", "ownership", "freshness", "claim", "revoke", "create"];
+  const allocation = [...controlSetup, "revoke", "login", "grant", "control close"];
+
+  for (const [scenario, stopAt, failedClose, expectedError, expectedCalls] of [
+    [
+      "control operation and close fail",
+      "control",
+      "control",
+      setupError,
+      [...controlSetup, "control close"],
+    ],
+    [
+      "owner operation and close fail",
+      "owner",
+      "owner",
+      setupError,
+      [...allocation, "owner open", "owner setup", "owner close"],
+    ],
+    ["control close alone fails", null, "control", closeError, allocation],
+  ]) {
+    await t.test(scenario, async () => {
+      const calls = [];
+      function connect(client) {
+        calls.push(`${client} open`);
+        async function execute([sql]) {
+          if (sql.startsWith("SELECT current_user")) {
+            calls.push("ownership");
+            return [{ owned: true }];
+          }
+          if (sql.startsWith("SELECT")) {
+            calls.push("freshness");
+            return [{ db: false, login: false }];
+          }
+          const operation = {
+            "REVOKE CONNECT ON DATABASE two_web_cutover FROM PUBLIC": "revoke",
+            "REVOKE CONNECT ON DATABASE": "revoke",
+            "CREATE DATABASE": "create",
+            "CREATE ROLE": "login",
+            "GRANT CONNECT ON DATABASE": "grant",
+          }[sql.trim()];
+          assert.ok(operation, "unexpected fixture operation");
+          calls.push(operation);
+          if (stopAt === "control" && operation === "create") throw setupError;
+        }
+        return Object.assign((query) => (typeof query === "string" ? query : execute(query)), {
+          unsafe: (query) => ({
+            async simple() {
+              assert.equal(client, "owner");
+              assert.ok(query);
+              calls.push("owner setup");
+              if (stopAt === "owner") throw setupError;
+            },
+          }),
+          async end(options) {
+            assert.deepEqual(options, { timeout: 0 });
+            calls.push(`${client} close`);
+            if (failedClose === client) throw closeError;
+          },
+        });
+      }
+      clients.set(url.pathname, () => connect("control"));
+      clients.set(`/${names.db}`, () => connect("owner"));
+      const claim = async () => {
+        calls.push("claim");
+      };
+      await assert.rejects(createFixture(url, names, claim), (error) => error === expectedError);
+      assert.deepEqual(calls, expectedCalls);
+    });
+  }
 });
 
 test("Ember fixture requires the exact 1033 starting prefix before recording 1037 proof", async (t) => {

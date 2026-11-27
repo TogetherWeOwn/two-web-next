@@ -48,6 +48,16 @@ async function exists(sql, { db, login }) {
   return row.db || row.login;
 }
 
+async function closeFailedSetup(sql, setupError) {
+  try {
+    await sql.end({ timeout: 0 });
+  } catch {
+    // The setup error takes precedence over a close failure.
+    throw setupError;
+  }
+  throw setupError;
+}
+
 export async function createFixture(url, names, claim) {
   const { db, login } = names;
   const control = connect(url);
@@ -65,9 +75,10 @@ export async function createFixture(url, names, claim) {
     await control`CREATE ROLE ${control(login)} LOGIN PASSWORD ${control.unsafe(`'${password}'`)}
       VALID UNTIL ${control.unsafe(`'${expiry}'`)}`;
     await control`GRANT CONNECT ON DATABASE ${control(db)} TO ${control(login)}`;
-  } finally {
-    await control.end({ timeout: 0 });
+  } catch (error) {
+    return closeFailedSetup(control, error);
   }
+  await control.end({ timeout: 0 });
   const ownerUrl = new URL(url);
   ownerUrl.pathname = `/${db}`;
   const owner = connect(ownerUrl);
@@ -83,8 +94,7 @@ export async function createFixture(url, names, claim) {
     await owner.unsafe(await readFile("docs/web-readiness-projection.sql", "utf8")).simple();
     return { owner, runtimeUrl };
   } catch (error) {
-    await owner.end({ timeout: 0 });
-    throw error;
+    return closeFailedSetup(owner, error);
   }
 }
 

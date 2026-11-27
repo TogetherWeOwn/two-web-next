@@ -178,6 +178,7 @@ export async function planServingIsolation(tx, identity, version, artifact, logi
   const { add, remove, after } = delta(before);
   return {
     identity,
+    servingRole: login,
     version,
     artifact,
     before: digest(JSON.stringify(before)),
@@ -199,6 +200,7 @@ function parsePlan(raw, hash) {
     "identity",
     "membership",
     "remove",
+    "servingRole",
     "version",
   ]);
   assert.ok(
@@ -250,6 +252,10 @@ export async function runServingIsolation(operation, end, env, options = {}) {
   assert.ok(["forward", "undo", "readback"].includes(operation) && approvedEnds.has(end));
   if (operation === "forward") assert.equal(end, originalEnd);
   const plan = parsePlan(env.PRODUCTION_DB_ISOLATION_PLAN, env.PRODUCTION_DB_ISOLATION_PLAN_SHA256);
+  assert.ok(
+    typeof plan.servingRole === "string" && plan.servingRole === login,
+    "Serving isolation plan belongs to a different serving role",
+  );
   const config = migrationConnectionConfig(
     { PRODUCTION_DATABASE_URL: env.PRODUCTION_DB_ISOLATION_DATABASE_URL },
     "production",

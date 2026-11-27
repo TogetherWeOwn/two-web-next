@@ -1,4 +1,5 @@
 import "./fixtures/staging-reservation-store.mjs";
+import "./fixtures/staging-lease-lifecycle.mjs";
 
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -7,7 +8,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { parse } from "yaml";
 import soakFixture from "../test/fixtures/staging-soak-receipt.json" with { type: "json" };
+import { stagingLane, stagingPlans } from "./fixtures/staging-reservation-workflow.mjs";
 import { isRedStagingRun } from "./resolve-promotion-sha.mjs";
 import {
   deploySmokeWasScoped,
@@ -48,6 +51,91 @@ const observe = (body, options = {}) =>
 
 test("candidate A survives deploy metadata B and workflow main tip C", () => {
   assert.equal(candidate(), A);
+});
+
+test("staging mutation entry requires a verified caller and a successful reservation decision", async () => {
+  const { assertStagingMutationAllowed } = await import("./staging-mutation-admission.mjs");
+  const verifiedCaller = { operation: "mutation", verifiedOwnerId: 42 };
+  const activeLease = {
+    sha: A,
+    allocationId: "11111111-1111-4111-8111-111111111111",
+    ownerId: 42,
+    issuedAt: "2026-11-01T10:30:00.000Z",
+    expiresAt: "2026-11-01T11:30:00.000Z",
+  };
+  const instrument = (readLease, decide, caller = verifiedCaller) => {
+    const effects = [];
+    const enter = async () => {
+      await assertStagingMutationAllowed({
+        verifiedCaller: caller,
+        reservationStore: {
+          async readLease() {
+            effects.push("read");
+            return readLease();
+          },
+        },
+        now: () => now,
+        canAdmitStagingOperation(record, context) {
+          effects.push({ record, context });
+          return decide(record);
+        },
+      });
+      effects.push("proceed");
+    };
+    return { enter, effects };
+  };
+  const refusal = { message: "Staging mutation reservation check refused" };
+  const context = { ...verifiedCaller, nowMs: now };
+  const admittedOnlyWhenAbsent = (record) => record === null;
+
+  const present = instrument(() => activeLease, admittedOnlyWhenAbsent);
+  await assert.rejects(present.enter, refusal);
+  assert.deepEqual(present.effects, ["read", { record: activeLease, context }]);
+
+  const unreadable = instrument(() => {
+    throw new Error("Synthetic store failure");
+  }, admittedOnlyWhenAbsent);
+  await assert.rejects(unreadable.enter, refusal);
+  assert.deepEqual(unreadable.effects, ["read"]);
+
+  const incomplete = instrument(
+    () => undefined,
+    () => true,
+  );
+  await assert.rejects(incomplete.enter, refusal);
+  assert.deepEqual(incomplete.effects, ["read"]);
+
+  for (const caller of [
+    null,
+    {},
+    { operation: "mutation" },
+    { operation: "mutation", verifiedOwnerId: "42" },
+    { operation: "mutation", verifiedOwnerId: 0 },
+    { operation: "e2e", verifiedOwnerId: 42 },
+  ]) {
+    const unverified = instrument(() => null, admittedOnlyWhenAbsent, caller);
+    await assert.rejects(unverified.enter, refusal);
+    assert.deepEqual(unverified.effects, []);
+  }
+
+  const ambiguous = instrument(
+    () => null,
+    () => "allow",
+  );
+  await assert.rejects(ambiguous.enter, refusal);
+  assert.deepEqual(ambiguous.effects, ["read", { record: null, context }]);
+
+  const absent = instrument(() => null, admittedOnlyWhenAbsent);
+  await absent.enter();
+  assert.deepEqual(absent.effects, ["read", { record: null, context }, "proceed"]);
+
+  const expiredLease = { ...activeLease, expiresAt: new Date(now).toISOString() };
+  const expired = instrument(
+    () => expiredLease,
+    () => true,
+  );
+  await expired.enter();
+  assert.deepEqual(expired.effects, ["read", { record: expiredLease, context }, "proceed"]);
 });
 
 test("staging receipts follow the served candidate through an out-of-order main advance and refuse disagreement", async () => {
@@ -140,6 +228,8 @@ test("staging receipts follow the served candidate through an out-of-order main 
   assert.ok(matched.includes(`actions/runs/200/attempts/1), workflow head \`${B}\``));
   assert.match(matched, /actions\/runs\/300\/attempts\/1/);
   assert.match(matched, /Pending successful qualification and 30-minute soak/);
+  assert.match(matched, /^- Identity receipt matched at observation$/m);
+  assert.match(matched, /Production checks run history separately\.$/m);
   assert.doesNotMatch(matched, /private response/);
 
   const disagreement = await e2e({}, fetchOrigins(B, A));
@@ -156,11 +246,28 @@ test("staging receipts follow the served candidate through an out-of-order main 
   assert.doesNotMatch(malformed, /private response/);
   assert.match(malformed, /Identity receipt refused/);
 
-  assert.match(await e2e({ STAGING_SKIP_E2E: "true" }, fetchOrigins(A, A)), /scope-skipped/);
+  const skipped = await e2e({ STAGING_SKIP_E2E: "true" }, fetchOrigins(A, A));
+  assert.match(skipped, /scope-skipped/);
+  assert.match(skipped, /^- Identity receipt matched at observation$/m);
+  assert.match(
+    skipped,
+    /^- \*\*Soak eligibility\*\* This E2E run is ineligible \(journeys scope-skipped\)$/m,
+  );
+  assert.doesNotMatch(skipped, /Pending successful qualification/);
   assert.match(
     await e2e({ GITHUB_RUN_ATTEMPT: "2" }, fetchOrigins(A, A)),
     /rerun disqualifies the commit and blocks candidates with older runs/,
   );
+  const skippedRerun = await e2e(
+    { GITHUB_RUN_ATTEMPT: "2", STAGING_SKIP_E2E: "true" },
+    fetchOrigins(A, A),
+  );
+  assert.match(skippedRerun, /^- Identity receipt matched at observation$/m);
+  assert.match(
+    skippedRerun,
+    /^- \*\*Soak eligibility\*\* This E2E rerun disqualifies the commit and blocks candidates with older runs$/m,
+  );
+  assert.doesNotMatch(skippedRerun, /journeys scope-skipped|Pending successful qualification/);
   const refused = await e2e({ STAGING_CANDIDATE: C, expectedProbes: [] }, fetchOrigins(C, C));
   assert.match(refused, /Candidate source unavailable/);
   assert.match(refused, /Identity receipt refused \(no observation\)/);
@@ -839,10 +946,212 @@ test("every shared staging lock preserves pending runs instead of replacing them
         /^( *)concurrency:\n\1  group: (.+)\n\1  cancel-in-progress: (.+)\n\1  queue: (.+)$/gm,
       ),
     ];
-    const staging = blocks.filter((block) => block[2].includes("deploy-staging"));
+    const staging = blocks.filter((block) => block[2].includes(stagingLane.group));
     assert.equal(staging.length, 1, `${name} must queue its shared staging entry`);
-    assert.equal(staging[0][3], "false", `${name} must not cancel an active mutation`);
-    assert.equal(staging[0][4], "max", `${name} must not evict a pending deployment`);
+    assert.equal(
+      staging[0][3],
+      String(stagingLane["cancel-in-progress"]),
+      `${name} must not cancel an active mutation`,
+    );
+    assert.equal(staging[0][4], stagingLane.queue, `${name} must not evict a pending deployment`);
+  }
+});
+
+test("staging reservation workflow admits qualifying E2E and gates queued mutations", () => {
+  const workflow = (name) =>
+    parse(readFileSync(new URL(`../.github/workflows/${name}.yml`, import.meta.url), "utf8"));
+  const deploy = workflow("deploy").jobs["deploy-staging"];
+  const rollback = workflow("rollback-production");
+  const rollbackJob = rollback.jobs["rollback-production"];
+  const drill = workflow("staging-rollback-drill");
+  const e2e = workflow("e2e-staging");
+  assert.deepEqual(deploy.concurrency, stagingLane);
+  assert.ok(deploy.steps.some((step) => step.run === "node ci/db-migrate.mjs apply"));
+  assert.ok(rollback.on.workflow_dispatch.inputs.environment.options.includes("staging"));
+  assert.match(rollbackJob.concurrency.group, /\|\| 'deploy-staging'/);
+  assert.match(rollback.concurrency.group, /staging-drill-call-\{0\}/);
+  assert.match(rollbackJob.concurrency.group, /staging-drill-leg-\{0\}/);
+  assert.ok(rollbackJob.steps.some((step) => step.id === "rollback"));
+  assert.match(drill.concurrency.group, /&& 'deploy-staging'/);
+  assert.ok(drill.jobs.plan.steps.some((step) => step.id === "versions"));
+  assert.equal(drill.jobs.rollback.needs, "plan");
+  // Require the default success() gate for rollback. Restore can follow a
+  // failed rollback, but still requires successful admission in plan.
+  assert.equal(drill.jobs.rollback.if, undefined);
+  assert.deepEqual(drill.jobs.restore.needs, ["plan", "rollback"]);
+  assert.equal(drill.jobs.restore.if, "${{ !cancelled() && needs.plan.result == 'success' }}");
+  for (const leg of [drill.jobs.rollback, drill.jobs.restore]) {
+    assert.match(leg.uses, /\/rollback-production\.yml@[a-f0-9]{40}$/);
+    assert.equal(leg.with.environment, "staging");
+  }
+  assert.match(e2e.concurrency.group, /&& 'deploy-staging'/);
+  const e2eSteps = e2e.jobs["staging-journeys"].steps;
+  const identityIndex = e2eSteps.findIndex((step) => step.id === "identity-before");
+  assert.ok(
+    identityIndex >= 0 &&
+      identityIndex < e2eSteps.findIndex((step) => step.run === "npm run e2e:staging"),
+  );
+
+  const allocation = (sha, number) => ({
+    sha,
+    allocationId: `00000000-0000-4000-8000-${String(number).padStart(12, "0")}`,
+  });
+  const candidate = allocation(A, 1);
+  const ownerId = 123;
+  const record = {
+    ...candidate,
+    ownerId,
+    issuedAt: "2026-11-01T10:00:00Z",
+    expiresAt: "2026-11-01T10:45:00Z",
+  };
+  const active = {
+    record,
+    nowMs: Date.parse("2026-11-01T10:10:00Z"),
+    e2eSha: A,
+    answers: { mutation: false, e2e: true },
+  };
+  const otherCandidate = { ...active, e2eSha: B, answers: { mutation: false, e2e: false } };
+  const soakFloor = Date.parse("2026-11-01T10:40:00Z");
+  const beforeFloor = { ...active, nowMs: soakFloor - 1000 };
+  const expiry = {
+    ...active,
+    nowMs: Date.parse(record.expiresAt),
+    answers: { mutation: true, e2e: true },
+  };
+  const release = { ...expiry, record: null, nowMs: soakFloor };
+  // A failed read is neither an expiry verdict nor a verified release.
+  const unavailable = { record: undefined };
+  const mutationEffects = {
+    deploy: ["apply-migrations", "replace-allocation"],
+    rollback: ["rollback-worker"],
+    drill: ["record-versions", "rollback-worker", "restore-worker"],
+  };
+
+  for (const next of [expiry, release]) {
+    let snapshot = { ...release, nowMs: Date.parse("2026-11-01T09:59:00Z") };
+    let live = candidate;
+    let allocationNumber = 1;
+    const pending = [];
+    const effects = [];
+    const reads = [];
+    function readReservation() {
+      reads.push(snapshot.record);
+      if (snapshot === unavailable) throw new Error("staging reservation unavailable");
+      return { record: snapshot.record, nowMs: snapshot.nowMs, verifiedOwnerId: ownerId };
+    }
+    // Return canned verdicts through the admission interface. The real
+    // predicate owns record validation and expiry/identity comparisons.
+    function canAdmitStagingOperation(
+      record,
+      { operation, nowMs, verifiedOwnerId, observed, e2eSha },
+    ) {
+      assert.equal(record, snapshot.record);
+      assert.equal(nowMs, snapshot.nowMs);
+      assert.equal(verifiedOwnerId, ownerId);
+      if (operation === "e2e") {
+        assert.deepEqual(observed, candidate);
+        assert.equal(e2eSha, snapshot.e2eSha);
+      }
+      return snapshot.answers[operation];
+    }
+    function runNext() {
+      const { path, sha } = pending.shift();
+      let observed;
+      let restoreSha;
+      for (const step of stagingPlans[path]) {
+        switch (step) {
+          case "observe-allocation":
+            observed = live;
+            break;
+          case "check-mutation":
+          case "check-e2e": {
+            const { record, ...context } = readReservation();
+            const operation = step === "check-e2e" ? "e2e" : "mutation";
+            const allowed = canAdmitStagingOperation(record, {
+              operation,
+              ...context,
+              observed,
+              e2eSha: operation === "e2e" ? sha : undefined,
+            });
+            if (allowed !== true) throw new Error("staging reservation denied");
+            break;
+          }
+          case "record-versions":
+            restoreSha = live.sha;
+            // Record the read-only plan effect to prove it also needs admission.
+            effects.push(step);
+            break;
+          case "replace-allocation":
+          case "rollback-worker":
+            live = allocation(sha, ++allocationNumber);
+            effects.push(step);
+            break;
+          case "restore-worker":
+            assert.ok(restoreSha);
+            live = allocation(restoreSha, ++allocationNumber);
+            effects.push(step);
+            break;
+          case "apply-migrations":
+          case "run-journeys":
+            effects.push(step);
+            break;
+          default:
+            assert.fail(`Unexpected offline step ${step}`);
+        }
+      }
+    }
+
+    const mutations = [
+      { path: "deploy", sha: B },
+      { path: "rollback", sha: C },
+      { path: "drill", sha: B },
+    ];
+    function rejectMutations(reason) {
+      for (const { path } of mutations) {
+        assert.throws(runNext, { message: `staging reservation ${reason}` }, path);
+      }
+      assert.deepEqual(live, candidate);
+    }
+
+    // Work queued before the lease must read the active lease when admitted.
+    pending.push(...mutations, { path: "e2e", sha: A });
+    assert.deepEqual(reads, []);
+    snapshot = active;
+    rejectMutations("denied");
+    assert.deepEqual(effects, []);
+    runNext();
+    assert.deepEqual(effects, ["run-journeys"]);
+
+    pending.push({ path: "e2e", sha: B });
+    snapshot = otherCandidate;
+    assert.throws(runNext, { message: "staging reservation denied" });
+    assert.deepEqual(effects, ["run-journeys"]);
+
+    // Even after E2E releases the workflow lane, the lease protects the soak.
+    for (const [phase, reason] of [
+      [beforeFloor, "denied"],
+      [unavailable, "unavailable"],
+    ]) {
+      pending.push(...mutations);
+      snapshot = phase;
+      rejectMutations(reason);
+      assert.deepEqual(effects, ["run-journeys"]);
+    }
+    assert.deepEqual(reads.slice(0, 8), Array(8).fill(record));
+    assert.deepEqual(reads.slice(8), [undefined, undefined, undefined]);
+
+    pending.push({ path: "e2e", sha: A }, ...mutations);
+    snapshot = next;
+    runNext();
+    assert.deepEqual(effects, ["run-journeys", "run-journeys"]);
+    for (const { path } of mutations) {
+      const before = effects.length;
+      runNext();
+      assert.deepEqual(effects.slice(before), mutationEffects[path]);
+    }
+    assert.deepEqual(live, allocation(C, 5));
+    assert.deepEqual(reads.slice(-4), Array(4).fill(next.record));
+    assert.deepEqual(pending, []);
   }
 });
 
