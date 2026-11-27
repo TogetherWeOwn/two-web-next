@@ -24,10 +24,13 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
+import { defaultTreeAdapter, type DefaultTreeAdapterMap, parse } from "parse5";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { isFeedPath, negotiateKitError, type KitErrorStatus } from "../src/kit-errors";
 import { safeRequestId } from "../src/request-log";
 import { dispatchHookRequest, type HookEventLike } from "../src/route-ownership";
+import { attr, elements, textOf } from "./helpers/kit-edit-controls";
+import { decodedOutput } from "./helpers/refused-edit-roster";
 
 const APP_URL = "https://next.example.test";
 const HOST = "next.example.test";
@@ -35,6 +38,7 @@ const INVITE = "https://discord.gg/fixture-invite";
 const RAY = "0123456789abcdef-LHR";
 const ULID = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
 const ULID_SAMPLE = "01ARYZ6S41AAAAAAAAAAAAAAAA";
+const HTML_FIXTURE = "<html>kit</html>";
 const SECRETS = [
   "cookie-secret",
   "bearer-secret",
@@ -51,7 +55,7 @@ const HOSTILE_RAYS = [
 ];
 
 const CORRELATED: KitErrorStatus[] = [403, 429, 500, 503];
-const ALL_STATUSES: KitErrorStatus[] = [400, 404, 403, 410, 429, 500, 503];
+const ALL_STATUSES: KitErrorStatus[] = [400, 404, 403, 410, 422, 429, 500, 503];
 
 const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
 const { compile } = webRequire("svelte/compiler") as {
@@ -129,12 +133,37 @@ export function renderErrorShell(code, extra) {
   rmSync(scratch, { recursive: true, force: true });
 }, 120000);
 
-function referenceOf(html: string): string | null {
-  return html.match(/data-testid="error-support-reference">([^<]*)<\/code>/)?.[1] ?? null;
+type ParsedPage = DefaultTreeAdapterMap["document"];
+
+function supportReferences(page: ParsedPage) {
+  return elements(page).filter(
+    (element) => attr(element, "data-testid") === "error-support-reference",
+  );
+}
+
+function referenceOf(page: ParsedPage): string | null {
+  const references = supportReferences(page);
+  const code = references[0];
+  return references.length === 1 &&
+    code?.tagName === "code" &&
+    code.childNodes.every(defaultTreeAdapter.isTextNode)
+    ? textOf(code)
+    : null;
+}
+
+function recoveryLinks(page: ParsedPage) {
+  return elements(page)
+    .filter((element) => element.tagName === "a" && Boolean(attr(element, "href")))
+    .map((link) => attr(link, "data-testid"));
 }
 
 function assertNoLeak(html: string) {
-  for (const secret of SECRETS) expect(html).not.toContain(secret);
+  const output = decodedOutput(html);
+  // The response can carry private data in bytes the parser discards.
+  for (const marker of SECRETS) {
+    expect(html).not.toContain(marker);
+    expect(output).not.toContain(marker);
+  }
 }
 
 // A generated id is a valid ULID the production validator admits. Asserts
@@ -207,7 +236,7 @@ async function dispatchKit(
   headers: Record<string, string>,
   status: number,
   contentType = "text/html",
-  body = "<html>kit</html>",
+  body = HTML_FIXTURE,
 ) {
   const request = kitRequest(path, headers);
   const url = new URL(request.url);
@@ -251,18 +280,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("Kit error shell support-reference markup", () => {
-  it("ErrorShell carries the Hono support-reference block, rendered only when a reference exists", () => {
+describe("Kit error shell source contracts", () => {
+  it("ErrorShell keeps recovery independent of session, database, and network reads", () => {
     const shell = read("web/src/lib/ErrorShell.svelte");
-    // Hono conventions (src/error-pages.tsx SupportReference): the paragraph
-    // class, the visible copy, and the code element carrying the testid.
-    expect(shell).toContain("error-support-reference");
-    expect(shell).toContain("Support reference");
-    expect(shell).toContain("support-reference");
-    expect(shell).toContain("<code");
-    // Blank-safe by construction: without a reference the block renders nothing.
-    expect(shell).toMatch(/\{#if[\s\S]*error-support-reference/);
-    // Recovery still offers itself with no session, DB or network reads.
     expect(shell).not.toMatch(/dbFor|getSignedCookie|readSession|fetch\(/);
     expect(shell).not.toContain("{@html");
   });
@@ -286,32 +306,63 @@ describe("Kit error shell support-reference markup", () => {
 describe("Kit error shell rendered reference", () => {
   it.each(CORRELATED)("%i shell shows the admitted reference in Hono conventions", (code) => {
     const html = renderErrorShell(code, { [referenceProp]: RAY });
-    expect(referenceOf(html)).toBe(RAY);
-    expect(html).toContain("Support reference");
-    expect(html).toContain('class="support-reference"');
-    expect(html).toContain('data-testid="error-invite"');
-    expect(html).toContain(code === 503 ? 'data-testid="error-retry"' : 'data-testid="error-home"');
+    const page = parse(html);
+    expect(referenceOf(page)).toBe(RAY);
+    const parent = supportReferences(page)[0]?.parentNode;
+    expect(parent && textOf(parent).trim().replace(/\s+/g, " ")).toBe(`Support reference: ${RAY}`);
+    expect(parent?.nodeName).toBe("p");
+    expect(
+      parent &&
+        defaultTreeAdapter.isElementNode(parent) &&
+        attr(parent, "class")?.split(/[\t\n\f\r ]+/),
+    ).toContain("support-reference");
+    const links = recoveryLinks(page);
+    expect(links).toContain("error-invite");
+    expect(links).toContain(code === 503 ? "error-retry" : "error-home");
     expect(html).not.toContain("undefined");
+    expect(decodedOutput(html)).not.toContain("undefined");
     assertNoLeak(html);
   });
 
   it("renders a generated ULID reference verbatim", () => {
     expect(ULID_SAMPLE).toMatch(ULID);
     const html = renderErrorShell(500, { [referenceProp]: ULID_SAMPLE });
-    expect(referenceOf(html)).toBe(ULID_SAMPLE);
+    expect(referenceOf(parse(html))).toBe(ULID_SAMPLE);
     assertNoLeak(html);
+  });
+
+  it("renders markup-like references as literal code text", () => {
+    const reference = '<b data-testid="fixture-marker">literal</b>';
+    const html = renderErrorShell(500, { [referenceProp]: reference });
+    expect(referenceOf(parse(html))).toBe(reference);
   });
 
   it("omits the reference block blank-safe when no id exists", () => {
     // Presence first: without the feature this whole contract is unmet.
-    expect(referenceOf(renderErrorShell(500, { [referenceProp]: RAY }))).toBe(RAY);
+    expect(referenceOf(parse(renderErrorShell(500, { [referenceProp]: RAY })))).toBe(RAY);
     for (const code of ALL_STATUSES) {
       const html = renderErrorShell(code);
-      expect(html, `${code} omits the block`).not.toContain("error-support-reference");
-      expect(html, `${code} renders no placeholder`).not.toContain("undefined");
+      const page = parse(html);
+      expect(supportReferences(page), `${code} omits the block`).toEqual([]);
+      expect(
+        elements(page).filter((element) =>
+          attr(element, "class")
+            ?.split(/[\t\n\f\r ]+/)
+            .includes("support-reference"),
+        ),
+        `${code} omits the support-reference paragraph`,
+      ).toEqual([]);
+      // Inert template content and parser-discarded bytes also ship to the client.
+      const output = decodedOutput(html);
+      expect(html).not.toContain("error-support-reference");
+      expect(output).not.toContain("error-support-reference");
+      expect(html).not.toContain("undefined");
+      expect(output).not.toContain("undefined");
       assertNoLeak(html);
       // Recovery links stay offerable with no id.
-      expect(html, `${code} keeps recovery links`).toMatch(/data-testid="error-(home|retry|join)/);
+      expect(recoveryLinks(page), `${code} keeps recovery links`).toContain(
+        code === 503 ? "error-retry" : "error-home",
+      );
     }
   });
 });
@@ -340,7 +391,7 @@ describe("Kit dispatch x-request-id", () => {
     expect(header).not.toBe(ray);
     expectGeneratedRequestId(header);
     expect(exposedToRender(seen, header)).toBe(true);
-    expect(await res.text()).not.toContain(ray);
+    expect(await res.text()).toBe(HTML_FIXTURE);
   });
 
   it("ignores a forged client x-request-id", async () => {
@@ -358,7 +409,7 @@ describe("Kit dispatch x-request-id", () => {
     expect(header).toBe(RAY);
     expect(exposedToRender(seen, header)).toBe(true);
     // The served shell renders exactly this value (pinned above per status).
-    expect(referenceOf(renderErrorShell(code, { [referenceProp]: header! }))).toBe(header);
+    expect(referenceOf(parse(renderErrorShell(code, { [referenceProp]: header! })))).toBe(header);
   });
 
   it("Kit member-read responses carry x-request-id for admin pages", async () => {
@@ -457,7 +508,8 @@ describe("Kit error contracts unchanged", () => {
 
     // The HTML shell gains no JSON envelope: the reference stays page markup.
     const html = renderErrorShell(503, { [referenceProp]: RAY });
-    expect(referenceOf(html)).toBe(RAY);
+    expect(referenceOf(parse(html))).toBe(RAY);
     expect(html).not.toContain('"request_id"');
+    expect(decodedOutput(html)).not.toContain('"request_id"');
   });
 });

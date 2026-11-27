@@ -27,6 +27,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import AxeBuilder from "@axe-core/playwright";
 import { build } from "esbuild";
+import { parse } from "parse5";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 // @ts-expect-error Standalone CI helper has no declaration file (single-line import: wrapping would detach this from TS7016).
@@ -34,6 +35,8 @@ import { assertNoViolations as gateAssert, WCAG_AA_TAGS as gateTags } from "../c
 import { kitErrorCopy, type KitErrorStatus } from "../src/kit-errors";
 import { twoSurface } from "../vendor/design-kit/tokens";
 import { registerAdminReadRetryBrowserAcceptance } from "./helpers/admin-read-retry-browser-acceptance";
+import { attr, elements, textOf } from "./helpers/kit-edit-controls";
+import { createKitSsrRenderer } from "./helpers/kit-ssr-render";
 import { registerPastArchiveBrowserAcceptance } from "./helpers/past-archive-search-browser-acceptance";
 import { registerPastSearchContextAcceptance } from "./helpers/past-search-context-browser-acceptance";
 
@@ -130,6 +133,65 @@ type RenderErrorShell = (
   adminBack?: { href: string; label: string } | null,
 ) => { head: string; body: string };
 
+function withoutFetch<T>(render: () => T): T {
+  const fetchSpy = vi.fn(() => {
+    throw new Error("kit error shell fixtures must remain offline");
+  });
+  vi.stubGlobal("fetch", fetchSpy);
+  try {
+    const rendered = render();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    return rendered;
+  } finally {
+    vi.unstubAllGlobals();
+  }
+}
+
+describe("Kit error shell offline markup", () => {
+  let renderer: Awaited<ReturnType<typeof createKitSsrRenderer>>;
+
+  beforeAll(async () => {
+    renderer = await createKitSsrRenderer("web/src/lib/ErrorShell.svelte");
+  }, 120000);
+  afterAll(() => renderer?.cleanup());
+
+  for (const { code, links, searchForm } of CASES) {
+    it(`${code}: labels the section and renders recovery links in order`, () => {
+      const html = withoutFetch(() => renderer.renderPage({}, { code, inviteUrl: INVITE }));
+      const nodes = elements(parse(html));
+      const main = nodes.find((element) => element.tagName === "main");
+      expect(main).toBeDefined();
+      const section = main && elements(main).find((element) => element.tagName === "section");
+      const headings = nodes.filter((element) => /^h[1-6]$/.test(element.tagName));
+      expect(
+        headings.map((heading) => [heading.tagName, attr(heading, "id"), textOf(heading).trim()]),
+      ).toEqual([["h1", "error-heading", kitErrorCopy(code).title]]);
+      expect(section && attr(section, "aria-labelledby")).toBe("error-heading");
+
+      const content = section ? elements(section) : [];
+      const recoveryCode = content.find((element) =>
+        attr(element, "class")
+          ?.split(/[\t\n\f\r ]+/)
+          .includes("recovery-code"),
+      );
+      expect(recoveryCode && attr(recoveryCode, "aria-hidden")).toBe("true");
+      expect(recoveryCode && textOf(recoveryCode).trim()).toBe(String(code));
+      expect(
+        content
+          .filter((element) => element.tagName === "a")
+          .map((link) => ({
+            testid: attr(link, "data-testid"),
+            href: attr(link, "href"),
+            name: textOf(link).trim().replace(/\s+/g, " "),
+          })),
+      ).toEqual(links);
+      expect(
+        content.filter((element) => element.tagName === "form").map((form) => attr(form, "role")),
+      ).toEqual(searchForm ? ["search"] : []);
+    });
+  }
+});
+
 // Opt in with KIT_ERROR_SHELL_BROWSER_TESTS=true after installing Playwright
 // Chromium and the Kit workspace dependencies. The a11y CI job sets the
 // opt-in and verifies every case executed (ci/a11y-require-executed.mjs);
@@ -202,21 +264,14 @@ export function renderErrorShell(code, adminBack) {
       // exactly as the Kit build generates them; the unlayered canvas and
       // .base-theme token mapping in app.css ride along regardless.
       const candidates = new Set<string>();
-      for (const { code } of CASES) {
-        const { head, body } = renderErrorShell(code);
-        for (const match of `${head}\n${body}`.matchAll(/class="([^"]+)"/g)) {
-          for (const token of (match[1] ?? "").split(/\s+/).filter(Boolean)) {
-            candidates.add(token);
-          }
-        }
-      }
-      // The admin way-back markup renders outside CASES; fold one 429 render
-      // with it into the candidates so the compiled stylesheet covers the note
-      // and link exactly as the Kit build generates them.
-      {
-        const { head, body } = renderErrorShell(429, ADMIN_BACK);
-        for (const match of `${head}\n${body}`.matchAll(/class="([^"]+)"/g)) {
-          for (const token of (match[1] ?? "").split(/\s+/).filter(Boolean)) {
+      const renders = CASES.map(({ code }) => withoutFetch(() => renderErrorShell(code)));
+      // Include the admin way-back note and link in the compiled stylesheet.
+      renders.push(withoutFetch(() => renderErrorShell(429, ADMIN_BACK)));
+      for (const { head, body } of renders) {
+        for (const element of elements(parse(`<head>${head}</head><body>${body}</body>`))) {
+          for (const token of (attr(element, "class") ?? "")
+            .split(/[\t\n\f\r ]+/)
+            .filter(Boolean)) {
             candidates.add(token);
           }
         }
@@ -246,19 +301,7 @@ export function renderErrorShell(code, adminBack) {
       code: KitErrorStatus,
       adminBack?: { href: string; label: string } | null,
     ): Promise<void> {
-      // The shell offers recovery with no session, DB or network reads: rendering
-      // must succeed with fetch refusing every call, and never invoke it.
-      const fetchSpy = vi.fn(() => {
-        throw new Error("kit error shell fixtures must remain offline");
-      });
-      vi.stubGlobal("fetch", fetchSpy);
-      let rendered: { head: string; body: string };
-      try {
-        rendered = renderErrorShell(code, adminBack);
-      } finally {
-        vi.unstubAllGlobals();
-      }
-      expect(fetchSpy).not.toHaveBeenCalled();
+      const rendered = withoutFetch(() => renderErrorShell(code, adminBack));
       await page.setContent(
         `<!doctype html><html lang="en"><head><meta charset="utf-8" />` +
           `<meta name="viewport" content="width=device-width, initial-scale=1" />` +
