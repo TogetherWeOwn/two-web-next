@@ -158,7 +158,8 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   TypeScript `<script>` blocks in `web/src/**/*.svelte`. The Node tooling
   ratchet and the attendee-path check compare exact expressions and counts
   per file against the tested base commit. Removed comparisons fall out of
-  the baseline when merged. `npm run scan:fetch-await` runs these checks.
+  the baseline when merged. `npm run scan:fetch-await` includes tracked
+  files matched by ignore globs and treats inline suppressions as inert.
 
 ## Pull-request CI selection
 

@@ -25,7 +25,8 @@ function checkByteLengthRuleCoverage() {
     git("init", "--quiet");
     git("add", "--", nodePath);
     const base = git("write-tree").toString().trim();
-    writeFileSync(join(directory, nodePath), unsafe.repeat(2));
+    writeFileSync(join(directory, ".gitignore"), `${nodePath}\n`);
+    writeFileSync(join(directory, nodePath), `${unsafe}// ast-grep-ignore\n${unsafe}`);
     writeFileSync(join(directory, jsPath), unsafe);
     writeFileSync(
       join(directory, "ci/clean.mjs"),
@@ -34,7 +35,8 @@ function checkByteLengthRuleCoverage() {
     writeFileSync(join(directory, "public/generated.js"), unsafe);
     writeFileSync(
       join(directory, sveltePath),
-      `<script module>${unsafe}</script>\n<script lang="ts">
+      `<script module>// ast-grep-ignore
+      ${unsafe}</script>\n<script lang="ts">
         function authReturnHref() {
           const fits = (href: string) => new TextEncoder().encode(href).byteLength <= maxBytes;
           return fits(url);
@@ -46,7 +48,7 @@ function checkByteLengthRuleCoverage() {
       `<script>let total = left.byteLength;</script>\n<p>left.byteLength &gt; max</p>\n`,
     );
 
-    const findings = scanByteLengthComparisons(directory, "^no-raw-byte-length-comparison");
+    const findings = scanByteLengthComparisons(directory);
     assert.deepEqual([...new Set(findings.map(({ file }) => file))].sort(), [
       nodePath,
       jsPath,
@@ -55,22 +57,18 @@ function checkByteLengthRuleCoverage() {
     assert.ok(
       findings.some(({ file, language }) => file === sveltePath && language === "JavaScript"),
     );
-    assert.deepEqual(
-      addedByteLengthComparisons(
-        directory,
-        base,
-        findings.filter(({ ruleId }) => ruleId.endsWith("-ratchet")),
-      ),
-      [
-        { file: nodePath, text: comparison, line: 2 },
-        { file: jsPath, text: comparison, line: 1 },
-        {
-          file: sveltePath,
-          text: "new TextEncoder().encode(href).byteLength <= maxBytes",
-          line: 5,
-        },
-      ],
-    );
+    assert.deepEqual(addedByteLengthComparisons(directory, base, findings), [
+      { file: nodePath, text: comparison, line: 3 },
+      { file: jsPath, text: comparison, line: 1 },
+      { file: sveltePath, text: comparison, line: 2 },
+      {
+        file: sveltePath,
+        text: "new TextEncoder().encode(href).byteLength <= maxBytes",
+        line: 6,
+      },
+    ]);
+    writeFileSync(join(directory, "ci/non-utf8.mjs"), Buffer.from([0xff]));
+    assert.throws(() => scanByteLengthComparisons(directory), /ci\/non-utf8\.mjs: invalid UTF-8/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -80,9 +78,21 @@ function checkByteLengthRuleCoverage() {
 const fixture = join("src", `ast-grep-warning-selftest-${process.pid}.test.ts`);
 try {
   writeFileSync(fixture, "expect(true).toBe(true);\n");
-  const result = spawnSync("npx", ["-y", "--package", "@ast-grep/cli@0.50.0", "ast-grep", "scan"], {
-    encoding: "utf8",
-  });
+  const result = spawnSync(
+    "npx",
+    [
+      "-y",
+      "--package",
+      "@ast-grep/cli@0.50.0",
+      "ast-grep",
+      "scan",
+      "--filter",
+      "^ts-vacuous-literal-expect$",
+    ],
+    {
+      encoding: "utf8",
+    },
+  );
   const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
   if (result.error || result.status !== 0) {
     throw new Error(output || result.error?.message || "ast-grep scan exited non-zero");

@@ -7,7 +7,7 @@
 # docs/quality-gates.md. Rule fixtures live in sg-tests/.
 #
 # Run the project scan and Node baseline check with npm run scan:fetch-await.
-# Error-severity findings and Node baseline changes fail the CI check job.
+# The CI check job rejects error-severity findings and new Node comparisons.
 # Rule tests: npx -y --package @ast-grep/cli@0.50.0 ast-grep test
 ruleDirs:
   - sg-rules
