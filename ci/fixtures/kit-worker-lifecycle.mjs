@@ -16,6 +16,17 @@ export async function stopWorker(worker) {
   if (worker.stopped) worker.reportPhase?.("stop", "complete");
 }
 
+export async function stopCompletedWorkers(workers, keep) {
+  const completed = workers.filter((worker) => !worker.stopped && !keep.includes(worker));
+  await Promise.all(completed.map(stopWorker));
+  const running = completed.filter(({ stopped }) => !stopped);
+  assert.equal(
+    running.length,
+    0,
+    `Workers did not stop: ${running.map(({ name }) => name).join(", ")}`,
+  );
+}
+
 export async function cleanUpWorkers(workers, scratch, failed) {
   await Promise.all(workers.map(stopWorker));
   // Redact output for all rollback attempts, including collisions retried without markers.

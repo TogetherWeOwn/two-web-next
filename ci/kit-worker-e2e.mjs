@@ -34,6 +34,7 @@ import { assertResponseContracts } from "./fixtures/kit-response-contracts.mjs";
 import { assertStaticFeedParity } from "./fixtures/kit-static-feed-parity.mjs";
 import {
   cleanUpWorkers,
+  stopCompletedWorkers,
   stopWorker,
   withPublicVoiceBrowserWorkers,
   withWorkerCleanup,
@@ -162,6 +163,17 @@ async function launchWorker(
     },
   };
   await writeFile(config, JSON.stringify(configBody));
+  if (args.length && process.platform === "linux") {
+    const meminfo = await readFile("/proc/meminfo", "utf8").catch((error) => {
+      console.warn(`Could not sample runner memory (${error.code})`);
+      return "";
+    });
+    const availableKiB = /^MemAvailable:\s+(\d+)\s+kB$/m.exec(meminfo)?.[1] ?? "unknown";
+    const activeWorkers = workers.filter(({ stopped }) => !stopped).length;
+    console.log(
+      `Before ${name}: active Wrangler Workers=${activeWorkers}, MemAvailableKiB=${availableKiB}`,
+    );
+  }
   startup.signal.throwIfAborted();
   if (args.length) console.log(`Launching loopback ${name} Worker`);
   return spawn(
@@ -483,6 +495,8 @@ export default agentEventsFixtureWorker(inner, ${JSON.stringify(agentProbePath)}
 
     await runInstalledLive();
   }
+  // Only the base Kit and Hono Workers serve the remaining document probes.
+  await stopCompletedWorkers(workers, [kit, hono]);
 
   const archive = await fetch(`${origin}/events/past`);
   const archiveHtml = await archive.text();
@@ -1165,6 +1179,7 @@ export default {
     });
     console.log("PASS installed Worker preserves Kit-owned data redirects");
   }
+  await stopCompletedWorkers(workers, [kit, hono, kitWithSession, honoWithSession]);
 
   // GET and HEAD, with and without a query, across slash variants. /members/
   // and /up/ are non-page paths; the rest are enabled page variants.
@@ -1294,6 +1309,7 @@ export default {
     assert.equal(result.headers["x-two-renderer"], undefined, `${label}: Hono owns the response`);
   }
   console.log("PASS generated Worker reserved method/path parity with API families off");
+  await stopCompletedWorkers(workers, [kitWithSession, honoWithSession]);
 
   async function startKit(name, vars, entry = worker) {
     const instance = await startWorker(name, entry, assets, secret, vars);
@@ -1344,6 +1360,7 @@ export default {
     publicApiOn,
     databaseUrl,
   });
+  await stopCompletedWorkers(workers, [kitWithSession, honoWithSession, feedOn]);
 
   await assertStaticFeedParity({
     hono: honoWithSession,
@@ -1404,6 +1421,7 @@ export default {
       return { appUrl, direct, enabled };
     },
   });
+  await stopCompletedWorkers(workers, [kitWithSession]);
 
   const authEntry = join(scratch, "kit-auth.mjs");
   const authFixture = fileURLToPath(new URL("./fixtures/kit-auth-worker.mjs", import.meta.url));

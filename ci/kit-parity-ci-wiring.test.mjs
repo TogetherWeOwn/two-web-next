@@ -9,6 +9,7 @@ import {
   normalizeKitViewerRow,
 } from "../e2e/kit-parity/member-board-viewer-row.mjs";
 import {
+  stopCompletedWorkers,
   withPublicVoiceBrowserWorkers,
   withWorkerCleanup,
 } from "./fixtures/kit-worker-lifecycle.mjs";
@@ -19,6 +20,42 @@ const repo = fileURLToPath(new URL("../", import.meta.url));
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const job = workflow.split("\n  check:\n")[1]?.split(/\n  [\w-]+:\n/)[0] ?? "";
 const e2eWorkflow = readFileSync(new URL("../.github/workflows/e2e.yml", import.meta.url), "utf8");
+
+test("fixture boundaries await closure of completed Workers and retain shared Workers", async () => {
+  const signals = [];
+  function fixture(name, stopped = false) {
+    const { promise, resolve } = Promise.withResolvers();
+    const worker = {
+      name,
+      stopped,
+      closed: promise,
+      child: {
+        kill(signal) {
+          signals.push([name, signal]);
+          setImmediate(() => {
+            worker.stopped = true;
+            resolve();
+          });
+        },
+      },
+    };
+    if (stopped) resolve();
+    return worker;
+  }
+  const shared = fixture("shared");
+  const completed = fixture("completed");
+  const closed = fixture("closed", true);
+  const workers = [shared, completed, closed];
+  await stopCompletedWorkers(workers, [shared]);
+  assert.deepEqual(signals, [["completed", "SIGTERM"]]);
+  assert.equal(completed.stopped, true);
+  assert.equal(shared.stopped, false);
+  assert.deepEqual(
+    workers,
+    [shared, completed, closed],
+    "retain Worker records for final cleanup",
+  );
+});
 
 test("public voice browser Worker lifecycle", async (t) => {
   const ready = ["start off", "ready off", "start enabled", "ready enabled"];
