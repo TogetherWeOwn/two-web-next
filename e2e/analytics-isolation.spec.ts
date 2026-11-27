@@ -1,3 +1,4 @@
+import type { IncomingHttpHeaders } from "node:http";
 import { expect, test } from "@playwright/test";
 import {
   compilePrivacyHistory,
@@ -120,4 +121,46 @@ test("staging rejects redirects, wrong jurisdiction, invalid UTF-8 and excess by
   await expect(parseAnalyticsResponse(invalidUtf8, "eu")).rejects.toThrow(TypeError);
   const oversized = response([chunk, chunk, Buffer.from(" ")]);
   await expect(parseAnalyticsResponse(oversized, "eu")).rejects.toThrow(/size limit/);
+});
+
+test("direct analytics reader destroys refused responses before reading their body", async () => {
+  const target = staging.requireAnalyticsTarget(["--target", origin, "--expect", "eu"]);
+  const html = fixturePage();
+  const headers = {
+    "content-type": "text/html; charset=utf-8",
+    "x-two-analytics-fixture": "isolated-v1",
+    "x-two-analytics-jurisdiction": "eu",
+  };
+
+  function read(responseHeaders: IncomingHttpHeaders) {
+    const events: string[] = [];
+    const document = staging.readAnalyticsDocument(target, staging.ELIGIBLE_PATH, async () => ({
+      headers: responseHeaders,
+      statusCode: 200,
+      [Symbol.asyncIterator]() {
+        events.push("body");
+        return (async function* () {
+          yield Buffer.from(html);
+        })();
+      },
+      destroy() {
+        events.push("destroy");
+      },
+    }));
+    return { document, events };
+  }
+
+  for (const [reason, refusedHeaders] of Object.entries({
+    "set-cookie": { ...headers, "set-cookie": ["fixture=synthetic"] },
+    "wrong fixture marker": { ...headers, "x-two-analytics-fixture": "invalid" },
+    "wrong jurisdiction": { ...headers, "x-two-analytics-jurisdiction": "uk" },
+  })) {
+    const { document, events } = read(refusedHeaders);
+    await expect(document, reason).rejects.toThrow(/^Synthetic target response failed admission$/);
+    expect(events, reason).toEqual(["destroy"]);
+  }
+
+  const { document, events } = read(headers);
+  await expect(document).resolves.toBe(html);
+  expect(events).toEqual(["body", "destroy"]);
 });

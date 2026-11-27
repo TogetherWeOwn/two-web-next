@@ -29,7 +29,7 @@ Full rules: CONTRIBUTING.md, "Pull request contract".
 ## Verification
 
 <!-- Include a code-formatted command and its observed result, or a GitHub Actions run/job URL, in every bullet. -->
-<!-- Add the bot comment’s full permalink once with the link label `Exact-head Actions evidence`. -->
+<!-- Record required checks with exact-head Actions run/job links and observed outcomes. -->
 
 -
 
