@@ -18,6 +18,7 @@ valid:
   - assert.ok(!html.includes('<a href="/members/private">'));
   - expect(!html.includes('data-testid="member-rsvp"')).toBe(true);
   - expect(!(html.match(/<script\b/) || html.match(/<iframe\b/))).toBeTruthy();
+  - expect(html.match(/<script\b/) || html.match(/<iframe\b/)).toBeFalsy();
   - expect(!html.includes("<script") && !html.includes("<iframe")).toBe(true);
   - const safe = !html.includes("<script");
   - const hasXmlRoot = body.includes("<urlset>");
@@ -32,7 +33,7 @@ invalid:
   - assert.ok(answer.body.includes(`<h1>${signal} hot zone</h1>`), answer.label);
   - assert(/<form\b/.test(html));
   - expect(!(html.match(/<form\b/) || html.match(/<input\b/))).toBe(false);
-  - expect(hasForm && (html.includes("<input") || empty)).toBe(true);
+  - expect(hasForm && (html.includes("<input") || empty), "form controls render").toBeTruthy();
   - if (!html.includes('aria-label="Primary"')) failures.push("missing navigation");
   - if (hasLoad && !html.includes('<script src="/islands/join-widget.js"')) failures.push("missing widget script");
   - if (checkPage && (!html.includes('<main>') || missingData)) failures.push("incomplete page");

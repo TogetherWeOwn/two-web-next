@@ -23,13 +23,13 @@ rule:
               - kind: arguments
                 inside:
                   any:
-                    - pattern: expect($QUERY)
+                    - pattern: expect($$$ARGS)
                       inside:
                         kind: member_expression
                         inside:
                           any:
-                            - pattern: expect($QUERY).toBe(true)
-                            - pattern: expect($QUERY).toBeTruthy()
+                            - pattern: expect($$$ARGS).toBe(true)
+                            - pattern: expect($$$ARGS).toBeTruthy()
                     - pattern: assert.ok($QUERY)
                     - pattern: assert.ok($QUERY, $MESSAGE)
                     - pattern: assert($QUERY)
@@ -43,6 +43,8 @@ rule:
                       any:
                         - pattern: expect(!$QUERY).toBe(false)
                         - pattern: expect(!$QUERY).toBeFalsy()
+                        - pattern: expect(!$QUERY, $MESSAGE).toBe(false)
+                        - pattern: expect(!$QUERY, $MESSAGE).toBeFalsy()
                       stopBy: end
                   - inside:
                       kind: parenthesized_expression
@@ -55,10 +57,6 @@ rule:
             stopBy:
               not:
                 matches: boolean-expression
-        - not:
-            inside:
-              matches: raw-query-context
-              stopBy: end
     - all:
         - matches: string-query
         - not:
@@ -127,6 +125,8 @@ utils:
       - pattern: $NEEDLE.test($RECEIVER)
   raw-query-context:
     any:
+      - pattern: expect($$$ARGS).toBe(false)
+      - pattern: expect($$$ARGS).toBeFalsy()
       - pattern: expect($ACTUAL).not.$NEGATIVE($EXPECTED)
       - pattern: expect($ACTUAL, $MESSAGE).not.$NEGATIVE($EXPECTED)
       - pattern: assert.doesNotMatch($ACTUAL, $EXPECTED)

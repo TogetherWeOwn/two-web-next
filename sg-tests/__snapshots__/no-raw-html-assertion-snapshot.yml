@@ -120,28 +120,28 @@ snapshots:
         style: primary
         start: 0
         end: 41
-  expect(hasForm && (html.includes("<input") || empty)).toBe(true);:
+  expect(hasForm && (html.includes("<input") || empty), "form controls render").toBeTruthy();:
     labels:
       - source: html.includes("<input")
         style: primary
         start: 19
         end: 42
-      - source: expect(hasForm && (html.includes("<input") || empty)).toBe(true)
+      - source: expect(hasForm && (html.includes("<input") || empty), "form controls render").toBeTruthy()
         style: secondary
         start: 0
-        end: 64
-      - source: expect(hasForm && (html.includes("<input") || empty)).toBe
+        end: 90
+      - source: expect(hasForm && (html.includes("<input") || empty), "form controls render").toBeTruthy
         style: secondary
         start: 0
-        end: 58
-      - source: expect(hasForm && (html.includes("<input") || empty))
+        end: 88
+      - source: expect(hasForm && (html.includes("<input") || empty), "form controls render")
         style: secondary
         start: 0
-        end: 53
-      - source: (hasForm && (html.includes("<input") || empty))
+        end: 77
+      - source: (hasForm && (html.includes("<input") || empty), "form controls render")
         style: secondary
         start: 6
-        end: 53
+        end: 77
   expect(html).toContain('name="duration" type="number"');:
     labels:
       - source: expect(html).toContain('name="duration" type="number"')
