@@ -120,7 +120,7 @@ describe("pr-size advisory wiring", () => {
     });
     expect(concurrency).toEqual({
       group:
-        "${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number || github.event_name }}",
+        "${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || inputs.pr_number || github.event_name }}",
       "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
     });
     expect(jobs["pr-size-gate"].name).toBe("pr-size-gate");
@@ -131,5 +131,33 @@ describe("pr-size advisory wiring", () => {
     expect(jobs["pr-size-weekly"].if).toBe(
       "github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.pr_number == '')",
     );
+  });
+
+  it("isolates concurrency groups across events for the same PR", () => {
+    const { name, concurrency } = parse(workflowSource);
+    const group: string = concurrency.group;
+    const events = [
+      { name: "pull_request", pullRequestNumber: 42 },
+      { name: "pull_request_review", pullRequestNumber: 42 },
+      { name: "workflow_dispatch", inputPrNumber: "42" },
+    ];
+    const groups = events.map((event) => {
+      const context: Record<string, string | number | undefined> = {
+        "github.workflow": name,
+        "github.event_name": event.name,
+        "github.event.pull_request.number": event.pullRequestNumber,
+        "inputs.pr_number": event.inputPrNumber,
+      };
+      const resolved = group.replace(/\$\{\{\s*(.*?)\s*\}\}/g, (_, expression: string) => {
+        const values = expression.split("||").map((path) => {
+          const key = path.trim();
+          expect(context).toHaveProperty([key]);
+          return context[key];
+        });
+        return String(values.find(Boolean) ?? "");
+      });
+      return resolved.toLowerCase();
+    });
+    expect(new Set(groups).size).toBe(events.length);
   });
 });
