@@ -21,7 +21,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { parseRenderedPage, renderedElements, renderedText } from "../ci/rendered-page.mjs";
 import { FALLBACK_RANKS, HOME_JOIN_RESULT_COPY, HOME_NOTICES, JOIN_INTRO } from "../src/home-copy";
+import { attr, elements } from "./helpers/kit-edit-controls";
+import { decodedOutput } from "./helpers/refused-edit-roster";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const webRequire = createRequire(join(root, "web/package.json"));
@@ -163,13 +166,11 @@ afterAll(() => {
   if (scratch) rmSync(scratch, { recursive: true, force: true });
 });
 
-type TeaserGroupKey = "tonight" | "this-week" | "later";
+const renderHome = (data = baseData()) => parseRenderedPage(renderPage(data));
 
-const GROUP_TESTIDS: Record<TeaserGroupKey, string> = {
-  tonight: "home-events-group-tonight",
-  "this-week": "home-events-group-this-week",
-  later: "home-events-group-later",
-};
+type Markup = Parameters<typeof elements>[0];
+type Element = ReturnType<typeof elements>[number];
+type TeaserGroupKey = "tonight" | "this-week" | "later";
 
 const GROUP_LABELS: Record<TeaserGroupKey, string> = {
   tonight: "Tonight",
@@ -177,47 +178,67 @@ const GROUP_LABELS: Record<TeaserGroupKey, string> = {
   later: "Later",
 };
 
-/** The group block for `key`, cut at the next group block or "See all events". */
-function groupSlice(html: string, key: TeaserGroupKey): string {
-  const start = html.indexOf(`data-testid="${GROUP_TESTIDS[key]}"`);
-  if (start === -1) throw new Error(`missing group block for ${key}`);
-  const rest = html.slice(start);
-  const ends: number[] = [];
-  for (const other of Object.keys(GROUP_TESTIDS) as TeaserGroupKey[]) {
-    if (other === key) continue;
-    const at = rest.indexOf(`data-testid="${GROUP_TESTIDS[other]}"`, 1);
-    if (at !== -1) ends.push(at);
-  }
-  const seeAll = rest.indexOf("See all events");
-  if (seeAll !== -1) ends.push(seeAll);
-  return ends.length > 0 ? rest.slice(0, Math.min(...ends)) : rest;
+function byTestId(root: Markup, id: string): Element | undefined {
+  return elements(root).find((node) => attr(node, "data-testid") === id);
 }
 
-function expectGroupHeading(slice: string, key: TeaserGroupKey): void {
-  expect(slice).toMatch(new RegExp(`<h3[^>]*>\\s*${GROUP_LABELS[key]}\\s*</h3>`));
+function groupNodes(root: Markup): Element[] {
+  return elements(root).filter((node) =>
+    attr(node, "data-testid")?.startsWith("home-events-group-"),
+  );
 }
 
-function teaserCardCount(html: string): number {
-  const listAt = html.indexOf('data-testid="home-events-list"');
-  if (listAt === -1) throw new Error("missing home-events-list");
-  const seeAll = html.indexOf("See all events", listAt);
-  if (seeAll === -1) throw new Error("missing See all events link");
-  return (html.slice(listAt, seeAll).match(/<li class="card(?:\s[^"]*)?"/g) ?? []).length;
+function cardNodes(root: Markup): Element[] {
+  return elements(root).filter(
+    (node) => node.tagName === "li" && attr(node, "class")?.split(/\s+/).includes("card"),
+  );
 }
 
-/** The one card linking `eventKey` inside the group for `key`. */
-function groupTeaserRow(html: string, key: TeaserGroupKey, eventKey: string): string {
-  const slice = groupSlice(html, key);
-  const hit = [...slice.matchAll(/<li class="card(?:\s[^"]*)?"[^>]*>[\s\S]*?<\/li>/g)].find(
-    ([row]) => row.includes(`/e/${eventKey}"`),
-  )?.[0];
-  if (!hit) throw new Error(`no ${eventKey} row under ${key}`);
-  return hit.split("</li>")[0]!;
+function expectTeaserGroups(page: Markup, expected: [TeaserGroupKey, ...string[]][]) {
+  const list = byTestId(page, "home-events-list");
+  if (list?.tagName !== "ul") throw new Error("missing home-events-list ul");
+  const groups = groupNodes(page);
+  expect(groups.map((node) => attr(node, "data-testid"))).toEqual(
+    expected.map(([key]) => `home-events-group-${key}`),
+  );
+  const groupedCards = expected.flatMap(([key, ...titles], index) => {
+    const group = groups[index];
+    if (!group) throw new Error(`missing ${key} group`);
+    expect(group.tagName === "li" && group.parentNode === list, key).toBe(true);
+    const headings = [...renderedElements(group, { tag: "h3" })];
+    expect(headings.map((node) => renderedText(node).trim())).toEqual([GROUP_LABELS[key]]);
+    const [rows] = [...renderedElements(group, { tag: "ul" })];
+    expect(rows?.parentNode === group, key).toBe(true);
+    const cards = cardNodes(group);
+    expect(cards.every((node) => node.parentNode === rows)).toBe(true);
+    expect(
+      cards.map((card) => [...renderedElements(card, { tag: "h4" })].map(renderedText)),
+    ).toEqual(titles.map((title) => [title]));
+    return cards;
+  });
+  expect(cardNodes(list).map((card) => groupedCards.indexOf(card))).toEqual(
+    groupedCards.map((_, index) => index),
+  );
+  const siblings = list.parentNode?.childNodes ?? [];
+  const links = siblings
+    .slice(siblings.indexOf(list) + 1)
+    .flatMap((node) =>
+      [...renderedElements(node, { tag: "a" })].filter((link) => attr(link, "href") === "/events"),
+    );
+  expect(links.map(renderedText)).toEqual([expect.stringContaining("See all events")]);
+  return groupedCards;
+}
+
+function cardLink(card: Element | undefined, href: string): Element {
+  const link =
+    card && [...renderedElements(card, { tag: "a" })].find((node) => attr(node, "href") === href);
+  if (!link) throw new Error(`missing ${href} link in teaser card`);
+  return link;
 }
 
 describe("Kit teaser grouping acceptance: grouped render", () => {
   it("groups three upcoming rows into Tonight / This week / Later in start order", () => {
-    const html = renderPage(
+    const page = renderHome(
       baseData({
         upcomingEvents: [
           canonicalEvent("tonight-1", "Tonight game night", "2030-07-04T19:00:00Z", {
@@ -233,45 +254,31 @@ describe("Kit teaser grouping acceptance: grouped render", () => {
         ],
       }),
     );
-    expect(html).toContain('data-testid="home-events-list"');
-    const tonightAt = html.indexOf(`data-testid="${GROUP_TESTIDS.tonight}"`);
-    const weekAt = html.indexOf(`data-testid="${GROUP_TESTIDS["this-week"]}"`);
-    const laterAt = html.indexOf(`data-testid="${GROUP_TESTIDS.later}"`);
-    expect(tonightAt).toBeGreaterThan(-1);
-    expect(weekAt).toBeGreaterThan(tonightAt);
-    expect(laterAt).toBeGreaterThan(weekAt);
-    expectGroupHeading(groupSlice(html, "tonight"), "tonight");
-    expectGroupHeading(groupSlice(html, "this-week"), "this-week");
-    expectGroupHeading(groupSlice(html, "later"), "later");
-    expect(groupSlice(html, "tonight")).toContain("Tonight game night");
-    expect(groupSlice(html, "tonight")).toContain('href="/e/tonight-1"');
-    expect(groupSlice(html, "this-week")).toContain("This week game night");
-    expect(groupSlice(html, "later")).toContain("Later game night");
-    expect(teaserCardCount(html)).toBe(3);
-    expect(html).toContain('href="/events"');
-    expect(html).toContain("See all events");
-    expect(groupSlice(html, "tonight")).toContain("Thu 4 Jul, 20:00 (Europe/London)");
-    expect(groupSlice(html, "tonight")).toContain("2 going");
-    expect(groupSlice(html, "this-week")).toContain("1 of 4 going");
-    expect(html).not.toContain('data-testid="home-events-empty"');
+    const [tonight, week] = expectTeaserGroups(page, [
+      ["tonight", "Tonight game night"],
+      ["this-week", "This week game night"],
+      ["later", "Later game night"],
+    ]);
+    const tonightLink = cardLink(tonight, "/e/tonight-1");
+    expect([...renderedElements(tonightLink, { tag: "time" })].map(renderedText)).toEqual([
+      "Thu 4 Jul, 20:00 (Europe/London)",
+    ]);
+    expect(renderedText(tonightLink)).toContain("2 going");
+    expect(renderedText(cardLink(week, "/e/week-1"))).toContain("1 of 4 going");
+    expect(byTestId(page, "home-events-empty")).toBeUndefined();
   });
 
   it("renders a lone later row under its own heading with list and link intact", () => {
-    const html = renderPage(
+    const page = renderHome(
       baseData({
         upcomingEvents: [canonicalEvent("later-1", "Later game night", "2030-07-13T10:00:00Z")],
       }),
     );
-    expect(html).not.toContain(`data-testid="${GROUP_TESTIDS.tonight}"`);
-    expect(html).not.toContain(`data-testid="${GROUP_TESTIDS["this-week"]}"`);
-    expectGroupHeading(groupSlice(html, "later"), "later");
-    expect(html).toContain('data-testid="home-events-list"');
-    expect(html).toContain("See all events");
-    expect(teaserCardCount(html)).toBe(1);
+    expectTeaserGroups(page, [["later", "Later game night"]]);
   });
 
   it("omits empty groups when every row lands tonight", () => {
-    const html = renderPage(
+    const page = renderHome(
       baseData({
         upcomingEvents: [
           canonicalEvent("tonight-1", "Tonight game night", "2030-07-04T19:00:00Z"),
@@ -279,14 +286,11 @@ describe("Kit teaser grouping acceptance: grouped render", () => {
         ],
       }),
     );
-    expect(html).toContain(`data-testid="${GROUP_TESTIDS.tonight}"`);
-    expect(html).not.toContain(`data-testid="${GROUP_TESTIDS["this-week"]}"`);
-    expect(html).not.toContain(`data-testid="${GROUP_TESTIDS.later}"`);
-    expect(teaserCardCount(html)).toBe(2);
+    expectTeaserGroups(page, [["tonight", "Tonight game night", "Second tonight game"]]);
   });
 
   it("splits a midnight boundary: 23:59 tonight, 00:01 this week", () => {
-    const html = renderPage(
+    const page = renderHome(
       baseData({
         nowMs: Date.parse("2030-07-04T23:30:00Z"),
         upcomingEvents: [
@@ -299,13 +303,14 @@ describe("Kit teaser grouping acceptance: grouped render", () => {
         ],
       }),
     );
-    expect(groupSlice(html, "tonight")).toContain("Late game night");
-    expect(groupSlice(html, "this-week")).toContain("Early game night");
-    expect(html).not.toContain(`data-testid="${GROUP_TESTIDS.later}"`);
+    expectTeaserGroups(page, [
+      ["tonight", "Late game night"],
+      ["this-week", "Early game night"],
+    ]);
   });
 
   it("buckets the same instant per event zone: UTC tomorrow, Auckland tonight", () => {
-    const html = renderPage(
+    const page = renderHome(
       baseData({
         nowMs: Date.parse("2030-06-01T23:30:00Z"),
         upcomingEvents: [
@@ -318,8 +323,10 @@ describe("Kit teaser grouping acceptance: grouped render", () => {
         ],
       }),
     );
-    expect(groupSlice(html, "this-week")).toContain("UTC tomorrow game");
-    expect(groupSlice(html, "tonight")).toContain("Auckland tonight game");
+    expectTeaserGroups(page, [
+      ["tonight", "Auckland tonight game"],
+      ["this-week", "UTC tomorrow game"],
+    ]);
   });
 
   it("reads an invalid zone as UTC for both bucket and label", () => {
@@ -335,15 +342,18 @@ describe("Kit teaser grouping acceptance: grouped render", () => {
         ],
       }),
     );
-    expect(groupSlice(html, "tonight")).toContain("Tonight game night");
-    const week = groupSlice(html, "this-week");
-    expect(week).toContain("This week game night");
-    expect(week).toContain("(UTC)");
+    const [, week] = expectTeaserGroups(parseRenderedPage(html), [
+      ["tonight", "Tonight game night"],
+      ["this-week", "This week game night"],
+    ]);
+    expect(renderedText(cardLink(week, "/e/week-1"))).toContain("(UTC)");
+    expect(decodedOutput(html)).not.toContain("Invalid/Zone");
+    // The HTML parser can discard raw bytes such as later duplicate attributes.
     expect(html).not.toContain("Invalid/Zone");
   });
 
   it("keeps going counts, the Full marker and Discord rows scoped to their groups", () => {
-    const html = renderPage(
+    const page = renderHome(
       baseData({
         upcomingEvents: [
           canonicalEvent("full-1", "Full tonight game", "2030-07-04T19:00:00Z", {
@@ -360,21 +370,25 @@ describe("Kit teaser grouping acceptance: grouped render", () => {
         ],
       }),
     );
-    const full = groupTeaserRow(html, "tonight", "full-1");
-    expect(full).toContain("1 of 2 going");
-    expect(full).toContain('data-testid="event-spots-left"');
-    expect(full).toContain(">Full<");
-    const open = groupTeaserRow(html, "this-week", "open-1");
-    expect(open).toContain("1 of 4 going");
-    expect(open).not.toContain("event-spots-left");
-    const later = groupSlice(html, "later");
-    expect(later).toContain('data-testid="home-event-discord"');
-    expect(later).toContain("RSVP in Discord");
-    expect(later).not.toContain("going");
+    const [tonight, week, later] = expectTeaserGroups(page, [
+      ["tonight", "Full tonight game"],
+      ["this-week", "Open week game"],
+      ["later", "Discord later game"],
+    ]);
+    const full = cardLink(tonight, "/e/full-1");
+    expect(renderedText(full)).toContain("1 of 2 going");
+    const marker = byTestId(full, "event-spots-left");
+    expect(marker && renderedText(marker)).toBe("Full");
+    expect(renderedText(cardLink(week, "/e/open-1"))).toContain("1 of 4 going");
+    expect(week && byTestId(week, "event-spots-left")).toBeUndefined();
+    const discord = cardLink(later, INVITE_URL);
+    expect(attr(discord, "data-testid")).toBe("home-event-discord");
+    expect(renderedText(discord)).toContain("RSVP in Discord");
+    expect(later && renderedText(later)).not.toContain("going");
   });
 
   it("renders grouped with no client script: group blocks carry no island", () => {
-    const html = renderPage(
+    const page = renderHome(
       baseData({
         upcomingEvents: [
           canonicalEvent("tonight-1", "Tonight game night", "2030-07-04T19:00:00Z"),
@@ -383,34 +397,37 @@ describe("Kit teaser grouping acceptance: grouped render", () => {
         ],
       }),
     );
-    for (const key of Object.keys(GROUP_TESTIDS) as TeaserGroupKey[]) {
-      const slice = groupSlice(html, key);
-      expectGroupHeading(slice, key);
-      expect(slice).not.toContain("data-island");
+    expectTeaserGroups(page, [
+      ["tonight", "Tonight game night"],
+      ["this-week", "This week game night"],
+      ["later", "Later game night"],
+    ]);
+    for (const group of groupNodes(page)) {
+      expect(elements(group).some((node) => attr(node, "data-island") !== undefined)).toBe(false);
+      expect(elements(group).some((node) => node.tagName === "script")).toBe(false);
     }
   });
 });
 
 describe("Kit teaser grouping acceptance: unchanged behavior controls", () => {
   it("names the empty schedule and keeps the join entry point", () => {
-    const html = renderPage(baseData());
-    expect(html).toContain('data-testid="home-events-empty"');
-    expect(html).toContain("Nothing scheduled yet.");
-    expect(html).toContain('data-testid="home-events-join"');
-    expect(html).not.toContain('data-testid="home-events-list"');
-    for (const key of Object.keys(GROUP_TESTIDS) as TeaserGroupKey[]) {
-      expect(html).not.toContain(`data-testid="${GROUP_TESTIDS[key]}"`);
-    }
+    const page = renderHome();
+    const empty = byTestId(page, "home-events-empty");
+    expect(empty && renderedText(empty)).toContain("Nothing scheduled yet.");
+    const join = byTestId(page, "home-events-join");
+    expect(join?.tagName).toBe("a");
+    expect(join && attr(join, "href")).toBe("/join");
+    expect(byTestId(page, "home-events-list")).toBeUndefined();
+    expect(groupNodes(page)).toHaveLength(0);
   });
 
   it("states the events outage without hiding the rest of the page", () => {
-    const html = renderPage(baseData({ eventsUnavailable: true }));
-    expect(html).toContain('data-state="unavailable"');
-    expect(html).toContain("Game nights are unavailable right now.");
-    expect(html).toContain('data-testid="member-count"');
-    expect(html).not.toContain('data-testid="home-events-list"');
-    for (const key of Object.keys(GROUP_TESTIDS) as TeaserGroupKey[]) {
-      expect(html).not.toContain(`data-testid="${GROUP_TESTIDS[key]}"`);
-    }
+    const page = renderHome(baseData({ eventsUnavailable: true }));
+    const outage = byTestId(page, "home-events-empty");
+    expect(outage && attr(outage, "data-state")).toBe("unavailable");
+    expect(outage && renderedText(outage)).toContain("Game nights are unavailable right now.");
+    expect(byTestId(page, "member-count")).toBeDefined();
+    expect(byTestId(page, "home-events-list")).toBeUndefined();
+    expect(groupNodes(page)).toHaveLength(0);
   });
 });
