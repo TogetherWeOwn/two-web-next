@@ -344,8 +344,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'VERIFY_SOURCE'
-          """Verify Gitleaks evidence for a metadata edit without running another scan."""
-
           import json
           import os
           import re
@@ -541,4 +539,4 @@ jobs:
 
       - name: Scan PR ${{ github.event.pull_request.number }} on ${{ github.event.pull_request.base.repo.id }}:${{ github.base_ref }} at ${{ github.sha }}
         if: env.REUSE_SCAN != 'true' && github.event_name == 'pull_request'
-        run: 'true'
+        run: "true"

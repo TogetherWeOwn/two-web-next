@@ -322,7 +322,9 @@ describe("gitleaks-scan.sh", () => {
     expect(scanScript).toContain("--config");
     expect(scanScript).toContain("--gitleaks-ignore-path");
     // An unfetched base branch fails the scan instead of falling back to the PR's files.
-    expect(scanScript).toMatch(/base policy revision for \$\{base_ref\} is not fetched[\s\S]*exit 2/);
+    expect(scanScript).toMatch(
+      /base policy revision for \$\{base_ref\} is not fetched[\s\S]*exit 2/,
+    );
   });
 
   it("unlinks the PR's ignore file before copying the base policy over it", () => {
