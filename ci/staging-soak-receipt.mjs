@@ -13,6 +13,8 @@ import { orderedDeploymentTime } from "./staging-forward.mjs";
 import { observeStaging, validateStagingIdentityPair } from "./staging-provenance.mjs";
 
 const GRAPHQL_URL = "https://api.cloudflare.com/client/v4/graphql";
+// The query returns one account and at most one aggregate row.
+const MAX_ANALYTICS_RESPONSE_BYTES = 64 * 1024;
 // Allow for a page of deployment history, or one version record, with JSON metadata.
 const ALLOCATION_PROVIDER_RESPONSE_BYTES = 1024 * 1024;
 const SHA = /^[0-9a-f]{40}$/;
@@ -195,15 +197,16 @@ async function versionTaggedCounts(base, sampledAt, { accountId, token, fetchImp
       sinceIso: base.e2e?.startedAt ?? base.e2eCompletedAt,
       untilIso: observedAt,
     });
+    const signal = AbortSignal.timeout(30_000);
     const response = await fetchImpl(GRAPHQL_URL, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
       body: JSON.stringify(query),
       redirect: "error",
-      signal: AbortSignal.timeout(30_000),
+      signal,
     });
     if (!response.ok) throw new Error("Cloudflare analytics response refused");
-    const payload = await response.json();
+    const payload = await readBoundedProviderJson(response, signal, MAX_ANALYTICS_RESPONSE_BYTES);
     const errors = payload?.errors;
     if (errors !== null && errors !== undefined && !Array.isArray(errors)) {
       throw new Error("Malformed Cloudflare analytics response");
@@ -216,7 +219,7 @@ async function versionTaggedCounts(base, sampledAt, { accountId, token, fetchImp
   return { observedAt, workerVersion: versionId, ...counts };
 }
 
-async function readAllocationProviderJson(response, signal) {
+async function readBoundedProviderJson(response, signal, maxBytes) {
   const reader = response.body?.getReader();
   if (!reader) throw new Error("Missing provider response body");
   const cancel = () => {
@@ -234,7 +237,7 @@ async function readAllocationProviderJson(response, signal) {
       signal.throwIfAborted();
       if (done) return JSON.parse(text + decoder.decode());
       bytes += value.byteLength;
-      if (bytes > ALLOCATION_PROVIDER_RESPONSE_BYTES) {
+      if (bytes > maxBytes) {
         throw new Error("Provider response too large");
       }
       text += decoder.decode(value, { stream: true });
@@ -272,7 +275,11 @@ export async function captureAllocationSoak(
           signal,
         },
       );
-      const body = await readAllocationProviderJson(response, signal);
+      const body = await readBoundedProviderJson(
+        response,
+        signal,
+        ALLOCATION_PROVIDER_RESPONSE_BYTES,
+      );
       if (body.success !== true || !body.result) throw new Error("Missing provider result");
       return body.result;
     } catch {

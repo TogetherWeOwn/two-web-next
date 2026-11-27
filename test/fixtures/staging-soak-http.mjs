@@ -152,17 +152,6 @@ export function installSoakCliReads({ finalReadUnavailable }) {
           );
           return new Response(body, { headers: { "content-type": "application/json" } });
         }
-        const trackedResponse = (body, init) => {
-          const response = Response.json(body, init);
-          const readBody = response.json.bind(response);
-          response.json = async () => {
-            await setImmediate();
-            const payload = await readBody();
-            reads.push(url);
-            return payload;
-          };
-          return response;
-        };
         if (url === `${STAGING_ORIGIN}/up`) {
           const payload = { revision: { commit: sha, version_id: workerVersion } };
           // Record consumption when the revision reader pulls, even without .json().
@@ -185,7 +174,7 @@ export function installSoakCliReads({ finalReadUnavailable }) {
           });
         }
         assert.equal(url, "https://api.cloudflare.com/client/v4/graphql");
-        return trackedResponse({
+        const analytics = {
           data: {
             viewer: {
               accounts: [
@@ -200,7 +189,21 @@ export function installSoakCliReads({ finalReadUnavailable }) {
               ],
             },
           },
-        });
+        };
+        return new Response(
+          new ReadableStream(
+            {
+              async pull(controller) {
+                await setImmediate();
+                controller.enqueue(new TextEncoder().encode(JSON.stringify(analytics)));
+                reads.push(url);
+                controller.close();
+              },
+            },
+            { highWaterMark: 0 },
+          ),
+          { headers: { "content-type": "application/json" } },
+        );
       },
     },
     {
