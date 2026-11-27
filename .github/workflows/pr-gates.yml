@@ -341,17 +341,131 @@ jobs:
     env:
       REUSE_SCAN: ${{ github.event.action == 'edited' && !github.event.changes.base }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: env.REUSE_SCAN == 'true'
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          persist-credentials: false
-
       - name: Verify the latest source scan
         if: env.REUSE_SCAN == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 .github/scripts/verify-pr-source-scan.py
+        run: |
+          python3 - <<'VERIFY_SOURCE'
+          """Verify Gitleaks evidence for a metadata edit without running another scan."""
+
+          import json
+          import os
+          import subprocess
+          import time
+          from pathlib import Path
+
+
+          def identity(pr):
+              head, base = pr["head"], pr["base"]
+              return (pr["number"], head["sha"], head["ref"], head["repo"]["id"],
+                      base["ref"], base["repo"]["id"])
+
+
+          def collection(api, path, key):
+              result = api(path + "&per_page=100")
+              rows = result[key]
+              if len(rows) != result["total_count"] or len({row["id"] for row in rows}) != len(rows):
+                  raise ValueError("Incomplete Actions evidence")
+              return rows
+
+
+          def latest_retarget(api, number):
+              latest = ""
+              for page in range(1, 11):
+                  events = api(f"issues/{number}/timeline?per_page=100&page={page}")
+                  for event in events:
+                      if event["event"] in ("base_ref_changed", "automatic_base_change_succeeded"):
+                          latest = max(latest, event["created_at"])
+                  if len(events) < 100:
+                      return latest
+              raise ValueError("Incomplete PR retarget history")
+
+
+          def source_scan(api, pr, current_run, retarget, merge_sha):
+              head = pr["head"]
+              base = pr["base"]
+              target = f"Scan PR {pr['number']} on {base['repo']['id']}:{base['ref']} at "
+              runs = collection(api, f"actions/workflows/pr-gates.yml/runs?head_sha={head['sha']}", "workflow_runs")
+              proof = None
+              for run in sorted(runs, key=lambda row: row["run_number"], reverse=True):
+                  run_id = run["id"]
+                  if (run_id == current_run or run["path"] != ".github/workflows/pr-gates.yml"
+                          or run["event"] != "pull_request" or run["head_sha"] != head["sha"]
+                          or run["head_branch"] != head["ref"]
+                          or (run["head_repository"] or {}).get("id") != head["repo"]["id"]):
+                      continue
+                  associations = run["pull_requests"]
+                  if len(associations) > 1:
+                      raise ValueError("Ambiguous Actions run association")
+                  if associations and associations[0]["number"] != pr["number"]:
+                      continue
+                  if proof and (run["run_attempt"] == 1 or run["updated_at"] < proof[0]):
+                      continue
+
+                  jobs = collection(api, f"actions/runs/{run_id}/jobs?filter=all", "jobs")
+                  for job in jobs:
+                      if ((job["head_sha"], job["run_id"]) != (head["sha"], run_id)
+                              or not 1 <= job["run_attempt"] <= run["run_attempt"]):
+                          raise ValueError("Actions job identity mismatch")
+                  if jobs and all(job["name"] in ("pr-lint", "gitleaks") and job.get("labels") == ["ubuntu-24.04"]
+                                  for job in jobs):
+                      continue
+
+                  # A newer attempt of an older source run can block an otherwise valid result.
+                  if proof:
+                      raise ValueError("An older source run was retried after the latest source run")
+                  if run["status"] != "completed":
+                      return None
+                  scans = [job for job in jobs if job["name"] == "gitleaks" and job["run_attempt"] == run["run_attempt"]]
+                  if run["conclusion"] == "cancelled" or not scans:
+                      raise ValueError("The latest source run did not finish Gitleaks")
+                  if len(scans) != 1:
+                      raise ValueError("Ambiguous source scan attempt")
+                  scan = scans[0]
+                  successful_steps = {step["name"] for step in scan["steps"] if step["conclusion"] == "success"}
+                  if (scan["status"] != "completed" or scan["conclusion"] != "success"
+                          or "Scan the full history" not in successful_steps):
+                      raise ValueError(f"The latest source scan did not pass: {scan['html_url']}")
+                  if (not any(name.startswith(target) for name in successful_steps)
+                          or run["created_at"] < retarget
+                          or (run["created_at"] == retarget and target + merge_sha not in successful_steps)):
+                      return None
+                  proof = run["created_at"], scan["id"], scan["html_url"]
+              return proof
+
+
+          def main():
+              pr = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())["pull_request"]
+              repo = os.environ["GITHUB_REPOSITORY"]
+              run_id = int(os.environ["GITHUB_RUN_ID"])
+              merge_sha = os.environ["GITHUB_SHA"]
+
+              def api(path):
+                  return json.loads(subprocess.check_output(["gh", "api", f"repos/{repo}/{path}"], timeout=15))
+
+              def verify_current():
+                  live = api(f"pulls/{pr['number']}")
+                  if live["state"] != "open" or identity(live) != identity(pr):
+                      raise ValueError("The pull request head or target changed")
+
+              deadline = time.monotonic() + 360
+              while time.monotonic() < deadline:
+                  verify_current()
+                  retarget = latest_retarget(api, pr["number"])
+                  proof = source_scan(api, pr, run_id, retarget, merge_sha)
+                  if (proof and proof == source_scan(api, pr, run_id, retarget, merge_sha)
+                          and retarget == latest_retarget(api, pr["number"])):
+                      verify_current()
+                      print(f"Verified source scan on {pr['head']['sha']}: {proof[2]}")
+                      return
+                  time.sleep(15)
+              raise ValueError("Timed out waiting for the latest source scan")
+
+
+          if __name__ == "__main__":
+              main()
+          VERIFY_SOURCE
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: env.REUSE_SCAN != 'true'
@@ -402,3 +516,7 @@ jobs:
         # .gitleaksignore apply, so an allowlist is honoured only after it
         # has merged.
         run: bash .github/scripts/gitleaks-scan.sh
+
+      - name: Scan PR ${{ github.event.pull_request.number }} on ${{ github.event.pull_request.base.repo.id }}:${{ github.base_ref }} at ${{ github.sha }}
+        if: env.REUSE_SCAN != 'true' && github.event_name == 'pull_request'
+        run: 'true'

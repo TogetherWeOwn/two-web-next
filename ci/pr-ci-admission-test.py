@@ -2,7 +2,6 @@
 import re
 from copy import deepcopy
 from pathlib import Path
-from runpy import run_path
 from textwrap import dedent
 from unittest import TestCase, main
 from unittest.mock import patch
@@ -10,7 +9,10 @@ from unittest.mock import patch
 yaml = Path(".github/workflows/pr-ci-admission.yml").read_text()
 scope = {"__name__": "admission_fixture"}
 exec(dedent(yaml.split("<<'PYTHON'\n")[1].rsplit("          PYTHON", 1)[0]), scope)
-source_scan = run_path(".github/scripts/verify-pr-source-scan.py")["source_scan"]
+gates = Path(".github/workflows/pr-gates.yml").read_text()
+scan_scope = {"__name__": "source_scan_fixture"}
+exec(dedent(gates.split("<<'VERIFY_SOURCE'\n")[1].split("          VERIFY_SOURCE", 1)[0]), scan_scope)
+source_scan = scan_scope["source_scan"]
 
 
 class AdmissionConcurrencyTest(TestCase):
@@ -90,8 +92,10 @@ class AdmissionTest(TestCase):
 
         def add(workflow, *names):
             run = len(runs) + 1
+            timestamp = f"2026-01-01T00:00:{run:02d}Z"
             runs.append(dict(id=run, run_number=run, run_attempt=1, status="completed",
                              conclusion="success", event="pull_request", pull_requests=[deepcopy(pr)],
+                             created_at=timestamp, updated_at=timestamp,
                              path=f".github/workflows/{workflow}.yml", head_sha=head["sha"],
                              head_branch=head["ref"], head_repository=head["repo"]))
             jobs[run] = [dict(id=run * 10 + i, name=name, status="completed", conclusion="success",
@@ -122,30 +126,46 @@ class AdmissionTest(TestCase):
 
     def test_metadata_checks_use_the_latest_source_scan(self):
         pr, runs, add, api = self.actions_fixture()
-        steps = [{"name": "Scan the full history", "conclusion": "success"}]
-        add("pr-gates", "pr-lint", "gitleaks")[1]["steps"] = steps
+        merge_sha = "c" * 40
+        def steps(ref):
+            return [{"name": name, "conclusion": "success"}
+                    for name in ("Scan the full history", f"Scan PR 4 on 2:{ref} at {merge_sha}")]
+
+        add("pr-gates", "pr-lint", "gitleaks")[1]["steps"] = steps("main")
+        runs[0]["pull_requests"] = []  # GitHub omits associations for some fork runs.
         add("pr-gates", "pr-lint")[0]["labels"] = ["ubuntu-24.04"]
         runs[-1]["conclusion"] = "cancelled"
         current = add("pr-gates", "pr-lint", "gitleaks")[0]["run_id"]
         pr["base"]["sha"] = "c" * 40
-        self.assertEqual(source_scan(api, pr, current), (11, "synthetic"))
+        def lookup(retarget="", sha=merge_sha):
+            return source_scan(api, pr, current, retarget, sha)
+
+        self.assertEqual(lookup(), (runs[0]["created_at"], 11, "synthetic"))
+        self.assertIsNone(lookup(runs[1]["created_at"]))
 
         newer = add("pr-gates", "pr-lint", "gitleaks")[1]
         for reason in ("failure", "skipped", "cancelled", "success"):
             with self.subTest(reason=reason), patch.dict(newer, conclusion=reason, steps=[]):
                 with self.assertRaisesRegex(ValueError, "latest source scan did not pass"):
-                    source_scan(api, pr, current)
+                    lookup()
         with patch.dict(runs[-1], status="queued", conclusion=None):
-            self.assertIsNone(source_scan(api, pr, current))
-        with patch.dict(runs[-1], conclusion="cancelled"):
-            with self.assertRaisesRegex(ValueError, "latest source run did not finish"):
-                source_scan(api, pr, current)
+            self.assertIsNone(lookup())
+        for invalid in ({"conclusion": "cancelled"}, {"run_attempt": 2}):
+            with patch.dict(runs[-1], invalid), self.assertRaisesRegex(ValueError, "latest source run did not finish"):
+                lookup()
 
+        newer["steps"] = steps("main")
         pr["base"]["ref"] = "release"
-        self.assertIsNone(source_scan(api, pr, current))
+        runs[-1]["pull_requests"] = [deepcopy(pr)]
+        self.assertIsNone(lookup())
         retarget = add("pr-gates", "pr-lint", "gitleaks")[1]
-        retarget["steps"] = steps
-        self.assertEqual(source_scan(api, pr, current), (51, "synthetic"))
+        retarget["steps"] = steps("release")
+        stamp = runs[-1]["created_at"]
+        self.assertEqual(lookup(stamp), (stamp, 51, "synthetic"))
+        self.assertIsNone(lookup(stamp, sha="d" * 40))
+        with patch.dict(runs[0], run_attempt=2, updated_at=stamp):
+            with self.assertRaisesRegex(ValueError, "An older source run was retried"):
+                lookup(stamp)
 
     def test_evidence_rejects_mismatched_run_association(self):
         pr, runs, add, api = self.actions_fixture()

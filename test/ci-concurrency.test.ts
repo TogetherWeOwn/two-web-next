@@ -47,13 +47,13 @@ describe("workflow concurrency", () => {
     expect(scan.env.REUSE_SCAN).toBe(`\${{ ${meta} }}`);
     expect(scan.steps.map((step: { if?: string }) => step.if)).toEqual([
       "env.REUSE_SCAN == 'true'",
-      "env.REUSE_SCAN == 'true'",
       "env.REUSE_SCAN != 'true'",
       "env.REUSE_SCAN != 'true'",
       "env.REUSE_SCAN != 'true'",
       "env.REUSE_SCAN != 'true'",
+      "env.REUSE_SCAN != 'true' && github.event_name == 'pull_request'",
     ]);
-    expect(scan.steps[1].run).toBe("python3 .github/scripts/verify-pr-source-scan.py");
+    expect(scan.steps[0].run).toContain("python3 - <<'VERIFY_SOURCE'");
   });
 
   it("cancels superseded runs of every pull_request workflow", () => {
