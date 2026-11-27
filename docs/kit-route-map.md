@@ -198,6 +198,14 @@ missing-item response and transactional deletion audit.
 
 The operator endpoint uses its bearer independently of the moderator cookie. The
 existing Hono guard serves legacy redirects and other unowned admin paths.
+
+`POST /admin/featured/:id/unpublish` stays on Hono when Admin ownership is
+enabled. The installed Worker fixture opts in on HTTP loopback with
+`KIT_PARITY_FIXTURE_ADMIN_FEATURED_UNPUBLISH=true`. It submits the existing
+Kit form to the shared Hono controller and checks moderator admission, the
+action body cap, the list redirect, the saved state and its activity receipt,
+and replay or a missing target through both owners.
+
 The exact `GET /admin/events/create` endpoint also has a disabled manifest
 entry. When enabled within the admin dispatcher, it requires a moderator and
 returns `301 Location: /admin/events/new` with no query. HEAD uses the same
