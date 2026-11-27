@@ -100,7 +100,8 @@ class AdmissionTest(TestCase):
                              path=f".github/workflows/{workflow}.yml", head_sha=head["sha"],
                              head_branch=head["ref"], head_repository=head["repo"]))
             jobs[run] = [dict(id=run * 10 + i, name=name, status="completed", conclusion="success",
-                              head_sha=head["sha"], run_id=run, run_attempt=1, html_url="synthetic")
+                              head_sha=head["sha"], run_id=run, run_attempt=1, html_url="synthetic",
+                              started_at=timestamp)
                          for i, name in enumerate(names)]
             return jobs[run]
 
@@ -135,7 +136,9 @@ class AdmissionTest(TestCase):
         source = add("pr-gates", "pr-lint", "gitleaks")[1]
         source["steps"] = steps("main")
         runs[0]["pull_requests"] = []  # GitHub omits associations for some fork runs.
-        add("pr-gates", "pr-lint")[0]["labels"] = ["ubuntu-24.04"]
+        lint, skipped = add("pr-gates", "pr-lint", "gitleaks")
+        lint["labels"] = ["ubuntu-24.04"]
+        skipped.update(labels=[], conclusion="skipped", runner_id=None, steps=[])
         runs[-1]["conclusion"] = "cancelled"
         current = add("pr-gates", "pr-lint", "gitleaks")[0]["run_id"]
         pr["base"]["sha"] = "c" * 40
@@ -164,6 +167,9 @@ class AdmissionTest(TestCase):
         with patch.dict(runs[0], run_attempt=2, updated_at=runs[-1]["created_at"]):
             with self.assertRaisesRegex(ValueError, "An older source run was retried"):
                 lookup()
+            later = "2026-01-01T00:00:10Z"
+            with patch.dict(runs[-1], run_attempt=2), patch.dict(newer, run_attempt=2, started_at=later):
+                self.assertEqual(lookup(), (later, 41, "synthetic"))
 
         pr["base"]["ref"] = "release"
         runs[-1]["pull_requests"] = [deepcopy(pr)]
@@ -173,6 +179,15 @@ class AdmissionTest(TestCase):
         stamp = runs[-1]["created_at"]
         self.assertEqual(lookup(stamp), (stamp, 51, "synthetic"))
         self.assertIsNone(lookup(stamp, sha="d" * 40))
+
+        latest_retarget = scan_scope["latest_retarget"]
+        self.assertEqual(latest_retarget(lambda _: [], 4), "")
+        ignored_events = [{"event": "commented"}] * 100
+        change = {"event": "base_ref_changed", "created_at": stamp}
+        pages = lambda path: ignored_events if path.endswith("&page=1") else [change]
+        self.assertEqual(latest_retarget(pages, 4), stamp)
+        with self.assertRaisesRegex(ValueError, "Incomplete PR retarget history"):
+            latest_retarget(lambda _: ignored_events, 4)
 
     def test_evidence_rejects_mismatched_run_association(self):
         pr, runs, add, api = self.actions_fixture()

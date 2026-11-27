@@ -382,6 +382,16 @@ jobs:
               raise ValueError("Incomplete PR retarget history")
 
 
+          def metadata_jobs(jobs):
+              label = ["ubuntu-24.04"]
+              return any(job.get("labels") == label for job in jobs) and all(
+                  job["name"] in ("pr-lint", "gitleaks") and (
+                      job.get("labels") == label or (not job.get("labels")
+                          and job["conclusion"] in ("skipped", "cancelled")
+                          and job.get("runner_id") in (0, None) and not job.get("steps")))
+                  for job in jobs)
+
+
           def source_scan(api, pr, current_run, retarget, merge_sha):
               head = pr["head"]
               base = pr["base"]
@@ -409,8 +419,7 @@ jobs:
                       if ((job["head_sha"], job["run_id"]) != (head["sha"], run_id)
                               or not 1 <= job["run_attempt"] <= run["run_attempt"]):
                           raise ValueError("Actions job identity mismatch")
-                  if jobs and all(job["name"] in ("pr-lint", "gitleaks") and job.get("labels") == ["ubuntu-24.04"]
-                                  for job in jobs):
+                  if metadata_jobs(jobs):
                       continue
 
                   # A newer attempt of an older source run can block an otherwise valid result.
@@ -430,7 +439,10 @@ jobs:
                       raise ValueError(f"The latest source scan did not pass: {scan['html_url']}")
                   if target not in successful_steps:
                       return None
-                  proof = started, scan["id"], scan["html_url"]
+                  scan_started = scan["started_at"]
+                  if not isinstance(scan_started, str) or scan_started < started:
+                      raise ValueError("Invalid source scan attempt timestamp")
+                  proof = scan_started, scan["id"], scan["html_url"]
               return proof
 
 
