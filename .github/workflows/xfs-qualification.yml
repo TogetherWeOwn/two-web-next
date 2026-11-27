@@ -157,6 +157,9 @@ jobs:
           sudo mkfs.xfs -V
           npm ci --include=dev --ignore-scripts --no-audit --no-fund
           npm ci --prefix web --include=dev --ignore-scripts --no-audit --no-fund
+      - name: Prove pinned Wrangler bind collision recovery
+        timeout-minutes: 2
+        run: node --test --test-timeout=90000 ci/kit-worker-loopback.test.mjs
       - name: Build stock Kit output
         run: npm run build --prefix web
       - name: Install Chromium for the installed Kit homepage proof
@@ -218,14 +221,6 @@ jobs:
             grep -Fx 'PASS loopback Workers and scratch cleaned up' "$RUNNER_TEMP/kit-installed-output.log"
           fi
           exit "$result"
-      - name: Retain installed Kit public voice screenshots
-        if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && steps.installed.outcome != 'skipped' }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: kit-public-voice-${{ env.EXPECTED_HEAD_SHA }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/kit-public-voice/
-          if-no-files-found: ${{ steps.installed.outcome == 'success' && 'error' || 'warn' }}
-          retention-days: 14
       - name: Build the Kit cutover server readiness profile
         if: env.MODERATOR_RSVP_ONLY != 'true'
         run: npm run build --prefix web
@@ -277,6 +272,15 @@ jobs:
           docker stop "$POSTGRES_CONTAINER"
           test "$(docker inspect --format '{{.State.Running}}' "$POSTGRES_CONTAINER")" = false
           printf '%s\n' 'Disposable Postgres stopped; the runner removes job services at teardown'
+      # Keep browser artifact I/O off the path to parity and service teardown.
+      - name: Retain installed Kit public voice screenshots
+        if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && steps.installed.outcome != 'skipped' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-public-voice-${{ env.EXPECTED_HEAD_SHA }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/kit-public-voice/
+          if-no-files-found: ${{ steps.installed.outcome == 'success' && 'error' || 'warn' }}
+          retention-days: 14
 
   # The socket deadlines consume over three minutes on their own. A separate
   # job lets both proofs finish tearing down their own fixtures.
