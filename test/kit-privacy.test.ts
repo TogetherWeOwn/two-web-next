@@ -3,9 +3,11 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseFragment } from "parse5";
 import { describe, expect, it } from "vitest";
 import { POLICY_MARKDOWN } from "../src/privacy-content";
 import { POLICY_VERSION, renderPolicyMarkdown } from "../src/privacy";
+import { elements, textOf } from "./helpers/kit-edit-controls";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const serverPath = join(root, "web/src/routes/privacy/+page.server.ts");
@@ -100,17 +102,28 @@ describe("Kit privacy port: safe rendering and chrome", () => {
   });
 
   it("reuses the safe renderer: hostile markdown escapes, links never form", () => {
-    const hostile = renderPolicyMarkdown(
-      '# Not an h1\n\n<script>alert("x")</script>\n\n[evil](https://evil.test)\n\n**unclosed\n',
+    const hostile = parseFragment(
+      renderPolicyMarkdown(
+        '# Not an h1\n\n<script>alert("x")</script>\n\n[evil](https://evil.test)\n\n**unclosed\n',
+      ),
     );
-    expect(hostile).not.toContain("<script>");
-    expect(hostile).toContain("&lt;script&gt;");
-    expect(hostile).not.toContain("<h1>");
-    expect(hostile).not.toContain("<a ");
+    const paragraphs = elements(hostile);
+    expect(paragraphs.map(({ tagName }) => tagName)).toEqual(["p", "p", "p", "p"]);
+    expect(paragraphs.flatMap(({ attrs }) => attrs)).toEqual([]);
+    const [heading, script, link, bold] = paragraphs.map(textOf);
+    expect(script).toBe('<script>alert("x")</script>');
+    expect([heading, link, bold]).toEqual([
+      "# Not an h1",
+      "[evil](https://evil.test)",
+      "**unclosed",
+    ]);
     // The constructs the policy uses still render richly.
-    const rich = renderPolicyMarkdown("## Title\n\nHello **bold** and `code`.\n");
-    expect(rich).toContain("<h2>Title</h2>");
-    expect(rich).toContain("<strong>bold</strong>");
-    expect(rich).toContain("<code>code</code>");
+    const rich = elements(
+      parseFragment(renderPolicyMarkdown("## Title\n\nHello **bold** and `code`.\n")),
+    );
+    const tagText = (tag: string) => rich.filter(({ tagName }) => tagName === tag).map(textOf);
+    expect(tagText("h2")).toEqual(["Title"]);
+    expect(tagText("strong")).toEqual(["bold"]);
+    expect(tagText("code")).toEqual(["code"]);
   });
 });

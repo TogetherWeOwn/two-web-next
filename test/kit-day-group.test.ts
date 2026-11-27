@@ -4,7 +4,20 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
-import { describe, expect, it } from "vitest";
+import type { DefaultTreeAdapterMap, parse } from "parse5";
+import { assert, describe, expect, it } from "vitest";
+
+type Element = DefaultTreeAdapterMap["element"];
+type Node = DefaultTreeAdapterMap["node"];
+
+const { parseRenderedPage, renderedAttribute, renderedElements, renderedText } = createRequire(
+  import.meta.url,
+)("../ci/rendered-page.mjs") as {
+  parseRenderedPage: typeof parse;
+  renderedAttribute: (element: Element, name: string) => string | undefined;
+  renderedElements: (root: Node, selector: { tag: string }) => Iterable<Element>;
+  renderedText: (root: Node) => string;
+};
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
@@ -55,17 +68,27 @@ export const html = render(Fixture).body;`,
         ],
       });
       const { html } = (await import(pathToFileURL(outfile).href)) as { html: string };
-      const sections = html.match(/<section\b[^>]*>[\s\S]*?<\/section>/g) ?? [];
+      const sections = [...renderedElements(parseRenderedPage(html), { tag: "section" })];
       expect(sections).toHaveLength(2);
-      for (const section of sections) {
-        expect(section).toMatch(/<ul\b[^>]*\brole="list"[^>]*>/);
+      const groups = [
+        [sections[0], "h2", "Monday, 1 December", ["Community night", "Practice session"]],
+        [sections[1], "h3", "Tuesday, 2 December", ["Open lobby"]],
+      ] as const;
+      for (const [section, headingTag, heading, events] of groups) {
+        assert(section);
+        const headings = [...renderedElements(section, { tag: headingTag })];
+        expect(headings.map(renderedText)).toEqual([heading]);
+        expect(headings[0]?.parentNode).toBe(section);
+        const lists = [...renderedElements(section, { tag: "ul" })];
+        expect(lists).toHaveLength(1);
+        const [list] = lists;
+        assert(list);
+        expect(renderedAttribute(list, "role")).toBe("list");
+        expect(list.parentNode).toBe(section);
+        const items = [...renderedElements(list, { tag: "li" })];
+        expect(items.map(renderedText)).toEqual(events);
+        expect(items.every((item) => item.parentNode === list)).toBe(true);
       }
-      expect(sections[0]).toMatch(/<h2[^>]*>Monday, 1 December<\/h2>/);
-      expect(sections[0]).toMatch(
-        /<ul[^>]*>[\s\S]*<li>Community night<\/li>[\s\S]*<li>Practice session<\/li>[\s\S]*<\/ul>/,
-      );
-      expect(sections[1]).toMatch(/<h3[^>]*>Tuesday, 2 December<\/h3>/);
-      expect(sections[1]).toMatch(/<ul[^>]*>[\s\S]*<li>Open lobby<\/li>[\s\S]*<\/ul>/);
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }

@@ -11,13 +11,30 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
-import { beforeAll, describe, expect, it } from "vitest";
+import { defaultTreeAdapter, type DefaultTreeAdapterMap, type parse } from "parse5";
+import { assert, beforeAll, describe, expect, it } from "vitest";
 import { RSVP_COPY, throttleWaitCopy } from "../src/islands/contracts-rsvp-button";
 import {
   RSVP_REFUSAL_GENERIC_MESSAGE,
   rsvpRefusalModelFor,
   type RsvpRefusalModel,
 } from "../src/events/rsvp-refusal";
+import { attr, elements, textOf } from "./helpers/kit-edit-controls";
+
+type Element = DefaultTreeAdapterMap["element"];
+type Node = DefaultTreeAdapterMap["node"];
+
+const { parseRenderedPage, renderedAttribute, renderedElements, renderedText } = createRequire(
+  import.meta.url,
+)("../ci/rendered-page.mjs") as {
+  parseRenderedPage: typeof parse;
+  renderedAttribute: (element: Element, name: string) => string | undefined;
+  renderedElements: (
+    root: Node,
+    selector: { tag?: string; id?: string; role?: string },
+  ) => Iterable<Element>;
+  renderedText: (root: Node) => string;
+};
 
 const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
 const { compile } = webRequire("svelte/compiler") as {
@@ -80,56 +97,127 @@ export function renderRefusal(props) {
   rmSync(scratch, { recursive: true, force: true });
 }, 120000);
 
+function renderPage(status: number, retryAfter: string | null = null) {
+  const html = renderRefusal(rsvpRefusalModelFor({ status, retryAfter, eventKey: "EVT" }));
+  return parseRenderedPage(html, { scriptingEnabled: false });
+}
+
+function* parsedNodes(node: Node): Generator<Node> {
+  yield node;
+  if ("childNodes" in node) {
+    for (const child of node.childNodes) yield* parsedNodes(child);
+  }
+  if ("content" in node) yield* parsedNodes(node.content);
+}
+
+function parsedElements(root: Node) {
+  return [...parsedNodes(root)].filter(defaultTreeAdapter.isElementNode);
+}
+
+function expectNoParsedCopy(root: Node, copy: string) {
+  const nodes = [...parsedNodes(root)];
+  const text = nodes.filter(defaultTreeAdapter.isTextNode).map((node) => node.value);
+  const comments = nodes.filter(defaultTreeAdapter.isCommentNode).map((node) => node.data);
+  const attributes = parsedElements(root).flatMap(({ attrs }) => attrs.map(({ value }) => value));
+  expect(text.join("")).not.toContain(copy);
+  expect([...comments, ...attributes].filter((value) => value.includes(copy))).toEqual([]);
+}
+
+function refusalAlert(document: Node) {
+  // Count parsed fallback alerts too. The shared visibility query skips noscript.
+  expect(
+    parsedElements(document).filter((element) => attr(element, "role") === "alert"),
+  ).toHaveLength(1);
+  const [alert] = renderedElements(document, { role: "alert" });
+  assert(alert);
+  return alert;
+}
+
 describe("Kit RSVP refusal presentation", () => {
   it("renders the generic refusal with the back nav, heading, alert and return link", () => {
-    const html = renderRefusal(
-      rsvpRefusalModelFor({ status: 403, retryAfter: null, eventKey: "EVT" }),
+    const document = renderPage(403);
+    expect([...renderedElements(document, { tag: "h1" })].map(renderedText)).toEqual([
+      RSVP_COPY.failedTitle,
+    ]);
+    expect(renderedText(refusalAlert(document))).toBe(RSVP_REFUSAL_GENERIC_MESSAGE);
+
+    const links = [...renderedElements(document, { tag: "a" })];
+    const returnLinks = links.filter((link) => renderedText(link).trim() === "Return to the event");
+    expect(returnLinks.map((link) => renderedAttribute(link, "href"))).toEqual(["/e/EVT"]);
+
+    const backNav = [...renderedElements(document, { tag: "nav" })].find(
+      (nav) => renderedAttribute(nav, "aria-label") === "Event calendar",
     );
-    expect(html).toContain(`<h1>${RSVP_COPY.failedTitle}</h1>`);
-    expect(html).toContain('role="alert"');
-    expect(html).toContain(RSVP_REFUSAL_GENERIC_MESSAGE);
-    expect(html).toContain('href="/e/EVT"');
-    expect(html).toContain("Return to the event");
-    expect(html).toContain('aria-label="Event calendar"');
-    expect(html).toContain(`<title>${RSVP_COPY.failedTitle} — Together We Own</title>`);
+    assert(backNav);
+    expect(
+      [...renderedElements(backNav, { tag: "a" })].map((link) => [
+        renderedText(link).trim(),
+        renderedAttribute(link, "href"),
+      ]),
+    ).toEqual([["← All events", "/events"]]);
+
+    const head = elements(document).find((element) => element.tagName === "head");
+    assert(head);
+    const titles = head.childNodes.filter((node) => "tagName" in node && node.tagName === "title");
+    expect(titles.map(textOf)).toEqual([`${RSVP_COPY.failedTitle} — Together We Own`]);
   });
 
   it("renders the throttled refusal with the announced wait", () => {
-    const html = renderRefusal(
-      rsvpRefusalModelFor({ status: 429, retryAfter: "7", eventKey: "EVT" }),
-    );
-    expect(html).toContain('role="alert"');
-    expect(html).toContain(throttleWaitCopy(7));
-    expect(html).not.toContain(RSVP_REFUSAL_GENERIC_MESSAGE);
+    const document = renderPage(429, "7");
+    expect(renderedText(refusalAlert(document))).toBe(throttleWaitCopy(7));
+    expectNoParsedCopy(document, RSVP_REFUSAL_GENERIC_MESSAGE);
   });
 
   it("escapes the message instead of rendering raw HTML", () => {
     const hostile = '</p><script>alert("xss")</script>';
-    const html = renderRefusal({
-      title: RSVP_COPY.failedTitle,
-      message: hostile,
-      returnPath: "/e/EVT",
-    });
-    expect(html).not.toContain("</p><script>");
-    expect(html).toContain("alert(");
-    expect(html).toContain('role="alert"');
+    const model = rsvpRefusalModelFor({ status: 403, retryAfter: null, eventKey: "EVT" });
+    const document = parseRenderedPage(renderRefusal({ ...model, message: hostile }));
+    const alert = refusalAlert(document);
+    expect(elements(alert)).toHaveLength(1);
+    expect(textOf(alert)).toBe(hostile);
+
+    const scripts = (root: Node) =>
+      parsedElements(root)
+        .filter((element) => element.tagName === "script")
+        .map((script) => ({ attrs: script.attrs, text: textOf(script) }));
+    expect(scripts(document)).toEqual(scripts(parseRenderedPage(renderRefusal(model))));
   });
 
   it("marks Events as the current location, like its Hono oracle", () => {
-    const html = renderRefusal(
-      rsvpRefusalModelFor({ status: 403, retryAfter: null, eventKey: "EVT" }),
+    const document = renderPage(403);
+    const events = [...renderedElements(document, { tag: "a" })].filter(
+      (link) => renderedText(link).trim() === "Events",
     );
-    expect(html).toContain('<a href="/events" aria-current="location">Events</a>');
-    expect(html).not.toContain('aria-current="page">Events');
+    expect(
+      events.map((link) => [
+        renderedAttribute(link, "href"),
+        renderedAttribute(link, "aria-current"),
+      ]),
+    ).toEqual([["/events", "location"]]);
+    expect(
+      parsedElements(document)
+        .filter((element) => attr(element, "aria-current") === "page")
+        .map((element) => textOf(element).trim()),
+    ).not.toContain("Events");
   });
 
   it("keeps the served shell chrome: event theme, no account area, skip link", () => {
-    const html = renderRefusal(
-      rsvpRefusalModelFor({ status: 503, retryAfter: null, eventKey: "EVT" }),
+    const document = renderPage(503);
+    const main = [...renderedElements(document, { tag: "main", id: "main" })];
+    const [themedShell] = [...renderedElements(document, { tag: "div" })].filter(
+      (div) => renderedAttribute(div, "data-theme") === "event",
     );
-    expect(html).toContain('data-theme="event"');
-    expect(html).not.toContain("Welcome, guest");
-    expect(html).not.toContain('href="/join/discord');
-    expect(html).toContain('href="#main"');
+    expect(main).toHaveLength(1);
+    expect(main[0]?.parentNode).toBe(themedShell);
+    const allElements = parsedElements(document);
+    expectNoParsedCopy(document, "Welcome, guest");
+    expect(allElements.some((element) => attr(element, "aria-label") === "Account")).toBe(false);
+    expect(allElements.some((element) => attr(element, "href")?.startsWith("/join/discord"))).toBe(
+      false,
+    );
+    const skipLinks = [...renderedElements(document, { tag: "a" })].filter(
+      (link) => renderedAttribute(link, "href") === "#main",
+    );
+    expect(skipLinks.map(renderedText)).toEqual(["Skip to content"]);
   });
 });
