@@ -44,7 +44,7 @@ function recorder(respond) {
   return { calls, fetchImpl };
 }
 const okJson = (body) => ({ ok: true, status: 200, json: async () => body });
-const compareOk = (body) => recorder(() => okJson(body));
+const compareOk = (body) => recorder(() => Response.json(body));
 const noFetch = () =>
   recorder(() => {
     assert.fail("no GitHub lookup is expected on this path");
@@ -61,12 +61,11 @@ const envFor = (event, target, live, extra = {}) => ({
 });
 
 const expectedUrl = (live, target) =>
-  `https://api.github.com/repos/o/r/compare/${live}...${target}`;
+  `https://api.github.com/repos/o/r/compare/${live}...${target}?per_page=1`;
 
 function assertCompared(calls, live, target) {
   assert.equal(calls.length, 1, "exactly one compare lookup");
-  const url = new URL(calls[0].url);
-  assert.equal(`${url.origin}${url.pathname}`, expectedUrl(live, target));
+  assert.equal(calls[0].url, expectedUrl(live, target));
 }
 
 test("an ahead candidate passes on both automatic triggers and on a default dispatch", async () => {
@@ -83,6 +82,92 @@ test("an ahead candidate passes on both automatic triggers and on a default disp
     assert.equal(result, "ahead", `${event} input=${JSON.stringify(input)}`);
     assertCompared(calls, LIVE, NEWER);
   }
+});
+
+test("production ancestry accepts whole-comparison counts on a large first page", async () => {
+  // GitHub paginates commits, but the first page can still carry 300 changed
+  // files. Its counts cover the whole comparison, even when the head is off page.
+  const patch = `@@ -0,0 +1,512 @@\n${"+export const description = 'Synthetic résumé fixture';\n".repeat(512)}`;
+  const comparison = compareBody(LIVE, {
+    ahead_by: 520,
+    total_commits: 520,
+    commits: [{ sha: MIDDLE }],
+    files: Array.from({ length: 300 }, (_, index) => ({
+      filename: `fixtures/sample-${index}.js`,
+      status: "added",
+      additions: 512,
+      deletions: 0,
+      changes: 512,
+      patch,
+    })),
+  });
+  const body = JSON.stringify(comparison);
+  assert.ok(Buffer.byteLength(body) > 8 * 1024 * 1024);
+  const { calls, fetchImpl } = recorder(
+    () =>
+      new Response(body, {
+        headers: { link: `<${expectedUrl(LIVE, NEWER)}&page=2>; rel="next"` },
+      }),
+  );
+  assert.equal(
+    await checkPromotionAncestry(envFor("schedule", NEWER, LIVE), { fetchImpl }),
+    "ahead",
+  );
+  assertCompared(calls, LIVE, NEWER);
+});
+
+test("production ancestry accepts a compare body at exactly 16 MiB", async () => {
+  const body = Buffer.alloc(16 * 1024 * 1024, " ");
+  body.write(JSON.stringify(compareBody(LIVE)));
+  const { calls, fetchImpl } = recorder(() => new Response(body));
+  assert.equal(
+    await checkPromotionAncestry(envFor("schedule", NEWER, LIVE), { fetchImpl }),
+    "ahead",
+  );
+  assertCompared(calls, LIVE, NEWER);
+});
+
+test("production ancestry cancels an oversized compare stream before reading to EOF", async () => {
+  const metadata = Buffer.from(JSON.stringify(compareBody(LIVE)));
+  const padding = Buffer.alloc(1024 * 1024, " ");
+  const chunks = [
+    metadata,
+    padding.subarray(metadata.byteLength),
+    ...Array(15).fill(padding),
+    padding.subarray(0, 1),
+    padding,
+  ];
+  assert.equal(
+    chunks.slice(0, -1).reduce((bytes, chunk) => bytes + chunk.byteLength, 0),
+    16 * 1024 * 1024 + 1,
+  );
+  let pulls = 0;
+  let cancelled = false;
+  const stream = new ReadableStream(
+    {
+      pull(controller) {
+        const chunk = chunks[pulls++];
+        if (chunk) controller.enqueue(chunk);
+        else controller.close();
+      },
+      cancel() {
+        cancelled = true;
+        // The refusal must not wait for the underlying stream to finish cancelling.
+        return new Promise(() => {});
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const { calls, fetchImpl } = recorder(
+    () => new Response(stream, { headers: { "content-length": String(metadata.byteLength) } }),
+  );
+  await assert.rejects(checkPromotionAncestry(envFor("schedule", NEWER, LIVE), { fetchImpl }), {
+    message: "Promotion ancestry response exceeds 16 MiB",
+  });
+  assertCompared(calls, LIVE, NEWER);
+  assert.equal(pulls, chunks.length - 1, "reads stop one byte over 16 MiB");
+  assert.equal(cancelled, true);
+  assert.equal(stream.locked, false);
 });
 
 test("a candidate equal to the live commit returns equal without any lookup", async () => {
@@ -242,18 +327,25 @@ test("HTTP, transport and decoding failures refuse instead of passing", async ()
     }),
     /fetch failed|ancestry|Promotion/i,
   );
-  await assert.rejects(
-    checkPromotionAncestry(envFor("schedule", NEWER, LIVE), {
-      fetchImpl: async () => ({
-        ok: true,
-        status: 200,
-        json: async () => {
-          throw new SyntaxError("Unexpected token in JSON");
+  const unreadable = [
+    new Response(null),
+    new Response("synthetic malformed JSON"),
+    new Response(
+      new ReadableStream({
+        pull() {
+          throw new Error("synthetic stream failure");
         },
       }),
-    }),
-    Error,
-  );
+    ),
+  ];
+  for (const response of unreadable) {
+    await assert.rejects(
+      checkPromotionAncestry(envFor("schedule", NEWER, LIVE), {
+        fetchImpl: async () => response,
+      }),
+      { message: "Promotion ancestry lookup returned unreadable JSON" },
+    );
+  }
 });
 
 test("an unknown or missing event refuses, even with a matching input sha", async () => {
