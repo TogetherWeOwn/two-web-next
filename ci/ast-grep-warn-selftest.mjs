@@ -31,16 +31,19 @@ function checkByteLengthRuleCoverage() {
     writeFileSync(join(directory, nodePath), unsafe);
     writeFileSync(join(directory, cleanPath), "exceedsByteLimit(left.byteLength, max);\n");
     const git = (...args) => execFileSync("git", args, { cwd: directory });
+    const commit = (message, ...args) =>
+      git("-c", "core.hooksPath=/dev/null", "commit", "-qm", message, "--no-gpg-sign", ...args);
     git("init", "--quiet");
     git("add", "--", nodePath, cleanPath);
     git("config", "user.name", "Fixture");
     git("config", "user.email", "fixture@example.org");
-    git("-c", "core.hooksPath=/dev/null", "commit", "-qm", "Fixture", "--no-gpg-sign");
+    commit("Fixture");
     git("update-ref", "refs/remotes/origin/main", "HEAD");
     writeFileSync(join(directory, ".gitignore"), `${nodePath}\n`);
     writeFileSync(join(directory, nodePath), `${unsafe}// ast-grep-ignore\n${unsafe}`);
     writeFileSync(join(directory, jsPath), unsafe);
     renameSync(join(directory, cleanPath), join(directory, "ci/renamed.mjs"));
+    writeFileSync(join(directory, "ci/placeholder.mjs"), "");
     writeFileSync(join(directory, "public/generated.js"), unsafe);
     writeFileSync(
       join(directory, sveltePath),
@@ -80,13 +83,7 @@ function checkByteLengthRuleCoverage() {
     symlinkSync(join(root, "node_modules"), join(directory, "node_modules"));
     const event = join(directory, "event.json");
     writeFileSync(event, "{}");
-    const lint = spawnSync("npm", ["run", "scan:fetch-await"], {
-      cwd: directory,
-      encoding: "utf8",
-      env: { ...process.env, GITHUB_EVENT_PATH: event, GITHUB_ACTIONS: "" },
-    });
-    assert.equal(lint.status, 1, lint.error?.message ?? lint.stderr);
-    assert.deepEqual(lint.stderr.match(/^.+:\d+(?=: Use the shared byte-limit helpers for )/gm), [
+    const expected = [
       `${nodePath}:3`,
       "src/probe.jsx:2",
       "src/probe.tsx:2",
@@ -94,7 +91,27 @@ function checkByteLengthRuleCoverage() {
       "web/src/fallback.svelte:1",
       `${sveltePath}:2`,
       `${sveltePath}:6`,
-    ]);
+    ];
+    git("add", "--", nodePath);
+    commit("Plant comparison");
+    const planted = git("rev-parse", "HEAD").toString().trim();
+    commit("Feature tip", "--allow-empty");
+    for (const ref of ["refs/heads/feature", "refs/heads/main"]) {
+      if (ref === "refs/heads/main") {
+        git("update-ref", "HEAD", planted);
+        git("update-ref", "refs/remotes/origin/main", planted);
+      }
+      const lint = spawnSync("npm", ["run", "scan:fetch-await"], {
+        cwd: directory,
+        encoding: "utf8",
+        env: { ...process.env, GITHUB_EVENT_PATH: event, GITHUB_ACTIONS: "", GITHUB_REF: ref },
+      });
+      assert.equal(lint.status, 1, lint.error?.message ?? lint.stderr);
+      assert.deepEqual(
+        lint.stderr.match(/^.+:\d+(?=: Use the shared byte-limit helpers for )/gm),
+        expected,
+      );
+    }
     assert.throws(() => scanByteLengthComparisons(directory, false), /missing tracked files/);
     writeFileSync(join(directory, "ci/non-utf8.mjs"), Buffer.from([0xff]));
     assert.throws(() => scanByteLengthComparisons(directory), /ci\/non-utf8\.mjs: invalid UTF-8/);

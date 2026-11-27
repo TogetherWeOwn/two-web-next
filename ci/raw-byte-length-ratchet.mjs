@@ -21,14 +21,18 @@ function scan(files, read) {
   if (!files.length) return [];
   const snapshot = mkdtempSync(join(tmpdir(), "ast-grep-byte-length-"));
   try {
+    let expected = 0;
     for (const file of files) {
       const bytes = read(file);
       assert.ok(isUtf8(bytes), `${file}: invalid UTF-8`);
+      if (!bytes.length) continue;
+      expected++;
       const path = join(snapshot, file);
       mkdirSync(dirname(path), { recursive: true });
       // Use an equal-length replacement so directives cannot hide matches or move their locations.
       writeFileSync(path, bytes.toString("utf8").replaceAll("ast-grep-ignore", "ast-grep-checks"));
     }
+    if (!expected) return [];
     const { status, error, stdout, stderr } = spawnSync(
       "npx",
       [
@@ -51,7 +55,7 @@ function scan(files, read) {
     );
     assert.equal(status, 0, error?.message ?? stderr);
     assert.ok(
-      stderr.includes(`scannedFileCount=${files.length},skippedFileCount=0`),
+      stderr.includes(`scannedFileCount=${expected},skippedFileCount=0`),
       `Incomplete ast-grep scan:\n${stderr}`,
     );
     return JSON.parse(stdout);
@@ -138,7 +142,8 @@ function comparisonBase(cwd) {
     );
     return parents[0];
   }
-  const base = event.merge_group?.base_sha ?? event.before;
+  const mainRun = eventPath && process.env.GITHUB_REF === "refs/heads/main";
+  const base = event.merge_group?.base_sha ?? event.before ?? (mainRun ? "HEAD^1" : undefined);
   const args = base
     ? ["rev-parse", "--verify", "--end-of-options", `${base}^{commit}`]
     : ["merge-base", "HEAD", "origin/main"];
