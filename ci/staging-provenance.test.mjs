@@ -1,5 +1,6 @@
 import "./fixtures/staging-reservation-store.mjs";
 import "./fixtures/staging-lease-lifecycle.mjs";
+import "./fixtures/staging-reservation-acquisition.mjs";
 
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
