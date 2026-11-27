@@ -8,22 +8,39 @@ import { parse } from "yaml";
 import { fixtureNames } from "../kit-cutover-database.mjs";
 import { LEDGER_STATES, STAGING_WORKER } from "../kit-cutover-evidence.mjs";
 
-// Stub the database adapter at import time so cleanup calls its normal dependency.
+// Stub only the postgres driver at import time so cleanup exercises production removeFixture.
 const staging = new URL("../kit-cutover-staging.mjs?synthetic-cleanup", import.meta.url);
-const databaseModule = new URL("../kit-cutover-database.mjs", import.meta.url);
-const adapter = `export * from ${JSON.stringify(databaseModule.href)};
-export const removeFixture = (database, names) => database.remove(names);`;
-const hook = registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (context.parentURL === staging.href && specifier === "./kit-cutover-database.mjs") {
-      return { shortCircuit: true, url: `data:text/javascript,${encodeURIComponent(adapter)}` };
+const databaseModule = new URL("../kit-cutover-database.mjs?synthetic-cleanup", import.meta.url);
+const fakeControls = new Map();
+let stagingPromise;
+
+function loadStaging() {
+  stagingPromise ??= (async () => {
+    const hook = registerHooks({
+      resolve(specifier, context, nextResolve) {
+        if (context.parentURL === staging.href && specifier === "./kit-cutover-database.mjs") {
+          return { shortCircuit: true, url: databaseModule.href };
+        }
+        if (context.parentURL === databaseModule.href && specifier === "postgres") {
+          return { shortCircuit: true, url: import.meta.url };
+        }
+        return nextResolve(specifier, context);
+      },
+    });
+    try {
+      return await import(staging.href);
+    } finally {
+      hook.deregister();
     }
-    return nextResolve(specifier, context);
-  },
-});
-const { cleanup, rehearseIsolatedCutover, verifyServed } = await import(staging.href).finally(() =>
-  hook.deregister(),
-);
+  })();
+  return stagingPromise;
+}
+
+export default function postgres(url, options) {
+  const handler = fakeControls.get(url);
+  assert.ok(handler, "unexpected live database access");
+  return handler(options);
+}
 
 const identity = {
   sourceSha: "a".repeat(40),
@@ -63,6 +80,7 @@ test("isolated cutover always cleans up before uploading successful proof", asyn
 
 for (const failure of ["validation", "recording"]) {
   test(`isolated cutover ${failure} failure cleans its claim and emits no success`, async (t) => {
+    const { cleanup, rehearseIsolatedCutover, verifyServed } = await loadStaging();
     const runnerTemp = await mkdtemp(join(tmpdir(), "kit-cutover-cleanup-test-"));
     t.after(() => rm(runnerTemp, { recursive: true, force: true }));
     const claim = join(runnerTemp, "kit-cutover-claimed.json");
@@ -76,16 +94,43 @@ for (const failure of ["validation", "recording"]) {
     const workers = new Set([otherWorker]);
     const databases = new Set([other.db]);
     const logins = new Set([other.login]);
-    const database = {
-      get href() {
-        assert.fail("unexpected live database access");
-      },
-      async remove(claimedNames) {
-        assert.deepEqual(claimedNames, names);
-        assert.equal(databases.delete(claimedNames.db), true);
-        assert.equal(logins.delete(claimedNames.login), true);
-      },
-    };
+    const database = new URL(
+      `postgresql://two_web_cutover_owner@synthetic-cleanup.example.invalid/${failure}/two_web_cutover`,
+    );
+    const sqlEvents = [];
+    const controlEnds = [];
+    fakeControls.set(database.href, (connectOptions) => {
+      assert.equal(connectOptions.max, 1);
+      assert.equal(connectOptions.prepare, false);
+      function sql(strings, ...values) {
+        if (typeof strings === "string") return { identifier: strings };
+        const [resource, login] = values;
+        switch (strings.join("?").replace(/\s+/g, " ").trim()) {
+          case "DROP DATABASE IF EXISTS ? WITH (FORCE)":
+            assert.equal(typeof resource?.identifier, "string");
+            assert.equal(databases.delete(resource.identifier), true);
+            sqlEvents.push(["drop-database", resource.identifier]);
+            return [];
+          case "DROP ROLE IF EXISTS ?":
+            assert.equal(typeof resource?.identifier, "string");
+            assert.equal(logins.delete(resource.identifier), true);
+            sqlEvents.push(["drop-login", resource.identifier]);
+            return [];
+          case "SELECT EXISTS (SELECT FROM pg_database WHERE datname = ?) AS db, EXISTS (SELECT FROM pg_roles WHERE rolname = ?) AS login":
+            assert.equal(typeof resource, "string");
+            assert.equal(typeof login, "string");
+            sqlEvents.push(["inspect", resource, login]);
+            return [{ db: databases.has(resource), login: logins.has(login) }];
+          default:
+            assert.fail("unexpected SQL in isolated cleanup fixture");
+        }
+      }
+      sql.end = async (endOptions) => {
+        controlEnds.push(endOptions);
+      };
+      return sql;
+    });
+    t.after(() => fakeControls.delete(database.href));
     const owner = { end: t.mock.fn() };
     let scratch;
     const api = async (path, method = "GET") => {
@@ -177,6 +222,12 @@ for (const failure of ["validation", "recording"]) {
       owner.end.mock.calls.map(({ arguments: args }) => args),
       [[{ timeout: 0 }]],
     );
+    assert.deepEqual(sqlEvents, [
+      ["drop-database", names.db],
+      ["drop-login", names.login],
+      ["inspect", names.db, names.login],
+    ]);
+    assert.deepEqual(controlEnds, [{ timeout: 0 }]);
     await assert.rejects(readdir(scratch), { code: "ENOENT" });
     assert.deepEqual(workers, new Set([otherWorker]));
     assert.deepEqual(databases, new Set([other.db]));
