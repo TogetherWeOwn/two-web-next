@@ -934,6 +934,30 @@ export async function verifyAllocationSoak(env, { fetchImpl = fetch, now = Date.
   );
 }
 
+async function readPassiveLedgerZip(body) {
+  if (!body) throw new Error("Passive ledger zip has no body");
+  const bytes = Buffer.alloc(PASSIVE_LEDGER_MAX_BYTES);
+  const reader = body.getReader();
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read().catch(() => {
+        throw new Error("Passive ledger zip could not be read");
+      });
+      if (done) return bytes.subarray(0, size);
+      if (size + value.byteLength > PASSIVE_LEDGER_MAX_BYTES) {
+        // Request cancellation immediately. A storage failure must not delay or mask refusal.
+        void reader.cancel().catch(() => undefined);
+        throw new Error(`Passive ledger zip is over the ${PASSIVE_LEDGER_MAX_BYTES}-byte limit`);
+      }
+      bytes.set(value, size);
+      size += value.byteLength;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 // The candidate's staging passive ledgers: the artifact of the newest
 // e2e-staging run titled for the candidate, which must name the candidate.
 export async function fetchPassiveLedgers(
@@ -1021,14 +1045,14 @@ export async function fetchPassiveLedgers(
   if (redirect.status !== 302 || !location?.startsWith("https://")) {
     throw new Error(`Passive ledger download failed (HTTP ${redirect.status})`);
   }
-  const zip = await fetchImpl(location, { redirect: "error", signal: AbortSignal.timeout(60_000) });
+  const zip = await fetchImpl(location, {
+    redirect: "error",
+    signal: AbortSignal.timeout(60_000),
+  }).catch(() => {
+    throw new Error("Passive ledger download failed");
+  });
   if (!zip.ok) throw new Error(`Passive ledger download failed (HTTP ${zip.status})`);
-  const bytes = Buffer.from(await zip.arrayBuffer());
-  if (bytes.byteLength > PASSIVE_LEDGER_MAX_BYTES) {
-    throw new Error(
-      `Passive ledger zip is ${bytes.byteLength} bytes, over the ${PASSIVE_LEDGER_MAX_BYTES}-byte limit`,
-    );
-  }
+  const bytes = await readPassiveLedgerZip(zip.body);
   mkdirSync(dir, { recursive: true });
   const zipPath = join(dir, "ledger.zip");
   writeFileSync(zipPath, bytes);
