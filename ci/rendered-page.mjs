@@ -65,8 +65,10 @@ export function renderedAttribute(element, name) {
 }
 
 /** @param {Element} element */
-function isInactive(element) {
-  if (NON_RENDERING_TAGS.has(element.tagName)) return true;
+function isInactive(element, includeScripts, includeHidden) {
+  if (NON_RENDERING_TAGS.has(element.tagName) && !(includeScripts && element.tagName === "script"))
+    return true;
+  if (includeHidden) return false;
   if (element.namespaceURI === SVG_NAMESPACE && ["desc", "metadata"].includes(element.tagName))
     return true;
   if (renderedAttribute(element, "hidden") !== undefined) return true;
@@ -76,15 +78,21 @@ function isInactive(element) {
 }
 
 /** @param {Node} root */
-function* renderedNodes(root) {
+function* pageNodes(root, { includeScripts = false, scope = "rendered" } = {}) {
+  const response = scope === "response";
   const pending = [root];
   while (pending.length > 0) {
     const node = pending.pop();
-    if (node.nodeName === "#comment" || ("tagName" in node && isInactive(node))) continue;
+    if (
+      node.nodeName === "#comment" ||
+      (!response && "tagName" in node && isInactive(node, includeScripts, scope === "document"))
+    )
+      continue;
     yield node;
-    if ("childNodes" in node) {
-      for (let index = node.childNodes.length - 1; index >= 0; index--) {
-        pending.push(node.childNodes[index]);
+    const parent = response && "content" in node ? node.content : node;
+    if (node.nodeName !== "script" && "childNodes" in parent) {
+      for (let index = parent.childNodes.length - 1; index >= 0; index--) {
+        pending.push(parent.childNodes[index]);
       }
     }
   }
@@ -92,24 +100,28 @@ function* renderedNodes(root) {
 
 /**
  * Match elements in document order. `tag` is an HTML tag and `role` is an explicit attribute.
+ * An explicit script query can inspect the element's attributes. Script contents never render.
+ * `document` includes hidden nodes for metadata. `response` also visits template content.
  * @param {Node} root
- * @param {{ tag?: string, id?: string, role?: string }} selector
+ * @param {{ tag?: string, id?: string, role?: string, attributes?: Record<string, string>, scope?: "rendered" | "document" | "response" }} selector
  */
-export function* renderedElements(root, { tag, id, role }) {
-  for (const node of renderedNodes(root)) {
+export function* renderedElements(root, { tag, id, role, attributes, scope }) {
+  const entries = attributes ? Object.entries(attributes) : [];
+  for (const node of pageNodes(root, { includeScripts: tag === "script", scope })) {
     if (!("tagName" in node)) continue;
     if (tag !== undefined && (node.namespaceURI !== HTML_NAMESPACE || node.tagName !== tag))
       continue;
     if (id !== undefined && renderedAttribute(node, "id") !== id) continue;
     if (role !== undefined && renderedAttribute(node, "role") !== role) continue;
+    if (entries.some(([name, value]) => renderedAttribute(node, name) !== value)) continue;
     yield node;
   }
 }
 
 /** @param {Node} root */
-export function renderedText(root) {
+export function renderedText(root, { scope } = {}) {
   let text = "";
-  for (const node of renderedNodes(root)) {
+  for (const node of pageNodes(root, { scope })) {
     if ("value" in node) text += node.value;
   }
   return text;

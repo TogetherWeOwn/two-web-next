@@ -9,10 +9,12 @@ import { summarizeJourneys } from "../e2e/staging/journey-ledger.mjs";
 import {
   LOGIN_JOURNEYS,
   PARITY_ROUTES,
+  assertJoinAttemptsAdmission,
   assertMembersContract,
   assertReservedContract,
   assertRouteContract,
   expectedMarkerFor,
+  hasKitGuestChrome,
   isAllowlistedHost,
   isCoveredByExecutedRun,
   isInJourneyScope,
@@ -271,6 +273,7 @@ test("unit gate passes on the shipped manifest (no network)", async () => {
   });
   assert.equal(code, 0, `expected exit 0, got ${code}\n${lines.join("")}`);
   assert.ok(lines.some((line) => line.includes("mutant") || line.includes("Kit parity ledger")));
+  assert.match(lines.join(""), /\[passed\] unit: join-attempts mutant hidden-search fails/);
 });
 
 test("login journey ownership derives from the manifest", () => {
@@ -484,14 +487,14 @@ const attemptsPage =
   \`<html><head><title>Join attempts — TWO admin</title></head>\` +
   \`<body><a class="skip-link" href="#main">Skip to content</a>\` +
   \`<header class="bar"><nav aria-label="Administration"></nav></header>\` +
-  \`<main id="main"><section><h1>Join attempts</h1>\` +
+  \`<main id="main"><section><h1>Join <!--[--><span>attempts</span><!--]--></h1>\` +
   \`<p class="hint">Read-only. Last 90 days, newest first. Search is an exact Discord id or request id.</p>\` +
-  \`<form method="get" action="/admin/join-attempts" class="filters">\` +
+  \`<form class='extra filters' action='/admin/join-attempts' method=GET>\` +
   \`<input id="q" name="q" type="search" value="" />\` +
   \`<select id="outcome" name="outcome"></select></form>\` +
-  \`<div aria-label="Join attempts list"><table data-testid="join-attempts-table"><thead><tr>\` +
+  \`<div role="region" aria-label="Join attempts list"><table data-testid="join-attempts-table"><thead><tr>\` +
   \`<th scope="col">Outcome</th><th scope="col">Source</th><th scope="col">Discord id</th>\` +
-  \`<th scope="col">Request id</th><th scope="col">Attempted</th></tr></thead>\` +
+  \`<th scope="col">Request id</th><th scope="col">Attempted <!--[--><span>(UTC)</span><!--]--></th></tr></thead>\` +
   \`<tbody><tr><td data-testid="join-attempts-empty">No join attempts.</td></tr></tbody></table></div>\` +
   \`<nav aria-label="Join attempt pages"><span>Page 1</span></nav></section></main>\` +
   \`<footer>Together We Own · moderators only</footer></body></html>\`;
@@ -560,6 +563,55 @@ test("Kit Home parity reads one active heading with the pinned ID", () => {
   assert.equal(kitHomeHeadingText(heading + '<div id="home-heading"></div>'), "");
   assert.equal(kitHomeHeadingText(heading + '<svg id="home-heading"></svg>'), "");
   assert.equal(kitHomeHeadingText(heading.replace("home-heading", "other-heading")), "");
+});
+
+function fixtureResponse(label, html, status, contract) {
+  const headers = { "content-type": "text/html", "cache-control": "private, no-store" };
+  return { label, html, headers, status, expected: { status, marker: null, contract } };
+}
+
+test("Home and public chrome require active elements and accept hydration markers", () => {
+  const join = `<a href='/auth/discord' data-testid=join>Join with <!--[--><span>Discord</span><!--]--></a>`;
+  const heading = `<h1>The lobby is <!--[--><em>open</em><!--]-->.</h1>`;
+  const html = `<link href='/canonical' rel=canonical><a href='#main' class='extra skip-link'>Skip</a><nav aria-label='Primary'></nav><main id=main>${heading}${join}</main><p>Welcome, <!--[-->guest<!--]--></p><template><main></main></template>`;
+  const check = (body) => assertRouteContract(fixtureResponse("home", body, 200, "home"));
+  assert.deepEqual(check(html), []);
+  const inactive = html.replace(heading, `<template>${heading}</template>`);
+  assert.deepEqual(check(inactive.replace(join, `<div hidden>${join}</div>`)), [
+    "home: home heading present",
+    "home: guest join action or session-unavailable invite fallback present",
+  ]);
+  for (const payload of [
+    `<section hidden data-testid=home-standing></section>`,
+    `<noscript><div data-testid=home-standing></div></noscript>`,
+    `<script>const html = '<div data-testid="home-standing"></div>';</script>`,
+  ])
+    assert.deepEqual(check(html + payload), ["home: guest home must not show member RSVP data"]);
+  for (const payload of [
+    `<div hidden><form action=/logout>Signed in</form></div>`,
+    `<form><form action="/logout">Signed in</form></form>`,
+  ])
+    assert.deepEqual(check(html + payload), ["home: guest page must not show Sign out"]);
+  const header = `<header data-kit-site-header><a href=/auth/discord aria-label='Sign in with Discord'>Sign in</a></header>`;
+  assert.equal(hasKitGuestChrome(`${header}<p inert>Welcome, guest</p>`, "/auth/discord"), false);
+  const fallback = `<noscript>Welcome, <!--[-->guest<!--]--></noscript>`;
+  assert.equal(hasKitGuestChrome(header + fallback, "/auth/discord"), false);
+});
+
+test("join-attempt admission rejects hidden audit markup in the response", () => {
+  const admission = (html) => assertJoinAttemptsAdmission(fixtureResponse("admission", html, 403));
+  const heading = `<h1>Join attempt <!--[-->7<!--]--></h1>`;
+  const table = `<table data-testid=join-attempts-table></table>`;
+  for (const payload of [
+    `<div hidden>${heading}</div><template>${table}</template>`,
+    `<!-- <h1>Join attempt 7</h1><table data-testid="join-attempts-table"></table> -->`,
+    `<noscript>${heading}${table}</noscript>`,
+    `<h1 hidden>Join attempt <!--[-->7<!--]--><span hidden>extra</span></h1>${table}`,
+  ])
+    assert.deepEqual(admission(payload), [
+      "admission: admission answer never serves the list",
+      "admission: admission answer never serves the detail",
+    ]);
 });
 
 test("member-board empty text matches raw browser text across whitespace", () => {
@@ -1129,7 +1181,7 @@ globalThis.fetch = async (input) => {
   if (url.pathname === "/up") return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
   if (url.pathname === "/events") {
     const kit = url.host.startsWith("kit.");
-    const body = kit ? html.replace("<p>Welcome, guest</p>", '<header data-kit-site-header><a href="/auth/discord?next=%2Fevents" aria-label="Sign in with Discord">Sign in</a></header>') : html;
+    const body = kit ? html.replace("<p>Welcome, guest</p>", '<header data-kit-site-header><a href="/auth/discord?next=%2Fevents" aria-label="Sign in with Discord">Sign <!--[--><strong>in</strong><!--]--></a><span hidden aria-label="Sign in with Discord"></span></header>') : html;
     return new Response(body, { status: 200, headers: { "content-type": "text/html", "cache-control": "public, max-age=9999", vary: "Cookie, X-Two-Island", ...(kit ? { "x-two-renderer": "kit" } : {}) } });
   }
   return new Response("", { status: 404 });
@@ -1429,6 +1481,16 @@ test("an enabled nested-reads join-attempts pair is covered by the executed pari
     !failed.some((j) => j.reason?.includes("/admin/join-attempts")),
     "no failure may name the covered join-attempts pair",
   );
+});
+
+test("archive contract detects an inert binder", () => {
+  const html = `<html><head><link href=x rel=canonical><meta content='noindex, follow' name=robots></head><body><a class="skip-link" href="#main">s</a><nav aria-label="Primary"></nav><main><section data-testid="past-events"></section></main><p>Welcome, guest</p><script hidden src='/islands/past-events.js'></script></body></html>`;
+  const check = (body) => assertRouteContract(fixtureResponse("archive", body, 200, "archive"));
+  assert.deepEqual(check(html), []);
+  for (const attr of ["type=application/json", "nomodule"])
+    assert.deepEqual(check(html.replace("script hidden", `script ${attr}`)), [
+      "archive: shared island binder",
+    ]);
 });
 
 test("route contract detects a planted break", () => {

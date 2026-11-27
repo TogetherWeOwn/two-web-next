@@ -21,7 +21,12 @@ import { parseSeasonParam } from "../src/hotzones/season.ts";
 import { stripEmberDelta } from "./kit-archive-delta.mjs";
 import { sectionOf } from "./kit-section-contract.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
-import { parseRenderedPage, renderedElements, renderedText } from "./rendered-page.mjs";
+import {
+  parseRenderedPage,
+  renderedAttribute as attr,
+  renderedElements,
+  renderedText,
+} from "./rendered-page.mjs";
 
 export const PARITY_ROUTES = [
   // Compare guest structure, not live viewer-specific content.
@@ -554,19 +559,74 @@ function countMatches(html, pattern) {
 export function kitHomeHeadingText(html) {
   const [heading, duplicate] = renderedElements(parseRenderedPage(html), { id: "home-heading" });
   if (heading?.tagName !== "h1" || duplicate) return "";
-  return renderedText(heading).replace(/\s+/g, " ").trim();
+  return normalizedText(heading);
 }
 
-const kitHeader = /<header\b[^>]*\sdata-kit-site-header(?=[\s=>])[^>]*>[\s\S]*?<\/header>/;
-const discordSignIn =
-  /<a\b(?=[^>]*\shref="([^"]+)")[^>]*\saria-label="Sign in with Discord"[^>]*>\s*Sign in\s*<\/a>/;
-export function hasKitGuestChrome(html, href = "/auth/discord?next=%2Fevents") {
-  const header = kitHeader.exec(html)?.[0] ?? "";
-  return (
-    discordSignIn.exec(header)?.[1] === href &&
-    countMatches(header, /\saria-label="Sign in with Discord"/g) === 1 &&
-    !html.includes("Welcome, guest")
+function normalizedText(node, options) {
+  return renderedText(node, options).replace(/\s+/g, " ").trim();
+}
+
+function pageTexts(page, selector) {
+  return renderedElements(page, selector).map((node) => normalizedText(node));
+}
+
+function attributeTokens(value = "") {
+  return value.split(/[\t\n\f\r ]+/);
+}
+
+function hasElement(page, selector) {
+  return !renderedElements(page, selector).next().done;
+}
+
+function hasSkipLink(page) {
+  return renderedElements(page, { tag: "a", attributes: { href: "#main" } }).some((link) =>
+    attributeTokens(attr(link, "class")).includes("skip-link"),
   );
+}
+
+function hasNamedNav(page, label) {
+  return hasElement(page, { tag: "nav", attributes: { "aria-label": label } });
+}
+
+function canonicalLinks(page) {
+  return renderedElements(page, { tag: "link", scope: "document" }).filter((link) =>
+    attributeTokens(attr(link, "rel")?.toLowerCase()).includes("canonical"),
+  );
+}
+
+function isExecutableScript(script) {
+  const type = attr(script, "type");
+  const language = attr(script, "language");
+  const mime = type?.trim() ?? (language ? `text/${language}` : "");
+  const classic =
+    /^(?:(?:application|text)\/(?:x-)?(?:java|ecma)script|text\/(?:jscript|livescript|javascript1\.[0-5]))$/i;
+  if (mime.toLowerCase() === "module") return true;
+  return attr(script, "nomodule") === undefined && (!mime || classic.test(mime));
+}
+
+function hasGuestGreeting(page, html = "") {
+  const text = normalizedText(page, html ? { scope: "response" } : undefined);
+  return text.includes("Welcome, guest") || html.includes("Welcome, guest");
+}
+
+export function hasKitGuestChrome(html, href = "/auth/discord?next=%2Fevents") {
+  return kitGuestChrome(parseRenderedPage(html), href, html);
+}
+
+function parseResponse(html) {
+  return parseRenderedPage(html, { scriptingEnabled: false });
+}
+
+function kitGuestChrome(page, href, html, response = parseResponse(html)) {
+  const header = renderedElements(page, { tag: "header" }).find(
+    (node) => attr(node, "data-kit-site-header") !== undefined,
+  );
+  if (!header || hasGuestGreeting(response, html)) return false;
+  const [signIn, duplicate] = renderedElements(header, {
+    attributes: { "aria-label": "Sign in with Discord" },
+  });
+  const matches = signIn?.tagName === "a" && attr(signIn, "href") === href;
+  return !duplicate && matches && normalizedText(signIn) === "Sign in";
 }
 
 // One assertion set per route response. Returns an array of failure labels
@@ -592,37 +652,53 @@ export function assertRouteContract({ label, html, headers, status, expected }) 
   }
   // Semantic DOM/a11y contract (component snapshots stay unit-fast; this is
   // the runtime proof).
-  if (countMatches(html, /<main(?:\s|>)/gi) !== 1) failures.push(`${label}: exactly one <main>`);
-  if (!html.includes('class="skip-link" href="#main"'))
-    failures.push(`${label}: skip link targets #main`);
-  if (!html.includes('aria-label="Primary"'))
-    failures.push(`${label}: primary nav has an accessible name`);
+  const page = parseRenderedPage(html);
+  const response = parseResponse(html);
+  if ([...renderedElements(page, { tag: "main" })].length !== 1)
+    failures.push(`${label}: exactly one <main>`);
+  if (!hasSkipLink(page)) failures.push(`${label}: skip link targets #main`);
+  if (!hasNamedNav(page, "Primary")) failures.push(`${label}: primary nav has an accessible name`);
   const contract = expected.contract ?? "archive";
   // Transient outcome pages ship no canonical link on either renderer (unlike
   // the archive/landing contracts), so only those require one here.
-  if (contract !== "recovery" && !html.includes('<link rel="canonical"'))
+  const [canonical, duplicate] = canonicalLinks(page);
+  const canonicalHref = canonical?.parentNode?.nodeName === "head" && attr(canonical, "href");
+  if (contract !== "recovery" && (!canonicalHref || !canonicalHref.trim() || duplicate))
     failures.push(`${label}: one canonical URL`);
   if (contract === "archive") {
-    if (!html.includes('data-testid="past-events"'))
+    if (!hasElement(page, { attributes: { "data-testid": "past-events" } }))
       failures.push(`${label}: archive section testid present (no-JS content)`);
-    if (!html.includes('<meta name="robots" content="noindex, follow"'))
+    const robots = { name: "robots", content: "noindex, follow" };
+    if (!hasElement(page, { tag: "meta", scope: "document", attributes: robots }))
       failures.push(`${label}: archive never indexes`);
-    if (!html.includes('<script src="/islands/past-events.js"'))
-      failures.push(`${label}: shared island binder`);
+    const scripts = renderedElements(page, { tag: "script", scope: "document" });
+    const binder = scripts.some(
+      (script) => attr(script, "src") === "/islands/past-events.js" && isExecutableScript(script),
+    );
+    if (!binder) failures.push(`${label}: shared island binder`);
   } else if (contract === "home") {
     const kitHeading = /^(?:The lobby is open\.|Next game night: .+\. Come play with us\.)$/;
     const headingOk =
       marker === "kit"
         ? kitHeading.test(kitHomeHeadingText(html))
-        : /<h1\b[^>]*>\s*The lobby is open\.\s*<\/h1>/i.test(html);
+        : pageTexts(page, { tag: "h1" }).some((text) => /^The lobby is open\.$/i.test(text));
     if (!headingOk) failures.push(`${label}: home heading present`);
-    const oauthJoin =
-      /<a\b(?=[^>]*\shref="\/auth\/discord")(?=[^>]*\sdata-testid="join")[^>]*>\s*Join with Discord\s*<\/a>/i;
-    const inviteFallback =
-      /<a\b(?=[^>]*\shref="\/discord")(?=[^>]*\sdata-testid="discord-join")[^>]*>\s*Join with an invite link\s*<\/a>/i;
-    if (!oauthJoin.test(html) && !inviteFallback.test(html))
+    const hasJoin = renderedElements(page, { tag: "a" }).some((link) => {
+      const href = attr(link, "href");
+      const testId = attr(link, "data-testid");
+      const text = normalizedText(link).toLowerCase();
+      return (
+        (href === "/auth/discord" && testId === "join" && text === "join with discord") ||
+        (href === "/discord" && testId === "discord-join" && text === "join with an invite link")
+      );
+    });
+    if (!hasJoin)
       failures.push(`${label}: guest join action or session-unavailable invite fallback present`);
-    if (/data-testid="(?:home-standing|home-event-own-rsvp)"/.test(html))
+    const hasMemberData = renderedElements(response, { scope: "response" }).some((node) =>
+      ["home-standing", "home-event-own-rsvp"].includes(attr(node, "data-testid")),
+    );
+    // Also check private markers in comments and script strings.
+    if (hasMemberData || /data-testid="(?:home-standing|home-event-own-rsvp)"/.test(html))
       failures.push(`${label}: guest home must not show member RSVP data`);
     if ((get("cache-control") ?? "") !== "private, no-store")
       failures.push(`${label}: home is private, no-store`);
@@ -650,10 +726,12 @@ export function assertRouteContract({ label, html, headers, status, expected }) 
     failures.push(`${label}: bare Kit CSRF text (must be the hardened gate)`);
   const emberHeader = expected.marker === "kit" && (contract === "join" || contract === "events");
   const signInHref = contract === "events" ? "/auth/discord?next=%2Fevents" : "/auth/discord";
-  if (!(emberHeader ? hasKitGuestChrome(html, signInHref) : html.includes("Welcome, guest")))
+  if (!(emberHeader ? kitGuestChrome(page, signInHref, html, response) : hasGuestGreeting(page)))
     failures.push(`${label}: guest account chrome`);
-  // Check the logout control, not copy that may appear in guest content.
-  if (/<form\b[^>]*\saction="\/logout(?:\/everywhere)?"/i.test(html))
+  const hasLogout = renderedElements(response, { tag: "form", scope: "response" }).some((form) =>
+    /^\/logout(?:\/everywhere)?$/i.test(attr(form, "action") ?? ""),
+  );
+  if (hasLogout || /<form\b[^>]*\saction="\/logout(?:\/everywhere)?"/i.test(html))
     failures.push(`${label}: guest page must not show Sign out`);
   const secretHits = scrubSecrets(html);
   if (secretHits.length)
@@ -1144,7 +1222,20 @@ export function assertMembersAdmission({ label, html, headers, status, expected 
 // The raw provider/token payload never renders: only the recorded
 // outcome/source/request-id/discord-id fields appear, so OAuth-shaped field
 // names in the HTML fail here.
-function adminPageFailures({ label, html, headers, status, expected }) {
+const joinAttemptsPath = "/admin/join-attempts";
+const attemptsTable = { tag: "table", attributes: { "data-testid": "join-attempts-table" } };
+
+function hasJoinAttemptHeading(page, { scope } = {}) {
+  const title = /^\s*Join\s+attempt\s+\d+\s*$/;
+  return renderedElements(page, { tag: "h1", scope }).some((heading) => {
+    if (title.test(renderedText(heading, { scope }))) return true;
+    if (scope !== "response") return false;
+    const children = heading.childNodes.map((child) => renderedText(child));
+    return title.test(children.join(""));
+  });
+}
+
+function adminPageFailures({ label, html, headers, status, expected }, page) {
   const failures = [];
   const get = (name) => headers.get?.(name) ?? headers[name.toLowerCase()] ?? null;
   if (status !== expected.status) {
@@ -1163,17 +1254,18 @@ function adminPageFailures({ label, html, headers, status, expected }) {
   if (expected.marker === null && marker !== null) {
     failures.push(`${label}: Hono-owned route must not carry the Kit marker`);
   }
-  if (countMatches(html, /<main(?:\s|>)/gi) !== 1) failures.push(`${label}: exactly one <main>`);
-  if (!html.includes('class="skip-link" href="#main"'))
-    failures.push(`${label}: skip link targets #main`);
-  if (!html.includes('aria-label="Administration"'))
+  if ([...renderedElements(page, { tag: "main" })].length !== 1)
+    failures.push(`${label}: exactly one <main>`);
+  if (!hasSkipLink(page)) failures.push(`${label}: skip link targets #main`);
+  if (!hasNamedNav(page, "Administration"))
     failures.push(`${label}: administration nav has an accessible name`);
-  if (!html.includes("moderators only")) failures.push(`${label}: moderator footer present`);
+  if (!pageTexts(page, { tag: "footer" }).some((text) => text.includes("moderators only")))
+    failures.push(`${label}: moderator footer present`);
   // Admin pages carry no account chrome on either renderer: a guest banner
   // or a canonical URL on this surface is a shell mix-up.
-  if (html.includes("Welcome, guest"))
+  if (hasGuestGreeting(parseResponse(html), html))
     failures.push(`${label}: admin page must not show guest chrome`);
-  if (html.includes('<link rel="canonical"'))
+  if (!canonicalLinks(page).next().done || html.includes('<link rel="canonical"'))
     failures.push(`${label}: admin page carries no canonical URL`);
   if (html.includes("Cross-site POST form submissions"))
     failures.push(`${label}: bare Kit CSRF text (must be the hardened gate)`);
@@ -1189,47 +1281,67 @@ function adminPageFailures({ label, html, headers, status, expected }) {
 }
 
 export function assertJoinAttemptsContract({ label, html, headers, status, expected }) {
-  const failures = adminPageFailures({ label, html, headers, status, expected });
+  const page = parseRenderedPage(html);
+  const failures = adminPageFailures({ label, html, headers, status, expected }, page);
   if (status !== expected.status) return failures;
-  if (!/<h1[^>]*>Join attempts<\/h1>/.test(html))
+  if (!pageTexts(page, { tag: "h1" }).some((text) => text === "Join attempts"))
     failures.push(`${label}: join-attempts heading present`);
-  if (!html.includes("Search is an exact Discord id or"))
+  if (!normalizedText(page).includes("Search is an exact Discord id or"))
     failures.push(`${label}: exact-search hint present`);
-  if (!html.includes('<form method="get" action="/admin/join-attempts" class="filters">'))
-    failures.push(`${label}: filter form posts back to the list as GET`);
-  if (!html.includes('id="q" name="q" type="search"'))
-    failures.push(`${label}: exact-search input present`);
-  if (!html.includes('id="outcome" name="outcome"'))
-    failures.push(`${label}: outcome filter present`);
-  if (!html.includes('aria-label="Join attempts list"'))
-    failures.push(`${label}: labelled scroll region present`);
-  if (!html.includes('data-testid="join-attempts-table"'))
-    failures.push(`${label}: attempts table present`);
+  const forms = renderedElements(page, { tag: "form", attributes: { action: joinAttemptsPath } });
+  const form = forms.find(
+    (node) =>
+      attr(node, "method")?.toLowerCase() === "get" &&
+      attributeTokens(attr(node, "class")).includes("filters"),
+  );
+  if (!form) failures.push(`${label}: filter form posts back to the list as GET`);
+  const search = { tag: "input", id: "q", attributes: { name: "q", type: "search" } };
+  if (!form || !hasElement(form, search)) failures.push(`${label}: exact-search input present`);
+  const outcome = { tag: "select", id: "outcome", attributes: { name: "outcome" } };
+  if (!form || !hasElement(form, outcome)) failures.push(`${label}: outcome filter present`);
+  const region = renderedElements(page, {
+    role: "region",
+    attributes: { "aria-label": "Join attempts list" },
+  }).next().value;
+  if (!region) failures.push(`${label}: labelled scroll region present`);
+  const table = region && renderedElements(region, attemptsTable).next().value;
+  if (!table) failures.push(`${label}: attempts table present`);
+  const columns = new Set(
+    table ? pageTexts(table, { tag: "th", attributes: { scope: "col" } }) : [],
+  );
   for (const column of ["Outcome", "Source", "Discord id", "Request id", "Attempted"]) {
-    if (!html.includes(`<th scope="col">${column}</th>`))
+    if (!columns.has(column) && !(column === "Attempted" && columns.has("Attempted (UTC)")))
       failures.push(`${label}: ${column} column present`);
   }
-  const hasRowLink = /href="\/admin\/join-attempts\/\d+"/.test(html);
-  const hasEmpty = html.includes('data-testid="join-attempts-empty"');
-  if (!hasRowLink && !hasEmpty) failures.push(`${label}: attempt rows or empty state present`);
-  if (!html.includes('aria-label="Join attempt pages"'))
-    failures.push(`${label}: paging nav present`);
+  const hasResults =
+    table &&
+    renderedElements(table, { tag: "tbody" }).some(
+      (body) =>
+        renderedElements(body, { tag: "a" }).some((link) =>
+          /^\/admin\/join-attempts\/\d+$/.test(attr(link, "href") ?? ""),
+        ) || hasElement(body, { tag: "td", attributes: { "data-testid": "join-attempts-empty" } }),
+    );
+  if (!hasResults) failures.push(`${label}: attempt rows or empty state present`);
+  if (!hasNamedNav(page, "Join attempt pages")) failures.push(`${label}: paging nav present`);
   return failures;
 }
 
 export function assertJoinAttemptDetailContract({ label, html, headers, status, expected }) {
-  const failures = adminPageFailures({ label, html, headers, status, expected });
+  const page = parseRenderedPage(html);
+  const failures = adminPageFailures({ label, html, headers, status, expected }, page);
   if (status !== expected.status) return failures;
-  if (!/<h1[^>]*>Join attempt \d+<\/h1>/.test(html))
-    failures.push(`${label}: join-attempt heading present`);
-  if (!html.includes('<a href="/admin/join-attempts">Back to join attempts</a>'))
+  if (!hasJoinAttemptHeading(page)) failures.push(`${label}: join-attempt heading present`);
+  const backLinks = pageTexts(page, { tag: "a", attributes: { href: joinAttemptsPath } });
+  if (!backLinks.some((text) => text === "Back to join attempts"))
     failures.push(`${label}: back navigation targets the list`);
-  if (!html.includes("<h2>Outcome</h2>")) failures.push(`${label}: outcome section present`);
-  if (!html.includes("<h2>Trace</h2>")) failures.push(`${label}: trace section present`);
+  const sections = new Set(pageTexts(page, { tag: "h2" }));
+  if (!sections.has("Outcome")) failures.push(`${label}: outcome section present`);
+  if (!sections.has("Trace")) failures.push(`${label}: trace section present`);
+  const terms = new Set(pageTexts(page, { tag: "dt" }));
   for (const term of ["Outcome", "Source", "Attempted at (UTC)", "Request ID", "Discord ID"]) {
-    if (!html.includes(`<dt>${term}</dt>`)) failures.push(`${label}: ${term} term present`);
+    if (!terms.has(term)) failures.push(`${label}: ${term} term present`);
   }
-  if (!/<time datetime="[^"]+">/.test(html))
+  if (!renderedElements(page, { tag: "time" }).some((time) => attr(time, "datetime")?.trim()))
     failures.push(`${label}: attempted-at instant present`);
   return failures;
 }
@@ -1252,9 +1364,14 @@ export function assertJoinAttemptsAdmission({ label, html, headers, status, expe
         `${label}: guest bounce lands on /auth/discord (got ${JSON.stringify(location)})`,
       );
   }
-  if (html.includes('data-testid="join-attempts-table"'))
+  const page = parseResponse(html);
+  const options = { scope: "response" };
+  if (
+    html.includes('data-testid="join-attempts-table"') ||
+    hasElement(page, { attributes: attemptsTable.attributes, ...options })
+  )
     failures.push(`${label}: admission answer never serves the list`);
-  if (/<h1[^>]*>Join attempt \d+<\/h1>/.test(html))
+  if (/<h1[^>]*>Join attempt \d+<\/h1>/.test(html) || hasJoinAttemptHeading(page, options))
     failures.push(`${label}: admission answer never serves the detail`);
   const secretHits = scrubSecrets(html);
   if (secretHits.length)
@@ -1949,8 +2066,13 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
   );
   const joinAttemptsMutants = [
     [
+      "hidden-search",
+      (html) => html.replace('<input id="q"', '<input hidden id="q"'),
+      "exact-search input present",
+    ],
+    [
       "guest-chrome",
-      (html) => html.replace("</main>", "<p>Welcome, guest</p></main>"),
+      (html) => `${html}<noscript>Welcome, <!--[-->guest<!--]--></noscript>`,
       "admin page must not show guest chrome",
     ],
     ["shared-cache", (html) => html, "admin page answers private, no-store"],
@@ -1962,11 +2084,12 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     ["provider-payload", (html) => `${html}<!-- access_token -->`, "no raw provider payload"],
     [
       "canonical",
-      (html) =>
-        html.replace(
-          "</title>",
-          '</title><link rel="canonical" href="https://next.togetherweown.com/admin/join-attempts">',
-        ),
+      (html) => html.replace("</title>", '</title><link hidden href="/" rel=canonical>'),
+      "admin page carries no canonical URL",
+    ],
+    [
+      "templated-canonical",
+      (html) => `${html}<template><link rel="canonical" href="/"></template>`,
       "admin page carries no canonical URL",
     ],
     ["wrong-renderer", (html) => html, "renderer marker"],
@@ -2007,7 +2130,7 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
   const joinAttemptDetailGood =
     adminShellOpen +
     `<main id="main"><section><p><a href="/admin/join-attempts">Back to join attempts</a></p>` +
-    `<h1>Join attempt 7</h1>` +
+    `<h1>Join attempt <!--[-->7<!--]--></h1>` +
     `<p class="hint">Read-only. Attempted at and trace identifiers are shown as recorded.</p>` +
     `<h2>Outcome</h2><dl><dt>Outcome</dt><dd>added</dd><dt>Source</dt><dd>—</dd>` +
     `<dt>Attempted at (UTC)</dt><dd><time datetime="2026-10-01T00:00:00.000Z">2026-10-01T00:00:00.000Z</time></dd></dl>` +
