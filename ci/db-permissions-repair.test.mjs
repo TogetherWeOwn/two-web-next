@@ -608,20 +608,31 @@ test("executor authority refuses mismatched membership before any write", async 
   }
 });
 
-test("repair refuses missing plan provenance and stale live identity before a write", async () => {
+function repairPlanFixture() {
   const hash = (value) => createHash("sha256").update(value).digest("hex");
   const inventory = JSON.parse(read("db-permissions-repair-inventory.json"));
+  const before = "a".repeat(64);
+  const identity = {
+    database: "postgres",
+    authenticated: "approved_executor",
+    effective: "approved_executor",
+  };
   const plan = JSON.stringify({
-    before: "a".repeat(64),
+    before,
     after: "b".repeat(64),
-    identity: hash("postgres\0approved_executor"),
-    owners: inventory.map(() => "approved_executor"),
+    identity: hash(`${identity.database}\0${identity.authenticated}`),
+    owners: inventory.map(() => identity.effective),
   });
   const env = {
     PRODUCTION_DB_REPAIR_PLAN: plan,
     PRODUCTION_DB_REPAIR_PLAN_SHA256: hash(plan),
     PRODUCTION_DB_REPAIR_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:synthetic@${PLANETSCALE_PRODUCTION_HOST}/postgres?sslmode=verify-full`,
   };
+  return { env, before, identity };
+}
+
+test("repair refuses missing plan provenance and stale live identity before a write", async () => {
+  const { env } = repairPlanFixture();
   const staleIdentity = {
     database: "postgres",
     authenticated: "stale_executor",
@@ -655,6 +666,59 @@ test("repair refuses missing plan provenance and stale live identity before a wr
     assert.ok(statements.slice(0, 4).every((sql) => sql.startsWith("set local ")));
     assert.match(statements.at(-1), /^select pg_catalog\.current_database\(\)/);
     assert.equal(closed, true);
+  }
+});
+
+test("repair readback refuses an unapproved catalog digest in a read-only transaction", async () => {
+  const { env, before, identity } = repairPlanFixture();
+  const snapshotSql = read("db-permissions-repair-state.sql");
+  const state = JSON.stringify({
+    ledger: {
+      count: 34,
+      digest: "b1d91750ac74a8ad4744bb603bcae55bd23b919ecdae7621c54ff0fece4b245c",
+      ids: "d".repeat(64),
+    },
+  });
+
+  for (const digest of ["c".repeat(64), before]) {
+    const calls = [];
+    const tx = ([sql]) => {
+      calls.push(sql);
+      return sql.startsWith("select pg_catalog.current_database()") ? [identity] : [];
+    };
+    tx.unsafe = (sql) => {
+      calls.push(sql);
+      return [{ digest, state }];
+    };
+
+    const result = runRepair("readback", env, (_, options) => {
+      calls.push(["connect", options]);
+      return {
+        begin: async (mode, run) => {
+          calls.push(["begin", mode]);
+          return run(tx);
+        },
+        end: async (options) => {
+          calls.push(["end", options]);
+        },
+      };
+    });
+    if (digest === before) {
+      assert.equal(await result, "before");
+    } else {
+      await assert.rejects(result, { message: "Unclassified repair state" });
+    }
+    assert.deepEqual(calls, [
+      ["connect", { readOnly: true }],
+      ["begin", "isolation level repeatable read read only"],
+      "set local search_path = pg_catalog",
+      "set local lock_timeout = '2s'",
+      "set local statement_timeout = '15s'",
+      "set local transaction_timeout = '30s'",
+      "select pg_catalog.current_database()::text as database,\n    session_user::text as authenticated, current_user::text as effective",
+      snapshotSql,
+      ["end", { timeout: 5 }],
+    ]);
   }
 });
 
