@@ -13,7 +13,7 @@ import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
 import { jsx } from "hono/jsx";
 import { parseFragment } from "parse5";
-import { beforeAll, describe, expect, it } from "vitest";
+import { assert, beforeAll, describe, expect, it } from "vitest";
 import {
   PROFILE_ERROR_IDS,
   PROFILE_FIELD_IDS,
@@ -127,17 +127,13 @@ describe("leaderboard_opt_out error key maps to the switch control", () => {
 describe("Hono ProfilePage renders the leaderboard error", () => {
   it("links the summary to the switch with aria wiring and keeps the submitted choice", () => {
     const html = renderHono({ leaderboard_opt_out: LEADERBOARD_ERROR });
-    expect(html).toContain('data-testid="profile-error"');
-    expect(html).toContain('href="#profile-leaderboard-opt-out"');
-    expect(html).toContain('id="profile-leaderboard-opt-out-error"');
-    expect(html).toContain('aria-invalid="true"');
-    expect(html).toContain('aria-describedby="profile-leaderboard-opt-out-error"');
-    expect(html).toContain(
-      `<p id="profile-leaderboard-opt-out-error" class="error">${LEADERBOARD_ERROR}</p>`,
-    );
+    const { checkbox, nodes } = leaderboardError(html);
+    expectSummaryLink(nodes);
+    expect(attr(checkbox, "aria-invalid")).toBe("true");
+    expect(attr(checkbox, "aria-describedby")).toBe("profile-leaderboard-opt-out-error");
     // Submitted opt-out (true) keeps the switch ticked, like the other fields
     // keep their drafts.
-    expect(html).toMatch(/type="checkbox"[^>]*checked|checked[^>]*type="checkbox"/);
+    expect(attr(checkbox, "checked")).toBeDefined();
   });
 
   it("keeps the switch unticked when the submitted choice was false", () => {
@@ -145,25 +141,37 @@ describe("Hono ProfilePage renders the leaderboard error", () => {
       { leaderboard_opt_out: LEADERBOARD_ERROR },
       { bio: "", games_text: "", timezone: "", leaderboard_opt_out: false },
     );
-    expect(html).toContain('id="profile-leaderboard-opt-out-error"');
-    expect(html).toContain(
-      `<p id="profile-leaderboard-opt-out-error" class="error">${LEADERBOARD_ERROR}</p>`,
-    );
-    expect(html).not.toMatch(/type="checkbox"[^>]*checked|checked[^>]*type="checkbox"/);
+    const { checkbox } = leaderboardError(html);
+    expect(attr(checkbox, "checked")).toBeUndefined();
   });
 });
 
-const kitLeaderboardError = (html: string) => {
+const leaderboardError = (html: string, message = LEADERBOARD_ERROR) => {
   const nodes = elements(parseFragment(html));
   const error = nodes.find((node) => attr(node, "id") === "profile-leaderboard-opt-out-error");
   const checkbox = nodes.find((node) => attr(node, "id") === "profile-leaderboard-opt-out");
-  if (!error || !checkbox) throw new Error("Expected the leaderboard checkbox and its error");
+  assert(error && checkbox, "Expected the leaderboard checkbox and its error");
   expect(error.tagName).toBe("p");
   expect(attr(error, "class")?.split(/\s+/)).toContain("error");
-  expect(textOf(error)).toBe(LEADERBOARD_ERROR);
+  expect(textOf(error).trim()).toBe(message);
+  expect(checkbox.tagName).toBe("input");
+  expect(attr(checkbox, "name")).toBe("leaderboard_opt_out");
+  expect(attr(checkbox, "value")).toBe("1");
   expect(attr(checkbox, "type")).toBe("checkbox");
   return { checkbox, nodes };
 };
+
+function expectSummaryLink(nodes: ReturnType<typeof elements>, message = LEADERBOARD_ERROR) {
+  const summary = nodes.find((node) => attr(node, "data-testid") === "profile-error");
+  assert(summary, "Expected the profile error summary");
+  expect(attr(summary, "role")).toBe("alert");
+  const link = elements(summary).find(
+    (node) => attr(node, "href") === "#profile-leaderboard-opt-out",
+  );
+  assert(link?.tagName === "a", "Expected the summary link to the leaderboard field");
+  expect(link.parentNode?.nodeName).toBe("li");
+  expect(textOf(link)).toBe(message);
+}
 
 describe("Svelte ProfileView renders the leaderboard error", () => {
   it("links the summary to the switch with aria wiring and keeps the submitted choice", () => {
@@ -173,9 +181,8 @@ describe("Svelte ProfileView renders the leaderboard error", () => {
         values: { bio: "", games_text: "", timezone: "", leaderboard_opt_out: true },
       }),
     );
-    const { checkbox, nodes } = kitLeaderboardError(html);
-    expect(html).toContain('data-testid="profile-error"');
-    expect(html).toContain('href="#profile-leaderboard-opt-out"');
+    const { checkbox, nodes } = leaderboardError(html);
+    expectSummaryLink(nodes);
     expect(attr(checkbox, "aria-invalid")).toBe("true");
     expect(attr(checkbox, "aria-describedby")?.split(/\s+/)).toEqual([
       "profile-leaderboard-privacy-help",
@@ -194,18 +201,21 @@ describe("Svelte ProfileView renders the leaderboard error", () => {
         values: { bio: "", games_text: "", timezone: "", leaderboard_opt_out: false },
       }),
     );
-    const { checkbox } = kitLeaderboardError(html);
+    const { checkbox } = leaderboardError(html);
     expect(attr(checkbox, "checked")).toBeUndefined();
   });
 
   it("escapes a hostile leaderboard error instead of interpreting it", () => {
+    const hostile = "<script>alert(1)</script>";
     const html = renderView(
       baseProps({
-        errors: { leaderboard_opt_out: "<script>alert(1)</script>" },
+        errors: { leaderboard_opt_out: hostile },
         values: { bio: "", games_text: "", timezone: "", leaderboard_opt_out: false },
       }),
     );
-    expect(html).not.toContain("<script>alert(1)</script>");
-    expect(html).toContain("&lt;script>alert(1)&lt;/script>");
+    const { nodes } = leaderboardError(html, hostile);
+    expectSummaryLink(nodes, hostile);
+    const scripts = nodes.filter((node) => node.tagName === "script");
+    expect(scripts.map(textOf)).not.toContain("alert(1)");
   });
 });

@@ -7,10 +7,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
-import { beforeAll, describe, expect, it } from "vitest";
+import { parse } from "parse5";
+import { assert, beforeAll, describe, expect, it } from "vitest";
 import { resolveKitProfile } from "../src/profiles/kit";
 import { ProfilePage } from "../src/profiles/pages";
 import { createMemoryProfileStore, type MemberView } from "../src/profiles/store";
+import { attr, elements, textOf } from "./helpers/kit-edit-controls";
 
 const APP_URL = "https://next.example.test";
 const PRIVATE_SESSION_MARKER = "viewer-session-secret-must-not-render";
@@ -25,14 +27,18 @@ const { compile } = webRequire("svelte/compiler") as {
 
 type RenderView = (props: Record<string, unknown>) => { html: string; head: string };
 
+function parseHead(html: string) {
+  const head = elements(parse(html)).find((el) => el.tagName === "head");
+  assert(head);
+  return head;
+}
+
 // Read only the rendered head: a body tag or copied helper value cannot
 // conceal removal of either independent ProfileView share-image tag.
 function expectBrandImage(head: string) {
+  const metas = elements(parseHead(head)).filter((el) => el.tagName === "meta");
   const contents = (property: string) =>
-    [...head.matchAll(/<meta\s+[^>]*>/g)]
-      .map(([tag]) => tag)
-      .filter((tag) => tag.includes(`property="${property}"`))
-      .map((tag) => tag.match(/content="([^"]*)"/)?.[1]);
+    metas.filter((el) => attr(el, "property") === property).map((el) => attr(el, "content"));
   expect(contents("og:image")).toEqual(["https://next.example.test/og-1200x630.png"]);
   expect(contents("og:image:alt")).toEqual(["Together We Own community logo"]);
 }
@@ -49,32 +55,34 @@ const member: MemberView = {
   joinedAt: new Date("2024-06-15T00:00:00Z"),
   leaderboardOptOut: true,
 };
-function visibleContract(html: string): string[] {
-  const text = (value: string | undefined) => value?.replace(/\s+/g, " ").trim() ?? "";
-  const capture = (pattern: RegExp) => {
-    const match = html.match(pattern);
-    expect(match, pattern.source).not.toBeNull();
-    return text(match?.[1]);
-  };
-  const games = [...html.matchAll(/<div data-testid="profile-games">([\s\S]*?)<\/div>/g)];
+function findElement(nodes: ReturnType<typeof elements>, tag: string, name: string, value: string) {
+  return nodes.find((el) => el.tagName === tag && attr(el, name) === value);
+}
+
+function expectVisibleContract(nodes: ReturnType<typeof elements>) {
+  const games = nodes.filter((el) => attr(el, "data-testid") === "profile-games");
   expect(games).toHaveLength(1);
-  const gameNames = [...(games[0]?.[1] ?? "").matchAll(/<li[^>]*>([^<]*)<\/li>/g)].map((match) =>
-    text(match[1]),
+  const [list] = games;
+  const avatar = findElement(nodes, "span", "data-testid", "profile-avatar");
+  assert(list?.tagName === "div" && avatar);
+  const image = elements(avatar).find((el) => el.tagName === "img");
+  assert(image);
+  expect(attr(image, "src")).toBe(
+    `https://cdn.discordapp.com/avatars/${member.id}/${member.avatar}.png?size=128`,
   );
-  expect(gameNames).toHaveLength(member.games.length);
-  const avatar = html.match(/<span data-testid="profile-avatar"[^>]*>([\s\S]*?)<\/span>/);
-  expect(avatar).not.toBeNull();
-  const image = avatar?.[1]?.match(/<img src="([^"]+)"/);
-  expect(image).not.toBeNull();
-  return [
-    text(image?.[1]),
-    capture(/data-testid="profile-name"[^>]*>([\s\S]*?)<\/h1>/),
-    capture(/data-testid="profile-handle"[^>]*>([\s\S]*?)<\/p>/),
-    capture(/data-testid="profile-bio"[^>]*>([\s\S]*?)<\/p>/),
-    gameNames.join(" "),
-    capture(/data-testid="profile-timezone"[^>]*>([\s\S]*?)<\/p>/),
-    capture(/data-testid="profile-joined"[^>]*>([\s\S]*?)<\/p>/),
-  ];
+  const items = elements(list).filter((el) => el.tagName === "li");
+  expect(items.map((el) => textOf(el).trim())).toEqual(["Chess", "Go"]);
+  for (const [tag, id, text] of [
+    ["h1", "name", "Public Member"],
+    ["p", "handle", "@Public Member"],
+    ["p", "bio", "Member bio"],
+    ["p", "timezone", "Timezone: Europe/London"],
+    ["p", "joined", "Joined June 2024"],
+  ] as const) {
+    const el = findElement(nodes, tag, "data-testid", `profile-${id}`);
+    assert(el, `Expected profile-${id}`);
+    expect(textOf(el).replace(/\s+/g, " ").trim()).toBe(text);
+  }
 }
 
 beforeAll(async () => {
@@ -119,8 +127,9 @@ export function renderView(props) {
   rmSync(scratch, { recursive: true, force: true });
 }, 120000);
 
-function leaksViewerIdentity(html: string): boolean {
-  return html.includes(PRIVATE_SESSION_MARKER);
+// These are response-wide privacy canaries, including comments and other non-rendered bytes.
+function expectPrivateDataAbsent(html: string, ...markers: string[]) {
+  for (const marker of [PRIVATE_SESSION_MARKER, ...markers]) expect(html).not.toContain(marker);
 }
 
 describe("Kit authenticated public-member profile output", () => {
@@ -168,22 +177,32 @@ describe("Kit authenticated public-member profile output", () => {
     expectBrandImage(kitHead);
     const honoHtml = ProfilePage(pageProps)!.toString() as string;
 
-    expect(visibleContract(kitHtml)).toEqual(visibleContract(honoHtml));
     for (const html of [kitHtml, honoHtml]) {
-      expect(html).toContain("Public Member");
-      expect(html).toContain("Member bio");
-      expect(html).toContain("Chess");
-      expect(html).toContain("Go");
-      expect(html).toContain("Europe/London");
-      expect(html).toContain("Joined June 2024");
-      expect(html).toContain('name="robots" content="noindex, nofollow"');
-      expect(html).toContain('action="/logout"');
-      expect(html).toContain('data-testid="profile-admin-link"');
-      expect(html).not.toContain("Edit your profile");
-      expect(html).not.toContain("leaderboard_opt_out");
-      expect(html).not.toContain("Hide me from the member leaderboard");
-      expect(html).not.toContain(viewerId);
-      expect(leaksViewerIdentity(html)).toBe(false);
+      const page = parse(html);
+      const nodes = elements(page);
+      expectVisibleContract(nodes);
+      const head = nodes.find((el) => el.tagName === "head");
+      assert(head);
+      const robots = findElement(elements(head), "meta", "name", "robots");
+      assert(robots);
+      expect(attr(robots, "content")).toBe("noindex, nofollow");
+      const signOut = findElement(nodes, "form", "action", "/logout");
+      const admin = findElement(nodes, "a", "data-testid", "profile-admin-link");
+      assert(signOut);
+      assert(admin);
+      expect(attr(signOut, "method")).toBe("post");
+      expect(attr(admin, "href")).toBe("/admin");
+      const text = textOf(page);
+      const attributes = nodes.flatMap((el) => el.attrs.map(({ value }) => value));
+      for (const copy of ["Edit your profile", "Hide me from the member leaderboard"]) {
+        expect(text).not.toContain(copy);
+        expect(attributes.some((value) => value.includes(copy))).toBe(false);
+      }
+      expect(nodes.some((el) => attr(el, "name") === "leaderboard_opt_out")).toBe(false);
+      expect(nodes.some((el) => attr(el, "data-saved-leaderboard-opt-out") !== undefined)).toBe(
+        false,
+      );
+      expectPrivateDataAbsent(html, viewerId, "credential-canary", "leaderboard_opt_out");
     }
   });
 
@@ -219,12 +238,19 @@ describe("Kit authenticated public-member profile output", () => {
     expectBrandImage(kitHead);
     const honoHtml = ProfilePage(pageProps)!.toString() as string;
 
-    expect(visibleContract(kitHtml)).toEqual(visibleContract(honoHtml));
     for (const html of [kitHtml, honoHtml]) {
-      expect(html).toContain('data-testid="profile-form"');
-      expect(html).toContain("Edit your profile");
-      expect(html).toMatch(/<input[^>]*name="leaderboard_opt_out"[^>]*checked/);
-      expect(leaksViewerIdentity(html)).toBe(false);
+      const nodes = elements(parse(html));
+      expectVisibleContract(nodes);
+      const form = findElement(nodes, "form", "data-testid", "profile-form");
+      const heading = findElement(nodes, "h2", "id", "edit-heading");
+      assert(form && heading);
+      expect(textOf(heading).trim()).toBe("Edit your profile");
+      const checkbox = findElement(elements(form), "input", "id", "profile-leaderboard-opt-out");
+      assert(checkbox);
+      expect(attr(checkbox, "name")).toBe("leaderboard_opt_out");
+      expect(attr(checkbox, "type")).toBe("checkbox");
+      expect(attr(checkbox, "checked")).toBeDefined();
+      expectPrivateDataAbsent(html);
     }
   });
 });
