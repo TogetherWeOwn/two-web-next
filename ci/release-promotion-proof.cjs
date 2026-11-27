@@ -4,6 +4,7 @@
 // Selectors and receipt JSON are untrusted. No deploy, credential fallback or
 // unchecked publication is available here; exhausted discovery fails closed.
 const { execFileSync } = require("node:child_process");
+const { createHash } = require("node:crypto");
 const path = require("node:path");
 
 const WORKFLOW = ".github/workflows/deploy-production.yml";
@@ -194,6 +195,11 @@ function verifyPromotion({ repo, sha }) {
       "gh",
       ["api", "--method", "GET", `repos/${repo}/actions/artifacts/${id(artifact.id)}/zip`],
       MAX_ARCHIVE,
+    );
+    // GitHub's artifact digest covers the downloaded ZIP bytes.
+    requireProof(
+      `sha256:${createHash("sha256").update(archive).digest("hex")}` === artifact.digest,
+      "artifact archive digest mismatch",
     );
     // Read a fixed bounded member in memory; never gh run download/unzip or
     // filesystem extraction of untrusted paths. Python's stdlib checks CRC too.

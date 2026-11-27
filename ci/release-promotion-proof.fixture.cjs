@@ -4,6 +4,7 @@
 // commands fail rather than reaching GitHub. The real request builder and local
 // git history remain under test. Run/attempt hints select evidence, never authorize it.
 const { execFileSync, spawnSync } = require("node:child_process");
+const { createHash } = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -12,11 +13,27 @@ const REPO = "o/r";
 const RUN = 700;
 const ATTEMPT = 2;
 const VERSION = "12345678-1234-4234-8234-123456789abc";
-const DIGEST = `sha256:${"4".repeat(64)}`;
 const artifactName = (sha, attempt = ATTEMPT) => `production-promotion-${sha}-${RUN}-${attempt}`;
 const SCRIPT = path.resolve(
   process.env.RELEASE_REQUEST || path.join(__dirname, "release-request.cjs"),
 );
+
+function zipReceipt(receipt) {
+  // ZipInfo supplies a fixed timestamp so repeated reads model one immutable artifact.
+  const bytes = execFileSync(
+    "python3",
+    [
+      "-c",
+      "import io,sys,zipfile; b=io.BytesIO(); z=zipfile.ZipFile(b,'w'); z.writestr(zipfile.ZipInfo('promotion.json'),sys.stdin.buffer.read()); z.close(); sys.stdout.buffer.write(b.getvalue())",
+    ],
+    { input: receipt },
+  );
+  return {
+    base64: bytes.toString("base64"),
+    digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+    size: bytes.length,
+  };
+}
 
 function fakeGh() {
   const root = process.env.PROOF_FIXTURE;
@@ -31,13 +48,6 @@ function fakeGh() {
   const json = (value) => {
     process.stdout.write(JSON.stringify(value));
     process.exit(0);
-  };
-  const receipt = (artifactId) => {
-    if (state.proofError === "download") fail("gh: Service Unavailable (HTTP 503)");
-    if (artifactId === "800") return state.receiptText ?? JSON.stringify(state.receipt);
-    const other = state.additionalReceipts[artifactId];
-    if (!other) fail("gh: Not Found (HTTP 404)");
-    return JSON.stringify(other);
   };
   if (argv[0] === "api") {
     const endpoint = argv.find((arg) => arg.startsWith("repos/") || arg.startsWith("/repos/"));
@@ -124,16 +134,10 @@ function fakeGh() {
         if (!artifact) fail("gh: Not Found (HTTP 404)");
         json(artifact);
       }
-      // A real ZIP with a single JSON member, not arbitrary JSON masquerading as
-      // the GitHub download response. Python's standard library needs no tools.
-      const encoded = Buffer.from(receipt(artifactId)).toString("base64");
-      const zip = spawnSync("python3", [
-        "-c",
-        "import base64,io,sys,zipfile; b=io.BytesIO(); z=zipfile.ZipFile(b,'w'); z.writestr('promotion.json',base64.b64decode(sys.argv[1])); z.close(); sys.stdout.buffer.write(b.getvalue())",
-        encoded,
-      ]);
-      if (zip.status !== 0) fail(String(zip.stderr), 2);
-      process.stdout.write(zip.stdout);
+      if (state.proofError === "download") fail("gh: Service Unavailable (HTTP 503)");
+      const archive = state.archives[artifactId];
+      if (!archive) fail("gh: Not Found (HTTP 404)");
+      process.stdout.write(Buffer.from(archive.base64, "base64"));
       process.exit(0);
     }
     fail(`fixture: unexpected API route ${route}`, 2);
@@ -238,9 +242,7 @@ function fixture(t) {
       {
         id: 800,
         name: artifactName(sha),
-        digest: DIGEST,
         expired: false,
-        size_in_bytes: 512,
         workflow_run: {
           id: RUN,
           repository_id: 100,
@@ -308,8 +310,31 @@ function fixture(t) {
     ...(hints ? { PROMOTION_RUN_ID: String(RUN), PROMOTION_RUN_ATTEMPT: String(ATTEMPT) } : {}),
     ...extraEnv,
   });
+  let archiveDigests;
   const runPublisher = (options = {}) => {
-    if (options.save !== false) fs.writeFileSync(provider, JSON.stringify(state));
+    if (options.save !== false) {
+      const archives = Object.fromEntries(
+        Object.entries(state.additionalReceipts).map(([id, receipt]) => [
+          id,
+          zipReceipt(JSON.stringify(receipt)),
+        ]),
+      );
+      archives[800] = zipReceipt(state.receiptText ?? JSON.stringify(state.receipt));
+      archiveDigests = Object.fromEntries(
+        Object.entries(archives).map(([id, archive]) => [id, archive.digest]),
+      );
+      const { artifactDigest = archives[800].digest } = options;
+      const artifacts = state.artifacts.map((artifact) => {
+        const archive = archives[artifact.id];
+        if (!archive) return artifact;
+        return {
+          ...artifact,
+          digest: artifact.id === 800 ? (artifactDigest ?? undefined) : archive.digest,
+          size_in_bytes: archive.size,
+        };
+      });
+      fs.writeFileSync(provider, JSON.stringify({ ...state, artifacts, archives }));
+    }
     fs.writeFileSync(callsFile, "");
     const output = path.join(root, "output");
     fs.writeFileSync(output, "");
@@ -327,10 +352,16 @@ function fixture(t) {
       .map((line) => JSON.parse(line));
     const text = fs.readFileSync(output, "utf8");
     const line = /^request=(.*)$/m.exec(text);
-    return { ...result, calls, output: text, request: line ? JSON.parse(line[1]) : null };
+    return {
+      ...result,
+      archiveDigests,
+      calls,
+      output: text,
+      request: line ? JSON.parse(line[1]) : null,
+    };
   };
   return { root, git, sha, historical, state, run: runPublisher, commit, environment };
 }
 
 if (process.argv[2] === "--fake-gh") fakeGh();
-module.exports = { fixture, REPO, RUN, ATTEMPT, VERSION, DIGEST, artifactName };
+module.exports = { fixture, REPO, RUN, ATTEMPT, VERSION, artifactName };
