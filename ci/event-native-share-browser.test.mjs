@@ -613,41 +613,32 @@ const suggestionViewports = [
   { width: 390, height: 844 },
 ];
 
-// A keyboard user can scroll before tabbing. Place the upcoming link at the
-// edge of the reserved scrollport, then let the browser move focus natively.
+// Frame the screenshot comparisons at the same scrollport edge.
 async function alignSuggestion(link, block) {
   await link.evaluate((node, block) => node.scrollIntoView({ block, behavior: "instant" }), block);
 }
 
-async function visitSuggestionFocus(page, status, linkTestId, observe) {
+async function visitSuggestionFocus(page, status, linkTestId, observe, beforeTab) {
   const links = page.getByTestId(linkTestId);
-  if (status === "cancelled") {
-    await tabTo(page, page.getByTestId("event-cancelled-ics"));
-    await alignSuggestion(links.first(), "end");
-    await page.keyboard.press("Tab");
-  } else {
-    await tabTo(page, links.first());
-  }
-  await expect(links.first()).toBeFocused();
-  await observe(links.first(), "first-link");
+  const preceding =
+    status === "cancelled"
+      ? page.getByTestId("event-cancelled-ics")
+      : page.getByTestId("event-roster-guest-nudge").getByRole("link");
+  await tabTo(page, preceding);
 
-  await alignSuggestion(links.last(), "end");
-  await page.keyboard.press("Tab");
-  await expect(links.last()).toBeFocused();
-  await observe(links.last(), "last-link");
-
+  const tab = async (link, state, key = "Tab") => {
+    await beforeTab?.(link, state);
+    await page.keyboard.press(key);
+    await expect(link).toBeFocused();
+    await observe(link, state);
+  };
+  await tab(links.first(), "first-link");
+  await tab(links.last(), "last-link");
   if (status === "published") {
-    const join = page.getByTestId("event-related-join");
-    await alignSuggestion(join, "end");
-    await page.keyboard.press("Tab");
-    await expect(join).toBeFocused();
-    await observe(join, "join");
+    await tab(page.getByTestId("event-related-join"), "join");
   }
   const previous = status === "published" ? links.last() : links.first();
-  await alignSuggestion(previous, "start");
-  await page.keyboard.press("Shift+Tab");
-  await expect(previous).toBeFocused();
-  await observe(previous, "reverse");
+  await tab(previous, "reverse", "Shift+Tab");
 }
 
 async function assertSuggestionOutline(link, compact, published) {
@@ -708,7 +699,17 @@ async function captureSuggestionFocus(t) {
       await page.evaluate(() => document.fonts.ready);
       await alignSuggestion(page.locator(`#${headingId}`), "center");
       await capture("resting");
-      await visitSuggestionFocus(page, status, linkTestId, (_link, state) => capture(state));
+      await visitSuggestionFocus(
+        page,
+        status,
+        linkTestId,
+        (_link, state) => capture(state),
+        async (link, state) => {
+          if (state !== "first-link" || status === "cancelled") {
+            await alignSuggestion(link, state === "reverse" ? "start" : "end");
+          }
+        },
+      );
       assert.deepEqual(blocked, []);
       assert.deepEqual(errors, []);
     }
@@ -755,8 +756,27 @@ describe("Kit event suggestions expose named markerless lists and keep native li
           const calendar = page.getByTestId("event-cancelled-ics");
           await expect(calendar).toHaveAttribute("href", `/events/${SHARE_KEY}.ics`);
         }
-        await visitSuggestionFocus(page, status, linkTestId, (link) =>
-          assertSuggestionOutline(link, viewport.width === 390, status === "published"),
+        await visitSuggestionFocus(
+          page,
+          status,
+          linkTestId,
+          async (link, state) => {
+            if (state === "first-link") {
+              assert.ok(
+                await page.evaluate(() => scrollY > 0),
+                "Tab must scroll to reach the list",
+              );
+            }
+            await assertSuggestionOutline(link, viewport.width === 390, status === "published");
+          },
+          async (link, state) => {
+            if (state === "first-link") {
+              // Keep the preceding link focused and start the next native Tab
+              // with its destination below the viewport.
+              await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+              await expect(link).not.toBeInViewport();
+            }
+          },
         );
 
         if (listEvidence) {
