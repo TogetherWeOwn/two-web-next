@@ -2,11 +2,16 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import {
   KIT_VIEWER_ROW_NAME,
   normalizeKitViewerRow,
 } from "../e2e/kit-parity/member-board-viewer-row.mjs";
+import {
+  withPublicVoiceBrowserWorkers,
+  withWorkerCleanup,
+} from "./fixtures/kit-worker-lifecycle.mjs";
 import { createDiscordReadRendezvous } from "./kit-discord-read-rendezvous.mjs";
 import { normalizeSection } from "./kit-section-contract.mjs";
 
@@ -14,6 +19,146 @@ const repo = fileURLToPath(new URL("../", import.meta.url));
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const job = workflow.split("\n  check:\n")[1]?.split(/\n  [\w-]+:\n/)[0] ?? "";
 const e2eWorkflow = readFileSync(new URL("../.github/workflows/e2e.yml", import.meta.url), "utf8");
+
+test("public voice browser Worker lifecycle", async (t) => {
+  const ready = ["start off", "ready off", "start enabled", "ready enabled"];
+  const verified = [...ready, "verify"];
+  const bothClosed = ["stop off", "stop enabled", "close off", "close enabled"];
+
+  const cases = [
+    { name: "closes both before later parity", expected: [...verified, ...bothClosed, "later"] },
+    {
+      name: "closes the first Worker if the second launch fails",
+      failAt: "start enabled",
+      expected: [...ready.slice(0, 3), "stop off", "close off"],
+    },
+    {
+      name: "closes both if the second Worker fails readiness",
+      failAt: "ready enabled",
+      expected: [...ready, ...bothClosed],
+    },
+    {
+      name: "closes both and preserves a browser assertion failure",
+      failAt: "verify",
+      expected: [...verified, ...bothClosed],
+    },
+    {
+      name: "fails if a bounded stop returns without a close event",
+      unconfirmed: true,
+      expected: [...verified, ...bothClosed.slice(0, 3)],
+    },
+    {
+      name: "reports unconfirmed closure without replacing a browser assertion",
+      failAt: "verify",
+      unconfirmed: true,
+      expected: [...verified, ...bothClosed.slice(0, 3)],
+    },
+  ];
+
+  for (const { name, failAt, unconfirmed, expected } of cases) {
+    await t.test(name, async (context) => {
+      const events = [];
+      const failure = new assert.AssertionError({ message: `synthetic failure at ${failAt}` });
+      const report = context.mock.method(console, "error", () => {});
+      function step(event) {
+        events.push(event);
+        if (event === failAt) throw failure;
+      }
+      async function start(name) {
+        step(`start ${name}`);
+        return { name, origin: `https://${name}.invalid`, stopped: false };
+      }
+      const proof = withPublicVoiceBrowserWorkers({
+        startOff: () => start("off"),
+        startEnabled: () => start("enabled"),
+        waitForWorker: async ({ name }) => step(`ready ${name}`),
+        verify: async (off, enabled) => {
+          assert.equal(off, "https://off.invalid");
+          assert.equal(enabled, "https://enabled.invalid");
+          await nextTurn();
+          step("verify");
+        },
+        stopWorker: async (worker) => {
+          step(`stop ${worker.name}`);
+          await nextTurn();
+          if (worker.name === "enabled") {
+            await nextTurn();
+            if (unconfirmed) return;
+          }
+          worker.stopped = true;
+          step(`close ${worker.name}`);
+        },
+      });
+      if (failAt) {
+        await assert.rejects(proof, (error) => error === failure);
+      } else if (unconfirmed) {
+        await assert.rejects(proof, /Could not confirm closure .*\(enabled\)/);
+      } else {
+        await proof;
+        step("later");
+      }
+      assert.deepEqual(events, expected);
+      assert.deepEqual(
+        report.mock.calls.map(({ arguments: [label, error] }) => [label, error.message]),
+        failAt && unconfirmed
+          ? [
+              [
+                "Worker cleanup failed",
+                "Could not confirm closure of public voice browser Workers (enabled)",
+              ],
+            ]
+          : [],
+      );
+    });
+  }
+});
+
+test("public voice browser Worker lifecycle is awaited before the installed live Worker starts", () => {
+  const runner = readFileSync(new URL("./kit-worker-e2e.mjs", import.meta.url), "utf8");
+  const start = runner.indexOf("await withPublicVoiceBrowserWorkers({");
+  const confirmed = runner.indexOf('console.log("PASS public voice browser Workers stopped")');
+  const live = runner.indexOf('await startWorker("kit-live",');
+  assert.ok(start >= 0 && start < confirmed && confirmed < live);
+  const scope = runner.slice(start, confirmed);
+  assert.match(scope, /startWorker\(\s*"kit-voice-off"/);
+  assert.match(scope, /startWorker\("kit-voice"/);
+  assert.match(
+    scope,
+    /await verifyKitPublicVoice\(offOrigin, enabledOrigin, databaseUrl, secret\)/,
+  );
+  assert.match(scope, /waitForWorker: \(instance\) => listen\(instance\.child, instance\.origin/);
+  assert.match(scope, /\bstopWorker,\s*\}\);\s*$/);
+});
+
+test("public voice browser Worker lifecycle preserves the original error through final cleanup", async (t) => {
+  const proofError = new assert.AssertionError({ message: "synthetic browser assertion" });
+  const cleanupError = new Error("synthetic final cleanup found a live Worker");
+  const report = t.mock.method(console, "error", () => {});
+  const cleanupStates = [];
+  async function finalCleanup(failed) {
+    cleanupStates.push(failed);
+    throw cleanupError;
+  }
+  await assert.rejects(
+    withWorkerCleanup(() => Promise.reject(proofError), finalCleanup),
+    (error) => error === proofError,
+  );
+  await assert.rejects(
+    withWorkerCleanup(() => Promise.resolve(), finalCleanup),
+    (error) => error === cleanupError,
+  );
+  assert.deepEqual(cleanupStates, [true, false]);
+  assert.deepEqual(
+    report.mock.calls.map(({ arguments: args }) => args),
+    [["Worker cleanup failed", cleanupError]],
+  );
+  const runner = readFileSync(new URL("./kit-worker-e2e.mjs", import.meta.url), "utf8");
+  assert.match(
+    runner,
+    /const runProof = liveSocketOnly\s*\?\s*runInstalledLive\s*:\s*installedAdminRsvp\s*\?\s*runAdminRsvpControls\s*:\s*runWorkerParity;/,
+  );
+  assert.match(runner, /await withWorkerCleanup\(runProof, async \(failed\) => \{/);
+});
 
 test("the Playwright loader links the parity config before the runner guard refuses local execution", () => {
   const env = { ...process.env };
