@@ -231,7 +231,9 @@ jobs:
       - name: Re-verify exact-SHA full CI before Worker deploy
         id: web-deploy-ci
         # Queue creation or the Tail deploy may outlive the accepted CI attempt; this step runs directly before the deploy.
-        run: node ci/staging-deploy-gate.mjs
+        # One fresh automatic recheck after a read timeout adds at most 30 seconds to this job.
+        # Older candidate checkouts ignore the flag and keep their single-pass gate.
+        run: node ci/staging-deploy-gate.mjs --retry-ci-timeout
         env:
           GITHUB_TOKEN: ${{ github.token }}
       - name: Deploy to Cloudflare Workers

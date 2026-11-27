@@ -3908,6 +3908,82 @@ test("isolated Kit season board shows the named viewer at both widths", async ({
   }
 });
 
+test("isolated Kit season board headings stick at the visible top edge without JavaScript", async ({
+  browser,
+}) => {
+  await prepareSeasonBoardFixtures();
+  const url = "https://example.test/season-board-fixture";
+  const page = await browser.newPage({ javaScriptEnabled: false });
+  try {
+    await page.route("**/*", (route) =>
+      route.request().url() === url
+        ? route.fulfill({
+            contentType: "text/html",
+            body: memberBoardDocument("season", "overall"),
+          })
+        : route.abort("blockedbyclient"),
+    );
+    const table = page.getByRole("table");
+    const viewer = table.getByRole("row").filter({
+      has: page.getByRole("rowheader", { name: `${VIEWER} (you)`, exact: true }),
+    });
+    const captureHeadings = async (name: string) => {
+      const path = test.info().outputPath(`${name}.png`);
+      await page.screenshot({ path, animations: "disabled", caret: "hide" });
+      await test.info().attach(name, { path, contentType: "image/png" });
+    };
+    const verifyStickyHeadings = async (state: string, stickySiteHeader: boolean) => {
+      await table.evaluate((element) =>
+        window.scrollBy(0, element.getBoundingClientRect().top + 160),
+      );
+      const header = page.getByRole("banner");
+      const bounds = (await header.boundingBox())!;
+      if (stickySiteHeader) expect(bounds.y).toBe(0);
+      else expect(bounds.y + bounds.height).toBeLessThanOrEqual(0);
+      const edge = stickySiteHeader ? bounds.y + bounds.height : 0;
+      for (const heading of await table.getByRole("columnheader").all()) {
+        expect((await heading.boundingBox())!.y).toBeCloseTo(edge, 0);
+        // Body rows cross behind the headings while the table scrolls.
+        expect(
+          await heading.evaluate((cell) => {
+            const rect = cell.getBoundingClientRect();
+            return cell.contains(
+              document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2),
+            );
+          }),
+        ).toBe(true);
+      }
+      await expect(viewer).toBeInViewport({ ratio: 1 });
+      await expect(viewer).toHaveAttribute("aria-current", "true");
+      await captureHeadings(`kit-review-season-sticky-after-${state}`);
+      // Reproduce the old desktop inset at the same scroll position. The
+      // compact shell already supplied both mobile insets before the fix.
+      const oldInset = await page.evaluateHandle(() => {
+        const style = document.createElement("style");
+        style.textContent = `@media (width > 820px) {
+          .board-layout .member-board-table thead th { top: var(--two-layout-sticky-offset); }
+        }`;
+        return document.head.appendChild(style);
+      });
+      await captureHeadings(`kit-review-season-sticky-before-${state}`);
+      await oldInset.evaluate((style) => style.remove());
+    };
+    for (const { name, size } of PARITY_VIEWPORTS) {
+      await page.setViewportSize(size);
+      await page.goto(url);
+      await expect(table.getByRole("columnheader")).toHaveCount(3);
+      await verifyStickyHeadings(name, name === "mobile");
+      if (name === "mobile") {
+        await page.getByRole("link", { name: "Menu", exact: true }).click();
+        await expect(page.getByRole("link", { name: "Close menu" })).toBeVisible();
+        await verifyStickyHeadings("mobile-fragment", false);
+      }
+    }
+  } finally {
+    await page.close();
+  }
+});
+
 test("isolated Kit frozen season standings fit both widths in each state", async ({ page }) => {
   await prepareSeasonBoardFixtures();
   await page.route("**/*", (route) => route.abort("blockedbyclient"));

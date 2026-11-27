@@ -155,13 +155,18 @@ version, approvals and watch results.
    the approved recovery with outbound activity disabled, and verify same-day
    branch and credential cleanup. Retain only redacted results. For an
    uncertain isolation result, use `readback` against the actual canonical end
-   and resolve any unclassified state before retrying. For a grant
+   and resolve any unclassified state before retrying. A failed step that says
+   the isolation or inverse committed confirms the database acknowledged the
+   mutation before connection cleanup failed. Use `readback` to verify the
+   expected state and investigate cleanup before continuing. For a grant
    regression, run the protected `undo` with the same plan and authority and
    select the actual end, `1033_session-roles-checked-at` or
    `1037_waitlist-offers`. `readback` and `undo` can use the approved `main`
-   ancestor while the dispatcher and its selector are unchanged. Verify that
-   undo restored the exact pre-isolation grants and direct ledger access while
-   preserving the permissions repair and the observed ledger. If required,
+   ancestor while the dispatcher and its selector are unchanged. Pin the
+   revised dispatcher when approving the forward change so the same pin
+   remains usable for recovery. Verify that undo restored the exact pre-isolation
+   grants and direct ledger access while preserving the permissions repair and
+   the observed ledger. If required,
    use [`rollback-production`](../.github/workflows/rollback-production.yml)
    with `environment: production`, the recorded direct-ledger Hono UUID as
    `version_id`, and the serving UUID as `expected_current_version_id`.

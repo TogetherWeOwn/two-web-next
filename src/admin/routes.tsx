@@ -37,7 +37,11 @@ import { requestBodyLimit } from "../body-limit";
 import { Hono } from "hono";
 import type { Context, MiddlewareHandler } from "hono";
 import { queuePreviewAdmission, queuePreviewHandler, type QueuePreviewVars } from "./queue-preview";
-import { queueRedispatchHandler, queueRedispatchPreThrottleRefusal } from "./queue-redispatch";
+import {
+  QUEUE_REDISPATCH_PATH,
+  queueRedispatchHandler,
+  queueRedispatchPreThrottleRefusal,
+} from "./queue-redispatch";
 import {
   SOURCE_EVIDENCE_REFUSED_METHODS,
   sourceEvidenceBodyLimit,
@@ -301,6 +305,15 @@ function refusedFeaturedSave(
   );
 }
 
+// Both owners install this chain after staging and moderator admission. The
+// cap and I/O-free refusals precede the shared admin-write throttle.
+export const queueRedispatchAction = [
+  requestBodyLimit("action"),
+  queueRedispatchPreThrottleRefusal,
+  throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
+  queueRedispatchHandler,
+] as const;
+
 /**
  * Optional overrides (tests only — production resolves through the seams).
  * A bare SessionStore overrides session resolution (guard pins); live route
@@ -378,21 +391,7 @@ export function buildAdminApp(admit: MiddlewareHandler<Vars>) {
   admin.use("/queue/*", queuePreviewAdmission);
   admin.use("/*", admit);
   admin.get("/queue/failed/:id/preview", queuePreviewHandler);
-  // Action-class admin write: the wire cap runs before the shared throttle
-  // (oversized attempts 413 without spending the bucket), the cap refuses
-  // before parsing, and the handler itself never parses a payload
-  // (dispatch always starts from the reconciled source). The two I/O-free
-  // refusals (non-operator 403, malformed id/query 422) run between the cap
-  // and the throttle with zero spend, even under an exhausted budget; the
-  // handler keeps the same checks as idempotent defense. Only the dedicated
-  // staging operator principal can reach the handler.
-  admin.post(
-    "/queue/failed/:id/redispatch",
-    requestBodyLimit("action"),
-    queueRedispatchPreThrottleRefusal,
-    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
-    queueRedispatchHandler,
-  );
+  admin.post(QUEUE_REDISPATCH_PATH, ...queueRedispatchAction);
 
   // Legacy Filament bookmarks: guard first, no query forwarding.
   // Only the featured edit alias needs a resource read to resolve the imported ID.

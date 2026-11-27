@@ -19,6 +19,11 @@ import { stagingRobots } from "../headers";
 import { getPublicApiEvent, listPublicApiEvents, type PublicApiEvent } from "../events/reads";
 import { publicReadGuard } from "../events/routes-shared";
 import { etagFor, matchesIfNoneMatch } from "../http/conditional";
+import {
+  exceedsCodePointLimit,
+  exceedsUtf8ByteLimit,
+  fitsUtf8ByteLimit,
+} from "../http/length-limit";
 import { inviteDestination } from "../invite";
 import { wallDateIso, wallTimeHm } from "../islands/contracts";
 import { MCP_SERVER_NAME, MCP_SERVER_VERSION } from "../mcp/identity";
@@ -210,6 +215,12 @@ const MCP_SERVER_INFO_META = JSON.stringify({
   "io.modelcontextprotocol/serverInfo": { name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION },
 });
 
+function eventResultJson(body: string, notice?: string): string {
+  const noticeBlock =
+    notice === undefined ? "" : `,${JSON.stringify({ type: "text", text: notice })}`;
+  return `{"content":[{"type":"text","text":${JSON.stringify(body)}}${noticeBlock}],"structuredContent":${body},"resultType":"complete","_meta":${MCP_SERVER_INFO_META}}`;
+}
+
 /**
  * Bytes of the largest serialized MCP tool result that carries this event
  * body: the text copy (string-escaped), the structuredContent copy, the
@@ -219,11 +230,7 @@ const MCP_SERVER_INFO_META = JSON.stringify({
  * and SSE/HTTP framing are not counted.
  */
 export function eventResultBytes(body: string, notice?: string): number {
-  const noticeBlock =
-    notice === undefined ? "" : `,${JSON.stringify({ type: "text", text: notice })}`;
-  return TEXT.encode(
-    `{"content":[{"type":"text","text":${JSON.stringify(body)}}${noticeBlock}],"structuredContent":${body},"resultType":"complete","_meta":${MCP_SERVER_INFO_META}}`,
-  ).length;
+  return TEXT.encode(eventResultJson(body, notice)).byteLength;
 }
 
 /**
@@ -258,7 +265,7 @@ export function fitByteBudget(
   notice: string,
 ): FittedEventBody {
   let body = JSON.stringify(wrap(rows));
-  if (eventResultBytes(body) <= maxBytes) return { body, trimmed: false };
+  if (fitsUtf8ByteLimit(eventResultJson(body), maxBytes)) return { body, trimmed: false };
   for (;;) {
     let longest: PublicApiEventDto | null = null;
     for (const row of rows) {
@@ -278,7 +285,7 @@ export function fitByteBudget(
         ? ""
         : `${codePoints.slice(0, Math.ceil(codePoints.length / 2) - 1).join("")}…`;
     body = JSON.stringify(wrap(rows));
-    if (eventResultBytes(body, notice) <= maxBytes) return { body, trimmed: true };
+    if (fitsUtf8ByteLimit(eventResultJson(body, notice), maxBytes)) return { body, trimmed: true };
   }
 }
 
@@ -396,7 +403,7 @@ export const publicApiHandlers = {
       const trimmed = rawGame.trim();
       if (
         trimmed === "" ||
-        [...trimmed].length > PUBLIC_API_GAME_MAX_LENGTH ||
+        exceedsCodePointLimit(trimmed, PUBLIC_API_GAME_MAX_LENGTH) ||
         containsControlCharacters(trimmed)
       ) {
         return emptyEventCollection(c);
@@ -468,7 +475,7 @@ export const publicApiHandlers = {
       return internalFault(c, err, PUBLIC_API_PATHS.events);
     }
     // Final guard: an oversized success is never cached or served.
-    if (TEXT.encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes) return unavailable(c);
+    if (exceedsUtf8ByteLimit(body, API_PUBLIC_BOUNDS.maxBodyBytes)) return unavailable(c);
     // Store under the clamped page the database answered, never the raw alias:
     // N past-the-end pages occupy one entry and cannot evict page 1. Filtered
     // entries carry the game so games never share bytes.
@@ -517,7 +524,7 @@ export const publicApiHandlers = {
       return internalFault(c, err, PUBLIC_API_PATHS.event);
     }
     // Final guard: an oversized success is never cached or served.
-    if (TEXT.encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes) return unavailable(c);
+    if (exceedsUtf8ByteLimit(body, API_PUBLIC_BOUNDS.maxBodyBytes)) return unavailable(c);
     return servePublicJson(c, key, body, generation);
   },
 

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { fitsUtf8ByteLimit } from "../http/length-limit";
 import { SNAPSHOT_BYTES, utcTimestamp } from "./transport";
 
 // Compact envelope with a 20-digit guild ID, 16-digit sequence and nanosecond UTC timestamp.
@@ -96,8 +97,9 @@ export function snapshotTopics(value: unknown, guildId: string): LiveState | nul
   if (state.voice.some(({ userId, channelId }) => !users.has(userId) || !voiceRoom(channelId)))
     return null;
   if (state.events.some(({ channelId: id }) => id !== null && !voiceRoom(id))) return null;
-  const bytes = new TextEncoder().encode(JSON.stringify(state)).byteLength;
-  return bytes <= SNAPSHOT_BYTES - SNAPSHOT_ENVELOPE_BYTES ? state : null;
+  return fitsUtf8ByteLimit(JSON.stringify(state), SNAPSHOT_BYTES - SNAPSHOT_ENVELOPE_BYTES)
+    ? state
+    : null;
 }
 
 const upsert = <T extends string, R>(topic: T, value: z.ZodType<R>, key: (row: R) => string) =>

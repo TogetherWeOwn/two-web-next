@@ -68,6 +68,54 @@ const hash = (input) => createHash("sha256").update(input).digest("hex");
 const snapshotSql = read("db-permissions-repair-state.sql");
 const MISSING_EDGE = [true, false, false];
 
+test("serving isolation rejects repeated membership pairs before connecting", async () => {
+  const login = "fixture_serving";
+  const membership = [
+    { role: "pg_read_all_data", grantor: "fixture_a", admin: false, inherit: true, set: true },
+    { role: "pg_read_all_data", grantor: "fixture_b", admin: false, inherit: false, set: false },
+    { role: "pg_write_all_data", grantor: "fixture_a", admin: false, inherit: true, set: true },
+  ];
+  const [edge] = membership;
+  const connectorReached = new Error("Synthetic connector reached");
+  const run = (operation, edges) => {
+    const raw = JSON.stringify({
+      add: [],
+      after: hash("after"),
+      artifact: { sourceSha: "a".repeat(40), digest: hash("artifact") },
+      before: hash("before"),
+      identity: hash("identity"),
+      membership: edges,
+      remove: [],
+      servingRole: login,
+      version: "00000000-0000-4000-8000-000000000001",
+    });
+    return runServingIsolation(
+      operation,
+      "1033_session-roles-checked-at",
+      {
+        PRODUCTION_DB_ISOLATION_PLAN: raw,
+        PRODUCTION_DB_ISOLATION_PLAN_SHA256: hash(raw),
+        PRODUCTION_DB_ISOLATION_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:fixture@${PLANETSCALE_PRODUCTION_HOST}/postgres?sslmode=verify-full`,
+      },
+      {
+        login,
+        connect() {
+          throw connectorReached;
+        },
+      },
+    );
+  };
+  for (const operation of ["forward", "undo", "readback"]) {
+    await assert.rejects(run(operation, membership), (error) => error === connectorReached);
+    for (const repeated of [edge, { ...edge, inherit: false, set: false }]) {
+      await assert.rejects(run(operation, [...membership, repeated]), {
+        code: "ERR_ASSERTION",
+        message: "Duplicate serving role membership",
+      });
+    }
+  }
+});
+
 async function denies(query, code = "42501") {
   await assert.rejects(query, (error) => {
     assert.equal(error.code, code);
@@ -243,6 +291,41 @@ const runAuthority = (connect, operation) => {
     () => connect(provisioner),
   );
 };
+
+async function assertExecutorLockRefused(restore, connect, operation) {
+  await withClient(restore.admin(), (holder) =>
+    holder.begin(async (tx) => {
+      const [{ acquired }] =
+        await tx`select pg_try_advisory_xact_lock(${webMigrationLockKey}) as acquired`;
+      assert.equal(acquired, true, "The competing transaction must hold the Web migration lock");
+      const before = await roleCatalog(tx);
+      await withClient(connect(provisioner), async (client) => {
+        const statements = [];
+        let closed = false;
+        client.options.debug = (_id, statement) => statements.push(statement.trim());
+        client.options.onclose = () => {
+          closed = true;
+        };
+        await assert.rejects(
+          runAuthority(() => client, operation),
+          {
+            code: "ERR_ASSERTION",
+            actual: false,
+            expected: true,
+            operator: "strictEqual",
+          },
+        );
+        assert.ok(statements.includes("select pg_try_advisory_xact_lock($1) as acquired"));
+        assert.doesNotMatch(statements.join("\n"), /\bpg_auth_members\b|^(?:grant|revoke)\b/im);
+        // Check cleanup before withClient performs its fallback close.
+        assert.equal(closed, true, "The executor must await connection shutdown");
+        await assert.rejects(client`select 1`, { code: "CONNECTION_ENDED" });
+      });
+      assert.deepEqual(await roleCatalog(tx), before);
+    }),
+  );
+}
+
 const run = (connect, direction, before, after) => {
   const plan = JSON.stringify({ before, after, owners, identity: identity(executor) });
   return runRepair(
@@ -478,6 +561,7 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
   });
   const { databaseReadiness } = await import(pathToFileURL(outfile).href);
   const isolationQueries = [];
+  const aclCommands = new Set();
   const {
     run: isolate,
     version,
@@ -488,17 +572,23 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
       login: app,
       database: "postgres",
       migrationRole: migrator,
-      connect() {
-        const client = connectMigrator();
-        isolationQueries.length = 0;
-        client.options.debug = (_id, statement, parameters) => {
+      connect: () => {
+        const client = fresh(migrator, "postgres", (_id, statement, parameters) => {
+          const command = /^(grant|revoke)\b/i.exec(statement.trimStart())?.[0];
+          const kind =
+            command?.toLowerCase() ??
+            (statement === "select pg_try_advisory_xact_lock($1) as acquired"
+              ? "advisory-lock"
+              : statement === "lock table drizzle.__drizzle_migrations in share mode nowait"
+                ? "relation-lock"
+                : "other");
+          if (command) aclCommands.add(command.toLowerCase());
           isolationQueries.push({
-            statement,
-            advisoryKey: statement.startsWith("select pg_try_advisory_xact_lock(")
-              ? Number(parameters[0])
-              : undefined,
+            kind,
+            advisoryKey: kind === "advisory-lock" ? Number(parameters[0]) : undefined,
           });
-        };
+        });
+        isolationQueries.length = 0;
         return client;
       },
       firstEnd: originalEnd,
@@ -554,6 +644,22 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
   assert.equal(originalGrants.length, originalObjects.length);
   const roles = () => withClient(restore.admin(), roleCatalog);
   const baselineRoles = await roles();
+  // Keep the row count and hashes intact while changing the restored history.
+  await withClient(restore.admin(), async (owner) => {
+    const last = base.rows.at(-1);
+    const changedTimestamp = String(BigInt(last.created_at) + 1n);
+    await owner`update drizzle.__drizzle_migrations set created_at = ${changedTimestamp}
+      where created_at = ${last.created_at}`;
+    const divergent = [...base.rows.slice(0, -1), { ...last, created_at: changedTimestamp }];
+    assert.deepEqual(await readServingLedger(owner), divergent);
+    await assert.rejects(isolate("readback"), /Migration history is not an exact prefix/);
+    assert.deepEqual(await readServingLedger(owner), divergent);
+    await owner`update drizzle.__drizzle_migrations set created_at = ${last.created_at}
+      where created_at = ${changedTimestamp}`;
+    assert.deepEqual(await readServingLedger(owner), base.rows);
+    assert.equal(await isolate("readback"), "before");
+  });
+  t.diagnostic("Readback refused the same-count timestamp mismatch and accepted the exact ledger.");
   const readiness = await probe(base, false);
   t.diagnostic("Web, Jobs and both Bot logins passed on the repaired 1033 baseline.");
   const assertMigrationLockRefused = async (operation, options, expectedState) => {
@@ -581,6 +687,27 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
     );
   };
   const forward = { readiness: { ...readiness, revision: { version_id: version } } };
+  await withClient(restore.admin(), async (sql) => {
+    await sql`create sequence public.fixture_unreviewed_serving_seq`;
+    try {
+      assert.equal(await isolate("readback"), "before");
+      const before = await inspect(fresh);
+      await assert.rejects(isolate("forward", forward), /Public serving inventory changed/);
+      assert.deepEqual([...aclCommands], [], "Inventory refusal issued a grant or revoke");
+      const after = await inspect(fresh);
+      assert.deepEqual(
+        after.state.ledger,
+        before.state.ledger,
+        "Inventory refusal changed the ledger",
+      );
+      assert.equal(after.digest, before.digest, "Inventory refusal changed the catalog");
+    } finally {
+      await sql`drop sequence public.fixture_unreviewed_serving_seq`;
+    }
+  });
+  t.diagnostic(
+    "Unexpected public sequence refused before any grant or revoke. Catalog and ledger matched.",
+  );
   await t.test("failed serving postcheck rolls back ACLs and allows a clean retry", () =>
     assertServingPostcheckRollback({
       admin: restore.admin,
@@ -595,7 +722,9 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
       probeBefore: () => probe(base, false),
       retryForward: async () => {
         await assertMigrationLockRefused("forward", forward, "before");
+        aclCommands.clear();
         assert.equal(await isolate("forward", forward), "committed");
+        assert.deepEqual(aclCommands, new Set(["grant", "revoke"]));
         t.diagnostic(
           "Held Web migration lock refused forward before ACL changes. Retry committed.",
         );
@@ -860,7 +989,14 @@ test("PostgreSQL 18 branch replay preserves repair and Bot scope with alternate 
     phase = "refuse repair during a snapshot write";
     const unprovisioned = await inspect(connect);
     assert.deepEqual(namedRepairScope(unprovisioned), namedRepairScope(originalRepairState));
+    await assertExecutorLockRefused(restore, connect, "provision");
     await runAuthority(connect, "provision");
+    changes(
+      replayed.edges,
+      (await readRestore()).edges,
+      [],
+      [[migrator, executor, provisioner, false, true, true]],
+    );
     const pre = await inspect(connect);
     const before = pre.digest;
     const expected = await withClient(connect(executor), expectedForward);
@@ -886,11 +1022,15 @@ test("PostgreSQL 18 branch replay preserves repair and Bot scope with alternate 
     assert.equal(await repair("undo"), "committed");
     assert.equal(await repair("readback"), "before");
     assert.deepEqual(await readRestore(), provisionedRoles);
+    await assertExecutorLockRefused(restore, connect, "revoke");
     await runAuthority(connect, "revoke");
     assert.deepEqual(await inspect(connect), unprovisioned);
     assert.deepEqual(await readRestore(), replayed);
     await webReads(fresh, false);
     await botReads(connect);
+    t.diagnostic(
+      "The held Web migration lock refused provision and revoke before membership access and closed both clients. Both scoped transitions passed after release.",
+    );
     t.diagnostic(
       "Exact undo restored the original digest and the first revoke removed temporary authority.",
     );

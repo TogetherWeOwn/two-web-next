@@ -1399,6 +1399,7 @@ function stubRepo({ target, previous, sql, up, seen = {} }) {
     if (parsed.pathname.endsWith("/contents/drizzle/meta/_journal.json")) {
       const ref = parsed.searchParams.get("ref");
       const tags = ref === TARGET ? target : ref === PREVIOUS ? previous : assert.fail(ref);
+      seen.journals = [...(seen.journals ?? []), ref];
       return Response.json({ encoding: "base64", content: journal(tags) });
     }
     const tag = parsed.pathname.match(/\/contents\/drizzle\/([^/]+)\.sql$/)?.[1];
@@ -1413,6 +1414,64 @@ function stubRepo({ target, previous, sql, up, seen = {} }) {
     assert.fail(`unexpected path ${parsed.pathname}`);
   };
 }
+
+test("rollback compatibility refuses malformed or duplicate journal tags before reading SQL", async (t) => {
+  const base = ["1000_a"];
+  const append = [...base, "1001_b"];
+  const invalidTarget = "Target migration journal has an invalid tag";
+  const invalidLive = "Live migration journal has an invalid tag";
+  const duplicateTarget = "Target migration journal has a duplicate tag";
+  const duplicateLive = "Live migration journal has a duplicate tag";
+  const cases = [
+    ["invalid target tag after a valid append", [...append, "bad/tag"], base, invalidTarget],
+    ["invalid live tag with a valid append", append, [...base, "bad/tag"], invalidLive],
+    ["duplicate target tag also present live", [...append, ...base], base, duplicateTarget],
+    ["duplicate live tag also present in target", append, [...base, ...base], duplicateLive],
+    ["duplicate added tag", [...append, "1001_b"], base, duplicateTarget],
+  ];
+  for (const [label, tag] of [
+    ["missing", undefined],
+    ["null", null],
+    ["numeric", 123],
+    ["empty", ""],
+    ["path separator", "bad/tag"],
+    ["trailing newline", "1002_c\n"],
+  ]) {
+    const shared = [...base, tag];
+    cases.push([`shared ${label} tag`, shared, shared, invalidTarget]);
+  }
+
+  for (const [label, target, previous, message] of cases) {
+    await t.test(label, async () => {
+      const seen = {};
+      await assert.rejects(
+        rollbackCompatibility({
+          repository: "fixture/repo",
+          targetSha: TARGET,
+          previousSha: PREVIOUS,
+          token: "fixture-only",
+          fetchImpl: stubRepo({ target, previous, sql: { "1001_b": "SELECT 1;" }, seen }),
+        }),
+        { message },
+      );
+      assert.deepEqual(seen, { journals: [TARGET, PREVIOUS] });
+    });
+  }
+});
+
+test("rollback compatibility reads no SQL for identical valid journals", async () => {
+  const tags = ["1000_a", "1001_b"];
+  const seen = {};
+  const result = await rollbackCompatibility({
+    repository: "fixture/repo",
+    targetSha: TARGET,
+    previousSha: PREVIOUS,
+    token: "fixture-only",
+    fetchImpl: stubRepo({ target: tags, previous: tags, sql: {}, seen }),
+  });
+  assert.deepEqual(result, { added: [], unsafe: [] });
+  assert.deepEqual(seen, { journals: [TARGET, PREVIOUS] });
+});
 
 test("compatibility reads only the migrations the target adds since the rollback commit", async () => {
   const seen = {};
@@ -1429,6 +1488,7 @@ test("compatibility reads only the migrations the target adds since the rollback
     }),
   });
   assert.deepEqual(result, { added: ["1001_b", "1002_c"], unsafe: ["1002_c"] });
+  assert.deepEqual(seen.journals, [TARGET, PREVIOUS]);
   assert.deepEqual(seen.sql, ["1001_b", "1002_c"]);
 });
 

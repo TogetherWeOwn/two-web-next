@@ -231,6 +231,7 @@ function parsePlan(raw, hash) {
       column === "" || (name === ledgerTable && ["created_at", "hash", "id"].includes(column)),
     );
   }
+  const membershipPairs = new Set();
   for (const { role, grantor, admin, inherit, set } of plan.membership) {
     assert.ok(
       broadRoles.includes(role) &&
@@ -239,12 +240,24 @@ function parsePlan(raw, hash) {
         typeof set === "boolean",
     );
     assert.match(grantor, identifier);
+    const pair = JSON.stringify([role, grantor]);
+    assert.ok(!membershipPairs.has(pair), "Duplicate serving role membership");
+    membershipPairs.add(pair);
   }
   assert.equal(
     new Set([...plan.add, ...plan.remove].map(aclId)).size,
     plan.add.length + plan.remove.length,
   );
   return plan;
+}
+
+export class ServingIsolationCleanupError extends Error {
+  constructor(outcome) {
+    super(
+      "Database serving ledger isolation connection cleanup failed after an acknowledged outcome.",
+    );
+    this.outcome = outcome;
+  }
 }
 
 export async function runServingIsolation(operation, end, env, options = {}) {
@@ -264,8 +277,10 @@ export async function runServingIsolation(operation, end, env, options = {}) {
   assert.equal(config.url.pathname, "/postgres");
   const readOnly = operation === "readback";
   const client = connect(config, { readOnly });
+  let outcome;
+  let closeFailed = false;
   try {
-    return await client.begin(
+    outcome = await client.begin(
       readOnly ? "isolation level repeatable read read only" : "isolation level read committed",
       async (tx) => {
         await tx`set local search_path = pg_catalog, pg_temp`;
@@ -321,6 +336,14 @@ export async function runServingIsolation(operation, end, env, options = {}) {
       },
     );
   } finally {
-    await client.end({ timeout: 5 });
+    try {
+      // Postgres resolves end() after either a graceful close or its bounded force-close.
+      await client.end({ timeout: 5 });
+    } catch {
+      closeFailed = true;
+    }
   }
+  // Reaching this point requires acknowledgement from begin() after COMMIT.
+  if (closeFailed) throw new ServingIsolationCleanupError(outcome);
+  return outcome;
 }

@@ -1110,14 +1110,19 @@ export async function fetchPassiveLedgers(
   }
   for (let page = 1; expectedRunId === undefined && page <= 3; page += 1) {
     const query = new URLSearchParams({ branch: "main", per_page: "100", page: String(page) });
-    const batch =
-      (await get(`/actions/workflows/e2e-staging.yml/runs?${query}`)).workflow_runs ?? [];
+    const listing = await get(`/actions/workflows/e2e-staging.yml/runs?${query}`);
+    const batch = listing?.workflow_runs;
+    if (
+      !Array.isArray(batch) ||
+      batch.some((run) => typeof run?.display_title !== "string" || !run.display_title.trim())
+    ) {
+      throw new Error(`Malformed e2e-staging run listing on page ${page}`);
+    }
     runs.push(...batch.filter((run) => run.display_title === e2eTitle(sha)));
     if (batch.length < 100) break;
   }
   if (!runs.length) throw new Error(`No e2e-staging run for ${sha}`);
-  const latest = runs.reduce((a, b) => (b.id > a.id ? b : a));
-  if (!runs.every((run) => Number.isSafeInteger(run.id))) {
+  if (runs.some((run) => !Number.isSafeInteger(run.id) || run.id <= 0)) {
     throw new Error(`e2e-staging run for ${sha} has an invalid run id`);
   }
   if (
@@ -1130,15 +1135,30 @@ export async function fetchPassiveLedgers(
   ) {
     throw new Error("e2e-staging.yml evidence revision/branch/workflow mismatch");
   }
+  const latest = runs.reduce((a, b) => (b.id > a.id ? b : a));
   const name = REGRESSION_LEDGER_ARTIFACT(latest.id);
   if (latest.status !== "completed") {
     throw new Error(`Latest e2e-staging run ${latest.id} is not completed`);
   }
-  const { artifacts = [] } = await get(`/actions/runs/${latest.id}/artifacts?name=${name}`);
+  const listing = await get(`/actions/runs/${latest.id}/artifacts?name=${name}`);
+  const artifacts = listing?.artifacts;
+  if (
+    !Array.isArray(artifacts) ||
+    artifacts.some(
+      (entry) =>
+        typeof entry?.name !== "string" ||
+        !entry.name.trim() ||
+        typeof entry.expired !== "boolean" ||
+        !Number.isSafeInteger(entry.id) ||
+        entry.id <= 0,
+    )
+  ) {
+    throw new Error(`Malformed passive ledger artifact listing for run ${latest.id}`);
+  }
   const [artifact, duplicate] = artifacts.filter(
-    (entry) => entry?.name === name && entry.expired === false,
+    (entry) => entry.name === name && entry.expired === false,
   );
-  if (!artifact || duplicate || !Number.isSafeInteger(artifact.id)) {
+  if (!artifact || duplicate) {
     throw new Error(
       `e2e-staging run ${latest.id} has no ${name} artifact; the candidate's staging passive set was not recorded`,
     );
@@ -1369,6 +1389,34 @@ function currentCheckoutSha() {
   }).trim();
 }
 
+// One Environment and its protection rules fit comfortably within 64 KiB.
+const MAX_PRODUCTION_ENVIRONMENT_BYTES = 64 * 1024;
+
+async function readProductionEnvironment(response) {
+  let reader;
+  try {
+    reader = response.body.getReader();
+    const bytes = new Uint8Array(MAX_PRODUCTION_ENVIRONMENT_BYTES);
+    let length = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return JSON.parse(new TextDecoder().decode(bytes.subarray(0, length)));
+      if (value.byteLength > bytes.length - length) break;
+      bytes.set(value, length);
+      length += value.byteLength;
+    }
+  } catch {
+    throw new Error("Cannot verify production Environment protection (unreadable JSON response)");
+  } finally {
+    if (reader) {
+      // Cancellation must not delay refusal or expose a transport error.
+      void reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+    }
+  }
+  throw new Error("Cannot verify production Environment protection (response exceeds 64 KiB)");
+}
+
 export async function checkProductionGate(env, fetchEnvironment = fetch, options = {}) {
   // checkoutSha stays lazy so disabled/unprotected requests refuse before any
   // subprocess or CI lookup. Tests pass it explicitly; the CLI resolves it.
@@ -1403,7 +1451,7 @@ export async function checkProductionGate(env, fetchEnvironment = fetch, options
     throw new Error(`Cannot verify production Environment protection (HTTP ${response.status})`);
   }
   const autoApprove = autoApproveEnabled(env);
-  assertProductionProtection(await response.json(), { autoApprove });
+  assertProductionProtection(await readProductionEnvironment(response), { autoApprove });
   if (rollback && options.beforeScriptsCheckout) {
     const sha = env.DEPLOY_SHA;
     // The same compare proof binds two exact SHAs. Clear explicit promotion

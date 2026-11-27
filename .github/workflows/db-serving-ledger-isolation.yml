@@ -111,6 +111,12 @@ jobs:
           case "$OPERATION:$status" in
             forward:0) printf '%s\n' 'Database serving ledger isolation committed.' ;;
             undo:0) printf '%s\n' 'Database serving ledger isolation inverse committed.' ;;
+            forward:12)
+              printf '%s\n' 'Database serving ledger isolation committed. Connection cleanup failed. Verify with readback.' >&2
+              exit 1 ;;
+            undo:12)
+              printf '%s\n' 'Database serving ledger isolation inverse committed. Connection cleanup failed. Verify with readback.' >&2
+              exit 1 ;;
             readback:10) printf '%s\n' 'Database serving grants match the approved original state.' ;;
             readback:11) printf '%s\n' 'Database serving grants match the approved isolated state.' ;;
             *)

@@ -348,6 +348,11 @@
       "route": "GET /admin/featured-contents/:id/edit",
       "binding": "web/src/routes/admin/featured-contents/[id]/edit/+server.ts",
       "reads": "moderator session admitted by the shared admin guard before the bounded legacy_id to id lookup; redirect carries only the current id"
+    },
+    {
+      "route": "POST /admin/queue/failed/:id/redispatch",
+      "binding": "web/src/routes/admin/queue/failed/[id]/redispatch/+server.ts",
+      "reads": "staging operator only (audited one-row reconciliation)"
     }
   ],
   "outOfScope": [

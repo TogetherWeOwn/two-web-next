@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import { calendarFixtures, joinAction, smokeFixtures } from "../test/fixtures/smoke-routes.mjs";
 import { startSmokeFixture } from "../test/helpers/smoke-http.mjs";
+import { stagingConfig } from "./kit-cutover-database.mjs";
 import {
   LEDGER_STATES,
   STAGING_WORKER,
@@ -25,7 +26,12 @@ import {
   writeManifest,
 } from "./kit-cutover-evidence.mjs";
 import { packageCutover } from "./kit-cutover-package.mjs";
-import { cloudflare, exercise, verifyServed } from "./kit-cutover-staging.mjs";
+import {
+  cloudflare,
+  exercise,
+  verifyServed,
+  verifyStagedBindings,
+} from "./kit-cutover-staging.mjs";
 import "./fixtures/kit-cutover-cleanup.mjs";
 import { KIT_ROUTE_FLAGS } from "./production-deploy-gate.mjs";
 import { sha256 } from "./worker-bundle-evidence.mjs";
@@ -35,17 +41,122 @@ const digest = "b".repeat(64);
 const hono = "11111111-1111-1111-1111-111111111111";
 const kit = "22222222-2222-2222-2222-222222222222";
 const identity = { sourceSha, runId: "21", runAttempt: "3", digest };
-const ledgerJournal = [
-  "1032_event-public-join-details",
-  "1033_session-roles-checked-at",
-  "1034_event-echoes",
-  "1035_bot-reconciliation-intents",
-  "1036_event-sync-claim-started",
-  "1037_waitlist-offers",
-  "1038_announcement-send-claims",
-].map((tag, i) => ({ tag, when: 1700000000000 + i }));
-
 const inputs = await sourceInputs();
+// Keep the offline rehearsal usable after the repository adds later migrations.
+const cutoverEnd = inputs.journal.findIndex(({ tag }) => tag === "1038_announcement-send-claims");
+const ledgerJournal = inputs.journal.slice(0, cutoverEnd + 1);
+
+test("isolated Worker settings and deletion readback uses bounded offline streams", async (t) => {
+  const account = "a".repeat(32);
+  const token = "synthetic";
+  const script = "scripts/synthetic-worker";
+  const settings = `${script}/settings`;
+  const base = `https://api.cloudflare.com/client/v4/accounts/${account}/workers/`;
+  const limit = 1024 * 1024;
+  const result = { bindings: [{ name: "FIXTURE", type: "plain_text", text: "Épreuve" }] };
+  const encode = (value) => new TextEncoder().encode(JSON.stringify(value));
+  const envelope = encode({ success: true, result });
+  const split = envelope.indexOf(0xc3) + 1;
+  const chunks = [envelope.subarray(0, split), envelope.subarray(split)];
+  const padding = new Uint8Array(limit - envelope.byteLength).fill(32);
+  const fixture = (chunks, status = 200) => {
+    let pulls = 0;
+    let cancelled = false;
+    const body = new ReadableStream(
+      {
+        pull(controller) {
+          const chunk = chunks[pulls++];
+          if (chunk) controller.enqueue(chunk);
+          else controller.close();
+        },
+        cancel() {
+          cancelled = true;
+          // A stalled cancellation must never delay a verdict.
+          return new Promise(() => {});
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    return {
+      response: new Response(body, { status }),
+      state: () => ({ pulls, cancelled, locked: body.locked }),
+    };
+  };
+  const offlineApi = (method, path, respond) =>
+    cloudflare({
+      account,
+      token,
+      fetchImpl: async (url, options) => {
+        assert.equal(url, `${base}${path}`);
+        assert.equal(options.method, method);
+        assert.equal(options.headers.Authorization, `Bearer ${token}`);
+        assert.equal(options.redirect, "error");
+        assert.ok(options.signal instanceof AbortSignal);
+        return respond(options.signal);
+      },
+    });
+
+  const timeout = t.mock.method(AbortSignal, "timeout");
+  const existing = fixture([...chunks, padding]);
+  assert.deepEqual(await offlineApi("GET", settings, () => existing.response)(settings), result);
+  const deleted = fixture([encode({ success: true, result: null })]);
+  assert.equal(await offlineApi("DELETE", script, () => deleted.response)(script, "DELETE"), null);
+
+  for (const [method, path] of [
+    ["DELETE", script],
+    ["GET", settings],
+  ]) {
+    const request = (respond) => offlineApi(method, path, respond)(path, method);
+    const oversized = fixture([...chunks, padding, Uint8Array.of(32)]);
+    await assert.rejects(
+      request(() => oversized.response),
+      {
+        message: "staging Workers API response too large",
+      },
+    );
+    assert.deepEqual(oversized.state(), { pulls: 4, cancelled: true, locked: false });
+
+    const missing = fixture([], 404);
+    assert.equal(await request(() => missing.response), null);
+    assert.deepEqual(missing.state(), { pulls: 0, cancelled: true, locked: false });
+
+    const refused = fixture([], 502);
+    for (const [response, message] of [
+      [fixture([]).response, "staging Workers API response was not valid JSON"],
+      [
+        fixture([new TextEncoder().encode("synthetic private response")]).response,
+        "staging Workers API response was not valid JSON",
+      ],
+      [fixture([Uint8Array.of(0xff)]).response, "staging Workers API response could not be read"],
+      [refused.response, "staging Workers API refused the request"],
+      [
+        fixture([encode({ success: "synthetic private response" })]).response,
+        "staging Workers API returned an error",
+      ],
+    ]) {
+      await assert.rejects(
+        request(() => response),
+        { message },
+      );
+    }
+    assert.deepEqual(refused.state(), { pulls: 0, cancelled: true, locked: false });
+    await assert.rejects(
+      request(() => {
+        throw new Error("synthetic private transport error");
+      }),
+      { message: "staging Workers API request failed" },
+    );
+  }
+  assert.deepEqual(existing.state(), { pulls: 4, cancelled: false, locked: false });
+  assert.deepEqual(deleted.state(), { pulls: 2, cancelled: false, locked: false });
+
+  const missingResult = fixture([encode({ success: true, result: null })]);
+  await assert.rejects(offlineApi("GET", settings, () => missingResult.response)(settings), {
+    message: "staging Workers API returned invalid settings",
+  });
+  assert.ok(timeout.mock.calls.length > 0);
+  for (const call of timeout.mock.calls) assert.deepEqual(call.arguments, [10_000]);
+});
 
 test("packaging refuses installed Kit asset drift after parity", async (t) => {
   const scratch = await mkdtemp(join(tmpdir(), "cutover-packaging-test-"));
@@ -128,6 +239,181 @@ test("packaging refuses installed Kit asset drift after parity", async (t) => {
   }
 });
 
+test("isolated cutover cleanup CLI reports each failure and keeps the claim for retry", async (t) => {
+  const scratch = await mkdtemp(join(tmpdir(), "cutover-cleanup-test-"));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const worker = `${STAGING_WORKER}-21-3`;
+  const dbHost = "ep-cleanup.example.neon.tech";
+  const claim = join(scratch, "kit-cutover-claimed.json");
+  const preload = `
+    import assert from "node:assert/strict";
+    import fs from "node:fs/promises";
+    import { registerHooks, syncBuiltinESMExports } from "node:module";
+    import { join } from "node:path";
+    const claimOperation = process.env.FAKE_CLAIM_OPERATION;
+    if (claimOperation) {
+      const claimPath = join(process.env.RUNNER_TEMP, "kit-cutover-claimed.json");
+      const original = fs[claimOperation];
+      fs[claimOperation] = async (path, ...args) => {
+        if (path === claimPath) throw Object.assign(new Error("raw claim I/O detail"), { code: "EIO" });
+        return original(path, ...args);
+      };
+      syncBuiltinESMExports();
+    }
+    let deleted = process.env.FAKE_WORKER === "absent";
+    globalThis.fetch = async (url, { method }) => {
+      const target = "https://api.cloudflare.com/client/v4/accounts/${"a".repeat(32)}/workers/scripts/${worker}";
+      if (method === "DELETE") {
+        assert.equal(url, target);
+        console.log("Worker delete");
+        if (process.env.FAKE_WORKER === "fail") throw new Error("raw Worker detail");
+        deleted = true;
+      } else {
+        assert.equal(method, "GET");
+        assert.equal(url, target + "/settings");
+        console.log("Worker settings");
+        if (deleted) return new Response(null, { status: 404 });
+      }
+      return Response.json({ success: true, result: {} });
+    };
+    globalThis.fakePostgres = (url) => {
+      assert.equal(url, "postgresql://two_web_cutover_owner:fixture@${dbHost}/two_web_cutover?sslmode=verify-full");
+      const execute = async (template, name) => {
+        if (template[0].startsWith("DROP DATABASE")) {
+          assert.equal(name, "two_web_cutover_21_3");
+          console.log("Database drop");
+          if (process.env.FAKE_DATABASE === "fail") throw new Error("raw database detail");
+        } else if (template[0].startsWith("DROP ROLE")) {
+          assert.equal(name, "two_web_cutover_21_3_runtime");
+          console.log("Login drop");
+        } else {
+          assert.match(template[0], /^SELECT/);
+          console.log("Database and login verification");
+          return [{ db: false, login: false }];
+        }
+      };
+      // The client uses the same callable for SQL and synchronous identifiers.
+      return Object.assign((query, ...values) => typeof query === "string" ? query : execute(query, ...values), {
+        end: async () => {},
+      });
+    };
+    registerHooks({
+      resolve(specifier, context, nextResolve) {
+        if (specifier === "postgres") {
+          return { url: "data:text/javascript,export default globalThis.fakePostgres", shortCircuit: true };
+        }
+        return nextResolve(specifier, context);
+      },
+    });
+  `;
+  function run(workerMode, databaseMode, claimOperation = "") {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        `data:text/javascript,${encodeURIComponent(preload)}`,
+        "ci/kit-cutover-staging.mjs",
+        "--cleanup",
+      ],
+      {
+        encoding: "utf8",
+        timeout: 5_000,
+        env: {
+          GITHUB_ACTIONS: "true",
+          RUNNER_ENVIRONMENT: "github-hosted",
+          GITHUB_REF: "refs/heads/main",
+          GITHUB_EVENT_NAME: "workflow_dispatch",
+          GITHUB_RUN_ID: "21",
+          GITHUB_RUN_ATTEMPT: "3",
+          CUTOVER_PROFILE: "ember",
+          RUNNER_TEMP: scratch,
+          CLOUDFLARE_ACCOUNT_ID: "a".repeat(32),
+          CLOUDFLARE_API_TOKEN: workerMode === "unconfigured" ? "" : "fixture",
+          KIT_CUTOVER_TEST_DATABASE_HOST: dbHost,
+          KIT_CUTOVER_TEST_DATABASE_URL:
+            databaseMode === "unconfigured"
+              ? ""
+              : `postgresql://two_web_cutover_owner:fixture@${dbHost}/two_web_cutover`,
+          FAKE_WORKER: workerMode,
+          FAKE_DATABASE: databaseMode,
+          FAKE_CLAIM_OPERATION: claimOperation,
+        },
+      },
+    );
+    assert.ifError(result.error);
+    assert.doesNotMatch(result.stdout + result.stderr, /raw (Worker|database|claim I\/O) detail/);
+    return result;
+  }
+
+  const workerCleanup = ["Worker settings", "Worker delete", "Worker settings"];
+  const databaseCleanup = ["Database drop", "Login drop", "Database and login verification"];
+  for (const [workerMode, databaseMode, failures, operations] of [
+    ["fail", "fail", "Worker, database and login", [...workerCleanup.slice(0, 2), "Database drop"]],
+    ["fail", "ok", "Worker", [...workerCleanup.slice(0, 2), ...databaseCleanup]],
+    ["ok", "fail", "database and login", [...workerCleanup, "Database drop"]],
+    ["unconfigured", "ok", "Worker", databaseCleanup],
+    ["ok", "unconfigured", "database and login", workerCleanup],
+  ]) {
+    await t.test(`Worker ${workerMode}, database ${databaseMode}`, async () => {
+      await writeFile(claim, worker);
+      const result = run(workerMode, databaseMode);
+      assert.equal(result.status, 1, result.stderr);
+      assert.deepEqual(result.stdout.trim().split("\n"), operations);
+      assert.equal(await readFile(claim, "utf8"), worker);
+      assert.equal(
+        result.stderr.split("\n").find((line) => line.startsWith("Error: ")),
+        `Error: Could not verify isolated cleanup: ${failures}`,
+      );
+    });
+  }
+  await t.test("successful retry tolerates a Worker already removed", async () => {
+    const result = run("absent", "ok");
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(result.stdout.trim().split("\n"), ["Worker settings", ...databaseCleanup]);
+    assert.equal(result.stderr, "");
+    await assert.rejects(readFile(claim, "utf8"), { code: "ENOENT" });
+  });
+  await t.test("successful cleanup deletes and verifies the Worker", async () => {
+    await writeFile(claim, worker);
+    const result = run("ok", "ok");
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(result.stdout.trim().split("\n"), [...workerCleanup, ...databaseCleanup]);
+    assert.equal(result.stderr, "");
+    await assert.rejects(readFile(claim, "utf8"), { code: "ENOENT" });
+  });
+  await t.test("missing claim needs no configuration", () => {
+    const result = run("unconfigured", "unconfigured");
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout + result.stderr, "");
+  });
+  await t.test("mismatched claim stays private and prevents cleanup", async () => {
+    const foreignMarker = "untrusted claim contents";
+    await writeFile(claim, foreignMarker);
+    const result = run("ok", "ok");
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(result.stdout, "");
+    assert.match(result.stderr, /^Error: Isolated cleanup claim mismatch$/m);
+    assert.ok(!result.stderr.includes(foreignMarker));
+    assert.equal(await readFile(claim, "utf8"), foreignMarker);
+  });
+  for (const [operation, diagnostic, calls] of [
+    ["readFile", "read", []],
+    ["rm", "clear", [...workerCleanup, ...databaseCleanup]],
+  ]) {
+    await t.test(`claim ${diagnostic} failure preserves the claim`, async () => {
+      await writeFile(claim, worker);
+      const result = run("ok", "ok", operation);
+      assert.equal(result.status, 1, result.stderr);
+      assert.equal(result.stdout.trim(), calls.join("\n"));
+      assert.equal(
+        result.stderr.split("\n").find((line) => line.startsWith("Error: ")),
+        `Error: Could not ${diagnostic} isolated cleanup claim`,
+      );
+      assert.equal(await readFile(claim, "utf8"), worker);
+    });
+  }
+});
+
 async function writePacketFixture(dir, extraNames = []) {
   for (const profile of ["hono", "kit"]) {
     await mkdir(join(dir, profile, "modules"), { recursive: true });
@@ -158,6 +444,43 @@ test("cutover inventory preserves filenames shared with object properties", asyn
       assert.equal(Object.getOwnPropertyDescriptor(files, name)?.value, digest, path);
     }
     assert.deepEqual(manifest.files[profile], files);
+  }
+});
+
+test("cutover package inventory rejects an external symlink before reading it", async (t) => {
+  const { default: fs, symlink } = await import("node:fs/promises");
+  const { syncBuiltinESMExports } = await import("node:module");
+
+  const scratch = await mkdtemp(join(tmpdir(), "cutover-package-symlink-test-"));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const packet = join(scratch, "packet");
+  const asset = join(packet, "assets", "fixture.txt");
+  const outside = join(scratch, "outside.txt");
+  const bytes = "synthetic packaged asset";
+  await mkdir(join(packet, "assets"), { recursive: true });
+  await writeFile(asset, bytes);
+  await writeFile(outside, bytes);
+
+  const read = t.mock.method(fs, "readFile");
+  // Inventory uses the named ESM export, which needs syncing after patch and restore.
+  syncBuiltinESMExports();
+  try {
+    assert.deepEqual(await inventory(packet), { "assets/fixture.txt": sha256(bytes) });
+    assert.equal(read.mock.callCount(), 1);
+    assert.equal(read.mock.calls[0].arguments[0], asset);
+    read.mock.resetCalls();
+
+    // Keep the bytes identical so a digest comparison cannot distinguish the replacement.
+    await rm(asset);
+    await symlink(outside, asset);
+    await assert.rejects(inventory(packet), {
+      code: "ERR_ASSERTION",
+      message: "cutover package requires regular files",
+    });
+    assert.equal(read.mock.callCount(), 0);
+  } finally {
+    read.mock.restore();
+    syncBuiltinESMExports();
   }
 });
 
@@ -742,12 +1065,52 @@ test("cutover packaging cleans only its own incomplete packet", async (t) => {
   });
 });
 
-test("cutover ledger admits exactly 1033 or 1037 and exact version readiness", () => {
-  const prefixes = ledgerPrefixes(ledgerJournal);
+test("cutover ledger requires the canonical pre-1033 journal", async (t) => {
+  const timestamps = ledgerJournal.map(({ when }) => when);
+  assert.deepEqual(ledgerPrefixes(ledgerJournal), {
+    1033: timestamps.slice(0, 34),
+    1037: timestamps.slice(0, 38),
+  });
+  const last = ledgerJournal.at(-1);
   assert.throws(
-    () => ledgerPrefixes([...ledgerJournal, { tag: "1039_later", when: 1700000000007 }]),
+    () => ledgerPrefixes([...ledgerJournal, { ...last, tag: "1039_later", when: last.when + 1 }]),
     /approved cutover window/,
   );
+  const unorderedTail = structuredClone(ledgerJournal);
+  unorderedTail.at(-1).when = unorderedTail.at(-2).when;
+  assert.throws(() => ledgerPrefixes(unorderedTail), /invalid canonical ledger timestamps/);
+
+  const [first, second] = ledgerJournal.slice(2, 4);
+  for (const [label, replacement] of [
+    ["malformed tag", [first, { ...second, tag: "1001_bad/tag" }]],
+    ["missing tag", [first, { ...second, tag: undefined }]],
+    ["duplicate tag", [first, { ...second, tag: first.tag }]],
+    ["duplicate migration number", [first, { ...second, tag: "1000_other" }]],
+    ["unexpected historical tag", [first, { ...second, tag: "1001_other" }]],
+    ["missing historical entry", [first]],
+    [
+      "out-of-order tags",
+      [
+        { ...first, tag: second.tag },
+        { ...second, tag: first.tag },
+      ],
+    ],
+    ["changed historical timestamp in order", [first, { ...second, when: second.when + 1 }]],
+  ]) {
+    await t.test(label, () => {
+      const journal = [...ledgerJournal.slice(0, 2), ...replacement, ...ledgerJournal.slice(4)];
+      assert.throws(() => ledgerPrefixes(journal), /noncanonical cutover migration journal/);
+    });
+  }
+  await t.test("changed cutover timestamp in order", () => {
+    const journal = structuredClone(ledgerJournal);
+    journal.at(-5).when += 1;
+    assert.throws(() => ledgerPrefixes(journal), /noncanonical cutover migration journal/);
+  });
+});
+
+test("cutover ledger admits exactly 1033 or 1037 and exact version readiness", () => {
+  const prefixes = ledgerPrefixes(ledgerJournal);
   const body = {
     db: "ok",
     pending_migrations: 0,
@@ -963,6 +1326,36 @@ test("isolated cutover counts routes only from the successful retry", async () =
   });
   assert.equal(routeCount, 3);
   assert.deepEqual(calls, ["readiness", "smoke", "wait", "readiness", "smoke"]);
+});
+
+test("isolated Ember bindings reject duplicate names without exposing binding contents", () => {
+  const config = stagingConfig(
+    "kit",
+    inputs,
+    STAGING_WORKER,
+    "https://cutover.example.invalid",
+    "ember",
+  );
+  const bindings = [
+    ...Object.entries(config.vars).map(([name, text]) => ({ name, type: "plain_text", text })),
+    { name: "DATABASE_URL", type: "secret_text" },
+    { name: "SESSION_SECRET", type: "secret_text" },
+    { name: "DISCORD_CLIENT_SECRET", type: "secret_text" },
+    { name: "DISCORD_BOT_TOKEN", type: "secret_text" },
+    { name: "CF_VERSION_METADATA", type: "version_metadata" },
+  ];
+  verifyStagedBindings({ id: kit, resources: { bindings } }, kit, config);
+
+  const conflictingFlag = { name: "KIT_ROUTE_EMBER_PAGES", type: "plain_text", text: "false" };
+  assert.throws(
+    () =>
+      verifyStagedBindings(
+        { id: kit, resources: { bindings: [conflictingFlag, ...bindings] } },
+        kit,
+        config,
+      ),
+    { message: "staged bindings contain duplicate names" },
+  );
 });
 
 test("isolated cutover repeats readiness and smoke when rollback is still propagating", async () => {

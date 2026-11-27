@@ -1,5 +1,6 @@
 import "./fixtures/staging-reservation-store.mjs";
 import "./fixtures/staging-lease-lifecycle.mjs";
+import "./fixtures/staging-reservation-acquisition.mjs";
 
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -280,6 +281,72 @@ test("staging receipts follow the served candidate through an out-of-order main 
   const refused = await e2e({ STAGING_CANDIDATE: C, expectedProbes: [] }, fetchOrigins(C, C));
   assert.match(refused, /Candidate source unavailable/);
   assert.match(refused, /Identity receipt refused \(no observation\)/);
+});
+
+test("staging receipts cancel refused /up bodies and retain 200 and 503 identity", async () => {
+  const worker = "12345678-0123-4567-abcd-123456789abc";
+  const env = {
+    GITHUB_REPOSITORY: repository,
+    STAGING_CANDIDATE: A,
+    STAGING_JOB_STATUS: "success",
+    STAGING_WEB_DEPLOY_OUTCOME: "success",
+  };
+  const revision = { commit: A, version_id: worker };
+  const receipt = async (response) => {
+    const requests = [];
+    const summary = await stagingReceipt(
+      "deploy",
+      env,
+      {},
+      {
+        now,
+        fetchImpl: async (url) => {
+          const path = new URL(url).pathname;
+          requests.push(path);
+          return path === "/up" ? response : new Response(JSON.stringify({ sha: A, deployedAt }));
+        },
+      },
+    );
+    assert.deepEqual(requests, ["/up", "/version"]);
+    return summary;
+  };
+
+  for (const status of [200, 503]) {
+    const ready = status === 200;
+    const response = new Response(
+      JSON.stringify({
+        status: ready ? "healthy" : "degraded",
+        db: "ok",
+        pending_migrations: ready ? 0 : 1,
+        revision,
+      }),
+      { status },
+    );
+    const summary = await receipt(response);
+    assert.ok(response.bodyUsed);
+    assert.ok(summary.includes(`Live /up source \`${A}\`, Worker version \`${worker}\``));
+    assert.match(summary, /Identity receipt matched at observation/);
+  }
+
+  const disposal = Promise.withResolvers();
+  let cancellations = 0;
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(JSON.stringify({ revision })));
+    },
+    cancel() {
+      cancellations++;
+      return disposal.promise;
+    },
+  });
+  const summary = await receipt(new Response(stream, { status: 429 }));
+  assert.equal(cancellations, 1, "cancel the live body before returning the receipt");
+  disposal.reject(new Error("synthetic cancellation failure"));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(summary, /Live \/up source unavailable, Worker version unavailable/);
+  assert.ok(summary.includes(`Live /version source \`${A}\``));
+  assert.match(summary, /Identity receipt refused \(disagreement or missing proof\)/);
+  assert.match(summary, /Soak eligibility\*\* Unproven \(identity receipt refused\)/);
 });
 
 const reservedE2e = Object.freeze({

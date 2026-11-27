@@ -43,6 +43,7 @@ import {
   targetWebEndUnknown,
   targetWebEntries,
 } from "./production-deploy-gate.mjs";
+import { resolvePromotionSha } from "./resolve-promotion-sha.mjs";
 
 const enabled = {
   PRODUCTION_DEPLOY_ENABLED: "true",
@@ -170,7 +171,7 @@ function stubProductionApi(evidence, seen = {}) {
     const parsed = new URL(url);
     if (parsed.pathname.endsWith("/environments/production")) {
       seen.environment = (seen.environment ?? 0) + 1;
-      return { ok: true, json: async () => protectedEnvironment };
+      return Response.json(protectedEnvironment);
     }
     if (/\/commits\/[0-9a-f]{40}$/.test(parsed.pathname)) {
       return {
@@ -212,6 +213,82 @@ test("allows only an enabled main dispatch with verified protection and green ex
   assert.deepEqual(evidence, { sha: dispatchSha, runId: 42, runAttempt: 1 });
   assert.equal(seen.environment, 1);
   assert.equal(seen.ci, 3);
+});
+
+const productionEnvironmentLimit = 64 * 1024;
+
+test("production Environment response at exactly 64 KiB advances to CI", async () => {
+  const body = JSON.stringify(protectedEnvironment).padEnd(productionEnvironmentLimit);
+  assert.equal(Buffer.byteLength(body), productionEnvironmentLimit);
+  const seen = {};
+  const evidence = await checkProductionGate(greenEnv, async () => new Response(body), {
+    checkoutSha: dispatchSha,
+    fetchCi: stubProductionApi(ciEvidence(), seen),
+  });
+  assert.deepEqual(evidence, { sha: dispatchSha, runId: 42, runAttempt: 1 });
+  assert.equal(seen.ci, 3);
+});
+
+test("oversized production Environment response cancels before further API calls", async () => {
+  const protection = new TextEncoder().encode(JSON.stringify(protectedEnvironment));
+  const padding = new Uint8Array(productionEnvironmentLimit + 1 - protection.byteLength);
+  const chunks = [protection, padding.fill(0x20)];
+  let reads = 0;
+  let cancelled = false;
+  const response = new Response(
+    new ReadableStream(
+      {
+        pull(controller) {
+          const chunk = chunks[reads++];
+          if (chunk) controller.enqueue(chunk);
+          else controller.close();
+        },
+        cancel() {
+          cancelled = true;
+        },
+      },
+      { highWaterMark: 0 },
+    ),
+    { headers: { "Content-Length": String(protection.byteLength) } },
+  );
+  const seen = [];
+  await assert.rejects(
+    checkProductionGate(
+      greenEnv,
+      async (url) => {
+        seen.push(new URL(url).pathname);
+        return response;
+      },
+      { checkoutSha: dispatchSha },
+    ),
+    { message: "Cannot verify production Environment protection (response exceeds 64 KiB)" },
+  );
+  assert.deepEqual(seen, ["/repos/fixture/repo/environments/production"]);
+  assert.equal(reads, 2);
+  assert.equal(cancelled, true);
+});
+
+test("unreadable production Environment response fails with a sanitized error", async () => {
+  const responses = [
+    new Response(null),
+    new Response("synthetic provider diagnostic"),
+    new Response(
+      new ReadableStream({
+        pull() {
+          throw new Error("synthetic stream diagnostic");
+        },
+      }),
+    ),
+  ];
+  for (const response of responses) {
+    await assert.rejects(
+      checkProductionGate(greenEnv, async () => response, {
+        checkoutSha: dispatchSha,
+        fetchCi: noNetwork,
+      }),
+      { message: "Cannot verify production Environment protection (unreadable JSON response)" },
+    );
+  }
 });
 
 for (const [name, pattern, mutate] of [
@@ -1567,7 +1644,7 @@ function stubAutoApi(staging, environment = autoEnvironment, seen = {}) {
     const parsed = new URL(url);
     if (parsed.pathname.endsWith("/environments/production")) {
       seen.environment = (seen.environment ?? 0) + 1;
-      return { ok: true, json: async () => environment };
+      return Response.json(environment);
     }
     if (/\/commits\/[0-9a-f]{40}$/.test(parsed.pathname)) {
       return {
@@ -1582,8 +1659,15 @@ function stubAutoApi(staging, environment = autoEnvironment, seen = {}) {
         assert.equal(parsed.searchParams.get("head_sha"), null);
         assert.equal(parsed.searchParams.get("branch"), "main");
         const page = Number(parsed.searchParams.get("page"));
-        const runs = (staging[file] ?? []).slice((page - 1) * 100, page * 100);
-        return { ok: true, json: async () => ({ total_count: runs.length, workflow_runs: runs }) };
+        const size = Number(parsed.searchParams.get("per_page"));
+        const runs = staging[file] ?? [];
+        return {
+          ok: true,
+          json: async () => ({
+            total_count: runs.length,
+            workflow_runs: runs.slice((page - 1) * size, page * size),
+          }),
+        };
       }
     }
     const jobsOf = parsed.pathname.match(/\/actions\/runs\/(\d+)\/jobs$/)?.[1];
@@ -1613,6 +1697,91 @@ test("auto-approve passes without reviewers when CI, staging deploy and e2e-stag
   ]);
   assert.equal(seen["deploy.yml"], 1);
   assert.equal(seen["e2e-staging.yml"], 1);
+});
+
+test("promotion callers require a complete e2e-staging history", async (t) => {
+  const staging = stagingEvidence();
+  staging["e2e-staging.yml"][0].id = 300;
+  const filler = Array.from({ length: 100 }, (_, i) =>
+    stagingRun("e2e-staging.yml", 299 - i, {
+      display_title: `e2e-staging deploy ${otherSha}`,
+      conclusion: "cancelled",
+    }),
+  );
+  const history = [...staging["e2e-staging.yml"], ...filler];
+  const firstPage = { total_count: history.length, workflow_runs: history.slice(0, 100) };
+  const lastPage = { total_count: history.length, workflow_runs: history.slice(100) };
+  const listings = {
+    "complete history": [firstPage, lastPage],
+    "short first page": [{ ...firstPage, workflow_runs: history.slice(0, 99) }],
+    "short last page": [
+      { ...firstPage, total_count: 102 },
+      { ...lastPage, total_count: 102 },
+    ],
+    "too many rows for the count": [{ ...firstPage, total_count: 99 }],
+    "count decreases to match the returned rows": [{ ...firstPage, total_count: 102 }, lastPage],
+    "a repeated run from an earlier page": [firstPage, { ...lastPage, workflow_runs: [filler[0]] }],
+    "a missing run ID": [firstPage, { ...lastPage, workflow_runs: [{}] }],
+    "a zero run ID": [firstPage, { ...lastPage, workflow_runs: [{ id: 0 }] }],
+    "an unsafe run ID": [
+      firstPage,
+      { ...lastPage, workflow_runs: [{ id: Number.MAX_SAFE_INTEGER + 1 }] },
+    ],
+    "a missing count": [{ workflow_runs: firstPage.workflow_runs }],
+    "a string count": [{ ...firstPage, total_count: "101" }],
+    "a negative count": [{ total_count: -1, workflow_runs: [] }],
+    "a missing run list": [{ total_count: 0 }],
+    "a non-array run list": [{ total_count: 0, workflow_runs: { length: 0 } }],
+  };
+  const checkout = { checkoutSha: dispatchSha };
+  const scheduledEnv = { ...autoEnv, GITHUB_EVENT_NAME: "schedule" };
+  const callers = {
+    "automatic candidate resolver": (fetchImpl) =>
+      resolvePromotionSha({
+        repository: autoEnv.GITHUB_REPOSITORY,
+        token: autoEnv.GITHUB_TOKEN,
+        fetchImpl,
+        log: () => {},
+      }),
+    "automatic production gate": async (fetchImpl) =>
+      (await checkProductionGate(scheduledEnv, fetchImpl, checkout)).sha,
+    "reviewer production gate": async (fetchImpl) =>
+      (await checkProductionGate(greenEnv, fetchImpl, checkout)).sha,
+  };
+  for (const [caller, check] of Object.entries(callers)) {
+    for (const [name, pages] of Object.entries(listings)) {
+      await t.test(`${caller}: ${name}`, async () => {
+        const api = stubAutoApi(
+          { ...staging, "e2e-staging.yml": history },
+          caller === "reviewer production gate" ? protectedEnvironment : autoEnvironment,
+        );
+        const historyPages = [];
+        const verdict = check((url, init) => {
+          const { pathname, searchParams } = new URL(url);
+          if (pathname.endsWith("/workflows/e2e-staging.yml/runs") && searchParams.has("created")) {
+            assert.equal(searchParams.get("per_page"), "100");
+            const page = Number(searchParams.get("page"));
+            historyPages.push(page);
+            assert.ok(
+              page > 0 && page <= pages.length,
+              `unexpected e2e-staging history page ${page}`,
+            );
+            return Response.json(pages[page - 1]);
+          }
+          return api(url, init);
+        });
+        if (name === "complete history") {
+          assert.equal(await verdict, dispatchSha);
+        } else {
+          await assert.rejects(verdict, /Cannot prove whole e2e-staging history/);
+        }
+        assert.deepEqual(
+          historyPages,
+          pages.map((_, i) => i + 1),
+        );
+      });
+    }
+  }
 });
 
 for (const [name, pattern, mutate] of [
@@ -1719,7 +1888,8 @@ for (const [name, pattern, mutate] of [
     /e2e-staging\.yml run 1 on [0-9a-f]{40} failed or was re-run/,
     (s) => {
       const other = { display_title: `e2e-staging deploy ${"e".repeat(40)}` };
-      for (let id = 500; id > 150; id -= 1) {
+      // Filler IDs stay clear of the candidate's passing run 200.
+      for (let id = 650; id > 300; id -= 1) {
         s["e2e-staging.yml"].push(stagingRun("e2e-staging.yml", id, other));
       }
       s["e2e-staging.yml"].push(stagingRun("e2e-staging.yml", 1, { conclusion: "failure" }));

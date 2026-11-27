@@ -30,6 +30,7 @@ import {
   KIT_EVENT_CALENDAR_ROUTE,
   kitLegacyEventCalendarKey,
 } from "../src/events/kit-event-calendar-route";
+import { STAGING_APP_URL } from "../src/qa";
 
 const APP_URL = "https://example.com";
 // Explicit Kit-owned view of the archive page for tests: the shipped manifest
@@ -49,8 +50,11 @@ function trustedEvent(path, host = "example.com") {
   return eventFor(APP_URL, path, host);
 }
 
-function apiEvent(path, { method = "GET", routeId, origin = APP_URL, host = "example.com" } = {}) {
-  const request = new Request(new URL(path, APP_URL), {
+function apiEvent(
+  path,
+  { method = "GET", routeId, appUrl = APP_URL, origin = appUrl, host = new URL(appUrl).host } = {},
+) {
+  const request = new Request(new URL(path, appUrl), {
     method,
     headers: { host, origin },
     body: method === "POST" ? "fixture body" : undefined,
@@ -671,6 +675,70 @@ describe("hooks.server route ownership wiring", () => {
     expect(source).not.toContain('"kit"');
     expect(source).not.toContain("'kit'");
     expect(source).not.toContain("as const");
+  });
+});
+
+describe("dormant Kit queue preview dispatch", () => {
+  const path = "/admin/queue/failed/42/preview";
+  const routeId = "/admin/queue/failed/[id]/preview";
+
+  function setup(url, { method, previewFlag = "true", adminFlag = "false" } = {}) {
+    // Give even aliases the native route ID so the original URL must decide ownership.
+    const event = apiEvent(url, { appUrl: STAGING_APP_URL, routeId, method });
+    const d = deps({
+      appUrl: STAGING_APP_URL,
+      admin: {
+        env: {
+          APP_URL: STAGING_APP_URL,
+          KIT_ROUTE_ADMIN: adminFlag,
+          KIT_ROUTE_ADMIN_QUEUE_PREVIEW: previewFlag,
+        },
+      },
+      sessionFor: vi.fn(),
+    });
+    return { d, event };
+  }
+
+  it("dispatches the literal GET with only the preview flag enabled", async () => {
+    const { d, event } = setup(path);
+    const response = await dispatchHookRequest(event, d);
+    expect(d.resolve).toHaveBeenCalledExactlyOnceWith(event);
+    expect(d.honoFetch).not.toHaveBeenCalled();
+    expect(d.sessionFor).not.toHaveBeenCalled();
+    expect(event.locals.requestId).toBe(response.headers.get("x-request-id"));
+    expect(response.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+  });
+
+  it.each([
+    ["HEAD", path],
+    ["POST", path],
+    ["PUT", path],
+    ["PATCH", path],
+    ["DELETE", path],
+    ["OPTIONS", path],
+    ["GET", `${path}/__data.json`],
+    ["GET", `${path}/`],
+    ["GET", "/admin/queue/%66ailed/42/preview"],
+    ["GET", "/admin/queue/failed/%342/preview"],
+    ["GET", "/admin/queue/failed/42%2F1/preview"],
+    ["GET", "/admin/queue/failed/42/1/preview"],
+  ])("keeps %s %s on Hono with preview ownership enabled", async (method, url) => {
+    const { d, event } = setup(url, { method });
+    const response = await dispatchHookRequest(event, d);
+    expect(d.honoFetch).toHaveBeenCalledExactlyOnceWith(event.request);
+    expect(d.resolve).not.toHaveBeenCalled();
+    expect(d.sessionFor).not.toHaveBeenCalled();
+    expect(response.headers.get(KIT_RENDERER_HEADER)).toBeNull();
+  });
+
+  it.each(["false", "true"])("keeps the preview off with the admin flag %s", async (adminFlag) => {
+    const { d, event } = setup(path, { previewFlag: "false", adminFlag });
+    const response = await dispatchHookRequest(event, d);
+    expect(d.honoFetch).toHaveBeenCalledExactlyOnceWith(event.request);
+    expect(d.resolve).not.toHaveBeenCalled();
+    expect(d.sessionFor).not.toHaveBeenCalled();
+    expect(response.headers.get(KIT_RENDERER_HEADER)).toBeNull();
   });
 });
 

@@ -202,6 +202,48 @@ describe("moderator event Unicode boundaries", () => {
       },
     );
   });
+
+  it.each([
+    {
+      field: "accessibility_notes",
+      key: "accessibilityNotes",
+      value: "😀".repeat(1000),
+      message: "Keep accessibility notes to 1000 characters.",
+    },
+    {
+      field: "organizer_name",
+      key: "organizer_name",
+      value: "😀".repeat(500),
+      message: "Keep the organizer name to 500 characters.",
+    },
+    {
+      field: "join_url",
+      key: "join_url",
+      value: "https://example.com/" + "😀".repeat(2028),
+      message: "Keep the public joining link to 2048 characters.",
+    },
+    {
+      field: "join_instructions",
+      key: "join_instructions",
+      value: "😀".repeat(5000),
+      message: "Keep joining instructions to 5000 characters.",
+    },
+  ] as const)("accepts $field at its astral boundary and rejects one more code point", (row) => {
+    const { field, key, value, message } = row;
+    expect(parseEventForm({ ...base, [field]: value })[key]).toBe(value);
+    expect(errors({ ...base, [field]: value + "😀" })).toEqual({ [field]: message });
+  });
+
+  it("checks join link syntax at the length limit and gives length errors precedence", () => {
+    const prefix = "https://user@example.com/";
+    const value = prefix + "😀".repeat(2048 - prefix.length);
+    expect(errors({ ...base, join_url: value })).toEqual({
+      join_url: "Enter a valid public HTTP or HTTPS link without sign-in credentials.",
+    });
+    expect(errors({ ...base, join_url: value + "😀" })).toEqual({
+      join_url: "Keep the public joining link to 2048 characters.",
+    });
+  });
   for (const field of [
     "title",
     "description",

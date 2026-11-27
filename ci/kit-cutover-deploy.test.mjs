@@ -215,16 +215,31 @@ test("cutover requires explicit protected selection and the paired Hono UUID", (
   ]) {
     assert.throws(() => selection({ ...active, ...change }));
   }
+});
+
+test("protected Hono undo verifies the pinned Worker version metadata", () => {
+  const pin = { ...identity, undo: hono };
   const version = {
     id: hono,
-    annotations: { "workers/tag": `${sourceSha}-99-1`, "workers/message": undoMessage(digest) },
+    annotations: {
+      // Wrangler tags the version with the upload run and attempt.
+      "workers/tag": `${sourceSha}-99-1`,
+      "workers/message": `two-web-cutover-undo:${digest}`,
+    },
   };
-  verifyUndoVersion(version, { ...identity, undo: hono });
-  assert.throws(() => verifyUndoVersion(version, { ...identity, undo: kit }), /Hono undo artifact/);
+  verifyUndoVersion(version, pin);
+  assert.throws(() => verifyUndoVersion(version, { ...pin, undo: kit }), /Hono undo artifact/);
   assert.throws(
-    () => verifyUndoVersion(version, { ...identity, undo: hono, digest: "d".repeat(64) }),
+    () => verifyUndoVersion(version, { ...pin, digest: "d".repeat(64) }),
     /Hono undo artifact/,
   );
+  for (const [reason, tag] of [
+    ["wrong source commit", `${"d".repeat(40)}-99-1`],
+    ["invalid run attempt", `${sourceSha}-99-01`],
+  ]) {
+    const mismatched = { ...version, annotations: { ...version.annotations, "workers/tag": tag } };
+    assert.throws(() => verifyUndoVersion(mismatched, pin), /Hono undo artifact/, reason);
+  }
 });
 
 test("admin rollback admits only the recorded production Ember version with admin off", () => {

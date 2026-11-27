@@ -160,10 +160,11 @@ describe("live batch reduction", () => {
     const row = { ...member, nick: "é".repeat(100) };
     const crowd = Array.from({ length: 3895 }, (_, i) => ({ ...row, userId: `${i + 1000}` }));
     const state = fixture({ ...baseline, members: [...baseline.members, ...crowd] });
-    const value = { ...event, description: "é".repeat(67) + (extra ? "é" : "x") };
+    const value = { ...event, description: "😀".repeat(33) + "é" + (extra ? "é" : "x") };
     const delta = patch({ topic: "events", op: "upsert", id: event.id, value });
     const candidate = { ...state, events: [value] };
     const snapshot = { ...snapshotEnvelope(), topics: candidate };
+    expect(Buffer.byteLength(JSON.stringify(candidate))).toBe(1024 * 1024 - 121 + extra);
     expect(Buffer.byteLength(JSON.stringify(snapshot))).toBe(1024 * 1024 + extra);
     expect(reduceLiveState(state, delta!) !== null).toBe(extra === 0);
     expect(snapshotTopics(candidate, guildId) !== null).toBe(extra === 0);

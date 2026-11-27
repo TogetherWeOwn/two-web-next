@@ -38,7 +38,10 @@ function stub(runs, jobs, { history = runs, committed = "2025-12-01T00:00:00Z" }
       const page = Number(searchParams.get("page"));
       return {
         ok: true,
-        json: async () => ({ workflow_runs: history.slice((page - 1) * 100, page * 100) }),
+        json: async () => ({
+          total_count: history.length,
+          workflow_runs: history.slice((page - 1) * 100, page * 100),
+        }),
       };
     }
     if (pathname.endsWith("/actions/workflows/e2e-staging.yml/runs")) {
@@ -823,7 +826,7 @@ test("automatic promotion requires an exact accepted SHA", () => {
   const stub = [
     {
       match: "/actions/workflows/e2e-staging.yml/runs",
-      body: { workflow_runs: [cliRun(7, A, oldAt)] },
+      body: { total_count: 1, workflow_runs: [cliRun(7, A, oldAt)] },
     },
     cliJobs(7),
     { match: `/commits/${A}`, body: { commit: { committer: { date: oldAt } } } },
@@ -893,7 +896,7 @@ test("resolver CLI promotes a soaked green on automatic triggers", () => {
   const result = spawnResolverCli({ ...cliBase, GITHUB_EVENT_NAME: "schedule" }, [
     {
       match: "/actions/workflows/e2e-staging.yml/runs",
-      body: { workflow_runs: [cliRun(7, A, oldAt)] },
+      body: { total_count: 1, workflow_runs: [cliRun(7, A, oldAt)] },
     },
     cliJobs(7),
     { match: `/commits/${A}`, body: { commit: { committer: { date: oldAt } } } },
@@ -919,7 +922,7 @@ test("resolver CLI emits exactly one staging coverage notice for explicit and au
         : [
             {
               match: "/actions/workflows/e2e-staging.yml/runs",
-              body: { workflow_runs: [cliRun(7, A, oldAt)] },
+              body: { total_count: 1, workflow_runs: [cliRun(7, A, oldAt)] },
             },
             cliJobs(7),
             { match: `/commits/${A}`, body: { commit: { committer: { date: oldAt } } } },

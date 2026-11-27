@@ -152,6 +152,8 @@ export type Env = AgentEventsEnv & {
   KIT_ROUTE_ADMIN_QUEUE_PREVIEW?: string;
   // Owner-only profile PATCH and native form POST. Only "true" opts in.
   KIT_ROUTE_PROFILE_WRITES?: string;
+  // Ownership of the staging operator's one-row queue redispatch POST.
+  KIT_ROUTE_ADMIN_QUEUE_REDISPATCH?: string;
   // Health, version, CSP sink and alert probe. Only "true" opts in.
   KIT_ROUTE_OPS?: string;
   // Exact POST /api/agent-events. Only the literal string "true" opts in.

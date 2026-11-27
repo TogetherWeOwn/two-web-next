@@ -157,7 +157,7 @@ describe("public game filter review regressions (offline)", () => {
     "route admits a stored game of exactly 100 code points (%j)",
     async (game) => {
       const h = fixture([game, "Other"]);
-      const response = await h.get(`?game=${encodeURIComponent(game)}`);
+      const response = await h.get(`?game=${encodeURIComponent(` ${game} `)}`);
       expect(response.status).toBe(200);
       const body = (await response.json()) as PublicApiEventCollectionDto;
       expect(body.data.map((row) => row.title)).toEqual(["Night 1"]);
@@ -180,9 +180,11 @@ describe("public game filter review regressions (offline)", () => {
   );
 
   it.each(["C".repeat(101), "🎲".repeat(101)])(
-    "route rejects 101 code points before reading even a matching fixture (%j)",
+    "route returns the empty page for 101 code points without a database (%j)",
     async (game) => {
-      const h = fixture([game]);
+      const h = fixture();
+      // The reader also rejects this input, so require the route to answer without it.
+      dbBox.db = null;
       const response = await h.get(`?game=${encodeURIComponent(game)}`);
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual(EMPTY);

@@ -62,8 +62,14 @@ Record the successful isolated job and cleanup, the proof's ledger states and
 version UUIDs, and the packet and proof from the same run attempt. Those
 artifacts are retained for 30 days. The production `cutover_pin` has the form
 `run_id:run_attempt:manifest_sha256`, using the manifest digest from the proof.
-To retry, select **Re-run all jobs** on the original dispatch. GitHub keeps
-the original SHA and ref, and isolated staging uses the new attempt's packet.
+To rerun qualification, select **Re-run all jobs** on the original dispatch.
+GitHub keeps the original SHA and ref, and isolated staging uses the new
+attempt's packet.
+
+The workflow invokes final cleanup once per job. If cleanup fails, the claim
+stays on that job's runner until the job ends. A later Actions attempt uses
+new fixture names and a new runner. Any resources left by the failed attempt
+require separate cleanup.
 
 Pair the isolated packet evidence with the
 [shared staging deploy, smoke, E2E and soak](../CONTRIBUTING.md#merge-and-production-staging-evidence)
