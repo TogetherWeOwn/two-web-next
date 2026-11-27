@@ -64,7 +64,7 @@ rule:
                   pattern: "!$NEGATED"
                   stopBy:
                     not:
-                      kind: parenthesized_expression
+                      matches: boolean-expression
         - any:
             - inside:
                 kind: variable_declarator

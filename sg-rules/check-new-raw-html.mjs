@@ -1,12 +1,15 @@
 // ast-grep reports every match. Use added Git lines as the baseline so existing
 // assertions need no suppressions and a newly copied assertion still fails.
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import { matchesGlob, normalize } from "node:path";
+import { parse as parseScript } from "@babel/parser";
 import { parse } from "yaml";
 import { parseDiff } from "../ci/patch-coverage.mjs";
 
 const rule = "no-raw-html-assertion";
+const displayPath = (path) =>
+  path.replace(/\p{C}/gu, (char) => `\\u{${char.codePointAt(0).toString(16)}}`);
 const git = (...args) =>
   execFileSync("git", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: "pipe" });
 
@@ -19,26 +22,25 @@ function baseRef() {
   return sha;
 }
 
+function hasSuppression(path) {
+  if (!lstatSync(path).isFile()) throw new Error("Expected a regular source file");
+  const source = readFileSync(path, "utf8");
+  if (!source.includes("ast-grep-ignore")) return false;
+  const ast = parseScript(source, {
+    sourceType: path.endsWith(".cjs") ? "commonjs" : "unambiguous",
+    plugins: ["typescript"],
+  });
+  return ast.comments?.some(({ value }) => /^[^\p{Alphabetic}]*ast-grep-ignore/u.test(value));
+}
+
 function scan(paths) {
   if (paths.length === 0) return [];
-  const result = spawnSync(
-    "npx",
-    [
-      "-y",
-      "--package",
-      "@ast-grep/cli@0.50.0",
-      "ast-grep",
-      "scan",
-      "--json=compact",
-      "--inspect",
-      "entity",
-      "--filter",
-      `^${rule}$`,
-      "--",
-      ...paths,
-    ],
-    { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
-  );
+  const cli = ["-y", "--package", "@ast-grep/cli@0.50.0", "ast-grep"];
+  const options = ["scan", "--json=compact", "--inspect=entity", "--filter", `^${rule}$`];
+  const result = spawnSync("npx", [...cli, ...options, "--", ...paths], {
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+  });
   // The pinned CLI can exit zero after a walker error or a skipped read.
   const files = /^sg: summary\|file: scannedFileCount=(\d+),skippedFileCount=0$/m;
   const rules = /^sg: summary\|rule: effectiveRuleCount=1,skippedRuleCount=\d+$/m;
@@ -79,12 +81,13 @@ try {
   const paths = [...new Set([...changed, ...untracked])].filter((path) =>
     scopes.some((scope) => matchesGlob(path, scope)),
   );
-
-  let violations = 0;
+  const suppressed = paths.find(hasSuppression);
+  if (suppressed) console.error(`${displayPath(suppressed)}: ast-grep suppression is forbidden`);
+  let violations = Number(Boolean(suppressed));
   for (const {
     file,
     range: { start, end },
-  } of scan(paths)) {
+  } of suppressed ? [] : scan(paths)) {
     const path = normalize(file);
     const lines = added.get(path);
     // ast-grep lines are zero-based and the end position is exclusive.
@@ -92,8 +95,7 @@ try {
     let line = start.line + 1;
     while (line <= lastLine && !untracked.has(path) && !lines?.has(line)) line++;
     if (line > lastLine) continue;
-    const display = path.replace(/\p{C}/gu, (char) => `\\u{${char.codePointAt(0).toString(16)}}`);
-    console.error(`${display}:${line}: ${message} (${rule})`);
+    console.error(`${displayPath(path)}:${line}: ${message} (${rule})`);
     violations++;
   }
   if (violations > 0) process.exitCode = 1;

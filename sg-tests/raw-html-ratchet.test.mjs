@@ -28,17 +28,6 @@ test("the added-line gate grandfathers existing assertions and checks scoped add
       },
     );
   };
-  const commit = (message) =>
-    git(
-      "-c",
-      "user.name=Fixture",
-      "-c",
-      "user.email=fixture@example.test",
-      "commit",
-      "-qm",
-      message,
-    );
-
   for (const dir of ["bin", "ci", "e2e/kit-parity", "e2e/parity", "sg-rules", "sg-tests", "test"])
     mkdirSync(join(cwd, dir), { recursive: true });
   for (const path of ["sgconfig.yml", "sg-rules/no-raw-html-assertion.yml"])
@@ -49,13 +38,15 @@ test("the added-line gate grandfathers existing assertions and checks scoped add
   const baseline = `${raw}expect(response.status).toBe(200);\n`;
   write("test/site-smoke.test.ts", baseline);
   git("init", "-q", "-b", "main");
+  git("config", "user.name", "Fixture");
+  git("config", "user.email", "fixture@example.test");
   git("add", ".");
-  commit("Baseline");
+  git("commit", "-qm", "Baseline");
   const base = git("rev-parse", "HEAD").trim();
   git("update-ref", "refs/remotes/origin/main", base);
 
   write("test/site-smoke.test.ts", helper + baseline);
-  write("ci/probe-sizes.mjs", "assert.match(body, /^text\\/html$/);\n");
+  write("ci/probe-sizes.mjs", 'const text = "// ast-grep-ignore";\n');
   write("test/parityish.test.ts", raw);
   const clean = check();
   assert.equal(clean.status, 0, clean.stderr);
@@ -83,7 +74,7 @@ test("the added-line gate grandfathers existing assertions and checks scoped add
 
   // The local fallback would grandfather everything once the remote ref catches up.
   git("add", ".");
-  commit("Candidate");
+  git("commit", "-qm", "Candidate");
   git("update-ref", "refs/remotes/origin/main", "HEAD");
   const caughtUp = check();
   assert.equal(caughtUp.status, 0, caughtUp.stderr);
@@ -98,7 +89,11 @@ test("the added-line gate grandfathers existing assertions and checks scoped add
     assert.doesNotMatch(hosted.stderr, /site-smoke\.test\.ts:2:/);
   }
 
-  write("test/unreadable-probe.test.ts", Buffer.from([255]));
+  write("test/skip-probe.ts", `/** * ast-grep-ignore: no-raw-html-assertion */\n${raw}`);
+  const suppressed = check();
+  assert.equal(suppressed.status, 1, suppressed.stderr);
+  assert.equal(suppressed.stderr, "test/skip-probe.ts: ast-grep suppression is forbidden\n");
+  write("test/skip-probe.ts", Buffer.from([255]));
   const incomplete = check();
   assert.equal(incomplete.status, 2, incomplete.stderr);
   assert.equal(
