@@ -231,6 +231,7 @@ function parsePlan(raw, hash) {
       column === "" || (name === ledgerTable && ["created_at", "hash", "id"].includes(column)),
     );
   }
+  const membershipPairs = new Set();
   for (const { role, grantor, admin, inherit, set } of plan.membership) {
     assert.ok(
       broadRoles.includes(role) &&
@@ -239,6 +240,9 @@ function parsePlan(raw, hash) {
         typeof set === "boolean",
     );
     assert.match(grantor, identifier);
+    const pair = JSON.stringify([role, grantor]);
+    assert.ok(!membershipPairs.has(pair), "Duplicate serving role membership");
+    membershipPairs.add(pair);
   }
   assert.equal(
     new Set([...plan.add, ...plan.remove].map(aclId)).size,
