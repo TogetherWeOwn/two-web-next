@@ -215,6 +215,21 @@ test("admin rollback admits only the recorded production Ember version with admi
     pin,
     sourceSha,
   );
+  for (const required of bindings) {
+    assert.throws(
+      () => verifyEmberUndoVersion(withBindings([...bindings, { ...required }]), pin, sourceSha),
+      assert.AssertionError,
+      `must reject duplicate ${required.name} bindings even when their values agree`,
+    );
+    const wrongType = bindings.map((binding) =>
+      binding.name === required.name ? { ...binding, type: "json" } : binding,
+    );
+    assert.throws(
+      () => verifyEmberUndoVersion(withBindings(wrongType), pin, sourceSha),
+      assert.AssertionError,
+      `must reject a non-plain-text ${required.name} binding even with the expected text`,
+    );
+  }
   for (const mismatch of [{ undo: hono }, { undoDigest: digest }]) {
     assert.throws(() => verifyEmberUndoVersion(version, { ...pin, ...mismatch }, sourceSha));
   }
