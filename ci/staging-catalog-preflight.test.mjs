@@ -214,6 +214,32 @@ test("endpoint pin refuses weak TLS, unknown params and bad shapes; strips chann
   }
 });
 
+test("staging URL requires exactly one allowed sslmode", () => {
+  const raw = new URL(staging());
+  for (const sslmode of ["require", "verify-full"]) {
+    raw.searchParams.set("sslmode", sslmode);
+    raw.searchParams.set("channel_binding", "require");
+    const url = validateStagingUrl(raw.href);
+    assert.deepEqual([...url.searchParams], [["sslmode", sslmode]]);
+  }
+
+  for (const query of [
+    "sslmode=require&sslmode=disable",
+    "sslmode=disable&sslmode=require",
+    "sslmode=require&sslmode=verify-full",
+    "sslmode=verify-full&sslmode=verify-full",
+    "sslmode=require&sslmode=",
+    "sslmode=verify-full&%73slmode=disable",
+  ]) {
+    raw.search = query;
+    assert.throws(
+      () => validateStagingUrl(raw.href),
+      { message: "Preflight requires a direct endpoint with TLS; value withheld." },
+      query,
+    );
+  }
+});
+
 const LIVE_URL = (() => {
   // Explicit opt-in only. Never fall back to DATABASE_URL: the fixture
   // roles below are cluster-wide, and a developer's ordinary local app

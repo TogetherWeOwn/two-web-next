@@ -15,7 +15,6 @@ import {
 import { smoke } from "../bin/smoke.mjs";
 import { REQUIRED_PRODUCTION_SECRETS } from "./check-production-secrets.mjs";
 import { assertStagedAdminServing } from "./fixtures/kit-admin-serving.mjs";
-import { readGitHubMetadataJson } from "./github-metadata-json.mjs";
 import {
   ADMIN_STAGING_CHECKS,
   EMBER_CUTOVER_VARS,
@@ -38,6 +37,57 @@ const cutoverProfile = process.env.CUTOVER_PROFILE || "all-off";
 const ember = cutoverProfile === "ember";
 const admin = cutoverProfile === "admin";
 const baseline = admin ? "ember" : "hono";
+const MAX_WORKERS_RESPONSE_BYTES = 1024 * 1024;
+
+function cancelBody(stream) {
+  // Disposal can fail after an abort. Keep the status or reader error authoritative.
+  void stream?.cancel().catch(() => undefined);
+}
+
+async function readWorkersResponse(response, { settings, strictUtf8 }) {
+  if (!response.ok) {
+    cancelBody(response.body);
+    if (response.status === 404) return null;
+    throw new Error("staging Workers API refused the request");
+  }
+
+  assert.ok(response.body, "staging Workers API response body missing");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: strictUtf8 });
+  let bytes = 0;
+  let text = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_WORKERS_RESPONSE_BYTES) break;
+      text += decoder.decode(value, { stream: true });
+    }
+  } catch {
+    throw new Error("staging Workers API response could not be read");
+  } finally {
+    cancelBody(reader);
+    reader.releaseLock();
+  }
+  assert.ok(bytes <= MAX_WORKERS_RESPONSE_BYTES, "staging Workers API response too large");
+
+  let body;
+  try {
+    body = JSON.parse(text + decoder.decode());
+  } catch {
+    throw new Error("staging Workers API response was not valid JSON");
+  }
+  assert.ok(body?.success === true, "staging Workers API returned an error");
+  // Only HTTP 404 proves that the script is absent.
+  if (settings) {
+    assert.ok(
+      body.result && typeof body.result === "object" && !Array.isArray(body.result),
+      "staging Workers API returned invalid settings",
+    );
+  }
+  return body.result;
+}
 
 export function cloudflare({
   account = process.env.CLOUDFLARE_ACCOUNT_ID,
@@ -63,27 +113,7 @@ export function cloudflare({
       if (readback) throw new Error("staging Workers API request failed");
       throw error;
     });
-    if (readback && !response.ok) void response.body?.cancel().catch(() => undefined);
-    if (response.status === 404) return null;
-    assert.ok(response.ok, "staging Workers API refused the request");
-    if (readback) {
-      // Reuse the 1 MiB stream reader and keep provider details out of diagnostics.
-      const body = await readGitHubMetadataJson(response.body).catch(() => {
-        throw new Error("staging Workers API response was unreadable, invalid or oversized");
-      });
-      assert.ok(body?.success === true, "staging Workers API returned an error");
-      // Only HTTP 404 proves that the script is absent.
-      if (settings) {
-        assert.ok(
-          body.result && typeof body.result === "object" && !Array.isArray(body.result),
-          "staging Workers API returned invalid settings",
-        );
-      }
-      return body.result;
-    }
-    const body = await response.json();
-    assert.equal(body.success, true, "staging Workers API returned an error");
-    return body.result;
+    return readWorkersResponse(response, { settings, strictUtf8: readback });
   };
 }
 
