@@ -1484,13 +1484,21 @@ test("an enabled nested-reads join-attempts pair is covered by the executed pari
 });
 
 test("archive contract detects an inert binder", () => {
-  const html = `<html><head><link href=x rel=canonical><meta content='noindex, follow' name=robots></head><body><a class="skip-link" href="#main">s</a><nav aria-label="Primary"></nav><main><section data-testid="past-events"></section></main><p>Welcome, guest</p><script hidden src='/islands/past-events.js'></script></body></html>`;
+  const html = `<html><head><link rel="canonical" href="x"><meta name="robots" content="noindex, follow"></head><body><a class="skip-link" href="#main">s</a><nav aria-label="Primary"></nav><main><section data-testid="past-events"></section></main><p>Welcome, guest</p><script src="/islands/past-events.js"></script></body></html>`;
   const check = (body) => assertRouteContract(fixtureResponse("archive", body, 200, "archive"));
-  assert.deepEqual(check(html), []);
   for (const attr of ["type=application/json", "nomodule"])
-    assert.deepEqual(check(html.replace("script hidden", `script ${attr}`)), [
+    assert.deepEqual(check(html.replace("></script>", ` ${attr}></script>`)), [
       "archive: shared island binder",
     ]);
+  assert.deepEqual(
+    check(
+      html.replace(
+        'script src="/islands/past-events.js"',
+        "script hidden src='/islands/past-events.js'",
+      ),
+    ),
+    [],
+  );
 });
 
 test("route contract detects a planted break", () => {
