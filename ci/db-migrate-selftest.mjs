@@ -27,6 +27,7 @@ import {
 import { runRepair } from "./db-permissions-repair.mjs";
 import { runExecutorAuthority } from "./db-repair-executor.mjs";
 import { rehearseProjection } from "./fixtures/web-readiness-projection.mjs";
+import { assertReadinessResponseBounds } from "./fixtures/web-readiness-response.mjs";
 import { OwnershipRefusal, assertMigratorOwnership } from "./migration-ownership.mjs";
 import {
   DefaultAclRefusal,
@@ -58,6 +59,11 @@ const productionEnv = {
 };
 const identityHash = (database, role) =>
   createHash("sha256").update(database).update(Buffer.of(0)).update(role).digest("hex");
+
+test(
+  "readiness traffic accepts the byte limit and cancels an oversized stream",
+  assertReadinessResponseBounds,
+);
 
 test("permissions repair rejects an unpinned plan before opening a client", async () => {
   await assert.rejects(
@@ -231,7 +237,7 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
         identity: identityHash(url.pathname.slice(1), "repair_legacy"),
         owners,
       };
-      const run = (direction, overrides = {}, planDigest) => {
+      const run = (direction, overrides = {}, planDigest, begin = executor.begin) => {
         const raw = JSON.stringify({ ...plan, ...overrides });
         return runRepair(
           direction,
@@ -244,7 +250,7 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
           (config) => {
             assert.equal(planDigest, undefined, "unexpected connection");
             config.url.pathname = url.pathname;
-            return { begin: executor.begin, end: async () => {} };
+            return { begin, end: async () => {} };
           },
         );
       };
@@ -340,29 +346,38 @@ test("permissions repair pins the catalog, preserves the ledger and reverses the
       const writing = Promise.withResolvers();
       const releaseWriter = Promise.withResolvers();
       try {
-        await Promise.all([
-          assert.rejects(
-            shortWriter.begin(async (tx) => {
-              await tx`insert into public.events values (-1)`;
-              writing.resolve();
-              await releaseWriter.promise;
-              throw rollback;
-            }),
-            (error) => error === rollback,
-          ),
-          writing.promise.then(() =>
-            Promise.all([
-              run("forward").then((result) => assert.equal(result, "committed")),
-              waitFor(
-                () => client`select exists (
-                  select from pg_stat_activity
-                  where datname = current_database() and usename = 'repair_legacy'
-                    and state = 'active' and wait_event = 'PgSleep') as seen`,
-                "Repair never rechecked the guard for an unrelated writer",
-              ).finally(() => releaseWriter.resolve()),
-            ]),
-          ),
-        ]);
+        const writerRolledBack = assert.rejects(
+          shortWriter.begin(async (tx) => {
+            await tx`insert into public.events values (-1)`;
+            writing.resolve();
+            await releaseWriter.promise;
+            throw rollback;
+          }),
+          (error) => error === rollback,
+        );
+        await Promise.race([writing.promise, writerRolledBack]);
+        let retried = false;
+        const beginWithWriter = (mode, execute) =>
+          executor.begin(mode, (tx) =>
+            execute(
+              new Proxy(tx, {
+                apply(target, thisArg, args) {
+                  const query = Reflect.apply(target, thisArg, args);
+                  if (retried || args[0][0] !== "select pg_sleep(0.25)") return query;
+                  retried = true;
+                  // Let PostgreSQL run the real retry wait. Hold its result until
+                  // the writer rolls back so the next poll cannot race the fixture.
+                  return query.then(async (rows) => {
+                    releaseWriter.resolve();
+                    await writerRolledBack;
+                    return rows;
+                  });
+                },
+              }),
+            ),
+          );
+        assert.equal(await run("forward", {}, undefined, beginWithWriter), "committed");
+        assert.equal(retried, true, "Repair never rechecked the guard for an unrelated writer");
       } finally {
         releaseWriter.resolve();
         await shortWriter.end({ timeout: 5 });

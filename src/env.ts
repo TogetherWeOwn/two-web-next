@@ -110,6 +110,8 @@ export type Env = AgentEventsEnv & {
   KIT_PARITY_FIXTURE_ADMIN_EVENT_CREATE_REDIRECT?: string;
   // Loopback installed Worker fixture only; serves the legacy event edit redirect.
   KIT_PARITY_FIXTURE_ADMIN_EVENT_EDIT_REDIRECT?: string;
+  // Loopback installed Worker fixture only; admits the shared featured unpublish form.
+  KIT_PARITY_FIXTURE_ADMIN_FEATURED_UNPUBLISH?: string;
   // Generated local capture build only; no deployed config defines the build gate.
   SSR_CAPTURE_FIXTURE?: string;
   // Archive and static are default-off Kit rollout controls for the canonical

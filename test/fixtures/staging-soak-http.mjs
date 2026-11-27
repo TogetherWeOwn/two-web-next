@@ -165,12 +165,25 @@ export function installSoakCliReads({ finalReadUnavailable }) {
           return response;
         };
         if (url === `${STAGING_ORIGIN}/up`) {
-          return trackedResponse(
-            { revision: { commit: sha, version_id: workerVersion } },
+          const payload = { revision: { commit: sha, version_id: workerVersion } };
+          // Record consumption when the revision reader pulls, even without .json().
+          const body = new ReadableStream(
             {
-              headers: { "x-two-origin": "two-web-next", "cache-control": "no-store" },
+              pull(controller) {
+                controller.enqueue(new TextEncoder().encode(JSON.stringify(payload)));
+                reads.push(url);
+                controller.close();
+              },
             },
+            { highWaterMark: 0 },
           );
+          return new Response(body, {
+            headers: {
+              "content-type": "application/json",
+              "x-two-origin": "two-web-next",
+              "cache-control": "no-store",
+            },
+          });
         }
         assert.equal(url, "https://api.cloudflare.com/client/v4/graphql");
         return trackedResponse({

@@ -77,10 +77,10 @@ export function assertProductionHold(env, { nowMs = Date.now() } = {}) {
 }
 
 // Live production identity: the Cloudflare active version's commit, read from
-// the production apex /up revision marker (the same source the production
-// promoter uses). Returns the 40-hex commit, or null when the marker is
-// absent or unreadable (unknown, never equal).
+// a successful production apex /up response. A 503 can carry a revision
+// for diagnostics. The promoter treats that identity as unknown.
 export const PRODUCTION_ORIGIN = APEX_ORIGIN;
+const PRODUCTION_UP_MAX_BYTES = 16 * 1024;
 
 export async function readLiveProductionCommit({
   origin = PRODUCTION_ORIGIN,
@@ -92,7 +92,32 @@ export async function readLiveProductionCommit({
       headers: { "cache-control": "no-cache" },
       signal: AbortSignal.timeout(10_000),
     });
-    const data = await response.json();
+    const mediaType = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
+    if (response.status !== 200 || response.redirected || mediaType !== "application/json") {
+      void response.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    if (!response.body) return null;
+
+    // Bound the actual response bytes, including bodies without Content-Length.
+    const reader = response.body.getReader();
+    const bytes = new Uint8Array(PRODUCTION_UP_MAX_BYTES);
+    let length = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value.byteLength === 0 || value.byteLength > bytes.length - length) return null;
+        bytes.set(value, length);
+        length += value.byteLength;
+      }
+    } finally {
+      void reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+    }
+    const data = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, length)),
+    );
     const commit = data?.revision?.commit;
     return typeof commit === "string" && /^[0-9a-f]{40}$/.test(commit) ? commit : null;
   } catch {
@@ -211,6 +236,9 @@ export function pendingMigrationTags(targetTags, liveTags) {
   return (Array.isArray(targetTags) ? targetTags : []).filter((tag) => !live.has(tag));
 }
 
+// Bound the Contents envelope, including base64 expansion and GitHub metadata.
+const MAX_JOURNAL_RESPONSE_BYTES = 256 * 1024;
+
 function decodeJournalEntries(content, encoding) {
   const text =
     encoding === "base64"
@@ -235,7 +263,27 @@ async function journalEntriesAt({ repository, ref, token, fetchImpl }) {
     },
   );
   if (!response.ok) throw new Error(`Migration journal lookup failed (HTTP ${response.status})`);
-  const body = await response.json();
+  if (!response.body) throw new Error("Migration journal lookup returned no body");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let received = 0;
+  let text = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.byteLength;
+      if (received > MAX_JOURNAL_RESPONSE_BYTES) {
+        // Cancellation is best effort and must not delay the size refusal.
+        void reader.cancel().catch(() => {});
+        throw new Error(`Migration journal response exceeds ${MAX_JOURNAL_RESPONSE_BYTES} bytes`);
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const body = JSON.parse(text + decoder.decode());
   return decodeJournalEntries(body.content, body.encoding);
 }
 
@@ -329,6 +377,38 @@ export function readLedgerState(body) {
   return ledger;
 }
 
+// The readiness document includes the timestamp set and metadata. Bound the
+// decoded HTTP stream in bytes before admitting it as migration evidence.
+const MAX_PRODUCTION_LEDGER_RESPONSE_BYTES = 16 * 1024;
+
+async function readProductionLedgerBody(response) {
+  if (!response.body) throw new Error("response has no body");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let bytes = 0;
+  let text = "";
+  let complete = false;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        complete = true;
+        return JSON.parse(text + decoder.decode());
+      }
+      bytes += value.byteLength;
+      if (bytes > MAX_PRODUCTION_LEDGER_RESPONSE_BYTES) break;
+      text += decoder.decode(value, { stream: true });
+    }
+  } catch {
+    throw new Error("response body is unreadable or invalid JSON");
+  } finally {
+    // Cancellation is best effort and must not delay a refusal.
+    if (!complete) void reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+  throw new Error(`response exceeds ${MAX_PRODUCTION_LEDGER_RESPONSE_BYTES} bytes`);
+}
+
 export async function readLiveProductionLedger({
   origin = PRODUCTION_ORIGIN,
   fetchImpl = fetch,
@@ -341,7 +421,7 @@ export async function readLiveProductionLedger({
       signal: AbortSignal.timeout(10_000),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    body = await response.json();
+    body = await readProductionLedgerBody(response);
   } catch (error) {
     throw new Error(
       `production ledger read failed (${error instanceof Error ? error.message : String(error)})`,
@@ -742,6 +822,8 @@ export function evaluateSoakErrorRate({ staging, production }) {
 }
 
 const SCRIPT_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+// The query returns at most 10,000 rows with two integer sums each.
+const SCRIPT_ERROR_RESPONSE_MAX_BYTES = 1024 * 1024;
 
 export function buildScriptErrorQuery({ accountId, scriptName, versionId, sinceIso, untilIso }) {
   if (!/^[0-9a-f]{32}$/.test(accountId ?? "")) throw new Error("Invalid Cloudflare account id");
@@ -783,6 +865,32 @@ export function sumScriptErrors(payload) {
   return { requests, errors };
 }
 
+async function readScriptErrorResponse(response) {
+  if (!response.body) throw new Error("Workers analytics response has no body");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return JSON.parse(text + decoder.decode());
+      bytes += value.byteLength;
+      if (bytes > SCRIPT_ERROR_RESPONSE_MAX_BYTES) {
+        // Cleanup cannot delay or replace the refusal.
+        void reader.cancel().catch(() => undefined);
+        break;
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } catch {
+    throw new Error("Workers analytics response is not readable JSON");
+  } finally {
+    reader.releaseLock();
+  }
+  throw new Error("Workers analytics response exceeds 1 MiB");
+}
+
 export async function scriptErrorSample(
   { accountId, scriptName, versionId, sinceIso, untilIso, token },
   { fetchImpl = fetch } = {},
@@ -796,7 +904,7 @@ export async function scriptErrorSample(
     signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok) throw new Error(`Workers analytics query failed (HTTP ${response.status})`);
-  return sumScriptErrors(await response.json());
+  return sumScriptErrors(await readScriptErrorResponse(response));
 }
 
 const STAGING_VERSION_PAGE_MAX_BYTES = 1024 * 1024;
@@ -934,6 +1042,30 @@ export async function verifyAllocationSoak(env, { fetchImpl = fetch, now = Date.
   );
 }
 
+async function readPassiveLedgerZip(body) {
+  if (!body) throw new Error("Passive ledger zip has no body");
+  const bytes = Buffer.alloc(PASSIVE_LEDGER_MAX_BYTES);
+  const reader = body.getReader();
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read().catch(() => {
+        throw new Error("Passive ledger zip could not be read");
+      });
+      if (done) return bytes.subarray(0, size);
+      if (size + value.byteLength > PASSIVE_LEDGER_MAX_BYTES) {
+        // Request cancellation immediately. A storage failure must not delay or mask refusal.
+        void reader.cancel().catch(() => undefined);
+        throw new Error(`Passive ledger zip is over the ${PASSIVE_LEDGER_MAX_BYTES}-byte limit`);
+      }
+      bytes.set(value, size);
+      size += value.byteLength;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 // The candidate's staging passive ledgers: the artifact of the newest
 // e2e-staging run titled for the candidate, which must name the candidate.
 export async function fetchPassiveLedgers(
@@ -1021,14 +1153,14 @@ export async function fetchPassiveLedgers(
   if (redirect.status !== 302 || !location?.startsWith("https://")) {
     throw new Error(`Passive ledger download failed (HTTP ${redirect.status})`);
   }
-  const zip = await fetchImpl(location, { redirect: "error", signal: AbortSignal.timeout(60_000) });
+  const zip = await fetchImpl(location, {
+    redirect: "error",
+    signal: AbortSignal.timeout(60_000),
+  }).catch(() => {
+    throw new Error("Passive ledger download failed");
+  });
   if (!zip.ok) throw new Error(`Passive ledger download failed (HTTP ${zip.status})`);
-  const bytes = Buffer.from(await zip.arrayBuffer());
-  if (bytes.byteLength > PASSIVE_LEDGER_MAX_BYTES) {
-    throw new Error(
-      `Passive ledger zip is ${bytes.byteLength} bytes, over the ${PASSIVE_LEDGER_MAX_BYTES}-byte limit`,
-    );
-  }
+  const bytes = await readPassiveLedgerZip(zip.body);
   mkdirSync(dir, { recursive: true });
   const zipPath = join(dir, "ledger.zip");
   writeFileSync(zipPath, bytes);

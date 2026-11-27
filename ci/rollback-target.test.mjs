@@ -1390,7 +1390,7 @@ function journal(tags) {
 }
 
 function stubRepo({ target, previous, sql, up, seen = {} }) {
-  return async (url) => {
+  return async (url, options) => {
     const parsed = new URL(url);
     if (parsed.pathname === "/up") {
       seen.up = (seen.up ?? 0) + 1;
@@ -1399,14 +1399,16 @@ function stubRepo({ target, previous, sql, up, seen = {} }) {
     if (parsed.pathname.endsWith("/contents/drizzle/meta/_journal.json")) {
       const ref = parsed.searchParams.get("ref");
       const tags = ref === TARGET ? target : ref === PREVIOUS ? previous : assert.fail(ref);
-      return { ok: true, json: async () => ({ encoding: "base64", content: journal(tags) }) };
+      return Response.json({ encoding: "base64", content: journal(tags) });
     }
     const tag = parsed.pathname.match(/\/contents\/drizzle\/([^/]+)\.sql$/)?.[1];
     if (tag) {
       assert.equal(parsed.searchParams.get("ref"), TARGET);
+      assert.equal(options.headers.Accept, "application/vnd.github.raw+json");
+      assert.equal(options.redirect, "error");
       seen.sql = [...(seen.sql ?? []), decodeURIComponent(tag)];
       if (!(tag in sql)) return { ok: false, status: 404 };
-      return { ok: true, text: async () => sql[tag] };
+      return sql[tag] instanceof Response ? sql[tag] : new Response(sql[tag]);
     }
     assert.fail(`unexpected path ${parsed.pathname}`);
   };
@@ -1428,6 +1430,120 @@ test("compatibility reads only the migrations the target adds since the rollback
   });
   assert.deepEqual(result, { added: ["1001_b", "1002_c"], unsafe: ["1002_c"] });
   assert.deepEqual(seen.sql, ["1001_b", "1002_c"]);
+});
+
+const boundarySqlPrefix = "SELECT 1; --";
+const sqlAtByteLimit = `${boundarySqlPrefix}${"é".repeat((64 * 1024 - boundarySqlPrefix.length) / 2)}`;
+
+test("compatibility accepts a migration at the exact byte limit", async () => {
+  assert.equal(Buffer.byteLength(sqlAtByteLimit), 65_536);
+  const result = await rollbackCompatibility({
+    repository: "fixture/repo",
+    targetSha: TARGET,
+    previousSha: PREVIOUS,
+    token: "fixture-only",
+    fetchImpl: stubRepo({
+      target: ["1000_a", "1001_b"],
+      previous: ["1000_a"],
+      sql: { "1001_b": sqlAtByteLimit },
+    }),
+  });
+  assert.deepEqual(result, { added: ["1001_b"], unsafe: [] });
+});
+
+test("compatibility cancels an oversized later migration and refuses the whole scan", async () => {
+  const encoder = new TextEncoder();
+  const chunks = [encoder.encode(sqlAtByteLimit), encoder.encode("\n")];
+  let pulls = 0;
+  let cancelled = false;
+  const body = new ReadableStream(
+    {
+      pull(controller) {
+        pulls += 1;
+        if (pulls <= chunks.length) controller.enqueue(chunks[pulls - 1]);
+        else controller.close();
+      },
+      cancel() {
+        cancelled = true;
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const seen = {};
+  await assert.rejects(
+    rollbackCompatibility({
+      repository: "fixture/repo",
+      targetSha: TARGET,
+      previousSha: PREVIOUS,
+      token: "fixture-only",
+      fetchImpl: stubRepo({
+        target: ["1000_a", "1001_b", "1002_c", "1003_d"],
+        previous: ["1000_a"],
+        sql: {
+          "1001_b": "SELECT 1;",
+          "1002_c": new Response(body, { headers: { "content-length": "10" } }),
+          "1003_d": 'DROP TABLE "z";',
+        },
+        seen,
+      }),
+    }),
+    /Migration 1002_c lookup failed: raw SQL exceeds 65536 bytes/,
+  );
+  assert.deepEqual(seen.sql, ["1001_b", "1002_c"]);
+  assert.equal(pulls, 2);
+  assert.equal(cancelled, true);
+});
+
+test("compatibility refuses an empty migration or an invalid UTF-8 tail", async () => {
+  const prefix = new TextEncoder().encode("SELECT 1; -- ");
+  for (const body of ["", new Uint8Array([...prefix, 0xc3])]) {
+    await assert.rejects(
+      rollbackCompatibility({
+        repository: "fixture/repo",
+        targetSha: TARGET,
+        previousSha: PREVIOUS,
+        token: "fixture-only",
+        fetchImpl: stubRepo({
+          target: ["1000_a", "1001_b"],
+          previous: ["1000_a"],
+          sql: { "1001_b": new Response(body) },
+        }),
+      }),
+      /Migration 1001_b lookup failed: invalid raw SQL body/,
+    );
+  }
+});
+
+test("compatibility refuses an interrupted migration even after valid SQL arrives", async () => {
+  let pulls = 0;
+  const body = new ReadableStream(
+    {
+      pull(controller) {
+        pulls += 1;
+        if (pulls === 1) controller.enqueue(new TextEncoder().encode("SELECT 1;"));
+        else controller.error(new Error("fixture stream failure"));
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const seen = {};
+  await assert.rejects(
+    rollbackCompatibility({
+      repository: "fixture/repo",
+      targetSha: TARGET,
+      previousSha: PREVIOUS,
+      token: "fixture-only",
+      fetchImpl: stubRepo({
+        target: ["1000_a", "1001_b", "1002_c"],
+        previous: ["1000_a"],
+        sql: { "1001_b": new Response(body), "1002_c": 'DROP TABLE "z";' },
+        seen,
+      }),
+    }),
+    { message: "Migration 1001_b lookup failed: invalid raw SQL body" },
+  );
+  assert.deepEqual(seen.sql, ["1001_b"]);
+  assert.equal(pulls, 2);
 });
 
 test("an unreadable migration file fails closed", async () => {
@@ -1725,6 +1841,78 @@ test("staging rollback drill uses the latest decisive run and permits empty hist
       new RegExp(`run 2\\) concluded ${conclusion}`),
     );
   }
+});
+
+test("staging lane CLI requires trustworthy run listings", async (t) => {
+  const sentinel = "PRIVATE_FIXTURE_BODY";
+  const empty = { workflow_runs: [] };
+  const occupied = { workflow_runs: [{ id: 1 }, { id: 1 }, { id: Number.MAX_SAFE_INTEGER }] };
+  const occupiedMessage =
+    "Staging lane busy: e2e-staging.yml run 1, e2e-staging.yml run 1, " +
+    `e2e-staging.yml run ${Number.MAX_SAFE_INTEGER}\n`;
+  const cases = [
+    { name: "empty", body: empty, busy: false },
+    { name: "occupied with boundary IDs and duplicates", body: occupied, busy: true },
+    { name: "absent listing", body: { details: sentinel } },
+    { name: "null listing", body: { workflow_runs: null } },
+    { name: "string listing", body: { workflow_runs: sentinel } },
+    { name: "object listing", body: { workflow_runs: { details: sentinel } } },
+    { name: "null run", body: { workflow_runs: [null] } },
+    { name: "missing ID", body: { workflow_runs: [{}] } },
+    ...[sentinel, "7", 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1].map((id) => ({
+      name: `invalid ID ${id}`,
+      body: { workflow_runs: [{ id }] },
+    })),
+    { name: "mixed listing", body: { workflow_runs: [{ id: 7 }, { id: sentinel }] } },
+  ];
+
+  for (const { name, body, busy } of cases) {
+    await t.test(name, (t) => {
+      const dir = mkdtempSync(join(tmpdir(), "staging-lane-proof-"));
+      t.after(() => rmSync(dir, { recursive: true, force: true }));
+      const output = join(dir, "out");
+      const stubs = [
+        { match: "/e2e-staging.yml/runs?status=waiting&per_page=20", body },
+        { match: "/runs?status=", body: empty },
+      ];
+      const result = spawnSync(process.execPath, ["ci/rollback-target.mjs", "--staging-busy"], {
+        encoding: "utf8",
+        env: {
+          GITHUB_OUTPUT: output,
+          GITHUB_REPOSITORY: "fixture/repo",
+          GITHUB_TOKEN: "fixture-only",
+          NODE_OPTIONS: `--import=${new URL("./test-fetch-stub.mjs", import.meta.url).href}`,
+          FETCH_STUB_JSON: JSON.stringify(stubs),
+        },
+      });
+      assert.ifError(result.error);
+      if (busy === undefined) {
+        assert.equal(result.status, 1, result.stdout);
+        assert.equal(result.stdout, "");
+        assert.equal(
+          result.stderr,
+          "::error::Staging lane lookup returned an invalid run listing\n",
+        );
+        assert.equal(existsSync(output), false);
+      } else {
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.stderr, "");
+        assert.equal(readFileSync(output, "utf8"), `busy=${busy}\n`);
+        assert.equal(result.stdout, busy ? occupiedMessage : "Staging lane idle\n");
+      }
+    });
+  }
+
+  await t.test("malformed JSON", async () => {
+    await assert.rejects(
+      stagingBusyRuns({
+        repository: "fixture/repo",
+        token: "fixture-only",
+        fetchImpl: async () => new Response(sentinel),
+      }),
+      { message: "Staging lane lookup returned an invalid run listing" },
+    );
+  });
 });
 
 test("staging lane is busy while deploy or e2e-staging runs are queued or running", async () => {

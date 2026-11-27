@@ -2,14 +2,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
-// The PR-size labeller is advisory only: these pins keep it that way. The
-// advisory job names must never join the required set; `pr-size-gate` is the
-// one deliberate required exception and must name the gate reusable. The
-// write scopes stay on the two caller jobs that need them (never
-// workflow-wide, never the weekly job). All labelling logic lives once in
-// the org `.github` repository and runs from there at a pinned SHA, so this
-// repo keeps no script copy a pull request could modify or delete to silence
-// its own label; behaviour is tested centrally next to the script.
+// The required gate runs the best-effort labeller in the same runner.
+// Its job-level grant covers both steps; the weekly tally stays read-only.
 const workflowSource = readFileSync(".github/workflows/pr-size.yml", "utf8");
 const workflow = workflowSource.replace(
   /^(      (?:issues|pull-requests): (?:read|write))[ \t]+#[^\n]*$/gm,
@@ -20,7 +14,7 @@ const job = (id: string, source = workflow) =>
   source.split(new RegExp(`\\n  ${id}:\\n`))[1]?.split(/\n  [A-Za-z0-9_-]+:\n/)[0] ?? "";
 const PERMISSION_BLOCK = /^    permissions:\n([\s\S]*?)(?=^    [A-Za-z][A-Za-z0-9_-]*:)/m;
 const CENTRAL = "TogetherWeOwn/.github/.github/workflows";
-const REVIEWED_CENTRAL_SHA = "ac9ce8d63e0cebd19ede904ac79137190c329964";
+const REVIEWED_CENTRAL_SHA = "649943c1ed8a1af8f8760e075f3923237dd72e50";
 
 describe("pr-size advisory wiring", () => {
   it("keeps the advisory jobs out of the required set and names the required gate", () => {
@@ -29,15 +23,16 @@ describe("pr-size advisory wiring", () => {
       ?.split(/\n#{2,3} /)[0];
     expect(branchProtection).toBeTruthy();
     expect(branchProtection).toContain("`ci-ok`");
-    expect(branchProtection).toContain("`pr-size-gate`");
+    expect(branchProtection).toContain("`pr-size-gate / gate`");
     expect(branchProtection).not.toContain("`pr-size`");
+    expect(branchProtection).not.toContain("`pr-size / label`");
   });
 
-  it("grants write scopes only to the labelling and gate jobs", () => {
+  it("grants write scopes only to the gate job", () => {
     expect(workflow.match(/^permissions:/gm)).toHaveLength(1);
     const topLevel = workflow.match(/^permissions:\n([\s\S]*?)(?=^[A-Za-z][A-Za-z0-9_-]*:)/m)?.[1];
     expect(topLevel?.trim()).toBe("contents: read");
-    for (const id of ["pr-size", "pr-size-gate", "pr-size-weekly"]) {
+    for (const id of ["pr-size-gate", "pr-size-weekly"]) {
       const callerJob = job(id);
       expect(callerJob.match(/^    permissions:/gm)).toHaveLength(1);
       const callerPermissions = callerJob.match(PERMISSION_BLOCK)?.[1];
@@ -47,20 +42,18 @@ describe("pr-size advisory wiring", () => {
       );
     }
     expect(job("pr-size-weekly")).not.toMatch(/\bwrite\b/);
-    // Fail closed on any added job or write scope beyond the two callers'.
+    // Fail closed on any added job or write scope beyond the gate's grant.
     const jobsText = workflow.split("\njobs:\n")[1] ?? "";
     expect([...jobsText.matchAll(/^  ([A-Za-z0-9_-]+):$/gm)].map((m) => m[1])).toEqual([
-      "pr-size",
       "pr-size-gate",
       "pr-size-weekly",
     ]);
-    expect(workflow.match(/\bwrite\b/g)).toHaveLength(4);
+    expect(workflow.match(/\bwrite\b/g)).toHaveLength(2);
   });
 
   it("documents each non-contents grant on its own permission line", () => {
     const { jobs } = parse(workflowSource);
     for (const [id, access] of [
-      ["pr-size", "write"],
       ["pr-size-gate", "write"],
       ["pr-size-weekly", "read"],
     ] as const) {
@@ -79,29 +72,22 @@ describe("pr-size advisory wiring", () => {
   });
 
   it("calls the central reusables at one pinned full SHA", () => {
-    const labelPin = job("pr-size").match(
-      new RegExp(`uses: ${CENTRAL.replaceAll(".", "\\.")}/pr-size\\.yml@([0-9a-f]{40})`),
-    )?.[1];
     const gatePin = job("pr-size-gate").match(
       new RegExp(`uses: ${CENTRAL.replaceAll(".", "\\.")}/pr-size-gate\\.yml@([0-9a-f]{40})`),
     )?.[1];
     const weeklyPin = job("pr-size-weekly").match(
       new RegExp(`uses: ${CENTRAL.replaceAll(".", "\\.")}/pr-size-weekly\\.yml@([0-9a-f]{40})`),
     )?.[1];
-    expect(labelPin).toBeTruthy();
-    expect(labelPin).toBe(REVIEWED_CENTRAL_SHA);
+    expect(gatePin).toBeTruthy();
     expect(gatePin).toBe(REVIEWED_CENTRAL_SHA);
     expect(weeklyPin).toBe(REVIEWED_CENTRAL_SHA);
-    expect(gatePin).toBe(labelPin);
-    expect(weeklyPin).toBe(labelPin);
+    expect(weeklyPin).toBe(gatePin);
+    expect(parse(workflow).jobs["pr-size-gate"].with["advisory-label"]).toBe(true);
     // No floating refs, no other reusable calls, no secrets passthrough:
     // the caller token stays capped by the job grants above.
-    expect(workflow.match(/\n    uses: /g)).toHaveLength(3);
+    expect(workflow.match(/\n    uses: /g)).toHaveLength(2);
     expect(workflow).not.toMatch(/secrets\s*:/);
-    // The gate re-evaluates when an exception is granted or revoked and
-    // when a review is submitted or dismissed.
-    expect(workflow).toContain("labeled, unlabeled");
-    expect(workflow).toContain("pull_request_review:");
+    expect(workflow).not.toMatch(/uses: .*\/pr-size\.yml@/);
   });
 
   it("keeps no local labeller copy and sets no local threshold", () => {
@@ -112,17 +98,38 @@ describe("pr-size advisory wiring", () => {
   });
 
   it("excludes this repo's generated paths but keeps hand-written SQL counted", () => {
-    for (const id of ["pr-size", "pr-size-gate"]) {
-      const callerJob = job(id);
-      expect(callerJob.match(/^      exclude-extra:/gm)).toHaveLength(1);
-      const extra = callerJob.match(/^      exclude-extra: "([^"]*)"$/m)?.[1] ?? "";
-      expect(extra).toBe("public/islands/**,public/styles.css,drizzle/meta/**");
-      expect(extra).not.toContain("drizzle/*.sql");
-      expect(extra.split(",")).not.toContain("drizzle/**");
-    }
+    const gate = job("pr-size-gate");
+    expect(gate.match(/^      exclude-extra:/gm)).toHaveLength(1);
+    const extra = gate.match(/^      exclude-extra: "([^"]*)"$/m)?.[1] ?? "";
+    expect(extra).toBe("public/islands/**,public/styles.css,drizzle/meta/**");
+    expect(extra).not.toContain("drizzle/*.sql");
+    expect(extra.split(",")).not.toContain("drizzle/**");
   });
 
-  it("keeps the Monday weekly tally schedule in the caller", () => {
-    expect(workflow).toMatch(/\n  schedule:\n    - cron: (["'])17 7 \* \* 1\1\n/);
+  it("preserves PR, review, manual and scheduled routing", () => {
+    const { on, concurrency, jobs } = parse(workflowSource);
+    expect(on).toEqual({
+      pull_request: {
+        types: ["opened", "synchronize", "reopened", "ready_for_review", "labeled", "unlabeled"],
+      },
+      pull_request_review: { types: ["submitted", "dismissed"] },
+      schedule: [{ cron: "17 7 * * 1" }],
+      workflow_dispatch: {
+        inputs: { pr_number: expect.objectContaining({ required: false, type: "string" }) },
+      },
+    });
+    expect(concurrency).toEqual({
+      group:
+        "${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number || github.event_name }}",
+      "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+    });
+    expect(jobs["pr-size-gate"].name).toBe("pr-size-gate");
+    expect(jobs["pr-size-gate"].if).toBe(
+      "github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || inputs.pr_number != ''",
+    );
+    expect(jobs["pr-size-gate"].with["pr-number"]).toBe("${{ inputs.pr_number || '' }}");
+    expect(jobs["pr-size-weekly"].if).toBe(
+      "github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.pr_number == '')",
+    );
   });
 });

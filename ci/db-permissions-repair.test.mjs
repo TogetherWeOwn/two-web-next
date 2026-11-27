@@ -6,15 +6,100 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { readMigrationFiles } from "drizzle-orm/migrator";
 import { parse } from "yaml";
 import { PLANETSCALE_PRODUCTION_BRANCH_ID, PLANETSCALE_PRODUCTION_HOST } from "./db-migrate.mjs";
 import { runRepair } from "./db-permissions-repair.mjs";
+import { runExecutorAuthority } from "./db-repair-executor.mjs";
 import { runServingIsolation } from "./db-serving-ledger-isolation.mjs";
+import { prepareServingIsolation } from "./fixtures/web-serving-isolation.mjs";
+import { addedAfter1033, publicServingRights } from "./web-readiness-scoped-acl.mjs";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const workflow = parse(read("../.github/workflows/db-permissions-repair.yml"));
 const shell = (script, env, prefix = "") =>
   spawnSync("/bin/bash", ["-c", `${prefix}\n${script}`], { env, encoding: "utf8" });
+
+test("executor authority replays committed provision and revoke without another write", async () => {
+  const hash = (value) => createHash("sha256").update(value).digest("hex");
+  const executor = "repair_executor";
+  const provisioner = "repair_provisioner";
+  const identity = { database: "postgres", authenticated: provisioner, effective: provisioner };
+  const grantSql =
+    "grant two_web_migrate to ? with admin false, inherit true, set true granted by current_user";
+  const revokeSql = "revoke two_web_migrate from ? granted by current_user restrict";
+  let committed = false;
+
+  for (const [operation, expectedEvents] of [
+    ["provision", ["read absent", "grant", "read present"]],
+    ["provision", ["read present"]],
+    ["revoke", ["read present", "revoke", "read absent"]],
+    ["revoke", ["read absent"]],
+  ]) {
+    const plan = JSON.stringify({
+      operation,
+      executor,
+      identity: hash(`postgres\0${provisioner}`),
+    });
+    const env = {
+      PRODUCTION_DB_EXECUTOR_PLAN: plan,
+      PRODUCTION_DB_EXECUTOR_PLAN_SHA256: hash(plan),
+      PRODUCTION_DB_EXECUTOR_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:synthetic@${PLANETSCALE_PRODUCTION_HOST}/postgres?sslmode=verify-full`,
+    };
+    const events = [];
+    await runExecutorAuthority(operation, env, () => {
+      events.push("connect");
+      return {
+        async begin(_isolation, run) {
+          let pending = committed;
+          await run((strings, ...values) => {
+            if (typeof strings === "string") {
+              assert.equal(strings, executor);
+              return strings;
+            }
+            const sql = strings.join("?").trim().replace(/\s+/g, " ");
+            if (sql.startsWith("set local ")) return [];
+            if (sql.startsWith("select pg_catalog.current_database()")) return [identity];
+            if (sql.startsWith("select pg_try_advisory_xact_lock(")) return [{ acquired: true }];
+            assert.deepEqual(values, [executor]);
+            if (sql === grantSql || sql === revokeSql) {
+              // postgres.js sends the statement only when its query is awaited.
+              return {
+                then(resolve) {
+                  pending = sql === grantSql;
+                  events.push(pending ? "grant" : "revoke");
+                  resolve([]);
+                },
+              };
+            }
+            assert.match(sql, /^select p\.oid::text as provisioner,/);
+            events.push(pending ? "read present" : "read absent");
+            return [
+              {
+                authorized: true,
+                provisioner: "123",
+                member: pending,
+                inherits: pending,
+                can_set: pending,
+                edges: pending ? [["123", false, true, true]] : [],
+              },
+            ];
+          });
+          committed = pending;
+          events.push("commit");
+        },
+        async end(options) {
+          assert.deepEqual(options, { timeout: 5 });
+          events.push("close start");
+          await new Promise((resolve) => setImmediate(resolve));
+          events.push("closed");
+        },
+      };
+    });
+    assert.equal(committed, operation === "provision");
+    assert.deepEqual(events, ["connect", ...expectedEvents, "commit", "close start", "closed"]);
+  }
+});
 
 test("repair dispatch isolates the credential and pins protected main and the same attempt", () => {
   assert.deepEqual(Object.keys(workflow.on), ["workflow_dispatch"]);
@@ -91,6 +176,157 @@ test("repair dispatch isolates the credential and pins protected main and the sa
     assert.equal(result.stdout, success ? `${line}\n` : "");
     assert.equal(result.stderr, success ? "" : `${line}\n`);
   }
+});
+
+test("executor CLI distinguishes acknowledged membership from an unconfirmed transaction", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "executor-close-"));
+  t.after(() => rmSync(dir, { recursive: true }));
+  const migration = new URL("./db-migrate.mjs", import.meta.url);
+  const executor = fileURLToPath(new URL("./db-repair-executor.mjs", import.meta.url));
+  const preload = join(dir, "preload.mjs");
+  const driver = join(dir, "driver.mjs");
+  writeFileSync(
+    preload,
+    `
+    import { registerHooks } from "node:module";
+    import { pathToFileURL } from "node:url";
+    registerHooks({
+      resolve(specifier, context, next) {
+        if (specifier === "postgres" && context.parentURL === ${JSON.stringify(migration.href)}) {
+          return { url: pathToFileURL(${JSON.stringify(driver)}).href, shortCircuit: true };
+        }
+        return next(specifier, context);
+      },
+    });
+  `,
+  );
+  writeFileSync(
+    driver,
+    `
+    import { writeFileSync } from "node:fs";
+    const { FIXTURE_FAILURE, FIXTURE_OPERATION } = process.env;
+    const events = [];
+    process.on("exit", () => writeFileSync(3, JSON.stringify(events)));
+    export default function postgres() {
+      events.push("connect");
+      let present = (FIXTURE_OPERATION === "revoke") !== FIXTURE_FAILURE.includes("no-op");
+      const tx = (strings, value) => {
+        if (typeof strings === "string") return strings;
+        const query = strings.join("?");
+        if (query.startsWith("set local ")) return [];
+        if (query.includes("current_database()")) {
+          return [{ database: "postgres", authenticated: "fixture", effective: "fixture" }];
+        }
+        if (query.includes("pg_try_advisory_xact_lock")) return [{ acquired: true }];
+        if (query.includes("from pg_namespace") && value === "fixture_executor") {
+          events.push("rights:" + present);
+          return [{
+            provisioner: "1", authorized: true, member: present, inherits: present,
+            can_set: present && FIXTURE_FAILURE !== "rights",
+            edges: present ? [["1", false, true, true]] : [],
+          }];
+        }
+        const verb = query.split(" ", 1)[0];
+        if ((verb === "grant" || verb === "revoke") && value === "fixture_executor") {
+          events.push(verb);
+          present = verb === "grant";
+          return [];
+        }
+        throw new Error("unexpected synthetic statement");
+      };
+      return {
+        async begin(options, callback) {
+          events.push(options);
+          await callback(tx);
+          events.push("callback complete");
+          if (FIXTURE_FAILURE === "unsettled") await new Promise(() => {});
+          if (FIXTURE_FAILURE.includes("commit")) throw new Error("synthetic commit error");
+          events.push("acknowledged");
+        },
+        async end({ timeout }) {
+          events.push("close:" + timeout);
+          if (FIXTURE_FAILURE.includes("close")) throw new Error("synthetic close error");
+        },
+      };
+    }
+  `,
+  );
+
+  const identity = createHash("sha256").update("postgres\0fixture").digest("hex");
+  const envForOperation = (operation) => {
+    const raw = JSON.stringify({ operation, identity, executor: "fixture_executor" });
+    return {
+      PRODUCTION_DB_EXECUTOR_PLAN: raw,
+      PRODUCTION_DB_EXECUTOR_PLAN_SHA256: createHash("sha256").update(raw).digest("hex"),
+      PRODUCTION_DB_EXECUTOR_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:fixture-password@${PLANETSCALE_PRODUCTION_HOST}:5432/postgres?sslmode=verify-full`,
+    };
+  };
+  for (const [operation, failure, code] of [
+    ["provision", "", 0],
+    ["revoke", "", 0],
+    ["provision", "close", 20],
+    ["revoke", "close", 21],
+    ["provision", "no-op close", 20],
+    ["revoke", "no-op close", 21],
+    ["revoke", "commit", 1],
+    ["provision", "commit and close", 1],
+    ["provision", "rights", 1],
+    ["revoke", "unsettled", 13],
+  ]) {
+    const label = `${operation} with ${failure || "no failure"}`;
+    const result = spawnSync(process.execPath, ["--import", preload, executor, operation], {
+      env: {
+        FIXTURE_FAILURE: failure,
+        FIXTURE_OPERATION: operation,
+        ...envForOperation(operation),
+      },
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe", "pipe"],
+      timeout: 5000,
+    });
+    const wanted = operation === "provision";
+    const alreadyCompliant = failure.includes("no-op");
+    const unsettled = failure === "unsettled";
+    assert.ifError(result.error);
+    assert.equal(result.stdout, "", label);
+    if (unsettled) {
+      assert.doesNotMatch(result.stderr, /fixture-password|fixture_executor/, label);
+    } else {
+      assert.equal(result.stderr, "", label);
+    }
+    assert.deepEqual(
+      JSON.parse(result.output[3]),
+      [
+        "connect",
+        "isolation level read committed",
+        `rights:${alreadyCompliant ? wanted : !wanted}`,
+        ...(alreadyCompliant ? [] : [wanted ? "grant" : "revoke", `rights:${wanted}`]),
+        ...(failure === "rights" ? [] : ["callback complete"]),
+        ...(unsettled || failure === "rights" || failure.includes("commit")
+          ? []
+          : ["acknowledged"]),
+        ...(unsettled ? [] : ["close:5"]),
+      ],
+      label,
+    );
+    assert.equal(result.status, code, label);
+  }
+
+  const transactionError = new Error("synthetic transaction rejection");
+  let closeAttempts = 0;
+  await assert.rejects(
+    runExecutorAuthority("provision", envForOperation("provision"), () => ({
+      async begin() {
+        throw transactionError;
+      },
+      async end() {
+        closeAttempts += 1;
+        throw new Error("synthetic close rejection");
+      },
+    })),
+    (error) => error === transactionError,
+  );
+  assert.equal(closeAttempts, 1);
 });
 
 test("database repair recovery pins an unchanged dispatcher and a main ancestor", (t) => {
@@ -294,6 +530,84 @@ test("database repair recovery pins an unchanged dispatcher and a main ancestor"
   assert.ok(directory.changedPaths.includes(nestedPath));
 });
 
+test("executor authority refuses mismatched membership before any write", async () => {
+  const hash = (value) => createHash("sha256").update(value).digest("hex");
+  const executor = "repair_executor";
+  const provisioner = "repair_provisioner";
+  const identity = { database: "postgres", authenticated: provisioner, effective: provisioner };
+  const plan = JSON.stringify({
+    operation: "revoke",
+    executor,
+    identity: hash(`postgres\0${provisioner}`),
+  });
+  const env = {
+    PRODUCTION_DB_EXECUTOR_PLAN: plan,
+    PRODUCTION_DB_EXECUTOR_PLAN_SHA256: hash(plan),
+    PRODUCTION_DB_EXECUTOR_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:synthetic@${PLANETSCALE_PRODUCTION_HOST}/postgres?sslmode=verify-full`,
+  };
+  const approvedEdge = ["123", false, true, true];
+
+  for (const edge of [["456", false, true, true], ["123", true, true, true], approvedEdge]) {
+    const events = [];
+    const attempt = runExecutorAuthority("revoke", env, () => ({
+      async begin(_isolation, run) {
+        let present = true;
+        try {
+          await run((strings, ...values) => {
+            if (typeof strings === "string") {
+              assert.equal(strings, executor);
+              return strings;
+            }
+            const sql = strings.join("?").trim().replace(/\s+/g, " ");
+            if (sql.startsWith("set local ")) return [];
+            if (sql.startsWith("select pg_catalog.current_database()")) return [identity];
+            if (sql.startsWith("select pg_try_advisory_xact_lock(")) return [{ acquired: true }];
+            assert.deepEqual(values, [executor]);
+            if (/^(grant|revoke)\b/i.test(sql)) {
+              events.push("write");
+              assert.equal(sql, "revoke two_web_migrate from ? granted by current_user restrict");
+              present = false;
+              return [];
+            }
+            assert.match(sql, /^select p\.oid::text as provisioner,/);
+            events.push(present ? "read present" : "read absent");
+            return [
+              {
+                authorized: true,
+                provisioner: "123",
+                member: present,
+                inherits: present,
+                can_set: present,
+                edges: present ? [edge] : [],
+              },
+            ];
+          });
+          events.push("commit");
+        } catch (error) {
+          events.push("rollback");
+          throw error;
+        }
+      },
+      async end(options) {
+        assert.deepEqual(options, { timeout: 5 });
+        events.push("close");
+      },
+    }));
+
+    if (edge === approvedEdge) {
+      await attempt;
+      assert.deepEqual(events, ["read present", "write", "read absent", "commit", "close"]);
+    } else {
+      await assert.rejects(attempt, {
+        code: "ERR_ASSERTION",
+        actual: [edge],
+        expected: [approvedEdge],
+      });
+      assert.deepEqual(events, ["read present", "rollback", "close"]);
+    }
+  }
+});
+
 test("repair refuses missing plan provenance and stale live identity before a write", async () => {
   const hash = (value) => createHash("sha256").update(value).digest("hex");
   const inventory = JSON.parse(read("db-permissions-repair-inventory.json"));
@@ -349,6 +663,7 @@ test("serving isolation refuses duplicate ACL entries in a digest-matched plan",
   const acl = { column: "", grantor: "fixture_owner", grantable: false };
   const plan = {
     identity: hash("postgres\0fixture_owner"),
+    servingRole: "two_web_app",
     version: "00000000-0000-4000-8000-000000000001",
     artifact: { sourceSha: "a".repeat(40), digest: "b".repeat(64) },
     before: "c".repeat(64),
@@ -392,6 +707,242 @@ test("serving isolation refuses duplicate ACL entries in a digest-matched plan",
   assert.equal(fetchImpl.mock.callCount(), 0);
 });
 
+test("executor rolls back a grant or revoke when the post-write membership query fails", async () => {
+  const hash = (value) => createHash("sha256").update(value).digest("hex");
+  const executor = "repair_executor";
+  const provisioner = "repair_provisioner";
+  const identity = { database: "postgres", authenticated: provisioner, effective: provisioner };
+  const refusal = new Error("Synthetic post-write membership query failure");
+
+  for (const [operation, wanted, write] of [
+    [
+      "provision",
+      true,
+      "grant two_web_migrate to ? with admin false, inherit true, set true granted by current_user",
+    ],
+    ["revoke", false, "revoke two_web_migrate from ? granted by current_user restrict"],
+  ]) {
+    const plan = JSON.stringify({
+      operation,
+      executor,
+      identity: hash(`postgres\0${provisioner}`),
+    });
+    const env = {
+      PRODUCTION_DB_EXECUTOR_PLAN: plan,
+      PRODUCTION_DB_EXECUTOR_PLAN_SHA256: hash(plan),
+      PRODUCTION_DB_EXECUTOR_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:synthetic@${PLANETSCALE_PRODUCTION_HOST}/postgres?sslmode=verify-full`,
+    };
+
+    for (const failPostWrite of [true, false]) {
+      const before = !wanted;
+      let committed = before;
+      const membershipReads = [];
+      const lifecycle = [];
+      const attempt = runExecutorAuthority(operation, env, () => ({
+        async begin(_isolation, run) {
+          let pending = committed;
+          // Publish changes only when the transaction callback resolves.
+          await run((strings, ...values) => {
+            if (typeof strings === "string") {
+              assert.equal(strings, executor);
+              return strings;
+            }
+            const sql = strings.join("?").trim().replace(/\s+/g, " ");
+            if (sql.startsWith("set local ")) return [];
+            if (sql.startsWith("select pg_catalog.current_database()")) return [identity];
+            if (sql.startsWith("select pg_try_advisory_xact_lock(")) return [{ acquired: true }];
+            assert.deepEqual(values, [executor]);
+            if (sql === write) {
+              // postgres.js executes the write when its query is awaited.
+              return {
+                then(resolve) {
+                  lifecycle.push("write");
+                  pending = wanted;
+                  resolve([]);
+                },
+              };
+            }
+            assert.match(sql, /^select p\.oid::text as provisioner,/);
+            membershipReads.push(pending);
+            if (failPostWrite && pending === wanted) return Promise.reject(refusal);
+            return [
+              {
+                authorized: true,
+                provisioner: "123",
+                member: pending,
+                inherits: pending,
+                can_set: pending,
+                edges: pending ? [["123", false, true, true]] : [],
+              },
+            ];
+          });
+          committed = pending;
+          lifecycle.push("commit");
+        },
+        async end(options) {
+          assert.deepEqual(options, { timeout: 5 });
+          lifecycle.push("close");
+        },
+      }));
+
+      if (failPostWrite) await assert.rejects(attempt, (error) => error === refusal);
+      else await attempt;
+      assert.deepEqual(membershipReads, [before, wanted]);
+      assert.equal(committed, failPostWrite ? before : wanted);
+      assert.deepEqual(
+        lifecycle,
+        failPostWrite ? ["write", "close"] : ["write", "commit", "close"],
+      );
+    }
+  }
+});
+
+test("serving isolation readback verifies endpoints and closes without mutation or locks", async () => {
+  const database = "postgres";
+  const migrationRole = "fixture_executor";
+  // Differs from the production default so a dropped login option fails.
+  const login = "fixture_runtime_login";
+  const firstEnd = "1033_session-roles-checked-at";
+  const { entries } = JSON.parse(read("../drizzle/meta/_journal.json"));
+  const migrationCount = entries.findIndex(({ tag }) => tag === firstEnd) + 1;
+  assert.ok(migrationCount > 0);
+  const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
+  const ledger = readMigrationFiles({ migrationsFolder })
+    .slice(0, migrationCount)
+    .map(({ hash, folderMillis }) => ({ hash, created_at: folderMillis }));
+  const requiredRights = publicServingRights.filter(({ name }) => !addedAfter1033.has(name));
+  const publicAcl = Array.from(
+    Map.groupBy(requiredRights, ({ kind, name, column }) =>
+      JSON.stringify([kind, name, column]),
+    ).values(),
+    (rights) => {
+      const [{ kind, name, column }] = rights;
+      return {
+        kind,
+        name,
+        column,
+        owner: migrationRole,
+        direct: rights.map(({ right }) => [right, migrationRole, false]),
+      };
+    },
+  );
+  const ledgerSchema = { kind: "schema", name: "drizzle", column: "", owner: migrationRole };
+  const ledgerAccess = { ...ledgerSchema, direct: [["USAGE", migrationRole, false]] };
+  const ledgerIsolated = { ...ledgerSchema, direct: [] };
+  const broadRoles = ["pg_read_all_data", "pg_write_all_data"].map((role) => ({
+    role,
+    grantor: migrationRole,
+    admin: false,
+    inherit: true,
+    set: false,
+  }));
+  const before = { acl: [...publicAcl, ledgerAccess], membership: broadRoles };
+  const after = { acl: [...publicAcl, ledgerIsolated], membership: [] };
+  const unclassified = { ...after, acl: [...publicAcl, ledgerAccess] };
+  const catalogQuery = /^with objects as \(/;
+  const membershipQuery = /^select role\.rolname/;
+
+  for (const { state, result, allowed } of [
+    { state: before, result: "before" },
+    { state: after, result: "after", allowed: true },
+    { state: unclassified, result: "unclassified" },
+    { state: after, result: "missing effective rights", allowed: false },
+  ]) {
+    // Offer only the ordered readback statements. An advisory lock, explicit
+    // relation lock, role change or write fails at the connector boundary.
+    const steps = [
+      [/^set local search_path = pg_catalog, pg_temp$/, []],
+      [/^set local lock_timeout = '500ms'$/, []],
+      [/^set local statement_timeout = '5s'$/, []],
+      [/^set local transaction_timeout = '25s'$/, []],
+      [
+        /^select pg_catalog\.current_database\(\)/,
+        [{ database, authenticated: migrationRole, effective: migrationRole }],
+      ],
+      [
+        /^select hash, created_at from drizzle\.__drizzle_migrations order by created_at, id limit \?$/,
+        ledger,
+        [entries.length + 1],
+      ],
+      [catalogQuery, state.acl, [login]],
+      [membershipQuery, state.membership, [login]],
+    ];
+    if (allowed !== undefined) {
+      steps.push(
+        [/^WITH runtimes AS \(/, [], [login]],
+        [
+          /^select bool_and\(case/,
+          [{ allowed }],
+          [login, login, login, JSON.stringify(requiredRights)],
+        ],
+      );
+    }
+    if (allowed) steps.push([/^select rolcanlogin and not/, [{ scoped: true }], [login]]);
+
+    let queryCount = 0;
+    const execute = (sql, params) => {
+      const step = steps[queryCount++];
+      assert.ok(step, `Unexpected readback statement: ${sql}`);
+      const [pattern, rows, expectedParams] = step;
+      const statement = sql.trim().replace(/\s+/g, " ");
+      assert.doesNotMatch(
+        statement,
+        /;|\bpg_(?:try_)?advisory_|\bfor (?:no key update|key share|update|share)\b/i,
+      );
+      assert.match(statement, pattern);
+      if (expectedParams) assert.deepEqual(params, expectedParams);
+      return rows;
+    };
+    const tx = (strings, ...params) => execute(strings.join("?"), params);
+    tx.unsafe = execute;
+    const lifecycle = [];
+    const { run, plan } = await prepareServingIsolation({
+      owner([sql]) {
+        if (catalogQuery.test(sql)) return before.acl;
+        assert.match(sql, membershipQuery);
+        return before.membership;
+      },
+      login,
+      database,
+      migrationRole,
+      firstEnd,
+      timestamps: ledger.map(({ created_at }) => created_at),
+      connect(_, options) {
+        assert.deepEqual(options, { readOnly: true });
+        return {
+          async begin(mode, work) {
+            lifecycle.push("begin");
+            assert.equal(mode, "isolation level repeatable read read only");
+            try {
+              return await work(tx);
+            } finally {
+              lifecycle.push("transaction ended");
+            }
+          },
+          async end(options) {
+            lifecycle.push("closed");
+            assert.deepEqual(options, { timeout: 5 });
+          },
+        };
+      },
+    });
+
+    if (result === "unclassified") {
+      await assert.rejects(run("readback"), {
+        code: "ERR_ASSERTION",
+        operator: "strictEqual",
+        expected: JSON.parse(plan).after,
+      });
+    } else if (result === "missing effective rights") {
+      await assert.rejects(run("readback"), /Required Web\/Jobs privileges are missing/);
+    } else {
+      assert.equal(await run("readback"), result);
+    }
+    assert.equal(queryCount, steps.length, result);
+    assert.deepEqual(lifecycle, ["begin", "transaction ended", "closed"], result);
+  }
+});
+
 test("executor dispatch scopes its credential and suppresses subprocess output", () => {
   const workflow = parse(read("../.github/workflows/db-repair-executor.yml"));
   const { preflight, authority } = workflow.jobs;
@@ -426,17 +977,54 @@ test("executor dispatch scopes its credential and suppresses subprocess output",
   assert.equal(run.env.PRODUCTION_DB_EXECUTOR_DATABASE_URL, dsn);
   assert.equal(JSON.stringify(workflow).split(dsn).length, 2);
   assert.ok(!JSON.stringify(workflow).includes("PRODUCTION_DB_REPAIR_DATABASE_URL"));
-  for (const code of [0, 1]) {
+  for (const code of [0, 1, 13, 20, 21]) {
     const result = shell(
       run.run,
       { OPERATION: "revoke" },
       `node() { printf 'fixture credential'; printf 'fixture error' >&2; return ${code}; }`,
     );
-    assert.equal(result.status, code);
+    assert.equal(result.status, code === 0 ? 0 : 1);
     assert.equal(result.stdout, code ? "" : "Approved executor membership state confirmed.\n");
     assert.equal(
       result.stderr,
       code ? "Executor membership operation did not confirm an outcome.\n" : "",
     );
   }
+});
+
+test("executor authority refuses changed plan bytes before connecting", async (t) => {
+  const hash = (value) => createHash("sha256").update(value).digest("hex");
+  const operation = "provision";
+  const identity = hash("postgres\0repair_provisioner");
+  const plan = JSON.stringify({ operation, executor: "repair_executor", identity });
+  const approvedDigest = hash(plan);
+  const env = {
+    PRODUCTION_DB_EXECUTOR_PLAN: plan,
+    PRODUCTION_DB_EXECUTOR_PLAN_SHA256: approvedDigest,
+    PRODUCTION_DB_EXECUTOR_DATABASE_URL: `postgresql://fixture.${PLANETSCALE_PRODUCTION_BRANCH_ID}:synthetic@${PLANETSCALE_PRODUCTION_HOST}/postgres?sslmode=verify-full`,
+  };
+  const admitted = new Error("Fixture reached the transaction boundary");
+  const connect = t.mock.fn((config) => {
+    assert.equal(config.identity, identity);
+    return {
+      async begin() {
+        throw admitted;
+      },
+      async end() {},
+    };
+  });
+
+  // A trailing space preserves the parsed plan and changes the approved bytes.
+  const changedPlan = `${plan} `;
+  await assert.rejects(
+    runExecutorAuthority(operation, { ...env, PRODUCTION_DB_EXECUTOR_PLAN: changedPlan }, connect),
+    { code: "ERR_ASSERTION", actual: hash(changedPlan), expected: approvedDigest },
+  );
+  assert.equal(connect.mock.callCount(), 0);
+
+  await assert.rejects(
+    runExecutorAuthority(operation, env, connect),
+    (error) => error === admitted,
+  );
+  assert.equal(connect.mock.callCount(), 1);
 });

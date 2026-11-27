@@ -118,49 +118,65 @@ test("the isolated read step receives the DSN and emits only fixed verdicts", ()
   }
 });
 
-test("the probe pins a verified TLS connection and issues only the read-only identity query", async () => {
-  for (const [rows, expected] of [
-    [[identity], true],
-    [[{ ...identity, effective: "wrong_role" }], false],
-    [[{ ...identity, authenticated: "wrong_role", effective: "wrong_role" }], false],
-    [[{ ...identity, database: "wrong_db" }], false],
-    [[], false],
-    [new Error(`private driver diagnostic: ${dsn}`), false],
+test("the probe pins a verified TLS connection and issues only the read-only identity query", async (t) => {
+  const driverError = new Error(`private driver diagnostic: ${dsn}`);
+  const identityRead = [
+    "read",
+    "select pg_catalog.current_database()::text as database, session_user::text as authenticated, current_user::text as effective",
+    [],
+  ];
+  for (const [name, { rows = [identity], failAt, expected = false }] of [
+    ["matched read and clean close", { expected: true }],
+    ["effective role mismatch", { rows: [{ ...identity, effective: "wrong_role" }] }],
+    [
+      "authenticated role mismatch",
+      { rows: [{ ...identity, authenticated: "wrong_role", effective: "wrong_role" }] },
+    ],
+    ["database mismatch", { rows: [{ ...identity, database: "wrong_db" }] }],
+    ["empty read", { rows: [] }],
+    ["failed BEGIN", { failAt: "begin" }],
+    ["failed identity read", { failAt: "read" }],
+    ["matched read and failed close", { failAt: "close" }],
   ]) {
-    const queries = [];
-    const closed = [];
-    const actual = await checkProductionIdentity(env, (config, options) => {
-      // postgres.js constructs its client lazily. Inspect the actual options
-      // with an invalid host and never call any connection/query methods.
-      assert.equal(config.url.hostname, PLANETSCALE_PRODUCTION_HOST);
-      const url = new URL(config.url);
-      url.hostname = "fixture.invalid";
-      const client = migrationClient({ ...config, url }, options);
-      assert.deepEqual(client.options.ssl, { rejectUnauthorized: true });
-      assert.deepEqual(client.options.port, [5432]);
-      assert.equal(client.options.max, 1);
-      assert.equal(client.options.fetch_types, false);
-      assert.equal(client.options.connection.default_transaction_read_only, "on");
-      return {
-        begin: async (mode, callback) => {
-          assert.equal(mode, "read only");
-          await callback(async (sql, ...parameters) => {
-            queries.push([sql.join("").replace(/\s+/g, " "), parameters]);
-            if (rows instanceof Error) throw rows;
-            return rows;
-          });
-        },
-        end: async (...args) => closed.push(args),
-      };
+    await t.test(name, async () => {
+      const calls = [];
+      const actual = await checkProductionIdentity(env, (config, options) => {
+        // postgres.js constructs its client lazily. Inspect the actual options
+        // with an invalid host and never call any connection/query methods.
+        assert.equal(config.url.hostname, PLANETSCALE_PRODUCTION_HOST);
+        const url = new URL(config.url);
+        url.hostname = "fixture.invalid";
+        const client = migrationClient({ ...config, url }, options);
+        assert.deepEqual(client.options.ssl, { rejectUnauthorized: true });
+        assert.deepEqual(client.options.port, [5432]);
+        assert.equal(client.options.max, 1);
+        assert.equal(client.options.fetch_types, false);
+        assert.equal(client.options.connection.default_transaction_read_only, "on");
+        return {
+          begin: async (mode, callback) => {
+            calls.push(["begin", mode]);
+            if (failAt === "begin") throw driverError;
+            await callback(async (sql, ...parameters) => {
+              calls.push(["read", sql.join("").replace(/\s+/g, " "), parameters]);
+              if (failAt === "read") throw driverError;
+              return rows;
+            });
+            calls.push(["matched"]);
+          },
+          end: async (...args) => {
+            calls.push(["end", ...args]);
+            if (failAt === "close") throw driverError;
+          },
+        };
+      });
+      assert.equal(actual, expected);
+      assert.deepEqual(calls[0], ["begin", "read only"]);
+      assert.deepEqual(calls.slice(1, -1), [
+        ...(failAt === "begin" ? [] : [identityRead]),
+        ...(expected || failAt === "close" ? [["matched"]] : []),
+      ]);
+      assert.deepEqual(calls.at(-1), ["end", { timeout: 5 }]);
     });
-    assert.equal(actual, expected);
-    assert.deepEqual(queries, [
-      [
-        "select pg_catalog.current_database()::text as database, session_user::text as authenticated, current_user::text as effective",
-        [],
-      ],
-    ]);
-    assert.deepEqual(closed, [[{ timeout: 5 }]]);
   }
 });
 

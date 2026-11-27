@@ -4,7 +4,6 @@ import { type Handle, sequence } from "@sveltejs/kit/hooks";
 import { env } from "cloudflare:workers";
 import { KIT_SOURCE_EVIDENCE_ROUTES } from "../../src/admin/kit-source-evidence-route";
 import { refuseSourceEvidenceOrigin } from "../../src/admin/source-evidence";
-import { KIT_EVENT_MARKDOWN_ROUTES } from "../../src/ai-friendly/kit-event-markdown-routes";
 import { renderNotFoundDocument } from "../../src/error-pages";
 import { recordBoardView, recordQueuedBoardView } from "../../src/hotzones/board-log";
 import { KIT_HOTZONE_SIGNAL_ROUTE } from "../../src/hotzones/kit-signal-route";
@@ -42,6 +41,7 @@ import { dispatchPastArchiveRequest } from "../../src/kit-past-events";
 import { KIT_PROFILE_WRITE_ROUTES } from "../../src/profiles/kit-write-route";
 import { kitAgentEventsFamily } from "#lib/server/agent-events.ts";
 import { authOriginRefusal, kitAuthRoutes } from "#lib/server/auth.ts";
+import { kitEventMarkdownFamily } from "#lib/server/event-markdown.ts";
 import { kitOpsFamily } from "#lib/server/ops.ts";
 import { kitMcpFamily } from "#lib/server/mcp.ts";
 import { honoFetch, honoRecoveryFetch } from "#lib/server/hono.ts";
@@ -109,7 +109,7 @@ const dispatchWithSecurity: Handle = async ({ event, resolve }) => {
       { flag: env.KIT_ROUTE_PUBLIC_API, routes: KIT_PUBLIC_API_ROUTES },
       { flag: env.KIT_ROUTE_HOTZONE_SIGNAL, routes: [KIT_HOTZONE_SIGNAL_ROUTE] },
       kitMcpFamily(),
-      { flag: env.KIT_ROUTE_EVENT_MARKDOWN, routes: KIT_EVENT_MARKDOWN_ROUTES },
+      kitEventMarkdownFamily(),
       { flag: env.KIT_ROUTE_SEO, routes: KIT_SEO_ROUTES },
       { flag: env.KIT_ROUTE_SECURITY_TXT, routes: [KIT_SECURITY_TXT_ROUTE] },
       {
