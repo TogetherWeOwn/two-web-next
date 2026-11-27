@@ -349,6 +349,7 @@ test("serving isolation refuses duplicate ACL entries in a digest-matched plan",
   const acl = { column: "", grantor: "fixture_owner", grantable: false };
   const plan = {
     identity: hash("postgres\0fixture_owner"),
+    servingRole: "two_web_app",
     version: "00000000-0000-4000-8000-000000000001",
     artifact: { sourceSha: "a".repeat(40), digest: "b".repeat(64) },
     before: "c".repeat(64),
