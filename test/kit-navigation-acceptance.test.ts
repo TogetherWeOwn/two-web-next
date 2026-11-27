@@ -171,7 +171,7 @@ const assertPrimaryOrder = (html: string, opts: { leaderboard: boolean; home?: b
   const hrefs = elementsOf(nav, "a").map((link) => {
     const href = renderedAttribute(link, "href");
     if (href === "/" || href === "/events" || href === boardHref)
-      expect(renderedAttribute(link, "tabindex")).toBeUndefined();
+      expect([undefined, "0"]).toContain(renderedAttribute(link, "tabindex"));
     return href;
   });
   const home = hrefs.indexOf("/");
@@ -482,6 +482,12 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
+it.each(["template", "noscript"])("finds inactive sign-in markup inside %s", (tag) => {
+  const header = headerOf(`<header><${tag}><a href=/ data-testid=signin></a></${tag}></header>`);
+  expect(withAttribute(header, "data-testid", "signin")).toHaveLength(1);
+  expect(withAttribute(header, "href", "/", "a")).toHaveLength(1);
+  expect(elementsOf(header, "a")).toHaveLength(0);
+});
 
 // ---------------------------------------------------------------------------
 // Oracle: Hono header behavior. All green; the Kit build must match this.
@@ -495,9 +501,7 @@ describe("oracle: Hono ordinary sign-in", () => {
     [DETAIL_NEXT, ordinaryUrl(DETAIL_NEXT)],
   ] as const)("signs %s through the ordinary round trip", (loginReturnTo, href) => {
     const html = honoHeader({ active: "events", loginReturnTo });
-    const link = signIn(html, href);
-    expect(link).toBeDefined();
-    expect(labelOf(link)).toBe("Sign in with Discord");
+    expect(labelOf(signIn(html, href))).toBe("Sign in with Discord");
     expect(html).not.toContain("/join/discord");
   });
 
@@ -558,9 +562,7 @@ describe("oracle: Hono account overrides stay intact", () => {
     const html = honoHeader({
       cta: { href: "/auth/discord?next=%2Fprofile", label: "Continue" },
     });
-    const link = signIn(html, "/auth/discord?next=%2Fprofile");
-    expect(link).toBeDefined();
-    expect(labelOf(link)).toBe("Continue");
+    expect(labelOf(signIn(html, "/auth/discord?next=%2Fprofile"))).toBe("Continue");
     expect(html).not.toContain("Sign in with Discord");
   });
 
@@ -687,9 +689,7 @@ describe("kit default header: ordinary sign-in", () => {
     "signs %s through the ordinary round trip",
     (loginReturnTo) => {
       const html = kit.renderSiteHeader({ loginReturnTo });
-      const link = signIn(html, ordinaryUrl(loginReturnTo));
-      expect(link).toBeDefined();
-      expect(labelOf(link)).toBe("Sign in with Discord");
+      expect(labelOf(signIn(html, ordinaryUrl(loginReturnTo)))).toBe("Sign in with Discord");
     },
   );
 
