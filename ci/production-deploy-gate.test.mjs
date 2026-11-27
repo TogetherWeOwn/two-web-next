@@ -34,6 +34,7 @@ import {
   pendingLedgerTags,
   pendingMigrationTags,
   pendingProductionMigrations,
+  productionJournalEntries,
   readLedgerState,
   readLiveProductionCommit,
   readLiveProductionLedger,
@@ -2271,6 +2272,116 @@ test("pending migrations are target tags the live journal lacks", () => {
   assert.deepEqual(pendingMigrationTags(["a"], []), ["a"]);
 });
 
+test("production journal reads retain tags and timestamps at both commits", async () => {
+  const targetSha = "a".repeat(40);
+  const liveSha = "b".repeat(40);
+  const live = [{ tag: "0000_init-users", when: 1790705195521 }];
+  const target = [...live, { tag: "1000_join-attempts-throttle", when: 1790713325933 }];
+  const contentsUrl =
+    "https://api.github.com/repos/fixture/repo/contents/drizzle/meta/_journal.json";
+  const journals = new Map([
+    [`${contentsUrl}?ref=${targetSha}`, target],
+    [`${contentsUrl}?ref=${liveSha}`, live],
+  ]);
+  const result = await productionJournalEntries({
+    repository: "fixture/repo",
+    targetSha,
+    liveSha,
+    token: "fixture-only",
+    fetchImpl: async (url) => {
+      const entries = journals.get(url);
+      assert.ok(entries, `unexpected journal request ${url}`);
+      journals.delete(url);
+      const journal = {
+        version: "7",
+        dialect: "postgresql",
+        entries: entries.map((entry, idx) => ({ ...entry, idx, version: "7", breakpoints: true })),
+      };
+      const encoded = Buffer.from(JSON.stringify(journal)).toString("base64");
+      const envelope = JSON.stringify({
+        encoding: "base64",
+        content: encoded.match(/.{1,60}/g).join("\n"),
+      });
+      // The ASCII envelope and its JSON whitespace occupy one byte per character.
+      return new Response(entries === target ? envelope.padEnd(256 * 1024, " ") : envelope);
+    },
+  });
+  assert.deepEqual(result, { target, live });
+  assert.equal(journals.size, 0);
+});
+
+test("production journal reads cancel an oversized Contents stream", async () => {
+  const targetSha = "a".repeat(40);
+  const liveSha = "b".repeat(40);
+  const journal = { encoding: "base64", content: Buffer.from('{"entries":[]}').toString("base64") };
+  const envelope = Buffer.from(JSON.stringify(journal));
+  // Trailing JSON whitespace makes the response valid at the limit and one byte over.
+  const chunks = [envelope, Buffer.alloc(256 * 1024 - envelope.length, " "), Buffer.from(" ")];
+  let pulls = 0;
+  let cancelled = false;
+  const body = new ReadableStream(
+    {
+      pull(controller) {
+        const chunk = chunks[pulls++];
+        if (chunk) controller.enqueue(chunk);
+        else controller.close();
+      },
+      cancel() {
+        cancelled = true;
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  await assert.rejects(
+    productionJournalEntries({
+      repository: "fixture/repo",
+      targetSha,
+      liveSha,
+      token: "fixture-only",
+      fetchImpl: async (url) => {
+        const ref = new URL(url).searchParams.get("ref");
+        if (ref === targetSha) return new Response(body);
+        assert.equal(ref, liveSha);
+        return Response.json(journal);
+      },
+    }),
+    /Migration journal response exceeds 262144 bytes/,
+  );
+  assert.equal(pulls, 3);
+  assert.equal(cancelled, true);
+  assert.equal(body.locked, false);
+});
+
+test("production journal reads reject missing and malformed Contents bodies", async () => {
+  const targetSha = "a".repeat(40);
+  const liveSha = "b".repeat(40);
+  for (const [body, error] of [
+    [null, /Migration journal lookup returned no body/],
+    ["", SyntaxError],
+    ["{", SyntaxError],
+    [
+      JSON.stringify({ encoding: "base64", content: Buffer.from("{}").toString("base64") }),
+      /Invalid migration journal/,
+    ],
+  ]) {
+    await assert.rejects(
+      productionJournalEntries({
+        repository: "fixture/repo",
+        targetSha,
+        liveSha,
+        token: "fixture-only",
+        fetchImpl: async (url) => {
+          const ref = new URL(url).searchParams.get("ref");
+          if (ref === targetSha) return new Response(body);
+          assert.equal(ref, liveSha);
+          return Response.json({ content: '{"entries":[]}' });
+        },
+      }),
+      error,
+    );
+  }
+});
+
 test("pending migration lookup compares journals at both commits and passes on unknown live", async () => {
   const journal = (tags) => ({
     content: Buffer.from(JSON.stringify({ entries: tags.map((tag) => ({ tag })) })).toString(
@@ -2283,7 +2394,7 @@ test("pending migration lookup compares journals at both commits and passes on u
   const fetchImpl = async (url) => {
     const ref = new URL(url).searchParams.get("ref");
     const tags = ref === targetSha ? ["0000_a", "0001_b"] : ["0000_a"];
-    return { ok: true, json: async () => journal(tags) };
+    return Response.json(journal(tags));
   };
   assert.deepEqual(
     await pendingProductionMigrations({
