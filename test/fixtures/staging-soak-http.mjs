@@ -139,26 +139,40 @@ export function installSoakCliReads({ finalReadUnavailable }) {
     {
       fetchImpl: async (input) => {
         const url = String(input);
-        const trackedResponse = (body, init) => {
-          const response = Response.json(body, init);
-          const reader = url === `${STAGING_ORIGIN}/version` ? "text" : "json";
-          const readBody = response[reader].bind(response);
-          response[reader] = async () => {
-            await setImmediate();
-            const payload = await readBody();
-            reads.push(url);
-            return payload;
-          };
-          return response;
-        };
-        if (url === `${STAGING_ORIGIN}/version`) return trackedResponse({ sha, deployedAt });
-        if (url === `${STAGING_ORIGIN}/up`) {
-          return trackedResponse(
-            { revision: { commit: sha, version_id: workerVersion } },
+        if (url === `${STAGING_ORIGIN}/version`) {
+          const body = new ReadableStream(
             {
-              headers: { "x-two-origin": "two-web-next", "cache-control": "no-store" },
+              async pull(controller) {
+                await setImmediate();
+                controller.enqueue(new TextEncoder().encode(JSON.stringify({ sha, deployedAt })));
+                reads.push(url);
+                controller.close();
+              },
             },
+            { highWaterMark: 0 },
           );
+          return new Response(body, { headers: { "content-type": "application/json" } });
+        }
+        if (url === `${STAGING_ORIGIN}/up`) {
+          const payload = { revision: { commit: sha, version_id: workerVersion } };
+          // Record consumption when the revision reader pulls, even without .json().
+          const body = new ReadableStream(
+            {
+              pull(controller) {
+                controller.enqueue(new TextEncoder().encode(JSON.stringify(payload)));
+                reads.push(url);
+                controller.close();
+              },
+            },
+            { highWaterMark: 0 },
+          );
+          return new Response(body, {
+            headers: {
+              "content-type": "application/json",
+              "x-two-origin": "two-web-next",
+              "cache-control": "no-store",
+            },
+          });
         }
         assert.equal(url, "https://api.cloudflare.com/client/v4/graphql");
         const analytics = {

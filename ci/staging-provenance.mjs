@@ -9,6 +9,10 @@ const SHA = /^[0-9a-f]{40}$/;
 export const isSha = (value) => typeof value === "string" && value.length === 40 && SHA.test(value);
 const DEPLOY_TITLE = /^deploy ([0-9a-f]{40})$/;
 export const STAGING_ORIGIN = "https://next.togetherweown.com";
+const MAX_IDENTITY_LENGTH = 2048;
+// Keep the decoded UTF-16 length policy. UTF-8 needs at most three bytes per
+// decoded code unit, plus the two leading BOMs Node's Response.text() can strip.
+const MAX_IDENTITY_BYTES = 3 * MAX_IDENTITY_LENGTH + 6;
 
 export function resolveStagingCandidate({ eventName, event, sha, ref, repository }) {
   if (eventName === "workflow_dispatch") {
@@ -35,6 +39,32 @@ export function resolveStagingCandidate({ eventName, event, sha, ref, repository
   return candidate;
 }
 
+// One deploy-staging job has roughly 40 steps. Allow 64 KiB for step records,
+// job URLs and GitHub metadata, with headroom for workflow growth.
+const MAX_DEPLOY_JOBS_BYTES = 64 * 1024;
+
+async function readDeployJobs(body) {
+  if (!body) return null;
+  const reader = body.getReader();
+  const bytes = new Uint8Array(MAX_DEPLOY_JOBS_BYTES);
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return new Response(bytes.subarray(0, size)).json();
+      if (value.byteLength > bytes.length - size) {
+        // Request cancellation without delaying full smoke on the transport.
+        void reader.cancel().catch(() => undefined);
+        return null;
+      }
+      bytes.set(value, size);
+      size += value.byteLength;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 // Only the exact successful deploy attempt can prove that its smoke scope
 // was checked against adjacent staging. Old workflows lack the forward guard.
 export async function deploySmokeWasScoped(run, repository, fetchImpl = fetch) {
@@ -57,7 +87,7 @@ export async function deploySmokeWasScoped(run, repository, fetchImpl = fetch) {
       { redirect: "error", signal: AbortSignal.timeout(10_000) },
     );
     if (!response.ok) return false;
-    const { total_count, jobs } = await response.json();
+    const { total_count, jobs } = (await readDeployJobs(response.body)) ?? {};
     if (total_count !== 1 || !Array.isArray(jobs) || jobs.length !== 1) return false;
     const [job] = jobs;
     if (
@@ -93,6 +123,36 @@ export function validateStagingIdentityPair(expected, before, after, now = Date.
   }
 }
 
+async function readIdentityText(body) {
+  if (!body) return "";
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = "";
+  let atStart = true;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      bytes += value?.byteLength ?? 0;
+      if (bytes > MAX_IDENTITY_BYTES) break;
+      let chunk = decoder.decode(value, { stream: !done });
+      if (atStart && chunk.length > 0) {
+        // TextDecoder already strips the first BOM. Node strips one more.
+        chunk = chunk.replace(/^\uFEFF/, "");
+        atStart = false;
+      }
+      text += chunk;
+      if (text.length > MAX_IDENTITY_LENGTH) break;
+      if (done) return text;
+    }
+    // Cancellation is best-effort and must not delay or replace the refusal.
+    void reader.cancel().catch(() => undefined);
+    throw new Error("Staging identity response too large");
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 export async function readStagingIdentity({ fetchImpl = fetch, now = Date.now() } = {}) {
   const response = await fetchImpl(`${STAGING_ORIGIN}/version`, {
     redirect: "error",
@@ -100,8 +160,7 @@ export async function readStagingIdentity({ fetchImpl = fetch, now = Date.now() 
     signal: AbortSignal.timeout(10_000),
   });
   if (response.status !== 200) throw new Error("Staging identity HTTP response refused");
-  const text = await response.text();
-  if (text.length > 2048) throw new Error("Staging identity response too large");
+  const text = await readIdentityText(response.body);
   let data;
   try {
     data = JSON.parse(text);

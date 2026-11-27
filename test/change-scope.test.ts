@@ -853,10 +853,10 @@ describe("e2e scope gate", () => {
     expect(trigger).toMatch(/(^|\n)  schedule:\n/);
   });
 
-  it("keeps the scope and required verdict on standard hosted runners", () => {
+  it("keeps GitHub fallbacks for scope and verdict and requires only the verdict", () => {
     const verdict = e2e.split("\n  e2e-ok:\n")[1] ?? "";
-    expect(scopeJob).toMatch(/^ {4}runs-on: ubuntu-latest$/m);
-    expect(verdict).toMatch(/^ {4}runs-on: ubuntu-latest$/m);
+    expect(scopeJob).toMatch(/^      && vars\.CI_BLACKSMITH_2VCPU \|\| 'ubuntu-latest' }}$/m);
+    expect(verdict).toMatch(/^      && vars\.CI_BLACKSMITH_2VCPU \|\| 'ubuntu-latest' }}$/m);
     // browser-smoke is not a required check: CONTRIBUTING names exactly
     // ci-ok, gitleaks, e2e-ok and pr-lint, so a docs-only or test-only skip
     // never blocks a merge.
@@ -1179,6 +1179,45 @@ describe("scope token boundary and verdict validation", () => {
       expect(fetch).not.toContain("GITHUB_OUTPUT");
     },
   );
+
+  it.each(["ci.yml", "e2e.yml"])("%s keeps both names of a merge-diff rename", (file) => {
+    git("config", "user.name", "Scope Fixture");
+    git("config", "user.email", "scope@example.test");
+    git("commit", "-qm", "base");
+    git("branch", "base");
+    git("switch", "-qc", "topic");
+    git("mv", "src/app.ts", "docs/moved.md");
+    git("commit", "-qm", "rename");
+    git("switch", "base");
+    writeFileSync(join(repo, "docs", "base-only.md"), "Only on the base branch.\n");
+    git("add", "docs/base-only.md");
+    git("commit", "-qm", "advance base");
+    git("merge", "--no-ff", "-qm", "merge", "topic");
+
+    const runnerTemp = dirname(repo);
+    const fetch = stepsOf(scopeJob(file)).find((step) => step.includes("GH_TOKEN:"));
+    const diff = fetch?.split("        run: |\n")[1]?.split("          mkdir -p")[0];
+    expect(diff).toBeDefined();
+    const parents = spawnSync("git", ["show", "-s", "--format=%P", "HEAD"], {
+      cwd: repo,
+      encoding: "utf8",
+    });
+    expect(parents.status, parents.stderr).toBe(0);
+    const [base, head] = parents.stdout.trim().split(" ");
+    const rows = join(runnerTemp, "pr-files.tsv");
+    for (const [headSha, expected] of [
+      [head, "docs/moved.md\tsrc/app.ts\n"],
+      [base, ""],
+    ]) {
+      const result = spawnSync("bash", ["-c", diff ?? ""], {
+        cwd: repo,
+        env: { PATH: process.env.PATH, RUNNER_TEMP: runnerTemp, BASE_SHA: base, HEAD_SHA: headSha },
+        encoding: "utf8",
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(rows, "utf8")).toBe(expected);
+    }
+  });
 
   it.each(workflows)(
     "$file classifies token-free with the base-branch script",

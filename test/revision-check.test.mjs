@@ -6,7 +6,9 @@ import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
+import { gzipSync } from "node:zlib";
 import { readRevision, revisionRetryConfig, verifyRevision } from "../bin/revision-check.mjs";
+import { stagingReceipt } from "../ci/staging-receipt.mjs";
 
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const OTHER = "fedcba9876543210fedcba9876543210fedcba98";
@@ -95,12 +97,13 @@ test("verifyRevision rejects an untagged or malformed marker", async () => {
   }
 });
 
-async function withServer(body, run) {
+async function withUpServer(send, run) {
   let hits = 0;
   const server = createServer((request, response) => {
     hits++;
     response.setHeader("content-type", "application/json");
-    response.end(request.url === "/up" ? JSON.stringify(body) : "{}");
+    if (request.url === "/up") send(response);
+    else response.writeHead(404).end();
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -110,6 +113,8 @@ async function withServer(body, run) {
     server.close();
   }
 }
+const withServer = (body, run) =>
+  withUpServer((response) => response.end(JSON.stringify(body)), run);
 const cliWithEnv = (args, envExtra = {}) =>
   new Promise((resolve) => {
     const child = spawn(process.execPath, ["bin/revision-check.mjs", ...args], {
@@ -123,6 +128,120 @@ const cliWithEnv = (args, envExtra = {}) =>
   });
 const cli = (...args) => cliWithEnv(args, {});
 const FAST_RETRY = { REVISION_CHECK_ATTEMPTS: "1", REVISION_CHECK_DELAY_MS: "0" };
+
+test("CLI and staging receipt bound /up before accepting revision evidence", async (t) => {
+  const marker = JSON.stringify({ revision: { version_id: VERSION, commit: COMMIT } });
+  const limit = 16 * 1024;
+  const prefix = `${marker.slice(0, -1)},"detail":"é`;
+  const suffix = '"}';
+  const atLimit = prefix + "x".repeat(limit - Buffer.byteLength(prefix + suffix)) + suffix;
+  assert.equal(Buffer.byteLength(atLimit), limit);
+  const deployedAt = "2026-10-01T12:00:00.000Z";
+  const env = { STAGING_CANDIDATE: COMMIT, STAGING_WEB_DEPLOY_OUTCOME: "success" };
+  const retries = { ...FAST_RETRY, REVISION_CHECK_ATTEMPTS: "2" };
+
+  for (const [name, status, body, accepted] of [
+    ["200 at the byte limit", 200, atLimit, true],
+    ["503 with revision metadata", 503, marker, true],
+    ["empty 200 response", 200, "", false],
+    ["malformed JSON", 200, `${marker} unexpected-text`, false],
+    ["chunked over the byte limit", 200, `${atLimit} `, false],
+    ["compressed over the decoded byte limit", 503, gzipSync(`${atLimit} `), false],
+  ]) {
+    await t.test(name, async () => {
+      await withUpServer(
+        (response) => {
+          response.statusCode = status;
+          if (Buffer.isBuffer(body)) {
+            response.setHeader("content-encoding", "gzip");
+            response.setHeader("content-length", body.byteLength);
+            response.end(body);
+          } else {
+            response.write(body.slice(0, 512));
+            response.end(body.slice(512));
+          }
+        },
+        async (origin, hits) => {
+          const record = await cliWithEnv([origin, "--json"]);
+          assert.equal(record.status, 0);
+          assert.equal(record.stderr, "");
+          assert.equal(hits(), 1);
+          const recordVerdict = JSON.parse(record.stdout);
+          assert.equal(recordVerdict.code, accepted ? "record.verified" : "record.unreadable");
+          assert.equal(recordVerdict.commit, accepted ? COMMIT : null);
+          assert.equal(recordVerdict.verified, accepted);
+
+          const verify = await cliWithEnv([origin, COMMIT, "--json"], retries);
+          assert.equal(verify.status, accepted ? 0 : 1);
+          assert.equal(verify.stderr, "");
+          assert.equal(hits(), accepted ? 2 : 3);
+          const verifyVerdict = JSON.parse(verify.stdout);
+          assert.equal(verifyVerdict.code, accepted ? "verify.verified" : "verify.unreadable");
+          assert.equal(verifyVerdict.commit, accepted ? COMMIT : null);
+          assert.equal(verifyVerdict.expected_commit, COMMIT);
+          assert.equal(verifyVerdict.verified, accepted);
+
+          const humanRecord = await cli(origin);
+          assert.equal(humanRecord.status, 0);
+          assert.match(humanRecord.stdout, accepted ? /rollback target/ : /\/up unreadable/);
+          const humanVerify = await cliWithEnv([origin, COMMIT], retries);
+          assert.equal(humanVerify.status, accepted ? 0 : 1);
+          if (accepted) assert.match(humanVerify.stdout, /Deployed revision verified/);
+          else assert.match(humanVerify.stderr, /^revision-check: request failed/);
+          const cliHits = accepted ? 4 : 6;
+          assert.equal(hits(), cliHits);
+
+          const receipt = await stagingReceipt(
+            "deploy",
+            env,
+            {},
+            {
+              now: Date.parse(deployedAt),
+              fetchImpl: (input, init) => {
+                const { pathname } = new URL(input);
+                if (pathname === "/up") return fetch(new URL(pathname, origin), init);
+                if (pathname === "/version") return json({ sha: COMMIT, deployedAt });
+                throw new Error("Unexpected fixture request");
+              },
+            },
+          );
+          assert.equal(hits(), cliHits + 1);
+          const live = accepted
+            ? `\`${COMMIT}\`, Worker version \`${VERSION}\``
+            : "unavailable, Worker version unavailable";
+          assert.ok(receipt.includes(`Live /up source ${live}\n`));
+          assert.ok(receipt.includes(`Live /version source \`${COMMIT}\``));
+          assert.ok(
+            receipt.includes(
+              accepted
+                ? "Identity receipt matched at observation"
+                : "Identity receipt refused (disagreement or missing proof)",
+            ),
+          );
+        },
+      );
+    });
+  }
+
+  await t.test("refuses and cancels an oversized open stream", { timeout: 1_000 }, async () => {
+    let cancelled = false;
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array(limit + 1));
+      },
+      cancel() {
+        cancelled = true;
+        return new Promise(() => {});
+      },
+    });
+    await assert.rejects(
+      readRevision("https://next.example.test", { fetchImpl: async () => new Response(body) }),
+      { name: "RangeError", message: "/up response too large" },
+    );
+    assert.equal(cancelled, true);
+    assert.equal(body.locked, false);
+  });
+});
 
 test("CLI record mode prints the live Version ID and never fails, marker or not", async () => {
   await withServer({ revision: { version_id: VERSION, commit: COMMIT } }, async (origin) => {

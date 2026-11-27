@@ -16,6 +16,7 @@
 // drill is green.
 //
 // CLIs read `wrangler ... --json` from stdin and never echo it.
+import { addAbortListener } from "node:events";
 import { appendFileSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { APEX_ORIGIN, STAGING_ORIGIN } from "./operator-constants.mjs";
@@ -191,15 +192,50 @@ export async function rollbackCompatibility({
   return { added, unsafe };
 }
 
+// Match the readiness probe's limit for the small /up metadata envelope.
+const LIVE_REVISION_BYTES = 16 * 1024;
+
 // /up names the serving version and its commit. The preflight trusts the
 // commit only when /up reports the same version the deployments list does.
 export async function readLiveRevision({ origin, fetchImpl = fetch }) {
+  const signal = AbortSignal.timeout(10_000);
   const response = await fetchImpl(new URL("/up", origin), {
     redirect: "manual",
     headers: { "cache-control": "no-cache" },
-    signal: AbortSignal.timeout(10_000),
+    signal,
   });
-  const body = await response.json();
+  // A deferred migration can return 503 with valid serving revision metadata.
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("Missing /up response body");
+  const cancel = () => {
+    // Close pending reads without waiting for the source's cleanup.
+    void reader.cancel().catch(() => undefined);
+  };
+  const deadline = addAbortListener(signal, cancel);
+  const bytes = new Uint8Array(LIVE_REVISION_BYTES);
+  let length = 0;
+  try {
+    signal.throwIfAborted();
+    for (;;) {
+      const { done, value } = await reader.read();
+      signal.throwIfAborted();
+      if (done) break;
+      if (value.byteLength > bytes.length - length) throw new Error("/up response too large");
+      bytes.set(value, length);
+      length += value.byteLength;
+    }
+  } finally {
+    deadline[Symbol.dispose]();
+    cancel();
+    reader.releaseLock();
+  }
+
+  let body;
+  try {
+    body = JSON.parse(new TextDecoder().decode(bytes.subarray(0, length)));
+  } catch {
+    throw new Error("Invalid /up JSON");
+  }
   const versionId = body?.revision?.version_id;
   const commit = body?.revision?.commit;
   return {
@@ -295,11 +331,12 @@ export async function assertRollbackDrillGreen({ repository, token, fetchImpl = 
   return latest.id;
 }
 
-// Workflows that deploy to staging or test it: the drill waits until none of
-// them is queued or running, so it never moves staging under a journey run.
+// Active deploy and qualification runs reported by the standalone lane check.
+// The scheduled and manual drill uses the deploy-staging concurrency group.
 export const STAGING_LANE_WORKFLOWS = ["deploy.yml", "e2e-staging.yml"];
 
 export async function stagingBusyRuns({ repository, token, fetchImpl = fetch }) {
+  const invalidListing = "Staging lane lookup returned an invalid run listing";
   const busy = [];
   for (const file of STAGING_LANE_WORKFLOWS) {
     for (const status of ["in_progress", "queued", "waiting"]) {
@@ -317,8 +354,17 @@ export async function stagingBusyRuns({ repository, token, fetchImpl = fetch }) 
         },
       );
       if (!response.ok) throw new Error(`Staging lane lookup failed (HTTP ${response.status})`);
-      for (const run of (await response.json()).workflow_runs ?? []) {
-        if (Number.isSafeInteger(run?.id)) busy.push(`${file} run ${run.id}`);
+      let runs;
+      try {
+        runs = (await response.json())?.workflow_runs;
+      } catch {
+        throw new Error(invalidListing);
+      }
+      if (!Array.isArray(runs)) throw new Error(invalidListing);
+      for (const run of runs) {
+        const id = run?.id;
+        if (!Number.isSafeInteger(id) || id <= 0) throw new Error(invalidListing);
+        busy.push(`${file} run ${id}`);
       }
     }
   }

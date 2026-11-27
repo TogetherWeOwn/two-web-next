@@ -7,9 +7,18 @@ jobs:
   evidence:
     runs-on: ubuntu-latest
     timeout-minutes: 9
-    # Keep each caller from occupying multiple runners while its prerequisites wait.
+    # Four lanes per caller cap waiting evidence jobs at eight runners across ci and e2e.
     concurrency:
-      group: pr-ci-admission-${{ github.workflow }}
+      group: >-
+        pr-ci-admission-${{ github.workflow }}-${{
+        (endsWith(format('{0}', github.event.pull_request.number || 0), '0') ||
+        endsWith(format('{0}', github.event.pull_request.number || 0), '1') ||
+        endsWith(format('{0}', github.event.pull_request.number || 0), '2')) && '0' ||
+        (endsWith(format('{0}', github.event.pull_request.number || 0), '3') ||
+        endsWith(format('{0}', github.event.pull_request.number || 0), '4') ||
+        endsWith(format('{0}', github.event.pull_request.number || 0), '5')) && '1' ||
+        (endsWith(format('{0}', github.event.pull_request.number || 0), '6') ||
+        endsWith(format('{0}', github.event.pull_request.number || 0), '7')) && '2' || '3' }}
       cancel-in-progress: false
       queue: max
     steps:
@@ -32,9 +41,12 @@ jobs:
               "gitleaks": "pr-gates ignored edit (scan)",
           }
 
-          def identity(pr):
-              return (pr["number"], *(
-                  (ref["sha"], ref["ref"], ref["repo"]["id"]) for ref in (pr["head"], pr["base"])
+          def current_identity(pr):
+              """Bind a PR and its Actions evidence while allowing its base commit to advance."""
+              return (pr["number"], (
+                  pr["head"]["sha"], pr["head"]["ref"], pr["head"]["repo"]["id"]
+              ), (
+                  pr["base"]["ref"], pr["base"]["repo"]["id"]
               ))
 
           def collection(api, path, key):
@@ -61,9 +73,13 @@ jobs:
                           raise ValueError("Unbound or ambiguous Actions run")
                       if associations[0]["number"] != pr["number"]:
                           continue
-                      if identity(associations[0]) != identity(pr):
+                      if current_identity(associations[0]) != current_identity(pr):
                           return None
-                      if run["status"] != "completed" or run["conclusion"] == "cancelled":
+                      # The advisory labeler may outlive the size gate. On the first
+                      # attempt there are no earlier job verdicts to confuse with it.
+                      first_size_attempt = workflow == "pr-size" and run["run_attempt"] == 1
+                      if run["conclusion"] == "cancelled" or (
+                              run["status"] != "completed" and not first_size_attempt):
                           return None
                       run_id = run["id"]
                       jobs = collection(api, f"actions/runs/{run_id}/jobs?filter=all", "jobs")
@@ -81,7 +97,8 @@ jobs:
                           if (job["name"] == IGNORED.get(name) and job["status"] == "completed"
                                   and job["conclusion"] == "skipped"):
                               continue
-                          if job["status"] != "completed" or job["conclusion"] == "cancelled":
+                          if (job["status"] != "completed" or job["conclusion"] == "cancelled"
+                                  or (run["status"] != "completed" and job["conclusion"] != "success")):
                               return None
                           if job["conclusion"] != "success":
                               raise ValueError(f"{name} concluded {job['conclusion']}: {job['html_url']}")
@@ -91,6 +108,11 @@ jobs:
                           break
               return proof if set(proof) == set().union(*GATES.values()) else None
 
+          def verify_current(api, pr):
+              live = api(f"pulls/{pr['number']}")
+              if current_identity(live) != current_identity(pr) or live["state"] != "open" or live["draft"]:
+                  raise ValueError("Pull request head, base, or readiness changed")
+
           def main():
               pr = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())["pull_request"]
               repository = os.environ["GITHUB_REPOSITORY"]
@@ -98,17 +120,12 @@ jobs:
               def api(path):
                   return json.loads(subprocess.check_output(["gh", "api", f"repos/{repository}/{path}"], timeout=15))
 
-              def verify_current():
-                  live = api(f"pulls/{pr['number']}")
-                  if identity(live) != identity(pr) or live["state"] != "open" or live["draft"]:
-                      raise ValueError("Pull request head, base, or readiness changed")
-
               deadline = time.monotonic() + 420
               while time.monotonic() < deadline:
-                  verify_current()
+                  verify_current(api, pr)
                   proof = evidence(api, pr)
                   if proof and proof == evidence(api, pr):
-                      verify_current()
+                      verify_current(api, pr)
                       for name, (run, attempt, job) in sorted(proof.items()):
                           print(f"{name} passed on {pr['head']['sha']} (attempt {attempt}): "
                                 f"https://github.com/{repository}/actions/runs/{run}/job/{job}")

@@ -1,4 +1,15 @@
-import { appendFileSync, readFileSync } from "node:fs";
+import {
+  appendFileSync,
+  copyFileSync,
+  lstatSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { readRevision } from "../bin/revision-check.mjs";
 import { PROMOTION_SOAK_MS } from "./resolve-promotion-sha.mjs";
@@ -89,8 +100,11 @@ export async function stagingReceipt(
     soak = "This E2E rerun disqualifies the commit and blocks candidates with older runs";
   } else if (e2e && env.STAGING_SKIP_E2E === "true") {
     soak = "This E2E run is ineligible (journeys scope-skipped)";
-  } else if (!e2e && env.STAGING_JOB_STATUS === "failure") {
-    soak = "This deploy run is ineligible (deploy job failed)";
+  } else if (!e2e && env.STAGING_JOB_STATUS !== "success") {
+    soak =
+      env.STAGING_JOB_STATUS === "failure"
+        ? "This deploy run is ineligible (deploy job failed)"
+        : "This deploy run is ineligible (deploy job did not succeed)";
   } else if (!matched) {
     soak = "Unproven (identity receipt refused)";
   } else if (e2e) {
@@ -121,14 +135,33 @@ export async function stagingReceipt(
   ].join("\n");
 }
 
+function appendStepSummary(path, receipt) {
+  const entry = lstatSync(path, { throwIfNoEntry: false });
+  const target = entry?.isSymbolicLink() ? realpathSync(path) : path;
+  if (entry && !statSync(target).isFile()) throw new Error("Invalid staging summary file");
+
+  // GitHub gives each step its own summary file. Publish the append only after
+  // the complete receipt is on disk, even if the write fails partway through.
+  const directory = mkdtempSync(join(dirname(target), ".staging-receipt-"));
+  try {
+    const pending = join(directory, "summary.md");
+    if (entry) copyFileSync(target, pending);
+    appendFileSync(pending, receipt);
+    renameSync(pending, target);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const mode = process.argv[2];
     if (mode !== "deploy" && mode !== "e2e") throw new Error("Invalid staging receipt mode");
     const env = process.env;
     const event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, "utf8"));
-    appendFileSync(env.GITHUB_STEP_SUMMARY, await stagingReceipt(mode, env, event));
+    appendStepSummary(env.GITHUB_STEP_SUMMARY, await stagingReceipt(mode, env, event));
   } catch {
     console.warn("::warning::Staging evidence summary unavailable");
+    process.exitCode = 1;
   }
 }

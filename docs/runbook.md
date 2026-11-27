@@ -712,9 +712,21 @@ Rehearse provision, forward, undo and revoke together on the isolated restore.
 Derive each target's repair pins after provisioning under its approved executor.
 The snapshot hashes the membership row OID. Recreating the edge changes the
 digest, so retain the same edge through the recovery window.
-Keep the repair credential separate. If a membership run is uncertain, use its
-same approved operation to confirm the state. An unexpected edge refuses without
-writes. Approve and dispatch `revoke` after recovery is no longer needed.
+Keep the repair credential separate. If closing the connection fails after
+transaction acknowledgement, the executor CLI exits `20` for confirmed
+membership after `provision` or `21` for confirmed absence after `revoke`.
+Treat other nonzero exits as unconfirmed. The protected workflow reports a
+generic failure for every nonzero exit, so a failed run can leave the grant in place.
+
+After that failure, stop writes and have the authorized operator check the
+approved database, provisioner and executor in a read-only catalog transaction.
+Compare the grantor and edge flags with the approved provisioner's single edge
+(`ADMIN` false, `INHERIT` and `SET` true) and check effective `MEMBER`, `USAGE` and
+`SET` rights. Expected absence means no direct edge and all three effective
+rights false. Stop on an unexpected or inconclusive state. Preserve a confirmed
+edge while recovery still needs it. Once recovery ends, use a separately approved
+`revoke` and verify absence. Reconcile the readback before approving another
+write. Keep automatic retries disabled for `provision`.
 
 Rehearse both directions of the [permissions repair](../.github/workflows/db-permissions-repair.yml) under the production release gate with catalog `MAINTAIN`.
 Use the approved executor login for every snapshot. Run `ci/db-permissions-repair-state.sql` read-only with `search_path = pg_catalog`. Use production Environment secrets.
@@ -966,8 +978,9 @@ be older than the commit production currently serves. Staging eligibility is
 not proof of forward ancestry.
 
 Initial `/up` live-SHA capture makes at most three reads, two seconds apart,
-stopping on the first valid 40-hex commit. Exhausted or invalid reads leave
-live identity unknown; they never bypass default ancestry admission.
+stopping on the first HTTP 200 JSON response with a valid 40-hex commit and
+a body no larger than 16 KiB. Redirects, other HTTP statuses and invalid
+bodies leave live identity unknown if all three reads fail.
 After capture, `deploy-production` runs
 `node ci/production-deploy-gate.mjs --check-ancestry` from the trusted
 **workflow-head** checkout, before candidate checkout, migration checks or any
@@ -997,6 +1010,12 @@ candidate selects the separate explicit redeploy/recovery route. Apply the
 independent exact-candidate approval, tier review, exact-SHA CI and incident and
 rollback requirements. `migrations_applied=true` does not bypass
 default ancestry admission, and neither does an empty-SHA manual dispatch.
+If the ordinary recovery route still cannot read the live commit after the
+migration gate's retries, including when `/up` keeps returning 503 with a
+revision, restore the successful `/up` response or use the audited
+`migrations_applied=true` confirmation after verifying through the production
+`db-migrate.yml` workflow that the target's migrations are applied. Without a
+trusted live SHA the gate cannot compare journals.
 The rollback workflow remains a separate already-served-version route.
 
 #### Regression check against production

@@ -1,18 +1,17 @@
 name: e2e
 
 # Browser smoke for the critical journeys (docs/critical-journeys.md).
-# Only browser-smoke opts in to the organization's 2-vCPU runner. Fork PRs
-# and runs without the opt-in use GitHub-hosted Ubuntu 24.04. Each smoke job
-# gets a disposable Postgres service. The guard in e2e/ci-only.mjs permits
+# Scope and verdict use included 2-vCPU capacity on same-repository PRs.
+# Browser smoke also uses that capacity on its existing non-PR events.
+# Browser smoke falls back to GitHub-hosted Ubuntu 24.04 and gets a
+# disposable Postgres service. The guard in e2e/ci-only.mjs permits
 # only that target, never staging or production. Browsers run here in CI
 # only, never on the controller.
 # Docs-only and test-only PRs (ci/change-scope.sh skip_e2e verdict, mirrored
 # from ci.yml) skip the smoke below: prose that no gate, test or build reads,
 # and unit tests the journeys never execute, prove nothing about browser
 # journeys. The pull_request trigger stays unfiltered so this workflow always
-# reports. The required check is the `e2e-ok` aggregator below, not
-# `browser-smoke`: the live required set is `ci-ok`, `gitleaks`, `e2e-ok`,
-# `pr-lint`, `CodeRabbit` and `Devin Review`. A scope-verdict skip passes
+# reports. The `e2e-ok` aggregator is the required check. A scope-verdict skip passes
 # through the aggregator instead of blocking a merge.
 
 on:
@@ -70,7 +69,12 @@ jobs:
     name: scope
     needs: pr-admission
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.draft == true || github.event.pull_request.head.repo.id != github.event.pull_request.base.repo.id || needs.pr-admission.result == 'success') }}
-    runs-on: ubuntu-latest
+    runs-on: >-
+      ${{ github.event_name == 'pull_request'
+      && github.repository
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'
+      && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}
     timeout-minutes: 5
     outputs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
@@ -186,8 +190,12 @@ jobs:
     if: ${{ !cancelled() && needs.scope.result == 'success' && needs.scope.outputs.skip_e2e != 'true' && github.event.pull_request.draft != true }}
     # The merge queue is disabled. Revisit this route before enabling it:
     # merge_group can include fork changes without pull_request provenance.
-    # Map the spending guard's ubuntu-latest cutoff to the baseline image.
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_BLACKSMITH_2VCPU != 'ubuntu-latest' && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-24.04' }}
+    # Preserve the Ubuntu 24.04 visual baseline on either provider, including at quota cutoff.
+    runs-on: >-
+      ${{ github.event_name && (github.event_name != 'pull_request'
+      || (github.repository && github.event.pull_request.head.repo.full_name == github.repository))
+      && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'
+      && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-24.04' }}
     timeout-minutes: 25
     services:
       postgres:
@@ -496,7 +504,12 @@ jobs:
     name: e2e-ok
     needs: [scope, browser-smoke]
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: >-
+      ${{ github.event_name == 'pull_request'
+      && github.repository
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'
+      && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}
     timeout-minutes: 2
     steps:
       - name: Verdict

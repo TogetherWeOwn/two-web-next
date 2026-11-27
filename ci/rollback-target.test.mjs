@@ -29,6 +29,7 @@ import {
   destructiveStatements,
   liveVersion,
   previousVersion,
+  readLiveRevision,
   rollbackAction,
   rollbackCompatibility,
   rollbackEnvironment,
@@ -1393,7 +1394,7 @@ function stubRepo({ target, previous, sql, up, seen = {} }) {
     const parsed = new URL(url);
     if (parsed.pathname === "/up") {
       seen.up = (seen.up ?? 0) + 1;
-      return { ok: true, json: async () => up };
+      return Response.json(up);
     }
     if (parsed.pathname.endsWith("/contents/drizzle/meta/_journal.json")) {
       const ref = parsed.searchParams.get("ref");
@@ -1443,10 +1444,12 @@ test("an unreadable migration file fails closed", async () => {
 });
 
 const upOk = { revision: { version_id: V1, commit: PREVIOUS } };
+const UP_ORIGIN = "https://serving.example";
+const UP_LIMIT = 16 * 1024;
 function target(overrides = {}, sql = { "1001_b": "SELECT 1;" }) {
   const { up = upOk, ...rest } = overrides;
   return checkRollbackTarget({
-    origin: "https://togetherweown.com",
+    origin: UP_ORIGIN,
     repository: "fixture/repo",
     targetSha: TARGET,
     token: "fixture-only",
@@ -1458,6 +1461,152 @@ function target(overrides = {}, sql = { "1001_b": "SELECT 1;" }) {
 
 test("rollback target is the version /up names, with its commit, when no migration breaks it", async () => {
   assert.deepEqual(await target(), { versionId: V1, commit: PREVIOUS, added: ["1001_b"] });
+});
+
+test("rollback /up preserves the exact healthy and deferred revision", async () => {
+  for (const [status, pending] of [
+    [200, 0],
+    [503, 1],
+  ]) {
+    const body = {
+      ...upOk,
+      status: pending ? "degraded" : "healthy",
+      db: "ok",
+      pending_migrations: pending,
+    };
+    const raw = JSON.stringify(body);
+    const stub = stubRepo({ target: [], previous: [] });
+    const result = await target({
+      fetchImpl: async (url, options) => {
+        if (String(url) !== `${UP_ORIGIN}/up`) return stub(url);
+        assert.equal(options.redirect, "manual");
+        assert.deepEqual(options.headers, { "cache-control": "no-cache" });
+        assert.ok(options.signal instanceof AbortSignal);
+        return new Response(raw.padEnd(UP_LIMIT), { status });
+      },
+    });
+    assert.deepEqual(result, { versionId: V1, commit: PREVIOUS, added: [] });
+  }
+});
+
+test("rollback /up refuses empty and malformed bodies without echoing input", async () => {
+  for (const [body, message] of [
+    [null, "Missing /up response body"],
+    ["", "Invalid /up JSON"],
+    ['{"revision": private-fixture-text}', "Invalid /up JSON"],
+  ]) {
+    await assert.rejects(
+      readLiveRevision({ origin: UP_ORIGIN, fetchImpl: async () => new Response(body) }),
+      { message },
+    );
+  }
+});
+
+test("rollback /up cancels a stalled stream when the request deadline expires", async (t) => {
+  const controller = new AbortController();
+  const timeout = new DOMException("Synthetic request deadline", "TimeoutError");
+  t.mock.method(AbortSignal, "timeout", (ms) => {
+    assert.equal(ms, 10_000);
+    return controller.signal;
+  });
+  let reads = 0;
+  let cancelled = false;
+  const body = new ReadableStream(
+    {
+      pull(stream) {
+        reads += 1;
+        if (reads === 1) stream.enqueue(Buffer.from(JSON.stringify(upOk)));
+        else controller.abort(timeout);
+      },
+      cancel() {
+        cancelled = true;
+        return Promise.reject(new Error("Synthetic disposal failure"));
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  await assert.rejects(
+    readLiveRevision({
+      origin: UP_ORIGIN,
+      fetchImpl: async (_url, { signal }) => {
+        assert.equal(signal, controller.signal);
+        return new Response(body);
+      },
+    }),
+    { name: "TimeoutError", message: timeout.message },
+  );
+  assert.equal(reads, 2);
+  assert.ok(cancelled);
+  assert.equal(body.locked, false);
+});
+
+test("rollback /up cancels oversized streams and refuses after the existing retries", async () => {
+  const raw = JSON.stringify(upOk);
+  const delays = [];
+  const streams = [];
+  let cancellations = 0;
+  await assert.rejects(
+    target({
+      fetchImpl: async (url) => {
+        assert.equal(String(url), `${UP_ORIGIN}/up`, "must refuse before checking migrations");
+        const chunks = [Buffer.from(raw.padEnd(UP_LIMIT)), Buffer.from(" ")];
+        const body = new ReadableStream(
+          {
+            pull(controller) {
+              if (chunks.length) controller.enqueue(chunks.shift());
+              else controller.close();
+            },
+            cancel() {
+              cancellations += 1;
+              return new Promise(() => {});
+            },
+          },
+          { highWaterMark: 0 },
+        );
+        streams.push(body);
+        return new Response(body);
+      },
+      sleep: async (ms) => delays.push(ms),
+    }),
+    /No valid rollback target: \/up did not report the live version ID and commit after 3 reads/,
+  );
+  assert.equal(streams.length, 3);
+  assert.equal(cancellations, 3);
+  assert.ok(streams.every((body) => !body.locked));
+  assert.deepEqual(delays, [2000, 2000]);
+});
+
+test("rollback /up CLI leaves no pin when every revision response is oversized", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "rollback-up-pin-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const output = join(dir, "out");
+  writeFileSync(output, "");
+  const result = spawnSync(
+    process.execPath,
+    ["--import", "./ci/test-fetch-stub.mjs", "ci/rollback-target.mjs", "--check-target"],
+    {
+      encoding: "utf8",
+      timeout: 10_000,
+      env: {
+        GITHUB_OUTPUT: output,
+        GITHUB_REPOSITORY: "fixture/repo",
+        DEPLOY_SHA: TARGET,
+        GITHUB_TOKEN: "fixture-only",
+        FETCH_STUB_JSON: JSON.stringify([
+          { match: "/up", status: 503, body: { ...upOk, padding: " ".repeat(UP_LIMIT) } },
+          {
+            match: "/contents/drizzle/meta/_journal.json",
+            body: { encoding: "base64", content: journal([]) },
+          },
+        ]),
+      },
+    },
+  );
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /No valid rollback target: \/up did not report.*after 3 reads/);
+  assert.equal(readFileSync(output, "utf8"), "");
 });
 
 test("no valid rollback target refuses promotion", async () => {
@@ -1576,6 +1725,78 @@ test("staging rollback drill uses the latest decisive run and permits empty hist
       new RegExp(`run 2\\) concluded ${conclusion}`),
     );
   }
+});
+
+test("staging lane CLI requires trustworthy run listings", async (t) => {
+  const sentinel = "PRIVATE_FIXTURE_BODY";
+  const empty = { workflow_runs: [] };
+  const occupied = { workflow_runs: [{ id: 1 }, { id: 1 }, { id: Number.MAX_SAFE_INTEGER }] };
+  const occupiedMessage =
+    "Staging lane busy: e2e-staging.yml run 1, e2e-staging.yml run 1, " +
+    `e2e-staging.yml run ${Number.MAX_SAFE_INTEGER}\n`;
+  const cases = [
+    { name: "empty", body: empty, busy: false },
+    { name: "occupied with boundary IDs and duplicates", body: occupied, busy: true },
+    { name: "absent listing", body: { details: sentinel } },
+    { name: "null listing", body: { workflow_runs: null } },
+    { name: "string listing", body: { workflow_runs: sentinel } },
+    { name: "object listing", body: { workflow_runs: { details: sentinel } } },
+    { name: "null run", body: { workflow_runs: [null] } },
+    { name: "missing ID", body: { workflow_runs: [{}] } },
+    ...[sentinel, "7", 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1].map((id) => ({
+      name: `invalid ID ${id}`,
+      body: { workflow_runs: [{ id }] },
+    })),
+    { name: "mixed listing", body: { workflow_runs: [{ id: 7 }, { id: sentinel }] } },
+  ];
+
+  for (const { name, body, busy } of cases) {
+    await t.test(name, (t) => {
+      const dir = mkdtempSync(join(tmpdir(), "staging-lane-proof-"));
+      t.after(() => rmSync(dir, { recursive: true, force: true }));
+      const output = join(dir, "out");
+      const stubs = [
+        { match: "/e2e-staging.yml/runs?status=waiting&per_page=20", body },
+        { match: "/runs?status=", body: empty },
+      ];
+      const result = spawnSync(process.execPath, ["ci/rollback-target.mjs", "--staging-busy"], {
+        encoding: "utf8",
+        env: {
+          GITHUB_OUTPUT: output,
+          GITHUB_REPOSITORY: "fixture/repo",
+          GITHUB_TOKEN: "fixture-only",
+          NODE_OPTIONS: `--import=${new URL("./test-fetch-stub.mjs", import.meta.url).href}`,
+          FETCH_STUB_JSON: JSON.stringify(stubs),
+        },
+      });
+      assert.ifError(result.error);
+      if (busy === undefined) {
+        assert.equal(result.status, 1, result.stdout);
+        assert.equal(result.stdout, "");
+        assert.equal(
+          result.stderr,
+          "::error::Staging lane lookup returned an invalid run listing\n",
+        );
+        assert.equal(existsSync(output), false);
+      } else {
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.stderr, "");
+        assert.equal(readFileSync(output, "utf8"), `busy=${busy}\n`);
+        assert.equal(result.stdout, busy ? occupiedMessage : "Staging lane idle\n");
+      }
+    });
+  }
+
+  await t.test("malformed JSON", async () => {
+    await assert.rejects(
+      stagingBusyRuns({
+        repository: "fixture/repo",
+        token: "fixture-only",
+        fetchImpl: async () => new Response(sentinel),
+      }),
+      { message: "Staging lane lookup returned an invalid run listing" },
+    );
+  });
 });
 
 test("staging lane is busy while deploy or e2e-staging runs are queued or running", async () => {

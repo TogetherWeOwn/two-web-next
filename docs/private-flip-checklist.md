@@ -10,6 +10,13 @@ private runner fleet separately.
   contract explicitly assigns a job to an opt-in. See the
   [browser-smoke routing rules](critical-journeys.md#ci-isolation) before
   changing merge-queue settings. The GitHub fallback covers fork pull requests.
+- The required PR gates and their CI dependencies use the organization
+  `CI_BLACKSMITH_2VCPU` switch for same-repository `pull_request` events. If
+  it is unset or the spending guard resets it to `ubuntu-latest`, newly
+  scheduled jobs use GitHub-hosted runners. The PR size labeller and weekly
+  tally are advisory and use GitHub capacity. The two prerequisite polling
+  jobs in `pr-ci-admission.yml` stay on GitHub while they await lint, scan
+  and size evidence.
 - `ci.yml` can select `boat` for `kit-browser-calendar` when `CI_HEAVY_RUNNER`
   is `boat`, the pull request head belongs to this repository, and both the
   original and triggering actors match the Boat allowlist. Fork pull requests,

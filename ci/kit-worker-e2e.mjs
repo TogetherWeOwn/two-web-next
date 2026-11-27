@@ -4,7 +4,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { createServer } from "node:net";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -13,10 +12,12 @@ import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 import { STAGING_STATIC_DOCUMENT_READY } from "../src/kit-staging-static.ts";
 import { prepareAdminDuplicateProbe } from "./fixtures/kit-admin-duplicate.mjs";
+import { assertAdminEventRosterParity } from "./fixtures/kit-admin-event-roster.mjs";
 import {
   assertInstalledJoinAttemptDetail,
   assertKitAdminServing,
   assertKitAttendanceDisabled,
+  assertKitQueuePreviewServing,
   assertMixedAdminAuthRollback,
   prepareAdminFixture,
   prepareAdminPublishFixture,
@@ -27,8 +28,14 @@ import {
 } from "./fixtures/kit-admin-rsvp-controls.mjs";
 import { assertEventReadsParity } from "./fixtures/kit-event-reads-parity.mjs";
 import { assertEventCreateFormParity } from "./fixtures/kit-event-create-form-parity.mjs";
+import { assertFeaturedDeleteParity } from "./fixtures/kit-featured-delete-parity.mjs";
 import { assertResponseContracts } from "./fixtures/kit-response-contracts.mjs";
 import { assertStaticFeedParity } from "./fixtures/kit-static-feed-parity.mjs";
+import {
+  withPublicVoiceBrowserWorkers,
+  withWorkerCleanup,
+} from "./fixtures/kit-worker-lifecycle.mjs";
+import { startLoopbackWorker, tail } from "./kit-worker-loopback.mjs";
 import { expectedMarkerFor, kitHomeHeadingText } from "./kit-parity-gates.mjs";
 import { STAGING_ORIGIN } from "./operator-constants.mjs";
 import { FIXTURE_SECRETS } from "./parity/fixture.mjs";
@@ -64,84 +71,57 @@ function requireDisposableDatabase(value) {
   }
 }
 
-function tail(value, limit = 4000) {
-  return value.length > limit ? `…${value.slice(-limit)}` : value;
-}
-
-function listen(child, origin, getLog, timeoutMs = 60_000) {
-  const started = Date.now();
-  let lastStatus = "no response";
-  return new Promise((resolveReady, reject) => {
-    const attempt = async () => {
-      if (child.exitCode !== null) {
-        reject(
-          new Error(
-            `Wrangler dev exited before ready (exit ${child.exitCode}). Worker output:\n${tail(getLog())}`,
-          ),
-        );
-        return;
-      }
-      try {
-        const response = await fetch(`${origin}/favicon.ico`, {
-          redirect: "manual",
-          signal: AbortSignal.timeout(1_000),
-        });
-        lastStatus = `HTTP ${response.status}`;
-        await response.body?.cancel();
-        if (response.ok) {
-          resolveReady();
-          return;
-        }
-      } catch {
-        // Wrangler has not bound its local listener yet.
-      }
-      if (Date.now() - started >= timeoutMs) {
-        reject(
-          new Error(
-            `Timed out waiting for ${origin}/favicon.ico (${lastStatus}). Worker output:\n${tail(getLog())}`,
-          ),
-        );
-        return;
-      }
-      setTimeout(attempt, 250);
-    };
-    void attempt();
-  });
-}
-
-async function unusedPort() {
-  const server = createServer();
-  await new Promise((resolveListen, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolveListen);
-  });
-  const { port } = server.address();
-  await new Promise((resolveClose, reject) =>
-    server.close((error) => (error ? reject(error) : resolveClose())),
-  );
-  return port;
+async function listen(child, origin, getLog) {
+  const { readiness } = workers.find((worker) => worker.child === child);
+  const failure = await readiness;
+  if (failure) throw failure.error;
+  if (child.exitCode === null && child.signalCode === null) return;
+  throw new Error(`Wrangler exited after readiness at ${origin}:\n${tail(getLog())}`);
 }
 
 requireDisposableDatabase(databaseUrl);
 const args = process.argv.slice(2);
 // The existing hosted Chromium lane opts in with --public-voice-browser.
 // Manual cutover qualification does not install Chromium or run this lane.
-const installedBrowser = args[0] === "--installed-output" && args[1] === "--public-voice-browser";
-const installedAdminRsvp = args[0] === "--installed-output" && args[1] === "--moderator-rsvp-only";
-if (installedBrowser || installedAdminRsvp) args.splice(1, 1);
+const mode = args.length === 2 && args[0] === "--installed-output" ? args[1] : undefined;
+const installedBrowser = mode === "--public-voice-browser";
+const installedAdminRsvp = mode === "--moderator-rsvp-only";
+const liveSocketOnly = mode === "--live-socket-only";
+if (installedBrowser || installedAdminRsvp || liveSocketOnly) args.pop();
 const { worker, assets } = await workerOutput(args);
 const scratch = await mkdtemp(
   join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "kit-worker-e2e-"),
 );
 const wrangler = join(web, "node_modules/.bin/wrangler");
 const workers = [];
+const starting = new Set();
+const startup = new AbortController();
 
 // Start one loopback Worker. The generated Kit Worker and the direct Hono
 // Worker (src/worker.ts, the same app Kit's catch-all forwards to) share the
 // fixture database and vars within each pair.
-async function startWorker(name, main, assetsDirectory, sessionSecret, vars, liveHub = false) {
-  const port = await unusedPort();
-  const origin = `http://127.0.0.1:${port}`;
+function startWorker(name, main, assetsDirectory, sessionSecret, vars, liveHub = false) {
+  const bound = startLoopbackWorker(
+    name,
+    (port, origin) =>
+      launchWorker(name, main, assetsDirectory, sessionSecret, vars, liveHub, port, origin),
+    workers,
+    { signal: startup.signal },
+  ).finally(() => starting.delete(bound));
+  starting.add(bound);
+  return bound;
+}
+
+async function launchWorker(
+  name,
+  main,
+  assetsDirectory,
+  sessionSecret,
+  vars,
+  liveHub,
+  port,
+  origin,
+) {
   const config = join(scratch, `${name}.wrangler.jsonc`);
   const configBody = {
     name: `two-web-${name}-ci-fixture`,
@@ -171,8 +151,9 @@ async function startWorker(name, main, assetsDirectory, sessionSecret, vars, liv
     },
   };
   await writeFile(config, JSON.stringify(configBody));
+  startup.signal.throwIfAborted();
   if (args.length) console.log(`Launching loopback ${name} Worker`);
-  const child = spawn(
+  return spawn(
     wrangler,
     [
       "dev",
@@ -198,26 +179,9 @@ async function startWorker(name, main, assetsDirectory, sessionSecret, vars, liv
         CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: "false",
         CLOUDFLARE_INCLUDE_PROCESS_ENV: "false",
       },
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
     },
   );
-  const worker = { name, child, origin, log: "", stopped: false };
-  worker.closed = new Promise((done) => {
-    child.once("close", () => {
-      worker.stopped = true;
-      done();
-    });
-  });
-  workers.push(worker);
-  child.on("error", (error) => {
-    worker.log += `\n${error.message}`;
-  });
-  for (const stream of [child.stdout, child.stderr]) {
-    stream?.on("data", (data) => {
-      worker.log += data.toString();
-    });
-  }
-  return worker;
 }
 
 async function stopWorker(worker) {
@@ -250,6 +214,77 @@ async function runAdminRsvpControls() {
     hono: rsvpHono,
     databaseUrl,
   });
+}
+
+async function runInstalledLive() {
+  const entry = join(scratch, "kit-live.mjs");
+  await writeFile(
+    entry,
+    `import { withEnv } from "cloudflare:workers";
+import worker, { LiveGuildHub as InstalledHub } from ${JSON.stringify(worker)};
+import { fixtureHub, controlledFetch } from ${JSON.stringify(fileURLToPath(new URL("./fixtures/kit-live-source.mjs", import.meta.url)))};
+export const LiveGuildHub = fixtureHub(InstalledHub);
+export default { fetch: controlledFetch(fetch) };
+function fetch(request, env, context) {
+  const incoming = new URL(request.url);
+  if (env.KIT_PARITY_FIXTURE_EVENT_DETAIL === "true" && incoming.pathname.startsWith("/e/")) {
+    // Event document ownership requires loopback. Socket and ingest requests
+    // still use the separate HTTPS origin required by the installed live hub.
+    const bindings = { ...env, APP_URL: incoming.origin };
+    return withEnv(bindings, () => worker.fetch(request, bindings, context));
+  }
+  const url = new URL(incoming.pathname + incoming.search, env.APP_URL);
+  const secure = new Request(url, request);
+  secure.headers.set("host", url.host);
+  // Map the browser's loopback origin to the synthetic HTTPS origin only.
+  if (secure.headers.get("origin") === incoming.origin) secure.headers.set("origin", url.origin);
+  return worker.fetch(secure, env, context);
+}\n`,
+  );
+  const { LIVE_FIXTURE_GUILD, verifyPublicFanout } = await import("./fixtures/kit-live-fanout.mjs");
+  const secret = FIXTURE_SECRETS.SESSION_SECRET;
+  const liveVars = {
+    APP_URL: "https://kit-live.invalid",
+    BOT_ENDPOINT_URL: "https://bot-live.invalid",
+    DISCORD_GUILD_ID: LIVE_FIXTURE_GUILD,
+    DISCORD_LIVE_INGEST_ENABLED: "true",
+    DISCORD_LIVE_SOCKET_ENABLED: "true",
+    DISCORD_LIVE_PUBLIC_VOICE_ROOM_IDS: "10,11",
+    DISCORD_LIVE_INGEST_KEY_ID: "fixture-ingest",
+    DISCORD_LIVE_INGEST_SECRET: "fixture-ingest-value",
+    DISCORD_LIVE_SNAPSHOT_KEY_ID: "fixture-snapshot",
+    DISCORD_LIVE_SNAPSHOT_SECRET: "fixture-snapshot-value",
+  };
+  if (installedBrowser) {
+    // Run the documents against separate persisted Workers so the hub starts
+    // cold and the disabled fixture has a working session bridge.
+    const browserVars = { ...liveVars, KIT_PARITY_FIXTURE_EVENT_DETAIL: "true" };
+    await withPublicVoiceBrowserWorkers({
+      startOff: () =>
+        startWorker(
+          "kit-voice-off",
+          entry,
+          assets,
+          secret,
+          { ...browserVars, DISCORD_LIVE_SOCKET_ENABLED: undefined },
+          true,
+        ),
+      startEnabled: () => startWorker("kit-voice", entry, assets, secret, browserVars, true),
+      waitForWorker: (instance) => listen(instance.child, instance.origin, () => instance.log),
+      verify: async (offOrigin, enabledOrigin) => {
+        const { verifyKitPublicVoice } = await import("./fixtures/kit-public-voice.mjs");
+        await verifyKitPublicVoice(offOrigin, enabledOrigin, databaseUrl, secret);
+      },
+      stopWorker,
+    });
+    console.log("PASS public voice browser Workers stopped");
+  }
+  if (!liveSocketOnly && process.env.KIT_INSTALLED_LIVE_SOCKET_SEPARATE === "true") return;
+  const live = await startWorker("kit-live", entry, assets, secret, liveVars, true);
+  await listen(live.child, live.origin, () => live.log);
+  const { verifyKitLiveSocket } = await import("./kit-live-socket.mjs");
+  await verifyKitLiveSocket(live.origin, "https://kit-live.invalid", databaseUrl, secret);
+  await verifyPublicFanout(live.origin, "https://kit-live.invalid", databaseUrl, secret);
 }
 
 async function runWorkerParity() {
@@ -444,69 +479,7 @@ export default agentEventsFixtureWorker(inner, ${JSON.stringify(agentProbePath)}
     assert.equal(disabledSocket.status, 503, "the installed socket route defaults off");
     await disabledSocket.body?.cancel();
 
-    const entry = join(scratch, "kit-live.mjs");
-    await writeFile(
-      entry,
-      `import { withEnv } from "cloudflare:workers";
-import worker, { LiveGuildHub as InstalledHub } from ${JSON.stringify(worker)};
-import { fixtureHub, controlledFetch } from ${JSON.stringify(fileURLToPath(new URL("./fixtures/kit-live-source.mjs", import.meta.url)))};
-export const LiveGuildHub = fixtureHub(InstalledHub);
-export default { fetch: controlledFetch(fetch) };
-function fetch(request, env, context) {
-  const incoming = new URL(request.url);
-  if (env.KIT_PARITY_FIXTURE_EVENT_DETAIL === "true" && incoming.pathname.startsWith("/e/")) {
-    // Event document ownership requires loopback. Socket and ingest requests
-    // still use the separate HTTPS origin required by the installed live hub.
-    const bindings = { ...env, APP_URL: incoming.origin };
-    return withEnv(bindings, () => worker.fetch(request, bindings, context));
-  }
-  const url = new URL(incoming.pathname + incoming.search, env.APP_URL);
-  const secure = new Request(url, request);
-  secure.headers.set("host", url.host);
-  // Map the browser's loopback origin to the synthetic HTTPS origin only.
-  if (secure.headers.get("origin") === incoming.origin) secure.headers.set("origin", url.origin);
-  return worker.fetch(secure, env, context);
-}\n`,
-    );
-    const { LIVE_FIXTURE_GUILD, verifyPublicFanout } = await import(
-      "./fixtures/kit-live-fanout.mjs"
-    );
-    const secret = FIXTURE_SECRETS.SESSION_SECRET;
-    const liveVars = {
-      APP_URL: "https://kit-live.invalid",
-      BOT_ENDPOINT_URL: "https://bot-live.invalid",
-      DISCORD_GUILD_ID: LIVE_FIXTURE_GUILD,
-      DISCORD_LIVE_INGEST_ENABLED: "true",
-      DISCORD_LIVE_SOCKET_ENABLED: "true",
-      DISCORD_LIVE_PUBLIC_VOICE_ROOM_IDS: "10,11",
-      DISCORD_LIVE_INGEST_KEY_ID: "fixture-ingest",
-      DISCORD_LIVE_INGEST_SECRET: "fixture-ingest-value",
-      DISCORD_LIVE_SNAPSHOT_KEY_ID: "fixture-snapshot",
-      DISCORD_LIVE_SNAPSHOT_SECRET: "fixture-snapshot-value",
-    };
-    if (installedBrowser) {
-      // Run the documents against separate persisted Workers so the hub starts
-      // cold and the disabled fixture has a working session bridge.
-      const browserVars = { ...liveVars, KIT_PARITY_FIXTURE_EVENT_DETAIL: "true" };
-      const off = await startWorker(
-        "kit-voice-off",
-        entry,
-        assets,
-        secret,
-        { ...browserVars, DISCORD_LIVE_SOCKET_ENABLED: undefined },
-        true,
-      );
-      await listen(off.child, off.origin, () => off.log);
-      const enabled = await startWorker("kit-voice", entry, assets, secret, browserVars, true);
-      await listen(enabled.child, enabled.origin, () => enabled.log);
-      const { verifyKitPublicVoice } = await import("./fixtures/kit-public-voice.mjs");
-      await verifyKitPublicVoice(off.origin, enabled.origin, databaseUrl, secret);
-    }
-    const live = await startWorker("kit-live", entry, assets, secret, liveVars, true);
-    await listen(live.child, live.origin, () => live.log);
-    const { verifyKitLiveSocket } = await import("./kit-live-socket.mjs");
-    await verifyKitLiveSocket(live.origin, "https://kit-live.invalid", databaseUrl, secret);
-    await verifyPublicFanout(live.origin, "https://kit-live.invalid", databaseUrl, secret);
+    await runInstalledLive();
   }
 
   const archive = await fetch(`${origin}/events/past`);
@@ -547,7 +520,7 @@ function fetch(request, env, context) {
       },
     });
     const { assertKitSourceEvidence } = await import("./fixtures/kit-source-evidence.mjs");
-    const evidenceWorkers = [];
+    const firstEvidenceWorker = workers.length;
     try {
       await assertKitSourceEvidence({
         worker,
@@ -562,12 +535,12 @@ function fetch(request, env, context) {
             FIXTURE_SECRETS.SESSION_SECRET,
             vars,
           );
-          evidenceWorkers.push(instance);
           await listen(instance.child, instance.origin, () => instance.log);
           return instance;
         },
       });
     } finally {
+      const evidenceWorkers = workers.slice(firstEvidenceWorker);
       await Promise.all(evidenceWorkers.map(stopWorker));
       assert.ok(
         evidenceWorkers.every(({ stopped }) => stopped),
@@ -1013,19 +986,34 @@ export default {
   }
 
   if (args.length) {
+    const { assertMembersNotFoundParity } = await import(
+      "./fixtures/kit-members-not-found-parity.mjs"
+    );
+    const members404 = await startKit("kit-members-not-found", {
+      KIT_ROUTE_MEMBERS_NOT_FOUND: "true",
+    });
+    await assertMembersNotFoundParity({
+      hono: honoWithSession,
+      off: kitWithSession,
+      on: members404,
+      databaseUrl,
+      secret,
+    });
     const entry = join(scratch, "kit-admin.mjs");
     const vars = await prepareAdminFixture(worker, entry);
     const publishEntry = await prepareAdminPublishFixture(entry, join(scratch, "kit-publish.mjs"));
-    const admin = await startAdminProbe("kit-admin", publishEntry, assets, vars);
-    const nativeCreate = await startWorker("kit-admin-native-create", entry, assets, secret, {
+    const adminStart = startAdminProbe("kit-admin", publishEntry, assets, vars);
+    const createStart = startWorker("kit-admin-native-create", entry, assets, secret, {
       ...vars,
       KIT_PARITY_FIXTURE_ADMIN_EVENT_CREATE_REDIRECT: "true",
     });
+    const [admin, nativeCreate] = await Promise.all([adminStart, createStart]);
     await Promise.all(
       [admin, nativeCreate].map((instance) =>
         listen(instance.child, instance.origin, () => instance.log),
       ),
     );
+    await assertAdminEventRosterParity({ kit: admin, fallback: kitWithSession, databaseUrl });
     await assertKitAdminServing({
       kit: admin,
       nativeCreate,
@@ -1033,6 +1021,40 @@ export default {
       hono: honoWithSession,
       databaseUrl,
     });
+    const previewWorkers = [];
+    try {
+      await assertKitQueuePreviewServing({
+        worker,
+        honoWorker: join(repo, "src/worker.ts"),
+        scratch,
+        databaseUrl,
+        start: async (name, entry) => {
+          const instance = await startWorker(
+            `queue-preview-${name}`,
+            entry,
+            name === "hono" ? join(repo, "public") : assets,
+            secret,
+          );
+          previewWorkers.push(instance);
+          await listen(instance.child, instance.origin, () => instance.log);
+          return instance;
+        },
+      });
+    } finally {
+      await Promise.all(previewWorkers.map(stopWorker));
+    }
+    assert.ok(
+      previewWorkers.every(({ stopped }) => stopped),
+      "queue preview Workers did not stop",
+    );
+    console.log("PASS queue preview Workers stopped and synthetic fixture cleanup completed");
+
+    const deleteFixture = await startWorker("kit-featured-delete", worker, assets, secret, {
+      KIT_ROUTE_ADMIN: "true",
+      KIT_PARITY_FIXTURE_ADMIN_FEATURED_DELETE: "true",
+    });
+    await listen(deleteFixture.child, deleteFixture.origin, () => deleteFixture.log);
+    await assertFeaturedDeleteParity({ kit: deleteFixture, off: admin, databaseUrl });
 
     await assertInstalledJoinAttemptDetail({
       worker,
@@ -1425,14 +1447,15 @@ export default machineParityWorker(inner, ${JSON.stringify(probePath)}, ${name =
 
 // Buffer Worker output and print it only on failure so both proof modes show
 // the error and close every Worker they started.
-let failed = false;
-try {
-  if (installedAdminRsvp) await runAdminRsvpControls();
-  else await runWorkerParity();
-} catch (error) {
-  failed = true;
-  throw error;
-} finally {
+const runProof = liveSocketOnly
+  ? runInstalledLive
+  : installedAdminRsvp
+    ? runAdminRsvpControls
+    : runWorkerParity;
+await withWorkerCleanup(runProof, async (failed) => {
+  // A parallel startup may still be preparing or retrying after its sibling fails.
+  startup.abort();
+  await Promise.allSettled(starting);
   await Promise.all(workers.map(stopWorker));
   // Print after the children close so their output has flushed.
   if (failed) {
@@ -1445,4 +1468,4 @@ try {
   );
   await rm(scratch, { recursive: true, force: true });
   if (args.length) console.log("PASS loopback Workers and scratch cleaned up");
-}
+});

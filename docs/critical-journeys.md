@@ -2,9 +2,10 @@
 
 The browser smoke suite runs **only in GitHub Actions on Linux**.
 The organization opts `browser-smoke` into Blacksmith Ubuntu 24.04 at 2 vCPUs
-through `CI_BLACKSMITH_2VCPU`. Fork pull requests and runs with the variable
-unset use GitHub-hosted `ubuntu-24.04`. The job also uses that image when the
-spending guard sets the variable to `ubuntu-latest`.
+when `CI_BLACKSMITH_2VCPU` names `blacksmith-2vcpu-ubuntu-2404`. This also
+applies to the existing main, scheduled and manual runs. Fork pull requests
+and runs without the approved label use GitHub-hosted `ubuntu-24.04`, including
+when the spending guard sets the variable to `ubuntu-latest`.
 Never install/run Playwright browsers on the controller. `npm run check` only
 checks the specs' types, safety guards and existing Vitest tests; it does not
 launch a browser. The Playwright config, fixture preparation and seeding refuse
