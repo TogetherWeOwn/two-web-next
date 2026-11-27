@@ -7,6 +7,15 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { beforeAll, describe, expect, it } from "vitest";
 import { HotzoneSignalPage, HotzonesIndexPage, renderHotzoneGrid } from "../src/hotzones/pages";
+import {
+  childText,
+  documentElements,
+  element,
+  elements,
+  parseRenderedPage,
+  renderedAttribute,
+  text,
+} from "./helpers/rendered-dom.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const webRequire = createRequire(join(root, "web/package.json"));
@@ -106,15 +115,36 @@ for (const renderer of ["Hono", "Kit"]) {
         renderer === "Kit"
           ? renderKit(signal, data)
           : await (signal ? HotzoneSignalPage(data) : HotzonesIndexPage(data)).toString();
-      if (renderer === "Kit") expect(html).toContain(kitCss);
-      const header = html.replace(/<!---->/g, "").match(/<header\b[^>]*>[\s\S]*?<\/header>/)?.[0];
-      expect(header).toBeDefined();
-      expect(header).toContain('aria-label="Account"');
+      const page = parseRenderedPage(html);
+      if (renderer === "Kit") {
+        const styles = documentElements(page, "style").filter(
+          (node) => renderedAttribute(node, "data-kit-imported-css") !== undefined,
+        );
+        expect(styles.map(childText)).toEqual([kitCss]);
+      }
+      const header = element(page, "header");
+      const account = element(header, "nav", { "aria-label": "Account" });
+      const discord = element(account, "a", { href: "/discord" });
+      expect(text(discord)).toBe("Open Discord");
+      expect(elements(header, "a", { href: "/discord" })).toHaveLength(1);
+      expect(text(header)).not.toContain("Sign in with Discord");
       expect(
-        header?.match(/<a\b[^>]*href="\/discord"[^>]*>\s*Open Discord\s*<\/a>/g) ?? [],
-      ).toHaveLength(1);
-      expect(header).not.toContain("Sign in with Discord");
-      expect(header).not.toContain("/join/discord");
+        elements(header, "a").map((link) => renderedAttribute(link, "href")),
+      ).not.toContainEqual(expect.stringContaining("/join/discord"));
     });
   });
 }
+
+it("queries visible header actions across hydration comments", () => {
+  const page = parseRenderedPage(`
+    <header>
+      <div hidden><a href="/discord">Hidden action</a></div>
+      <template><a href="/discord">Template action</a></template>
+      <!-- <a href="/discord">Comment action</a> -->
+      <a href='/discord' class='action'><!--[-->Open Dis<!---->cord<!--]--></a>
+    </header>
+  `);
+  const header = element(page, "header");
+  expect(text(element(header, "a", { href: "/discord" }))).toBe("Open Discord");
+  expect(text(header)).toBe("Open Discord");
+});

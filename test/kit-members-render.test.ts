@@ -12,13 +12,23 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { URL, fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, assert, beforeAll, describe, expect, it } from "vitest";
 import { parseActivityParam } from "../src/leaderboards/members";
 import {
   frozenSeasonFixture,
   prepareSeasonBoardFixtures,
   renderMemberBoard,
 } from "./fixtures/member-board-viewer";
+import {
+  documentElements,
+  element,
+  elements,
+  parseRenderedPage,
+  renderedAttribute,
+  responseValues,
+  rowCells,
+  text,
+} from "./helpers/rendered-dom.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
@@ -93,53 +103,98 @@ export function renderPage(data) {
   });
 });
 
+function boardRows(page: ReturnType<typeof parseRenderedPage>) {
+  return elements(element(page, "tbody"), "tr").map((row) =>
+    rowCells(row).map((cell) => [cell.tagName, renderedAttribute(cell, "scope"), text(cell)]),
+  );
+}
+
+function tablesWithoutScripting(html: string) {
+  return documentElements(parseRenderedPage(html, { scriptingEnabled: false }), "table");
+}
+
+it("detects ranking tables in noscript content", () => {
+  const html = "<noscript><table><tr><td>1</td><td>9</td></tr></table></noscript>";
+  expect(documentElements(parseRenderedPage(html), "table")).toHaveLength(0);
+  expect(tablesWithoutScripting(html)).toHaveLength(1);
+});
+
 describe("Isolated Kit season board render", () => {
   beforeAll(prepareSeasonBoardFixtures);
 
   it("describes Going sign-ups, keeps tied positions and offers a privacy opt-out link", () => {
-    const html = renderMemberBoard("season", "overall", true, false, {
-      rows: [
-        { username: "Vic", count: 3, rank: 1, isViewer: true },
-        { username: "Mira", count: 3, rank: 2, isViewer: false },
-      ],
-    });
-    expect(html).toContain('<td>1</td><th scope="row">Vic (you)</th><td>3 · Tied</td>');
-    expect(html).toContain('<td>2</td><th scope="row">Mira</th><td>3 · Tied</td>');
-    expect(html).toContain("current Going sign-ups for published or past events");
-    expect(html).toContain(
-      'opt out of leaderboards in your <a href="/profile">profile settings</a>',
+    const page = parseRenderedPage(
+      renderMemberBoard("season", "overall", true, false, {
+        rows: [
+          { username: "Vic", count: 3, rank: 1, isViewer: true },
+          { username: "Mira", count: 3, rank: 2, isViewer: false },
+        ],
+      }),
     );
+    expect(boardRows(page)).toEqual([
+      [
+        ["td", undefined, "1"],
+        ["th", "row", "Vic (you)"],
+        ["td", undefined, "3 · Tied"],
+      ],
+      [
+        ["td", undefined, "2"],
+        ["th", "row", "Mira"],
+        ["td", undefined, "3 · Tied"],
+      ],
+    ]);
+    expect(text(page)).toContain("current Going sign-ups for published or past events");
+    const privacyHint = elements(page, "p").find((paragraph) =>
+      text(paragraph).includes("opt out of leaderboards in your profile settings"),
+    );
+    assert(privacyHint, "Expected the privacy opt-out paragraph");
+    expect(text(element(privacyHint, "a", { href: "/profile" }))).toBe("profile settings");
   });
 
   it("round-trips an accepted game spelling whose lowercase exceeds the limit", () => {
     const activityInput = `${"A".repeat(99)}İ`;
     const activity = activityInput.toLowerCase();
     expect(parseActivityParam(activity)).toMatchObject({ ok: false });
-    const html = renderMemberBoard("season", "relative", true, false, { activity, activityInput });
-    const links = [...html.matchAll(/href="(\/leaderboards\/members\?[^" ]+)"/g)];
-    const games = links
-      .map(
-        ([, href]) => new URL(href!.replaceAll("&amp;", "&"), "https://example.test").searchParams,
-      )
+    const page = parseRenderedPage(
+      renderMemberBoard("season", "relative", true, false, { activity, activityInput }),
+    );
+    const games = elements(page, "a")
+      .map((link) => renderedAttribute(link, "href"))
+      .filter((href): href is string => href?.startsWith("/leaderboards/members?") === true)
+      .map((href) => new URL(href, "https://example.test").searchParams)
       .filter((params) => params.has("activity"));
     expect(games).toHaveLength(6);
     for (const game of games) {
       expect(parseActivityParam(game.get("activity"))).toEqual({ ok: true, game: activity });
     }
-    expect(html).toContain(`name="activity" type="text" value="${activityInput}"`);
+    expect(
+      renderedAttribute(element(page, "input", { name: "activity", type: "text" }), "value"),
+    ).toBe(activityInput);
   });
 
   it("labels synthetic ranks as frozen attendance and omits sign-up controls", () => {
     const html = renderMemberBoard("season", "overall", true, false, frozenSeasonFixture("ranked"));
-    expect(html).toContain("Members ranked by events with a frozen attendance record.");
-    expect(html).toContain("met the event’s voice attendance threshold");
-    expect(html).toContain("<caption>Recorded events, season 2000-02</caption>");
-    expect(html).toContain('<th scope="col">Recorded events</th>');
-    expect(html).toContain("8 recorded events");
-    expect(html).toContain("1 recorded event<");
-    expect(html).toContain('<td>2</td><th scope="row">Fixture viewer (you)</th><td>1</td>');
-    expect(html).not.toMatch(/Going counts|sign-ups|Played|Filter the leaderboard|Board scope/);
-    expect(html).not.toMatch(/42 recorded events|12 recorded events|fixture-echo-event/);
+    const page = parseRenderedPage(html);
+    const copy = text(page);
+    expect(copy).toContain("Members ranked by events with a frozen attendance record.");
+    expect(copy).toContain("met the event’s voice attendance threshold");
+    expect(text(element(page, "caption"))).toBe("Recorded events, season 2000-02");
+    expect(elements(page, "th", { scope: "col" }).map(text)).toContain("Recorded events");
+    const leaders = element(page, "ol", { "aria-label": "Leading recorded event counts" });
+    expect(elements(leaders, "span").map(text)).toEqual(
+      expect.arrayContaining(["8 recorded events", "1 recorded event"]),
+    );
+    expect(boardRows(page)).toContainEqual([
+      ["td", undefined, "2"],
+      ["th", "row", "Fixture viewer (you)"],
+      ["td", undefined, "1"],
+    ]);
+    expect(copy).not.toMatch(/Going counts|sign-ups|Played|Filter the leaderboard|Board scope/);
+    const forbidden = /42 recorded events|12 recorded events|fixture-echo-event/;
+    expect(copy).not.toMatch(forbidden);
+    expect(responseValues(page, html)).not.toContainEqual(expect.stringMatching(forbidden));
+    expect(elements(page, "form", { "aria-label": "Filter the leaderboard" })).toEqual([]);
+    expect(elements(page, "nav", { "aria-label": "Board scope" })).toEqual([]);
   });
 
   it.each([
@@ -158,10 +213,13 @@ describe("Isolated Kit season board render", () => {
         ],
       },
     } satisfies typeof fixture);
-    expect(html).toContain(message);
-    expect(html).not.toMatch(
-      /Private fixture marker|Fixture neighbor|<table|temporarily unavailable/,
-    );
+    const page = parseRenderedPage(html);
+    expect(text(element(page, "p", { role: "status" }))).toBe(message);
+    expect(documentElements(page, "table")).toEqual([]);
+    expect(tablesWithoutScripting(html)).toEqual([]);
+    const forbidden = /Private fixture marker|Fixture neighbor|temporarily unavailable/;
+    expect(text(page)).not.toMatch(forbidden);
+    expect(responseValues(page, html)).not.toContainEqual(expect.stringMatching(forbidden));
   });
 
   it.each([
@@ -170,12 +228,14 @@ describe("Isolated Kit season board render", () => {
     ["unavailable", "Attendance standings are temporarily unavailable.", false],
   ] as const)("renders a distinct %s frozen result", (state, message, hasRows) => {
     const html = renderMemberBoard("season", "overall", true, false, frozenSeasonFixture(state));
-    expect([...html.matchAll(/role="status">([^<]+)<\/p>/g)].map((match) => match[1])).toEqual([
-      message,
-    ]);
-    expect(html.includes("<table")).toBe(hasRows);
-    expect(html).not.toContain("Fixture viewer (you)");
-    expect(html).not.toContain("Answer going");
+    const page = parseRenderedPage(html);
+    expect(text(element(page, "p", { role: "status" }))).toBe(message);
+    expect(elements(page, "table")).toHaveLength(hasRows ? 1 : 0);
+    expect(documentElements(page, "table")).toHaveLength(hasRows ? 1 : 0);
+    expect(tablesWithoutScripting(html)).toHaveLength(hasRows ? 1 : 0);
+    const forbidden = /Fixture viewer \(you\)|Answer going/;
+    expect(text(page)).not.toMatch(forbidden);
+    expect(responseValues(page, html)).not.toContainEqual(expect.stringMatching(forbidden));
   });
 });
 
@@ -185,26 +245,32 @@ afterAll(() => {
 
 describe("Kit member board render", () => {
   it("serves member chrome (Signed in, viewer name, Sign out), never guest chrome", () => {
-    const html = renderPage(baseData());
-    expect(html).toContain('<form method="post" action="/logout">');
-    expect(html).toContain('<span class="account-caption">Signed in</span>');
-    expect(html).toContain('<span class="who">Vic</span>');
-    expect(html).toContain("Sign out");
-    expect(html).not.toContain("Welcome, guest");
-    expect(html).not.toContain("Sign in with Discord");
+    const page = parseRenderedPage(renderPage(baseData()));
+    const account = element(page, "nav", { "aria-label": "Account" });
+    const signOut = elements(account, "form", { method: "post", action: "/logout" }).find(
+      (form) => elements(form, "span", { class: "account-caption" }).length > 0,
+    );
+    assert(signOut, "Expected the logout form with the account caption");
+    expect(text(element(signOut, "span", { class: "account-caption" }))).toBe("Signed in");
+    expect(text(element(signOut, "span", { class: "who" }))).toBe("Vic");
+    expect(text(element(signOut, "button", { type: "submit" }))).toBe("Sign out");
+    expect(text(page)).not.toMatch(/Welcome, guest|Sign in with Discord/);
+    expect(elements(account, "a", { "aria-label": "Sign in with Discord" })).toEqual([]);
     // The viewer's own row is marked from the server-side isViewer flag.
-    expect(html).toContain('aria-current="true"');
+    const viewerRow = element(page, "tr", { "aria-current": "true" });
+    expect(text(element(viewerRow, "th", { scope: "row" }))).toBe("Vic");
   });
 
   it("links the board in the Primary nav as the current page, as Hono does, not Events", () => {
-    const nav = renderPage(baseData()).match(
-      /<nav[^>]*aria-label="Primary"[^>]*>([\s\S]*?)<\/nav>/,
-    );
-    expect(nav).not.toBeNull();
-    expect(nav![1]).toContain(
-      '<a href="/leaderboards/members" aria-current="page">Leaderboard</a>',
+    const nav = element(parseRenderedPage(renderPage(baseData())), "nav", {
+      "aria-label": "Primary",
+    });
+    expect(text(element(nav, "a", { href: "/leaderboards/members", "aria-current": "page" }))).toBe(
+      "Leaderboard",
     );
     // Events is a sibling section here, never the current page.
-    expect(nav![1]).toContain('<a href="/events">Events</a>');
+    const events = element(nav, "a", { href: "/events" });
+    expect(text(events)).toBe("Events");
+    expect(renderedAttribute(events, "aria-current")).toBeUndefined();
   });
 });
