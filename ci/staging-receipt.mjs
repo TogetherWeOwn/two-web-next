@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { readRevision } from "../bin/revision-check.mjs";
+import { readUpJson } from "../bin/revision-check.mjs";
 import { PROMOTION_SOAK_MS } from "./resolve-promotion-sha.mjs";
 import {
   isSha,
@@ -21,6 +21,7 @@ import {
 } from "./staging-provenance.mjs";
 
 const workerId = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+const UP_READY = "ready (HTTP 200)";
 const sha = (value) => (isSha(value) ? `\`${value}\`` : "unavailable");
 const positiveId = (value) =>
   (typeof value === "number" || typeof value === "string") && /^[1-9][0-9]{0,15}$/.test(value);
@@ -30,6 +31,41 @@ function runLink(repository, id, attempt) {
     return "unavailable";
   }
   return `[${id}, attempt ${attempt}](https://github.com/${repository}/actions/runs/${id}/attempts/${attempt})`;
+}
+
+function upReadiness(status, body) {
+  const { db, pending_migrations: pending, config, status: health } = body ?? {};
+  // /up allows queue-only degradation without failing database or config readiness.
+  const ready = db === "ok" && pending === 0 && config === undefined;
+  if (status === 200 && ready && (health === "healthy" || health === "degraded")) {
+    return UP_READY;
+  }
+
+  const pendingCount = Number.isSafeInteger(pending) && pending >= 0;
+  const validDatabase =
+    db === "ok" ? pendingCount || pending === null : db === "error" && pending === null;
+  const validConfig = config === undefined || config === "missing" || config === "weak";
+  if (status === 503 && !ready && health === "degraded" && validDatabase && validConfig) {
+    return pending > 0 ? "unready (HTTP 503, pending migrations)" : "unready (HTTP 503)";
+  }
+
+  return `unproven (inconsistent or invalid HTTP ${status} response)`;
+}
+
+async function readStagingUp(fetchImpl) {
+  const response = await fetchImpl(new URL("/up", STAGING_ORIGIN), {
+    redirect: "error",
+    headers: { "cache-control": "no-cache" },
+    signal: AbortSignal.timeout(10_000),
+  });
+  const { status } = response;
+  if (status !== 200 && status !== 503) {
+    // The revision reader never receives this body. Cancel it without delaying refusal.
+    void response.body?.cancel().catch(() => undefined);
+    throw new Error("Unexpected /up response status");
+  }
+  const body = await readUpJson(response);
+  return { revision: body?.revision, readiness: upReadiness(status, body) };
 }
 
 export async function stagingReceipt(
@@ -69,27 +105,21 @@ export async function stagingReceipt(
   let version;
   if (shouldObserve) {
     [up, version] = await Promise.all([
-      readRevision(STAGING_ORIGIN, {
-        fetchImpl: async (url, options) => {
-          const response = await fetchImpl(url, { ...options, redirect: "error" });
-          if (response.status !== 200 && response.status !== 503) {
-            // The revision reader never receives this body. Cancel it without delaying refusal.
-            void response.body?.cancel().catch(() => undefined);
-            throw new Error("Unexpected /up response status");
-          }
-          return response;
-        },
-      }).catch(() => null),
+      readStagingUp(fetchImpl).catch(() => null),
       readStagingIdentity({ fetchImpl, now }).catch(() => null),
     ]);
   }
+  const revision = up?.revision;
+  const readiness =
+    up?.readiness ??
+    (shouldObserve ? "unproven (missing or unreadable response)" : "unproven (no observation)");
   const versionId =
-    typeof up?.version_id === "string" &&
-    up.version_id.length === 36 &&
-    workerId.test(up.version_id)
-      ? up.version_id
+    typeof revision?.version_id === "string" &&
+    revision.version_id.length === 36 &&
+    workerId.test(revision.version_id)
+      ? revision.version_id
       : null;
-  const matched = versionId && version?.sha === candidate && up.commit === candidate;
+  const matched = versionId && version?.sha === candidate && revision.commit === candidate;
   const identityVerdict = matched
     ? "matched at observation"
     : shouldObserve
@@ -109,6 +139,8 @@ export async function stagingReceipt(
         : "This deploy run is ineligible (deploy job did not succeed)";
   } else if (!matched) {
     soak = "Unproven (identity receipt refused)";
+  } else if (readiness !== UP_READY) {
+    soak = "Unproven (/up readiness not established)";
   } else if (e2e) {
     soak = `Pending successful qualification and ${PROMOTION_SOAK_MS / 60_000}-minute soak. Production checks run history separately.`;
   } else {
@@ -129,7 +161,8 @@ export async function stagingReceipt(
     `- Workflow trigger SHA (run head) ${sha(env.GITHUB_SHA)}`,
     `- ${provenance}`,
     `- Candidate source ${sha(candidate)}`,
-    `- Live /up source ${sha(up?.commit)}, Worker version ${versionId ? `\`${versionId}\`` : "unavailable"}`,
+    `- Live /up source ${sha(revision?.commit)}, Worker version ${versionId ? `\`${versionId}\`` : "unavailable"}`,
+    `- Live /up readiness ${readiness}`,
     `- Live /version source ${sha(version?.sha)}${version ? `, deployed at \`${version.deployedAt}\`` : ""}`,
     `- Identity receipt ${identityVerdict}`,
     `- **Soak eligibility** ${soak}`,

@@ -21,7 +21,7 @@ const VERSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 const COMMIT = /^[0-9a-f]{40}$/;
 const MAX_UP_BYTES = 16 * 1024;
 
-async function readUpJson(response) {
+export async function readUpJson(response) {
   if (!response.body) throw new SyntaxError("Empty /up response");
   const reader = response.body.getReader();
   const decoder = new TextDecoder();

@@ -148,6 +148,82 @@ test("staging mutation entry requires a verified caller and a successful reserva
   assert.deepEqual(expired.effects, ["read", { record: expiredLease, context }, "proceed"]);
 });
 
+test("staging receipts distinguish matched identity from readiness", async () => {
+  const worker = "12345678-0123-4567-abcd-123456789abc";
+  const event = { workflow_run: { ...run, id: 200, run_attempt: 1 } };
+  const env = {
+    GITHUB_REPOSITORY: repository,
+    GITHUB_EVENT_NAME: "workflow_run",
+    GITHUB_SHA: C,
+    GITHUB_RUN_ID: "300",
+    GITHUB_RUN_ATTEMPT: "1",
+    STAGING_CANDIDATE: A,
+    STAGING_JOB_STATUS: "success",
+    STAGING_WEB_DEPLOY_OUTCOME: "success",
+    STAGING_SKIP_E2E: "false",
+  };
+  const healthy = { status: "healthy", db: "ok", pending_migrations: 0 };
+  const blockedMigration = { ...healthy, status: "degraded", pending_migrations: 1 };
+  const cases = [
+    [503, blockedMigration, "unready (HTTP 503, pending migrations)", false],
+    [200, healthy, "ready (HTTP 200)", true],
+    [200, { ...healthy, status: "degraded" }, "ready (HTTP 200)", true],
+    [503, { ...blockedMigration, pending_migrations: null }, "unready (HTTP 503)", false],
+    [503, { ...healthy, status: "degraded", config: "missing" }, "unready (HTTP 503)", false],
+    [200, blockedMigration, "unproven (inconsistent or invalid HTTP 200 response)", false],
+    [
+      200,
+      { ...healthy, pending_migrations: "0" },
+      "unproven (inconsistent or invalid HTTP 200 response)",
+      false,
+    ],
+    [
+      503,
+      { ...blockedMigration, pending_migrations: "1" },
+      "unproven (inconsistent or invalid HTTP 503 response)",
+      false,
+    ],
+    [
+      503,
+      { ...healthy, status: "degraded" },
+      "unproven (inconsistent or invalid HTTP 503 response)",
+      false,
+    ],
+    [
+      200,
+      { ...healthy, config: "private response" },
+      "unproven (inconsistent or invalid HTTP 200 response)",
+      false,
+    ],
+  ];
+  for (const mode of ["deploy", "e2e"]) {
+    const pending =
+      mode === "deploy"
+        ? "Pending a qualifying staging E2E run"
+        : "Pending successful qualification and 30-minute soak. Production checks run history separately.";
+    for (const [status, body, readiness, ready] of cases) {
+      const fetchImpl = async (url) => {
+        const { pathname } = new URL(url);
+        if (pathname === "/up") {
+          return new Response(
+            JSON.stringify({ ...body, revision: { commit: A, version_id: worker } }),
+            { status },
+          );
+        }
+        assert.equal(pathname, "/version");
+        return new Response(JSON.stringify({ sha: A, deployedAt }));
+      };
+      const summary = await stagingReceipt(mode, env, event, { fetchImpl, now });
+      const lines = summary.split("\n");
+      assert.ok(lines.includes("- Identity receipt matched at observation"), summary);
+      const nextStep = ready ? pending : "Unproven (/up readiness not established)";
+      assert.ok(lines.includes(`- **Soak eligibility** ${nextStep}`), summary);
+      assert.ok(lines.includes(`- Live /up readiness ${readiness}`), summary);
+      assert.doesNotMatch(summary, /private response/);
+    }
+  }
+});
+
 test("staging receipts follow the served candidate through an out-of-order main advance and refuse disagreement", async () => {
   const worker = "12345678-0123-4567-abcd-123456789abc";
   const env = {
@@ -163,19 +239,29 @@ test("staging receipts follow the served candidate through an out-of-order main 
     STAGING_WEB_DEPLOY_OUTCOME: "success",
   };
   const calls = [];
-  const fetchOrigins = (upSha, versionSha) => async (url, options) => {
-    const endpoint = new URL(url);
-    assert.equal(endpoint.origin, "https://next.togetherweown.com");
-    assert.equal(options.redirect, "error");
-    calls.push(endpoint.pathname);
-    if (endpoint.pathname === "/up") {
-      return new Response(JSON.stringify({ revision: { commit: upSha, version_id: worker } }), {
-        status: 503,
-      });
-    }
-    assert.equal(endpoint.pathname, "/version");
-    return new Response(JSON.stringify({ sha: versionSha, deployedAt, extra: "private response" }));
-  };
+  const fetchOrigins =
+    (upSha, versionSha, pendingMigrations = 0) =>
+    async (url, options) => {
+      const endpoint = new URL(url);
+      assert.equal(endpoint.origin, "https://next.togetherweown.com");
+      assert.equal(options.redirect, "error");
+      calls.push(endpoint.pathname);
+      if (endpoint.pathname === "/up") {
+        return new Response(
+          JSON.stringify({
+            status: pendingMigrations ? "degraded" : "healthy",
+            db: "ok",
+            pending_migrations: pendingMigrations,
+            revision: { commit: upSha, version_id: worker },
+          }),
+          { status: pendingMigrations ? 503 : 200 },
+        );
+      }
+      assert.equal(endpoint.pathname, "/version");
+      return new Response(
+        JSON.stringify({ sha: versionSha, deployedAt, extra: "private response" }),
+      );
+    };
   const deploy = await stagingReceipt("deploy", env, {}, { fetchImpl: fetchOrigins(A, A), now });
   assert.ok(deploy.includes(`Workflow trigger SHA (run head) \`${B}\``));
   assert.ok(deploy.includes(`actions/runs/100/attempts/2), source \`${A}\``));
@@ -189,9 +275,10 @@ test("staging receipts follow the served candidate through an out-of-order main 
     "deploy",
     { ...env, STAGING_JOB_STATUS: "failure" },
     {},
-    { fetchImpl: fetchOrigins(A, A), now },
+    { fetchImpl: fetchOrigins(A, A, 1), now },
   );
   assert.match(failedDeploy, /Identity receipt matched at observation/);
+  assert.match(failedDeploy, /Live \/up readiness unready \(HTTP 503, pending migrations\)/);
   assert.match(failedDeploy, /This deploy run is ineligible \(deploy job failed\)/);
   assert.deepEqual(calls.splice(0), ["/up", "/version"]);
 
@@ -221,6 +308,7 @@ test("staging receipts follow the served candidate through an out-of-order main 
     { fetchImpl: fetchOrigins(A, A), now },
   );
   assert.match(failedUpload, /Identity receipt refused \(no observation\)/);
+  assert.match(failedUpload, /Live \/up readiness unproven \(no observation\)/);
   assert.equal(calls.length, 0);
 
   const e2eEnv = { ...env, GITHUB_SHA: C, GITHUB_RUN_ID: "300", STAGING_SKIP_E2E: "false" };
@@ -606,7 +694,12 @@ Date.now = () => ${now};
 globalThis.fetch = async (url) => {
   switch (new URL(url).pathname) {
     case "/up":
-      return Response.json({ revision: { commit: "${A}", version_id: "12345678-0123-4567-abcd-123456789abc" } });
+      return Response.json({
+        status: "healthy",
+        db: "ok",
+        pending_migrations: 0,
+        revision: { commit: "${A}", version_id: "12345678-0123-4567-abcd-123456789abc" },
+      });
     case "/version":
       return Response.json({ sha: "${A}", deployedAt: "${deployedAt}" });
     default:
