@@ -392,6 +392,11 @@
       "reason": "Private operator record behind independent control-bearer admission."
     },
     {
+      "route": "GET /admin/queue/failed/:id/preview",
+      "binding": "web/src/routes/admin/queue/failed/[id]/preview/+server.ts",
+      "reason": "Private queue advice requires the staging Origin, a moderator session and the dedicated operator. The installed Worker fixture covers the response and audit refusals. There is no Kit data representation."
+    },
+    {
       "route": "GET /admin/queue/source-evidence/:id",
       "binding": "web/src/routes/admin/queue/source-evidence/[id]/+server.ts",
       "reason": "Staging-only evidence JSON behind independent bearer, incident and time-window checks. The installed source-evidence fixture covers wire parity and the absence of a Kit data response."

@@ -6,6 +6,8 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { readMigrationFiles } from "drizzle-orm/migrator";
+import { calendarFixtures, joinAction, smokeFixtures } from "../test/fixtures/smoke-routes.mjs";
+import { startSmokeFixture } from "../test/helpers/smoke-http.mjs";
 import {
   LEDGER_STATES,
   STAGING_WORKER,
@@ -13,6 +15,7 @@ import {
   inventory,
   ledgerPrefixes,
   productionUploadConfig,
+  readReady,
   sourceInputs,
   verifyPackage,
   verifyReady,
@@ -334,116 +337,86 @@ syncBuiltinESMExports();
   }
 });
 
-test("isolated Worker settings and deletion readback uses bounded offline streams", async (t) => {
-  const account = "a".repeat(32);
-  const token = "synthetic";
-  const script = "scripts/synthetic-worker";
-  const settings = `${script}/settings`;
-  const base = `https://api.cloudflare.com/client/v4/accounts/${account}/workers/`;
-  const limit = 1024 * 1024;
-  const result = { bindings: [{ name: "FIXTURE", type: "plain_text", text: "Épreuve" }] };
-  const encode = (value) => new TextEncoder().encode(JSON.stringify(value));
-  const envelope = encode({ success: true, result });
-  const split = envelope.indexOf(0xc3) + 1;
-  const chunks = [envelope.subarray(0, split), envelope.subarray(split)];
-  const padding = new Uint8Array(limit - envelope.byteLength).fill(32);
-  const fixture = (chunks, status = 200) => {
-    let pulls = 0;
-    let cancelled = false;
-    const body = new ReadableStream(
-      {
-        pull(controller) {
-          const chunk = chunks[pulls++];
-          if (chunk) controller.enqueue(chunk);
-          else controller.close();
-        },
-        cancel() {
-          cancelled = true;
-          // A stalled cancellation must never delay a verdict.
-          return new Promise(() => {});
-        },
-      },
-      { highWaterMark: 0 },
-    );
-    return {
-      response: new Response(body, { status }),
-      state: () => ({ pulls, cancelled, locked: body.locked }),
-    };
+const readyOrigin = "https://cutover.example.invalid";
+const readyPrefixes = ledgerPrefixes(ledgerJournal);
+const readyIdentity = { version: kit, commit: sourceSha, state: "1033" };
+const readyBody = {
+  db: "ok",
+  pending_migrations: 0,
+  migration_ledger: readyPrefixes["1033"],
+  revision: { version_id: kit, commit: sourceSha },
+};
+
+test("readReady admits exact 200 and approved deferred 503 responses", async () => {
+  const jsonAtLimit = JSON.stringify(readyBody).padEnd(16 * 1024);
+  const response = async (url, { headers, redirect, signal }) => {
+    assert.equal(url.href, `${readyOrigin}/up`);
+    assert.deepEqual(headers, { "cache-control": "no-cache" });
+    assert.equal(redirect, "error");
+    assert.ok(signal instanceof AbortSignal && !signal.aborted);
+    return new Response(jsonAtLimit);
   };
-  const offlineApi = (method, path, respond) =>
-    cloudflare({
-      account,
-      token,
-      fetchImpl: async (url, options) => {
-        assert.equal(url, `${base}${path}`);
-        assert.equal(options.method, method);
-        assert.equal(options.headers.Authorization, `Bearer ${token}`);
-        assert.equal(options.redirect, "error");
-        assert.ok(options.signal instanceof AbortSignal);
-        return respond(options.signal);
+  assert.equal(await readReady(readyOrigin, readyPrefixes, readyIdentity, response), "1033");
+
+  const deferred = async () =>
+    Response.json({ ...readyBody, pending_migrations: 1 }, { status: 503 });
+  assert.equal(
+    await readReady(
+      readyOrigin,
+      readyPrefixes,
+      { ...readyIdentity, allowDeferred: true },
+      deferred,
+    ),
+    "1033",
+  );
+  await assert.rejects(readReady(readyOrigin, readyPrefixes, readyIdentity, deferred), /readiness/);
+});
+
+test("readReady cancels and refuses an oversized stream without Content-Length", {
+  timeout: 2_000,
+}, async () => {
+  const atLimit = new TextEncoder().encode(JSON.stringify(readyBody).padEnd(16 * 1024));
+  const chunks = [atLimit, Uint8Array.of(0x20)];
+  let pulls = 0;
+  let cancelled = false;
+  const stream = new ReadableStream(
+    {
+      pull(controller) {
+        const chunk = chunks[pulls++];
+        if (chunk) controller.enqueue(chunk);
+        else controller.close();
       },
-    });
-
-  const timeout = t.mock.method(AbortSignal, "timeout");
-  const existing = fixture([...chunks, padding]);
-  assert.deepEqual(await offlineApi("GET", settings, () => existing.response)(settings), result);
-  const deleted = fixture([encode({ success: true, result: null })]);
-  assert.equal(await offlineApi("DELETE", script, () => deleted.response)(script, "DELETE"), null);
-
-  for (const [method, path] of [
-    ["DELETE", script],
-    ["GET", settings],
-  ]) {
-    const request = (respond) => offlineApi(method, path, respond)(path, method);
-    const oversized = fixture([...chunks, padding, Uint8Array.of(32)]);
-    await assert.rejects(
-      request(() => oversized.response),
-      {
-        message: "staging Workers API response too large",
+      cancel() {
+        cancelled = true;
+        // An unsettled cleanup must leave the refusal prompt.
+        return new Promise(() => {});
       },
-    );
-    assert.deepEqual(oversized.state(), { pulls: 4, cancelled: true, locked: false });
+    },
+    { highWaterMark: 0 },
+  );
+  const response = new Response(stream);
+  assert.equal(response.headers.get("content-length"), null);
+  await assert.rejects(
+    readReady(readyOrigin, readyPrefixes, readyIdentity, async () => response),
+    /readiness response exceeds/,
+  );
+  assert.equal(pulls, 2);
+  assert.equal(cancelled, true);
+  assert.equal(stream.locked, false);
+});
 
-    const missing = fixture([], 404);
-    assert.equal(await request(() => missing.response), null);
-    assert.deepEqual(missing.state(), { pulls: 0, cancelled: true, locked: false });
-
-    const refused = fixture([], 502);
-    for (const [response, message] of [
-      [fixture([]).response, "staging Workers API response was not valid JSON"],
-      [
-        fixture([new TextEncoder().encode("synthetic private response")]).response,
-        "staging Workers API response was not valid JSON",
-      ],
-      [fixture([Uint8Array.of(0xff)]).response, "staging Workers API response could not be read"],
-      [refused.response, "staging Workers API refused the request"],
-      [
-        fixture([encode({ success: "synthetic private response" })]).response,
-        "staging Workers API returned an error",
-      ],
-    ]) {
-      await assert.rejects(
-        request(() => response),
-        { message },
-      );
-    }
-    assert.deepEqual(refused.state(), { pulls: 0, cancelled: true, locked: false });
+test("readReady refuses empty, invalid or truncated JSON", async () => {
+  await assert.rejects(
+    readReady(readyOrigin, readyPrefixes, readyIdentity, async () => new Response()),
+    /missing readiness response body/i,
+  );
+  const json = JSON.stringify(readyBody);
+  for (const body of ["", `${json} garbage`, json.slice(0, -1)]) {
     await assert.rejects(
-      request(() => {
-        throw new Error("synthetic private transport error");
-      }),
-      { message: "staging Workers API request failed" },
+      readReady(readyOrigin, readyPrefixes, readyIdentity, async () => new Response(body)),
+      /invalid readiness JSON/i,
     );
   }
-  assert.deepEqual(existing.state(), { pulls: 4, cancelled: false, locked: false });
-  assert.deepEqual(deleted.state(), { pulls: 2, cancelled: false, locked: false });
-
-  const missingResult = fixture([encode({ success: true, result: null })]);
-  await assert.rejects(offlineApi("GET", settings, () => missingResult.response)(settings), {
-    message: "staging Workers API returned invalid settings",
-  });
-  assert.ok(timeout.mock.calls.length > 0);
-  for (const call of timeout.mock.calls) assert.deepEqual(call.arguments, [10_000]);
 });
 
 test("cutover packet refuses wrong bytes, package identity, or source config", async (t) => {
@@ -697,6 +670,118 @@ test("isolated Workers API GET bounds and disposes provider responses", async (t
   );
 });
 
+test("isolated Worker settings and deletion readback uses bounded offline streams", async (t) => {
+  const account = "a".repeat(32);
+  const token = "synthetic";
+  const script = "scripts/synthetic-worker";
+  const settings = `${script}/settings`;
+  const base = `https://api.cloudflare.com/client/v4/accounts/${account}/workers/`;
+  const limit = 1024 * 1024;
+  const result = { bindings: [{ name: "FIXTURE", type: "plain_text", text: "Épreuve" }] };
+  const encode = (value) => new TextEncoder().encode(JSON.stringify(value));
+  const envelope = encode({ success: true, result });
+  const split = envelope.indexOf(0xc3) + 1;
+  const chunks = [envelope.subarray(0, split), envelope.subarray(split)];
+  const padding = new Uint8Array(limit - envelope.byteLength).fill(32);
+  const fixture = (chunks, status = 200) => {
+    let pulls = 0;
+    let cancelled = false;
+    const body = new ReadableStream(
+      {
+        pull(controller) {
+          const chunk = chunks[pulls++];
+          if (chunk) controller.enqueue(chunk);
+          else controller.close();
+        },
+        cancel() {
+          cancelled = true;
+          // A stalled cancellation must never delay a verdict.
+          return new Promise(() => {});
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    return {
+      response: new Response(body, { status }),
+      state: () => ({ pulls, cancelled, locked: body.locked }),
+    };
+  };
+  const offlineApi = (method, path, respond) =>
+    cloudflare({
+      account,
+      token,
+      fetchImpl: async (url, options) => {
+        assert.equal(url, `${base}${path}`);
+        assert.equal(options.method, method);
+        assert.equal(options.headers.Authorization, `Bearer ${token}`);
+        assert.equal(options.redirect, "error");
+        assert.ok(options.signal instanceof AbortSignal);
+        return respond(options.signal);
+      },
+    });
+
+  const timeout = t.mock.method(AbortSignal, "timeout");
+  const existing = fixture([...chunks, padding]);
+  assert.deepEqual(await offlineApi("GET", settings, () => existing.response)(settings), result);
+  const deleted = fixture([encode({ success: true, result: null })]);
+  assert.equal(await offlineApi("DELETE", script, () => deleted.response)(script, "DELETE"), null);
+
+  for (const [method, path] of [
+    ["DELETE", script],
+    ["GET", settings],
+  ]) {
+    const request = (respond) => offlineApi(method, path, respond)(path, method);
+    const oversized = fixture([...chunks, padding, Uint8Array.of(32)]);
+    await assert.rejects(
+      request(() => oversized.response),
+      {
+        message: "staging Workers API response too large",
+      },
+    );
+    assert.deepEqual(oversized.state(), { pulls: 4, cancelled: true, locked: false });
+
+    const missing = fixture([], 404);
+    assert.equal(await request(() => missing.response), null);
+    assert.deepEqual(missing.state(), { pulls: 0, cancelled: true, locked: false });
+
+    const refused = fixture([], 502);
+    for (const [response, message] of [
+      [fixture([]).response, "staging Workers API response was not valid JSON"],
+      [
+        fixture([new TextEncoder().encode("synthetic private response")]).response,
+        "staging Workers API response was not valid JSON",
+      ],
+      [fixture([Uint8Array.of(0xff)]).response, "staging Workers API response could not be read"],
+      [refused.response, "staging Workers API refused the request"],
+      [
+        fixture([encode({ success: "synthetic private response" })]).response,
+        "staging Workers API returned an error",
+      ],
+    ]) {
+      await assert.rejects(
+        request(() => response),
+        { message },
+      );
+    }
+    assert.deepEqual(refused.state(), { pulls: 0, cancelled: true, locked: false });
+    await assert.rejects(
+      request(() => {
+        throw new Error("synthetic private transport error");
+      }),
+      { message: "staging Workers API request failed" },
+    );
+  }
+  assert.deepEqual(existing.state(), { pulls: 4, cancelled: false, locked: false });
+  assert.deepEqual(deleted.state(), { pulls: 2, cancelled: false, locked: false });
+
+  const missingResult = fixture([encode({ success: true, result: null })]);
+  await assert.rejects(offlineApi("GET", settings, () => missingResult.response)(settings), {
+    message: "staging Workers API returned invalid settings",
+  });
+  assert.ok(timeout.mock.calls.length > 0);
+  for (const call of timeout.mock.calls) assert.deepEqual(call.arguments, [10_000]);
+});
+
 test("isolated cutover repeats readiness and smoke when rollback is still propagating", async () => {
   const origin = "https://cutover.example.invalid";
   const prefixes = ledgerPrefixes(ledgerJournal);
@@ -833,6 +918,70 @@ test("isolated cutover refuses successful smoke with no route checks", async () 
     { message: "isolated route smoke ran no checks" },
   );
   assert.deepEqual(calls, ["readiness", "smoke"]);
+});
+
+test("isolated cutover refuses a healthy smoke response from the wrong Worker version", async (t) => {
+  const prefixes = ledgerPrefixes(ledgerJournal);
+  let smokeVersion = kit;
+  const observations = [];
+  const { url, requests } = await startSmokeFixture(
+    t,
+    (path, response, headers) => {
+      if (path === "/join") response.body += joinAction;
+      if (path === "/up") {
+        // readReady sends no-cache. The ordinary-traffic smoke makes its own request.
+        const ready = headers["cache-control"] === "no-cache";
+        const version = ready ? hono : smokeVersion;
+        observations.push([ready ? "readiness" : "smoke", version]);
+        response.body = JSON.stringify({
+          ...JSON.parse(response.body),
+          migration_ledger: prefixes[1033],
+          revision: { version_id: version, commit: sourceSha },
+        });
+      }
+    },
+    calendarFixtures,
+  );
+  const log = t.mock.method(console, "log", () => {});
+  const waits = [];
+  const verify = () =>
+    verifyServed(url, prefixes, identity, hono, "1033", "hono", {
+      wait: async (ms) => {
+        waits.push(ms);
+      },
+    });
+
+  await assert.rejects(verify(), /isolated public-route smoke failed/);
+  assert.deepEqual(waits, Array(5).fill(10_000));
+  assert.deepEqual(
+    observations,
+    Array.from({ length: 6 }, () => [
+      ["readiness", hono],
+      ["smoke", kit],
+    ]).flat(),
+  );
+  const failures = log.mock.calls
+    .map(({ arguments: [line] }) => line)
+    .filter((line) => line.startsWith("FAIL "));
+  assert.deepEqual(
+    failures,
+    Array(6).fill(
+      `FAIL /up: expected revision.version_id ${hono}; actual revision.version_id ${kit}`,
+    ),
+  );
+
+  smokeVersion = hono;
+  observations.length = 0;
+  assert.equal(
+    await verify(),
+    Object.keys(smokeFixtures).length + Object.keys(calendarFixtures).length,
+  );
+  assert.deepEqual(observations, [
+    ["readiness", hono],
+    ["smoke", hono],
+  ]);
+  assert.equal(waits.length, 5);
+  assert.ok(requests.every(({ override }) => override === undefined));
 });
 
 test("isolated cutover proof requires both exact versions and six healthy transitions", () => {

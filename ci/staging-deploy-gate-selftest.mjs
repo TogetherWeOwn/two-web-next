@@ -724,6 +724,29 @@ test("truncated CI jobs after preparation stop staging before the first queue", 
   assert.deepEqual(accepted.calls, mutationCalls);
 });
 
+test("a failed duplicate required job makes same-attempt CI evidence ambiguous", () => {
+  const ctx = context("workflow_run");
+  const evidence = fixture();
+  evidence.jobs.jobs = evidence.jobs.jobs.map((job, index) => ({ ...job, id: 101 + index }));
+
+  const accepted = executeStaging(ctx, evidence);
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.deepEqual(accepted.calls, mutationCalls);
+  assert.match(
+    accepted.stdout,
+    new RegExp(`Staging gate passed: ${sha}, full CI run ${run.id}, attempt ${run.run_attempt}`),
+  );
+
+  const check = evidence.jobs.jobs[1];
+  evidence.jobs.jobs.push({ ...check, id: 103, conclusion: "failure" });
+  evidence.jobs.total_count = evidence.jobs.jobs.length;
+
+  const refused = executeStaging(ctx, evidence);
+  assert.equal(refused.status, 1, refused.stderr);
+  assert.deepEqual(refused.calls, []);
+  assert.match(refused.stderr, /^Staging gate refused: Missing or ambiguous check job$/m);
+});
+
 for (const [family, archiveFlag, staticFlag, eventsFlag, homeFlag, joinFlag] of [
   ["archive", "true", "false", "false", "false", "false"],
   ["archive-static", "true", "true", "false", "false", "false"],
@@ -929,6 +952,33 @@ test("a stale automatic run ID/attempt or missing token refuses before Cloudflar
     }),
     /Missing read-only/,
   );
+});
+
+test("a failed CI jobs HTTP read stops proof collection with a status-only diagnostic", async () => {
+  const evidence = fixture();
+  const jobsFailure = Response.json(
+    { ...evidence.jobs, message: "Synthetic provider response detail\n".repeat(100) },
+    { status: 503 },
+  );
+  const requests = [];
+  const base = `https://api.github.com/repos/${repository}/actions`;
+  const runsUrl = `${base}/workflows/ci.yml/runs?branch=main&event=push&head_sha=${sha}&per_page=100`;
+  const jobsUrl = `${base}/runs/${run.id}/jobs?filter=latest&per_page=100`;
+
+  await assert.rejects(
+    requireSuccessfulCi(context("workflow_run"), {
+      token: "offline-stub",
+      fetchImpl: async (url) => {
+        requests.push(url);
+        if (url === runsUrl) return Response.json(evidence.runs);
+        if (url === jobsUrl) return jobsFailure;
+        assert.fail(`Unexpected CI evidence request: ${url}`);
+      },
+    }),
+    { name: "Error", message: "CI evidence request failed (HTTP 503)" },
+  );
+  assert.deepEqual(requests, [runsUrl, jobsUrl]);
+  assert.equal(jobsFailure.bodyUsed, false);
 });
 
 test("workflow wires the tested gate before both mutations and preserves staging isolation", () => {
