@@ -137,7 +137,7 @@ export default {
   return entry;
 }
 
-function renewedModerator(headers) {
+export function renewedModerator(headers) {
   const cookie = headers.getSetCookie().find((value) => value.startsWith(`${SESSION_COOKIE}=`));
   assert.ok(cookie, "the response refreshes the shared moderator bearer");
   return cookie.split(";", 1)[0];

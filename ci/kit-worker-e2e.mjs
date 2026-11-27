@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 import { STAGING_STATIC_DOCUMENT_READY } from "../src/kit-staging-static.ts";
 import { prepareAdminDuplicateProbe } from "./fixtures/kit-admin-duplicate.mjs";
+import { assertAdminEventRosterParity } from "./fixtures/kit-admin-event-roster.mjs";
 import {
   assertInstalledJoinAttemptDetail,
   assertKitAdminServing,
@@ -1001,6 +1002,7 @@ export default {
         listen(instance.child, instance.origin, () => instance.log),
       ),
     );
+    await assertAdminEventRosterParity({ kit: admin, fallback: kitWithSession, databaseUrl });
     await assertKitAdminServing({
       kit: admin,
       nativeCreate,
