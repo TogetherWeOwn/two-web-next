@@ -31,6 +31,8 @@
 #                 github.event.merge_group.base_ref (a full ref such as
 #                 `refs/heads/main`; the prefix is stripped here). Required
 #                 when EVENT_NAME is `pull_request` or `merge_group`.
+#   POLICY_REVISION  immutable base revision from the workflow; local fixtures
+#                    may use the fetched base ref when this is unset.
 #   RUNNER_TEMP   scratch directory (falls back to TMPDIR, then /tmp)
 # Run from the repository root. In a PR or queue run it overwrites the
 # working-tree `.gitleaksignore`; run it only in a disposable checkout.
@@ -46,8 +48,8 @@ if [[ "${EVENT_NAME:-}" == "pull_request" || "${EVENT_NAME:-}" == "merge_group" 
   # merge_group.base_ref arrives as a full ref (refs/heads/main); strip it.
   base_ref="${BASE_REF#refs/heads/}"
   base="refs/remotes/origin/${base_ref}"
-  if ! git rev-parse --verify --quiet "${base}^{commit}" >/dev/null; then
-    echo "::error::base branch ${base_ref} is not fetched; the ${EVENT_NAME} scan cannot load its policy" >&2
+  if ! base=$(git rev-parse --verify --quiet --end-of-options "${POLICY_REVISION:-${base}}^{commit}"); then
+    echo "::error::base policy revision for ${base_ref} is not fetched; the ${EVENT_NAME} scan cannot load its policy" >&2
     exit 2
   fi
 

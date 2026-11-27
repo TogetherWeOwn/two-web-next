@@ -261,6 +261,36 @@ describe("PR lint dispatch binding (hermetic workflow/API fixtures)", () => {
     ).toEqual([["api", "repos/TogetherWeOwn/two-web-next/pulls/28"]]);
   });
 
+  it.each([
+    ["invalid queued title", "fix(ci): use the latest title", 0],
+    ["fix(ci): valid queued title", "invalid latest title", 1],
+  ])(
+    "lints current metadata on same-head edits when the event carried %s",
+    (queuedTitle, liveTitle, status) => {
+      const fixture = pullRequest(true);
+      const newBase = { ...fixture.live.base, ref: "strict-base", sha: "f".repeat(40) };
+      fixture.checkoutSha = headSha;
+      fixture.checkedSha = headSha;
+      fixture.waiverBaseSha = newBase.sha;
+      fixture.event.pull_request!.base = newBase;
+      fixture.live.base = newBase;
+      fixture.event.pull_request!.title = queuedTitle;
+      fixture.live.title = liveTitle;
+      for (const changes of [
+        { title: { from: "previous title" } },
+        { base: { ref: { from: "main" }, sha: { from: baseSha } } },
+      ]) {
+        Object.assign(fixture.event, { action: "edited", changes });
+        const result = runWorkflow(fixture);
+        expect(result.status, result.stdout + result.stderr).toBe(status);
+        expect(JSON.parse(result.output).title).toBe(liveTitle);
+        expect(
+          result.stdout.includes("PR floor-waiver trailers are visible to merge-queue validation"),
+        ).toBe(status === 0);
+      }
+    },
+  );
+
   describe.each(["workflow_dispatch", "pull_request"])("queue-visible waivers (%s)", (event) => {
     const fixtureForEvent = () => (event === "workflow_dispatch" ? dispatch() : pullRequest(true));
 
@@ -634,6 +664,12 @@ describe("PR lint dispatch binding (hermetic workflow/API fixtures)", () => {
       "moved live head",
       (f: Fixture) => {
         f.live.head.sha = "d".repeat(40);
+      },
+    ],
+    [
+      "case-only base retarget at the same head",
+      (f: Fixture) => {
+        f.live.base.ref = "Main";
       },
     ],
     [

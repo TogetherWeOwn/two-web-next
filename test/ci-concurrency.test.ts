@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 
 // TOG-11811: runners are the throughput ceiling, so a superseded PR push must
 // cancel its own runs. Deploy, rollback and release runs must never be cancelled midway.
@@ -28,6 +29,38 @@ const groupPerSha = (text: string) =>
 const SCHEDULE_SHARES_MAIN_GROUP = new Set<string>();
 
 describe("workflow concurrency", () => {
+  it("keeps metadata edits in their own lane and verifies, rather than reruns, the source scan", () => {
+    const workflow = parse(readFileSync(join(dir, "pr-gates.yml"), "utf8"));
+    const meta = "github.event.action == 'edited' && !github.event.changes.base";
+    expect(workflow.concurrency.group).toBe(
+      `\${{ github.workflow }}-\${{ github.event_name == 'workflow_dispatch' && 'dispatch' || ${meta} && 'metadata' || 'source' }}-\${{ github.event.pull_request.number || inputs.pr_number || github.sha }}`,
+    );
+    expect(workflow.on.pull_request.types).toEqual([
+      "opened",
+      "edited",
+      "synchronize",
+      "reopened",
+      "ready_for_review",
+    ]);
+    const scan = workflow.jobs.gitleaks;
+    expect(scan.name).toBe("gitleaks");
+    expect(scan.env.REUSE_SCAN).toBe(`\${{ ${meta} }}`);
+    expect(scan.steps.map((step: { if?: string }) => step.if)).toEqual([
+      "env.REUSE_SCAN == 'true'",
+      "env.REUSE_SCAN != 'true'",
+      "env.REUSE_SCAN != 'true'",
+      "env.REUSE_SCAN != 'true'",
+      "env.REUSE_SCAN != 'true'",
+      "env.REUSE_SCAN != 'true' && github.event_name == 'pull_request'",
+    ]);
+    expect(scan.steps[0].run).toContain("python3 - <<'VERIFY_SOURCE'");
+    expect(scan.steps[1].with).toEqual({
+      ref: "${{ github.sha }}",
+      "fetch-depth": 0,
+      "persist-credentials": false,
+    });
+  });
+
   it("cancels superseded runs of every pull_request workflow", () => {
     const pr = workflows.filter(({ text }) => /(^|\n)  pull_request:/.test(triggers(text)));
     expect(pr.length).toBeGreaterThan(2);
