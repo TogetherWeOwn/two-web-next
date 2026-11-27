@@ -75,7 +75,7 @@ try {
     ),
   );
   const untracked = new Set(git("ls-files", "--others", "--exclude-standard", "-z").split("\0"));
-  stage = "scan every added file in scope";
+  stage = "scan scoped additions";
   const { files: scopes, message } = parse(readFileSync(`sg-rules/${rule}.yml`, "utf8"));
   const changed = [...added].filter(([, lines]) => lines.size > 0).map(([path]) => path);
   const paths = [...new Set([...changed, ...untracked])].filter((path) =>

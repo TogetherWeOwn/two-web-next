@@ -70,6 +70,20 @@ snapshots:
         style: secondary
         start: 6
         end: 64
+  expect(!(html.match(/<form\b/) || html.match(/<input\b/))).toBe(false);:
+    labels:
+      - source: html.match(/<form\b/)
+        style: primary
+        start: 9
+        end: 30
+      - source: expect(!(html.match(/<form\b/) || html.match(/<input\b/))).toBe(false)
+        style: secondary
+        start: 0
+        end: 70
+      - source: '!(html.match(/<form\b/) || html.match(/<input\b/))'
+        style: secondary
+        start: 7
+        end: 57
   expect(await response.text(), "Join link").toContain(`href="${joinPath}"`);:
     labels:
       - source: expect(await response.text(), "Join link").toContain(`href="${joinPath}"`)
@@ -134,28 +148,6 @@ snapshots:
         style: primary
         start: 0
         end: 55
-  expect(html.includes("<form")).toBe(true);:
-    labels:
-      - source: html.includes("<form")
-        style: primary
-        start: 7
-        end: 29
-      - source: expect(html.includes("<form")).toBe(true)
-        style: secondary
-        start: 0
-        end: 41
-      - source: expect(html.includes("<form")).toBe
-        style: secondary
-        start: 0
-        end: 35
-      - source: expect(html.includes("<form"))
-        style: secondary
-        start: 0
-        end: 30
-      - source: (html.includes("<form"))
-        style: secondary
-        start: 6
-        end: 30
   if (!html.includes('aria-label="Primary"')) failures.push("missing navigation");:
     labels:
       - source: html.includes('aria-label="Primary"')

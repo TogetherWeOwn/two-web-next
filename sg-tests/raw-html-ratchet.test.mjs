@@ -96,8 +96,5 @@ test("the added-line gate grandfathers existing assertions and checks scoped add
   write("test/skip-probe.ts", Buffer.from([255]));
   const incomplete = check();
   assert.equal(incomplete.status, 2, incomplete.stderr);
-  assert.equal(
-    incomplete.stderr,
-    "no-raw-html-assertion: could not scan every added file in scope\n",
-  );
+  assert.equal(incomplete.stderr, "no-raw-html-assertion: could not scan scoped additions\n");
 });

@@ -38,14 +38,20 @@ rule:
                     - pattern: check($QUERY, $MESSAGE)
                     - pattern: check($QUERY, $MESSAGE, $DETAIL)
               - pattern: "!$QUERY"
-                inside:
-                  kind: parenthesized_expression
-                  inside:
-                    kind: if_statement
-                    field: condition
-                  stopBy:
-                    not:
-                      matches: boolean-expression
+                any:
+                  - inside:
+                      any:
+                        - pattern: expect(!$QUERY).toBe(false)
+                        - pattern: expect(!$QUERY).toBeFalsy()
+                      stopBy: end
+                  - inside:
+                      kind: parenthesized_expression
+                      inside:
+                        kind: if_statement
+                        field: condition
+                      stopBy:
+                        not:
+                          matches: boolean-expression
             stopBy:
               not:
                 matches: boolean-expression

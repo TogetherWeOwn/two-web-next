@@ -31,7 +31,7 @@ invalid:
   - assert.equal(response.text, '<p role="status">Ready</p>');
   - assert.ok(answer.body.includes(`<h1>${signal} hot zone</h1>`), answer.label);
   - assert(/<form\b/.test(html));
-  - expect(html.includes("<form")).toBe(true);
+  - expect(!(html.match(/<form\b/) || html.match(/<input\b/))).toBe(false);
   - expect(hasForm && (html.includes("<input") || empty)).toBe(true);
   - if (!html.includes('aria-label="Primary"')) failures.push("missing navigation");
   - if (hasLoad && !html.includes('<script src="/islands/join-widget.js"')) failures.push("missing widget script");
