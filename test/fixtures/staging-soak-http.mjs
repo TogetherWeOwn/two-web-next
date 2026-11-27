@@ -67,9 +67,8 @@ export function trustedReads({ fetchImpl }, { deployments, run, skipped = false 
         return Response.json({ commit: { committer: { date: deployedAt } } });
       }
       if (url.pathname.endsWith("/actions/workflows/e2e-staging.yml/runs")) {
-        return Response.json({
-          workflow_runs: run.event === "workflow_dispatch" ? [run, preRollback] : [run],
-        });
+        const runs = run.event === "workflow_dispatch" ? [run, preRollback] : [run];
+        return Response.json({ total_count: runs.length, workflow_runs: runs });
       }
       const jobRun = url.pathname.includes(`/runs/${preRollback.id}/`) ? preRollback : run;
       assert.equal(url.pathname, `/repos/${repo}/actions/runs/${jobRun.id}/attempts/1/jobs`);

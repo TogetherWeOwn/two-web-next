@@ -478,6 +478,7 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
   });
   const { databaseReadiness } = await import(pathToFileURL(outfile).href);
   const isolationQueries = [];
+  const aclCommands = new Set();
   const {
     run: isolate,
     version,
@@ -488,17 +489,23 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
       login: app,
       database: "postgres",
       migrationRole: migrator,
-      connect() {
-        const client = connectMigrator();
-        isolationQueries.length = 0;
-        client.options.debug = (_id, statement, parameters) => {
+      connect: () => {
+        const client = fresh(migrator, "postgres", (_id, statement, parameters) => {
+          const command = /^(grant|revoke)\b/i.exec(statement.trimStart())?.[0];
+          const kind =
+            command?.toLowerCase() ??
+            (statement === "select pg_try_advisory_xact_lock($1) as acquired"
+              ? "advisory-lock"
+              : statement === "lock table drizzle.__drizzle_migrations in share mode nowait"
+                ? "relation-lock"
+                : "other");
+          if (command) aclCommands.add(command.toLowerCase());
           isolationQueries.push({
-            statement,
-            advisoryKey: statement.startsWith("select pg_try_advisory_xact_lock(")
-              ? Number(parameters[0])
-              : undefined,
+            kind,
+            advisoryKey: kind === "advisory-lock" ? Number(parameters[0]) : undefined,
           });
-        };
+        });
+        isolationQueries.length = 0;
         return client;
       },
       firstEnd: originalEnd,
@@ -597,6 +604,27 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
     );
   };
   const forward = { readiness: { ...readiness, revision: { version_id: version } } };
+  await withClient(restore.admin(), async (sql) => {
+    await sql`create sequence public.fixture_unreviewed_serving_seq`;
+    try {
+      assert.equal(await isolate("readback"), "before");
+      const before = await inspect(fresh);
+      await assert.rejects(isolate("forward", forward), /Public serving inventory changed/);
+      assert.deepEqual([...aclCommands], [], "Inventory refusal issued a grant or revoke");
+      const after = await inspect(fresh);
+      assert.deepEqual(
+        after.state.ledger,
+        before.state.ledger,
+        "Inventory refusal changed the ledger",
+      );
+      assert.equal(after.digest, before.digest, "Inventory refusal changed the catalog");
+    } finally {
+      await sql`drop sequence public.fixture_unreviewed_serving_seq`;
+    }
+  });
+  t.diagnostic(
+    "Unexpected public sequence refused before any grant or revoke. Catalog and ledger matched.",
+  );
   await t.test("failed serving postcheck rolls back ACLs and allows a clean retry", () =>
     assertServingPostcheckRollback({
       admin: restore.admin,
@@ -611,7 +639,9 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
       probeBefore: () => probe(base, false),
       retryForward: async () => {
         await assertMigrationLockRefused("forward", forward, "before");
+        aclCommands.clear();
         assert.equal(await isolate("forward", forward), "committed");
+        assert.deepEqual(aclCommands, new Set(["grant", "revoke"]));
         t.diagnostic(
           "Held Web migration lock refused forward before ACL changes. Retry committed.",
         );

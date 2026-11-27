@@ -73,6 +73,8 @@ export async function stagingReceipt(
         fetchImpl: async (url, options) => {
           const response = await fetchImpl(url, { ...options, redirect: "error" });
           if (response.status !== 200 && response.status !== 503) {
+            // The revision reader never receives this body. Cancel it without delaying refusal.
+            void response.body?.cancel().catch(() => undefined);
             throw new Error("Unexpected /up response status");
           }
           return response;
