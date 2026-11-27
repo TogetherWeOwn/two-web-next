@@ -11,8 +11,6 @@ import { dirname, join } from "node:path";
 import { URL, fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { beforeAll, describe, expect, it } from "vitest";
-// @ts-expect-error Standalone CI helper has no declaration file (single-line import: wrapping would detach this from TS7016).
-import { normalizeSection } from "../ci/kit-section-contract.mjs";
 import { resolveRouteOwner, ROUTE_MANIFEST } from "../src/route-ownership";
 import { FAQS, faqPageData } from "../src/faq-content";
 import { transformContentLeafChunk } from "../src/kit-content-chunk";
@@ -20,6 +18,7 @@ import { LEAF_CRITICAL_CSS } from "../src/leaf-critical-css";
 import { FAQS as screenFaqs } from "../src/screens/faq";
 import { canonicalUrl } from "../src/seo";
 import app from "./app";
+import { contentLeafDom, GUEST_JOIN } from "./helpers/content-leaf-dom";
 import type { Env } from "../src/env";
 
 const APP_URL = "https://next.example.test";
@@ -113,40 +112,6 @@ export function renderPage(data) {
   }
 }
 
-// The question list both renderers must agree on. The list is a div (not a
-// section), so the shared sectionOf helper cannot anchor it: extract by tag
-// depth instead, then apply the shared framework-tolerant treatment.
-// Svelte's empty `<!---->` snippet anchors have no Hono counterpart, so they
-// are excised first: zero-width hydration markers, serializer-owned like the
-// markers the shared treatment already strips — never content. Quote
-// entities differ the same way: Hono escapes `'`/`"` in text while Svelte
-// emits them bare, so map the entities before comparing — the contract is
-// the text, never the serializer's escaping.
-function faqListOf(html: string): string {
-  const start = html.indexOf('<div data-testid="faq-list">');
-  if (start === -1) throw new Error("faq list is missing");
-  const tag = /<\/?div\b[^>]*>/g;
-  tag.lastIndex = start;
-  let depth = 0;
-  let end = -1;
-  let match: RegExpExecArray | null;
-  while ((match = tag.exec(html)) !== null) {
-    depth += match[0].startsWith("</") ? -1 : 1;
-    if (depth === 0) {
-      end = match.index + match[0].length;
-      break;
-    }
-  }
-  if (end === -1) throw new Error("faq list never closes");
-  return normalizeSection(
-    html
-      .slice(start, end)
-      .replace(/<!---->/g, "")
-      .replace(/&#x27;|&#39;/g, "'")
-      .replace(/&quot;/g, '"'),
-  );
-}
-
 async function honoFaq() {
   const res = await app.request("/faq", {}, env);
   return { res, html: await res.text() };
@@ -204,12 +169,11 @@ describe("Hono /faq contract", () => {
     expect(res.headers.get("content-type")).toContain("text/html");
     expect(res.headers.get("cache-control")).toBe("public, max-age=3600");
     expect(res.headers.getSetCookie()).toHaveLength(0);
-    expect(html).toContain('data-testid="faq-list"');
-    expect(html).toContain('data-testid="faq-join"');
-    expect(html).toContain(
-      '<div><span class="account-caption">Welcome, guest</span><a class="btn" href="/join">Join with Discord</a></div>',
-    );
-    expect(html).toContain("How do I join?");
+    const dom = contentLeafDom(html);
+    expect(dom.one("div", { "data-testid": "faq-list" })).toBeDefined();
+    expect(dom.one("a", { "data-testid": "faq-join", href: "/join" })).toBeDefined();
+    expect(dom.guestJoin()).toEqual(GUEST_JOIN);
+    expect(dom.all("h3").map(dom.text)).toContain("How do I join?");
   });
 });
 
@@ -231,77 +195,76 @@ describe("Kit /faq parity with Hono", () => {
   it("renders the identical question list", async () => {
     const kitHtml = renderPage(faqPageData(APP_URL));
     const { html: honoHtml } = await honoFaq();
-    expect(faqListOf(kitHtml)).toBe(faqListOf(honoHtml));
+    const list = { "data-testid": "faq-list" };
+    const markup = (html: string) =>
+      contentLeafDom(html)
+        .markup("div", list)
+        .replace(/&#x27;|&#39;/g, "'")
+        .replace(/&quot;/g, '"');
+    expect(markup(kitHtml)).toBe(markup(honoHtml));
   });
 
   it("keeps the semantic and a11y contract", () => {
     const html = renderPage(faqPageData(APP_URL));
-    expect(html.match(/<main(?:\s|>)/g)).toHaveLength(1);
-    expect(html).toContain('class="skip-link" href="#main"');
-    expect(html).toContain('aria-label="Primary"');
-    expect(html.match(/<link rel="canonical"/g)).toHaveLength(1);
-    expect(html).toContain(`<link rel="canonical" href="${canonicalUrl(APP_URL, "/faq")}"`);
-    expect(html).toContain('<h1 id="faq-heading">Frequently asked questions</h1>');
-    expect(html).toContain('<p class="strap">New here? Start here</p>');
-    expect(html.match(/<section aria-labelledby=/g)).toHaveLength(SECTION_IDS.length);
-    for (const id of SECTION_IDS) expect(html).toContain(`id="${id}"`);
-    for (const question of QUESTIONS) expect(html).toContain(question);
-    expect(html.match(/<div class="card">/g)).toHaveLength(QUESTION_COUNT);
-    expect(html).toContain('data-testid="faq-join"');
-    expect(html).toContain('href="/join"');
-    // Community-information nav: exactly the FAQ link is current.
-    expect(html).toContain('aria-label="Community information"');
-    expect(html).toContain('<a href="/faq" aria-current="page">FAQ</a>');
-    expect(html).not.toContain('href="/about" aria-current');
-    expect(html).not.toContain('href="/rules" aria-current');
-    expect(html).not.toContain('href="/privacy" aria-current');
-    // Header join action matches the Hono leaf's joinAction chrome byte for
-    // byte for every visitor, without a session read.
-    expect(html).toContain(
-      '<div><span class="account-caption">Welcome, guest</span><a class="btn" href="/join">Join with Discord</a></div>',
-    );
+    const dom = contentLeafDom(html);
+    expect(dom.all("main")).toHaveLength(1);
+    expect(dom.one("a", { class: "skip-link", href: "#main" })).toBeDefined();
+    expect(dom.one("nav", { "aria-label": "Primary" })).toBeDefined();
+    expect(dom.all("link", { rel: "canonical" })).toHaveLength(1);
+    expect(
+      dom.one("link", { rel: "canonical", href: canonicalUrl(APP_URL, "/faq") }),
+    ).toBeDefined();
+    expect(dom.text(dom.one("h1", { id: "faq-heading" }))).toBe("Frequently asked questions");
+    expect(dom.text(dom.one("p", { class: "strap" }))).toBe("New here? Start here");
+    const list = dom.one("div", { "data-testid": "faq-list" });
+    expect(list).toBeDefined();
+    const groups = list && dom.all("section", { "aria-labelledby": null }, list);
+    expect(groups?.map((group) => dom.attr(group, "aria-labelledby"))).toEqual(SECTION_IDS);
+    for (const id of SECTION_IDS) expect(dom.one("h2", { id })).toBeDefined();
+    expect(dom.all("h3").map(dom.text)).toEqual(QUESTIONS);
+    expect(dom.all("div", { class: "card" })).toHaveLength(QUESTION_COUNT);
+    expect(dom.one("a", { "data-testid": "faq-join", href: "/join" })).toBeDefined();
+    const nav = dom.one("nav", { "aria-label": "Community information" });
+    expect(nav).toBeDefined();
+    const current = nav && dom.all("a", { "aria-current": null }, nav);
+    expect(current).toHaveLength(1);
+    expect(dom.text(current?.[0])).toBe("FAQ");
+    expect(current?.map((link) => dom.attr(link, "href"))).toEqual(["/faq"]);
+    expect(current?.map((link) => dom.attr(link, "aria-current"))).toEqual(["page"]);
+    expect(dom.one("a", { href: "/about", "aria-current": null })).toBeUndefined();
+    expect(dom.one("a", { href: "/rules", "aria-current": null })).toBeUndefined();
+    expect(dom.one("a", { href: "/privacy", "aria-current": null })).toBeUndefined();
+    expect(dom.guestJoin()).toEqual(GUEST_JOIN);
     expect(html).not.toContain("Sign out");
   });
 
   it("keeps the markdown-alternate discovery both renderers share", async () => {
-    // The Hono leaf always emits /faq.md via the Leaf chrome (page-shell);
-    // the Kit page must too, or enabling it regresses machine discovery.
-    // Attribute-wise: Svelte SSR owns void-element serialization, not us.
-    const kit = renderPage(faqPageData(APP_URL));
-    for (const token of ['rel="alternate"', 'type="text/markdown"', 'href="/faq.md"']) {
-      expect(kit).toContain(token);
-    }
-    const { html: honoHtml } = await honoFaq();
-    for (const token of ['rel="alternate"', 'href="/faq.md"']) {
-      expect(honoHtml).toContain(token);
-    }
+    const kit = contentLeafDom(renderPage(faqPageData(APP_URL)));
+    const { html } = await honoFaq();
+    const alternate = { rel: "alternate", href: "/faq.md" };
+    expect(kit.one("link", { ...alternate, type: "text/markdown" })).toBeDefined();
+    expect(contentLeafDom(html).one("link", alternate)).toBeDefined();
   });
 
   it("renders no scripts and no secret-shaped content (no-JS page)", () => {
     const html = renderPage(faqPageData(APP_URL));
-    expect(html).not.toContain("<script");
+    expect(contentLeafDom(html).elements.some((node) => node.tagName === "script")).toBe(false);
     expect(html).not.toMatch(/__Host-two_session\s*=/);
     expect(html).not.toMatch(/DISCORD_BOT_TOKEN/i);
   });
 
   it("serves the leaf CSS with zero render-blocking stylesheet links", () => {
-    // Same served contract as the Hono leaf (test/leaf-css-drift.test.ts):
-    // the exact hash-allowlisted block, no stylesheet link, and the Hono
-    // body class so the leaf block owns the canvas. This harness renders the
-    // page without +layout.svelte, so the layout asset SvelteKit adds on the
-    // built worker is folded in through the production hook transform
-    // (transformContentLeafChunk, via dispatchHookRequest): the assertion
-    // runs on the transformed document, and ci/kit-worker-e2e.mjs pins the
-    // same contract against the real built worker.
-    const html = transformContentLeafChunk(renderPage(faqPageData(APP_URL)));
-    expect(html).toContain(`<style>${LEAF_CRITICAL_CSS}</style>`);
-    expect(html).not.toContain('rel="stylesheet"');
-    expect(html).not.toMatch(/<link(?=[^>]*rel="preload")(?=[^>]*as="style")/);
-    expect(html).toContain('<body class="base-theme content-theme">');
-    // The content shell must not lean on the stripped layout stylesheet:
-    // no Tailwind utilities in the served class attributes (the leaf block
-    // owns every styled element). Re-adding one stays green nowhere else.
-    expect(html).not.toMatch(/class="[^"]*(lobby-|font-sans)/);
+    // Apply the production hook transform before checking the CSP-allowlisted CSS bytes.
+    const dom = contentLeafDom(transformContentLeafChunk(renderPage(faqPageData(APP_URL))));
+    expect(dom.inlineStyles()).toContain(LEAF_CRITICAL_CSS);
+    expect(dom.linksWithRel("stylesheet")).toHaveLength(0);
+    expect(
+      dom.linksWithRel("preload").some((link) => dom.attr(link, "as")?.toLowerCase() === "style"),
+    ).toBe(false);
+    expect(dom.one("body", { class: "base-theme content-theme" })).toBeDefined();
+    expect(
+      dom.elements.some((node) => /lobby-|font-sans/.test(dom.attr(node, "class") ?? "")),
+    ).toBe(false);
   });
 
   it("pins the server load contract at the source level", () => {
