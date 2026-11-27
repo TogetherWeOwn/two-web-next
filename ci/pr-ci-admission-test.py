@@ -146,6 +146,13 @@ class AdmissionTest(TestCase):
             return source_scan(api, pr, current, retarget, sha)
 
         self.assertEqual(lookup(), (runs[0]["created_at"], 11, "synthetic"))
+        def cancelled_without_jobs(path):
+            return {"total_count": 0, "jobs": []} if path.startswith("actions/runs/2/") else api(path)
+
+        self.assertEqual(source_scan(cancelled_without_jobs, pr, current, "", merge_sha), lookup())
+        with patch.dict(runs[1], run_attempt=2):
+            with self.assertRaisesRegex(ValueError, "latest source run did not finish"):
+                source_scan(cancelled_without_jobs, pr, current, "", merge_sha)
         self.assertIsNone(lookup(sha="d" * 40))
         with patch.dict(runs[0], conclusion="cancelled"):
             self.assertIsNone(lookup(runs[1]["created_at"]))

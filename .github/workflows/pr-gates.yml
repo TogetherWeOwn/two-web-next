@@ -419,7 +419,10 @@ jobs:
                       if ((job["head_sha"], job["run_id"]) != (head["sha"], run_id)
                               or not 1 <= job["run_attempt"] <= run["run_attempt"]):
                           raise ValueError("Actions job identity mismatch")
-                  if metadata_jobs(jobs):
+                  # A first attempt cancelled before GitHub created any jobs has no scan verdict.
+                  cancelled_before_jobs = (not jobs and run["run_attempt"] == 1
+                                           and run["status"] == "completed" and run["conclusion"] == "cancelled")
+                  if cancelled_before_jobs or metadata_jobs(jobs):
                       continue
 
                   # A newer attempt of an older source run can block an otherwise valid result.
