@@ -192,6 +192,94 @@ test("untrusted, failed, non-main and missing deploy events fail closed", () => 
   assert.throws(() => resolveStagingCandidate({ eventName: "push", sha: A, repository }));
 });
 
+test("candidate CLI refuses a failed deploy workflow even with successful smoke-skip proof", (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "staging-candidate-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const event = join(directory, "event.json");
+  const output = join(directory, "output");
+  const requests = join(directory, "requests");
+  const preload = join(directory, "fetch.mjs");
+  const script = fileURLToPath(new URL("./staging-provenance.mjs", import.meta.url));
+  const trigger = {
+    ...run,
+    id: 55,
+    run_attempt: 2,
+    status: "completed",
+    event: "workflow_run",
+    path: ".github/workflows/deploy.yml",
+  };
+  writeFileSync(
+    join(directory, "jobs.json"),
+    JSON.stringify({
+      total_count: 1,
+      jobs: [
+        {
+          name: "deploy-staging",
+          run_id: trigger.id,
+          run_attempt: trigger.run_attempt,
+          head_sha: trigger.head_sha,
+          status: "completed",
+          conclusion: "success",
+          steps: [
+            {
+              name: "Record adjacent staging smoke skip",
+              status: "completed",
+              conclusion: "success",
+            },
+          ],
+        },
+      ],
+    }),
+  );
+  writeFileSync(
+    preload,
+    `import { appendFileSync, readFileSync } from "node:fs";
+const jobs = readFileSync(new URL("./jobs.json", import.meta.url), "utf8");
+globalThis.fetch = async (url) => {
+  appendFileSync(new URL("./requests", import.meta.url), url + "\\n");
+  return new Response(jobs);
+};
+`,
+  );
+
+  const execute = (conclusion) => {
+    writeFileSync(event, JSON.stringify({ workflow_run: { ...trigger, conclusion } }));
+    writeFileSync(output, "");
+    writeFileSync(requests, "");
+    const result = spawnSync(process.execPath, ["--import", preload, script, "candidate"], {
+      cwd: directory,
+      env: {
+        GITHUB_EVENT_NAME: "workflow_run",
+        GITHUB_EVENT_PATH: event,
+        GITHUB_OUTPUT: output,
+        GITHUB_REPOSITORY: repository,
+        GITHUB_SHA: A,
+      },
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    assert.ifError(result.error);
+    return result;
+  };
+
+  const success = execute("success");
+  assert.equal(success.status, 0, success.stderr);
+  assert.equal(readFileSync(output, "utf8"), `sha=${A}\ndeploy_smoke_scoped=true\n`);
+  assert.equal(
+    readFileSync(requests, "utf8"),
+    `https://api.github.com/repos/${repository}/actions/runs/55/attempts/2/jobs?per_page=100\n`,
+  );
+
+  const failure = execute("failure");
+  assert.equal(failure.status, 1, failure.stderr);
+  assert.equal(
+    failure.stderr,
+    "::error::Staging provenance refused; qualification is not evidence\n",
+  );
+  assert.equal(readFileSync(output, "utf8"), "");
+  assert.equal(readFileSync(requests, "utf8"), "");
+});
+
 test("manual qualification uses the exact main dispatch revision, not a deploy title", () => {
   assert.equal(
     resolveStagingCandidate({
