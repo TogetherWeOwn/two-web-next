@@ -57,6 +57,38 @@ test("fixture boundaries await closure of completed Workers and retain shared Wo
   );
 });
 
+test("parity runner awaits phase cleanup before later fixtures", () => {
+  const runner = readFileSync(new URL("./kit-worker-e2e.mjs", import.meta.url), "utf8");
+  const boundaries = [
+    ["await runInstalledLive();", "kit, hono", "const archive = await fetch("],
+    [
+      "PASS installed Worker preserves Kit-owned data redirects",
+      "kit, hono, kitWithSession, honoWithSession",
+      "const pagePaths = [",
+    ],
+    [
+      "PASS generated Worker reserved method/path parity with API families off",
+      "kitWithSession, honoWithSession",
+      'startKit("kit-event-writes-on"',
+    ],
+    [
+      "await assertEventReadsParity({",
+      "kitWithSession, honoWithSession, feedOn",
+      "await assertStaticFeedParity({",
+    ],
+    ["return { appUrl, direct, enabled };", "kitWithSession", 'startWorker("kit-auth"'],
+  ];
+  for (const [after, keep, before] of boundaries) {
+    const start = runner.indexOf(after);
+    const cleanup = runner.indexOf(`await stopCompletedWorkers(workers, [${keep}]);`, start);
+    const next = runner.indexOf(before, start);
+    assert.ok(
+      start >= 0 && start < cleanup && cleanup < next,
+      `confirm Worker closure before ${before}`,
+    );
+  }
+});
+
 test("public voice browser Worker lifecycle", async (t) => {
   const ready = ["start off", "ready off", "start enabled", "ready enabled"];
   const verified = [...ready, "verify"];
