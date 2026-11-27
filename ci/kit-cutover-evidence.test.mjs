@@ -6,6 +6,8 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { readMigrationFiles } from "drizzle-orm/migrator";
+import { calendarFixtures, joinAction, smokeFixtures } from "../test/fixtures/smoke-routes.mjs";
+import { startSmokeFixture } from "../test/helpers/smoke-http.mjs";
 import {
   LEDGER_STATES,
   STAGING_WORKER,
@@ -721,6 +723,70 @@ test("isolated cutover refuses successful smoke with no route checks", async () 
     { message: "isolated route smoke ran no checks" },
   );
   assert.deepEqual(calls, ["readiness", "smoke"]);
+});
+
+test("isolated cutover refuses a healthy smoke response from the wrong Worker version", async (t) => {
+  const prefixes = ledgerPrefixes(ledgerJournal);
+  let smokeVersion = kit;
+  const observations = [];
+  const { url, requests } = await startSmokeFixture(
+    t,
+    (path, response, headers) => {
+      if (path === "/join") response.body += joinAction;
+      if (path === "/up") {
+        // readReady sends no-cache. The ordinary-traffic smoke makes its own request.
+        const ready = headers["cache-control"] === "no-cache";
+        const version = ready ? hono : smokeVersion;
+        observations.push([ready ? "readiness" : "smoke", version]);
+        response.body = JSON.stringify({
+          ...JSON.parse(response.body),
+          migration_ledger: prefixes[1033],
+          revision: { version_id: version, commit: sourceSha },
+        });
+      }
+    },
+    calendarFixtures,
+  );
+  const log = t.mock.method(console, "log", () => {});
+  const waits = [];
+  const verify = () =>
+    verifyServed(url, prefixes, identity, hono, "1033", "hono", {
+      wait: async (ms) => {
+        waits.push(ms);
+      },
+    });
+
+  await assert.rejects(verify(), /isolated public-route smoke failed/);
+  assert.deepEqual(waits, Array(5).fill(10_000));
+  assert.deepEqual(
+    observations,
+    Array.from({ length: 6 }, () => [
+      ["readiness", hono],
+      ["smoke", kit],
+    ]).flat(),
+  );
+  const failures = log.mock.calls
+    .map(({ arguments: [line] }) => line)
+    .filter((line) => line.startsWith("FAIL "));
+  assert.deepEqual(
+    failures,
+    Array(6).fill(
+      `FAIL /up: expected revision.version_id ${hono}; actual revision.version_id ${kit}`,
+    ),
+  );
+
+  smokeVersion = hono;
+  observations.length = 0;
+  assert.equal(
+    await verify(),
+    Object.keys(smokeFixtures).length + Object.keys(calendarFixtures).length,
+  );
+  assert.deepEqual(observations, [
+    ["readiness", hono],
+    ["smoke", hono],
+  ]);
+  assert.equal(waits.length, 5);
+  assert.ok(requests.every(({ override }) => override === undefined));
 });
 
 test("isolated cutover proof requires both exact versions and six healthy transitions", () => {
