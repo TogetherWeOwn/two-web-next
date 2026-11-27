@@ -58,6 +58,17 @@ export function fallbackText(root) {
   return normalizeText(segments.join(" "));
 }
 
+export function discordGuestLinks(root) {
+  return documentElements(root, "a").filter((link) => {
+    const href = renderedAttribute(link, "href");
+    return (
+      renderedAttribute(link, "aria-label") === "Sign in with Discord" ||
+      href?.startsWith("/auth/discord") ||
+      href?.includes("/join/discord")
+    );
+  });
+}
+
 export function childText(element) {
   return element.childNodes.map((node) => node.value ?? "").join("");
 }

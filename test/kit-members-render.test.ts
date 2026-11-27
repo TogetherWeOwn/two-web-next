@@ -20,6 +20,7 @@ import {
   renderMemberBoard,
 } from "./fixtures/member-board-viewer";
 import {
+  discordGuestLinks,
   documentElements,
   element,
   elements,
@@ -260,9 +261,7 @@ describe("Kit member board render", () => {
     expect(text(page)).not.toMatch(guestCopy);
     const noScriptPage = parseRenderedPage(html, { scriptingEnabled: false });
     expect(fallbackText(noScriptPage)).not.toMatch(guestCopy);
-    expect(
-      documentElements(noScriptPage, "a").map((link) => renderedAttribute(link, "aria-label")),
-    ).not.toContain("Sign in with Discord");
+    expect(discordGuestLinks(noScriptPage)).toEqual([]);
     // The viewer's own row is marked from the server-side isViewer flag.
     const viewerRow = element(page, "tr", { "aria-current": "true" });
     expect(text(element(viewerRow, "th", { scope: "row" }))).toBe("Vic");

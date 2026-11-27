@@ -9,6 +9,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { HotzoneSignalPage, HotzonesIndexPage, renderHotzoneGrid } from "../src/hotzones/pages";
 import {
   childText,
+  discordGuestLinks,
   documentElements,
   element,
   elements,
@@ -134,9 +135,7 @@ for (const renderer of ["Hono", "Kit"]) {
         "header",
       );
       expect(fallbackText(noScriptHeader)).not.toContain("Sign in with Discord");
-      expect(
-        documentElements(noScriptHeader, "a").map((link) => renderedAttribute(link, "href")),
-      ).not.toContainEqual(expect.stringContaining("/join/discord"));
+      expect(discordGuestLinks(noScriptHeader)).toEqual([]);
     });
   });
 }
@@ -147,7 +146,9 @@ it("queries visible header actions across hydration comments", () => {
       <div hidden><a href="/discord">Hidden action</a></div>
       <template><a href="/discord">Template action</a></template>
       <!-- <a href="/discord">Comment action</a> -->
-      <noscript><a href="/join/discord">Sign in with <strong>Discord</strong></a></noscript>
+      <noscript><a href="/join/discord">Sign in with <strong>Discord</strong></a>
+        <a href="/auth/discord?next=%2Fhotzones" aria-label="Sign in with Discord">Sign in</a>
+      </noscript>
       <a href='/discord' class='action'><!--[-->Open Dis<!---->cord<!--]--></a>
     </header>
   `;
@@ -156,8 +157,9 @@ it("queries visible header actions across hydration comments", () => {
   expect(text(element(header, "a", { href: "/discord" }))).toBe("Open Discord");
   expect(text(header)).toBe("Open Discord");
   const fallback = element(parseRenderedPage(html, { scriptingEnabled: false }), "header");
-  expect(fallbackText(fallback)).toBe("Sign in with Discord");
-  expect(documentElements(fallback, "a").map((link) => renderedAttribute(link, "href"))).toContain(
+  expect(fallbackText(fallback)).toContain("Sign in with Discord");
+  expect(discordGuestLinks(fallback).map((link) => renderedAttribute(link, "href"))).toEqual([
     "/join/discord",
-  );
+    "/auth/discord?next=%2Fhotzones",
+  ]);
 });

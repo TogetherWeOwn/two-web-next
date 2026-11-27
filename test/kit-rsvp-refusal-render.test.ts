@@ -20,6 +20,7 @@ import {
 } from "../src/events/rsvp-refusal";
 import {
   childText,
+  discordGuestLinks,
   documentElements,
   element,
   elements,
@@ -55,9 +56,7 @@ function guestChrome(html: string) {
     guestCaption: [text(page), fallbackText(page), ...responseValues(page, html)].some((value) =>
       value.includes("Welcome, guest"),
     ),
-    joinLink: documentElements(page, "a").some((link) =>
-      renderedAttribute(link, "href")?.startsWith("/join/discord"),
-    ),
+    guestLink: discordGuestLinks(page).length > 0,
   };
 }
 
@@ -170,7 +169,7 @@ describe("Kit RSVP refusal presentation", () => {
     const chrome = guestChrome(html);
     expect(chrome.accountNav).toBe(false);
     expect(chrome.guestCaption).toBe(false);
-    expect(chrome.joinLink).toBe(false);
+    expect(chrome.guestLink).toBe(false);
     expect(text(element(page, "a", { href: "#main" }))).toBe("Skip to content");
     expect(elements(page, "main", { id: "main" })).toHaveLength(1);
   });
@@ -178,11 +177,11 @@ describe("Kit RSVP refusal presentation", () => {
   it("detects guest chrome in a no-script fallback", () => {
     const html = `<body><noscript><nav aria-label="Account">Welcome, <!---->guest
       <a href="/join/discord">Join</a></nav></noscript></body>`;
-    expect(guestChrome(html)).toEqual({ accountNav: true, guestCaption: true, joinLink: true });
+    expect(guestChrome(html)).toEqual({ accountNav: true, guestCaption: true, guestLink: true });
   });
 
   it("detects a standalone no-script guest caption split across nodes", () => {
     const html = "<body><noscript>Welcome, <strong>guest</strong></noscript></body>";
-    expect(guestChrome(html)).toEqual({ accountNav: false, guestCaption: true, joinLink: false });
+    expect(guestChrome(html)).toEqual({ accountNav: false, guestCaption: true, guestLink: false });
   });
 });

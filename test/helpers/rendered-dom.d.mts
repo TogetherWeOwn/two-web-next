@@ -15,5 +15,6 @@ export function text(node: Node): string;
 export function rowCells(row: Element): Element[];
 export function documentElements(root: Node, tag: string): Element[];
 export function fallbackText(root: Node): string;
+export function discordGuestLinks(root: Node): Element[];
 export function childText(element: Element): string;
 export function responseValues(root: Node, html: string): string[];
