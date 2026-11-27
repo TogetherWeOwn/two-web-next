@@ -102,10 +102,8 @@ for (const failure of ["validation", "recording"]) {
     fakeControls.set(database.href, (connectOptions) => {
       assert.equal(connectOptions.max, 1);
       assert.equal(connectOptions.prepare, false);
-      function sql(strings, ...values) {
-        if (typeof strings === "string") return { identifier: strings };
-        const [resource, login] = values;
-        switch (strings.join("?").replace(/\s+/g, " ").trim()) {
+      function execute(statement, [resource, login]) {
+        switch (statement) {
           case "DROP DATABASE IF EXISTS ? WITH (FORCE)":
             assert.equal(typeof resource?.identifier, "string");
             assert.equal(databases.delete(resource.identifier), true);
@@ -124,6 +122,18 @@ for (const failure of ["validation", "recording"]) {
           default:
             assert.fail("unexpected SQL in isolated cleanup fixture");
         }
+      }
+      function sql(strings, ...values) {
+        if (typeof strings === "string") return { identifier: strings };
+        const statement = strings.join("?").replace(/\s+/g, " ").trim();
+        // Postgres tagged queries execute only once they are awaited or explicitly run.
+        return {
+          then(resolve, reject) {
+            return Promise.resolve()
+              .then(() => execute(statement, values))
+              .then(resolve, reject);
+          },
+        };
       }
       sql.end = async (endOptions) => {
         controlEnds.push(endOptions);
