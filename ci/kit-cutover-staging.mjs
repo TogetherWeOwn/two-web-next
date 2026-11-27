@@ -37,14 +37,14 @@ const cutoverProfile = process.env.CUTOVER_PROFILE || "all-off";
 const ember = cutoverProfile === "ember";
 const admin = cutoverProfile === "admin";
 const baseline = admin ? "ember" : "hono";
-const MAX_WORKERS_GET_BYTES = 1024 * 1024;
+const MAX_WORKERS_RESPONSE_BYTES = 1024 * 1024;
 
 function cancelBody(stream) {
   // Disposal can fail after an abort. Keep the status or reader error authoritative.
   void stream?.cancel().catch(() => undefined);
 }
 
-async function readWorkersGet(response) {
+async function readWorkersResponse(response, { settings, strictUtf8 }) {
   if (!response.ok) {
     cancelBody(response.body);
     if (response.status === 404) return null;
@@ -53,7 +53,7 @@ async function readWorkersGet(response) {
 
   assert.ok(response.body, "staging Workers API response body missing");
   const reader = response.body.getReader();
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder("utf-8", { fatal: strictUtf8 });
   let bytes = 0;
   let text = "";
   try {
@@ -61,7 +61,7 @@ async function readWorkersGet(response) {
       const { done, value } = await reader.read();
       if (done) break;
       bytes += value.byteLength;
-      if (bytes > MAX_WORKERS_GET_BYTES) break;
+      if (bytes > MAX_WORKERS_RESPONSE_BYTES) break;
       text += decoder.decode(value, { stream: true });
     }
   } catch {
@@ -70,7 +70,7 @@ async function readWorkersGet(response) {
     cancelBody(reader);
     reader.releaseLock();
   }
-  assert.ok(bytes <= MAX_WORKERS_GET_BYTES, "staging Workers API response too large");
+  assert.ok(bytes <= MAX_WORKERS_RESPONSE_BYTES, "staging Workers API response too large");
 
   let body;
   try {
@@ -79,6 +79,13 @@ async function readWorkersGet(response) {
     throw new Error("staging Workers API response was not valid JSON");
   }
   assert.ok(body?.success === true, "staging Workers API returned an error");
+  // Only HTTP 404 proves that the script is absent.
+  if (settings) {
+    assert.ok(
+      body.result && typeof body.result === "object" && !Array.isArray(body.result),
+      "staging Workers API returned invalid settings",
+    );
+  }
   return body.result;
 }
 
@@ -92,6 +99,8 @@ export function cloudflare({
     "missing staging Cloudflare credentials",
   );
   return async (path, method = "GET") => {
+    const settings = method === "GET" && /^scripts\/[^/]+\/settings$/.test(path);
+    const readback = settings || method === "DELETE";
     const response = await fetchImpl(
       `https://api.cloudflare.com/client/v4/accounts/${account}/workers/${path}`,
       {
@@ -100,13 +109,11 @@ export function cloudflare({
         redirect: "error",
         signal: AbortSignal.timeout(10_000),
       },
-    );
-    if (method === "GET") return readWorkersGet(response);
-    if (response.status === 404) return null;
-    assert.ok(response.ok, "staging Workers API refused the request");
-    const body = await response.json();
-    assert.equal(body.success, true, "staging Workers API returned an error");
-    return body.result;
+    ).catch((error) => {
+      if (readback) throw new Error("staging Workers API request failed");
+      throw error;
+    });
+    return readWorkersResponse(response, { settings, strictUtf8: readback });
   };
 }
 
@@ -224,7 +231,7 @@ export async function cleanup({ claim, worker, names }, api, database) {
   try {
     if ((await api(`${target}/settings`)) !== null) {
       await api(target, "DELETE");
-      assert.equal(await api(`${target}/settings`), null, "isolated Worker cleanup failed");
+      assert.ok((await api(`${target}/settings`)) === null, "isolated Worker cleanup failed");
     }
   } finally {
     await removeFixture(database, names);
@@ -371,7 +378,7 @@ async function qualify(dir, proofPath, ctx) {
   const subdomain = (await api("subdomain"))?.subdomain;
   assert.match(subdomain ?? "", /^[a-z0-9][a-z0-9-]{0,62}$/);
   const origin = `https://${worker}.${subdomain}.workers.dev`;
-  assert.equal(await api(`scripts/${worker}/settings`), null, "isolated script already exists");
+  assert.ok((await api(`scripts/${worker}/settings`)) === null, "isolated script already exists");
   await rehearseIsolatedCutover(
     dir,
     proofPath,

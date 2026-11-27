@@ -53,6 +53,118 @@ const ledgerJournal = [
 
 const inputs = await sourceInputs();
 
+test("isolated Worker settings and deletion readback uses bounded offline streams", async (t) => {
+  const account = "a".repeat(32);
+  const token = "synthetic";
+  const script = "scripts/synthetic-worker";
+  const settings = `${script}/settings`;
+  const base = `https://api.cloudflare.com/client/v4/accounts/${account}/workers/`;
+  const limit = 1024 * 1024;
+  const result = { bindings: [{ name: "FIXTURE", type: "plain_text", text: "Épreuve" }] };
+  const encode = (value) => new TextEncoder().encode(JSON.stringify(value));
+  const envelope = encode({ success: true, result });
+  const split = envelope.indexOf(0xc3) + 1;
+  const chunks = [envelope.subarray(0, split), envelope.subarray(split)];
+  const padding = new Uint8Array(limit - envelope.byteLength).fill(32);
+  const fixture = (chunks, status = 200) => {
+    let pulls = 0;
+    let cancelled = false;
+    const body = new ReadableStream(
+      {
+        pull(controller) {
+          const chunk = chunks[pulls++];
+          if (chunk) controller.enqueue(chunk);
+          else controller.close();
+        },
+        cancel() {
+          cancelled = true;
+          // A stalled cancellation must never delay a verdict.
+          return new Promise(() => {});
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    return {
+      response: new Response(body, { status }),
+      state: () => ({ pulls, cancelled, locked: body.locked }),
+    };
+  };
+  const offlineApi = (method, path, respond) =>
+    cloudflare({
+      account,
+      token,
+      fetchImpl: async (url, options) => {
+        assert.equal(url, `${base}${path}`);
+        assert.equal(options.method, method);
+        assert.equal(options.headers.Authorization, `Bearer ${token}`);
+        assert.equal(options.redirect, "error");
+        assert.ok(options.signal instanceof AbortSignal);
+        return respond(options.signal);
+      },
+    });
+
+  const timeout = t.mock.method(AbortSignal, "timeout");
+  const existing = fixture([...chunks, padding]);
+  assert.deepEqual(await offlineApi("GET", settings, () => existing.response)(settings), result);
+  const deleted = fixture([encode({ success: true, result: null })]);
+  assert.equal(await offlineApi("DELETE", script, () => deleted.response)(script, "DELETE"), null);
+
+  for (const [method, path] of [
+    ["DELETE", script],
+    ["GET", settings],
+  ]) {
+    const request = (respond) => offlineApi(method, path, respond)(path, method);
+    const oversized = fixture([...chunks, padding, Uint8Array.of(32)]);
+    await assert.rejects(
+      request(() => oversized.response),
+      {
+        message: "staging Workers API response too large",
+      },
+    );
+    assert.deepEqual(oversized.state(), { pulls: 4, cancelled: true, locked: false });
+
+    const missing = fixture([], 404);
+    assert.equal(await request(() => missing.response), null);
+    assert.deepEqual(missing.state(), { pulls: 0, cancelled: true, locked: false });
+
+    const refused = fixture([], 502);
+    for (const [response, message] of [
+      [fixture([]).response, "staging Workers API response was not valid JSON"],
+      [
+        fixture([new TextEncoder().encode("synthetic private response")]).response,
+        "staging Workers API response was not valid JSON",
+      ],
+      [fixture([Uint8Array.of(0xff)]).response, "staging Workers API response could not be read"],
+      [refused.response, "staging Workers API refused the request"],
+      [
+        fixture([encode({ success: "synthetic private response" })]).response,
+        "staging Workers API returned an error",
+      ],
+    ]) {
+      await assert.rejects(
+        request(() => response),
+        { message },
+      );
+    }
+    assert.deepEqual(refused.state(), { pulls: 0, cancelled: true, locked: false });
+    await assert.rejects(
+      request(() => {
+        throw new Error("synthetic private transport error");
+      }),
+      { message: "staging Workers API request failed" },
+    );
+  }
+  assert.deepEqual(existing.state(), { pulls: 4, cancelled: false, locked: false });
+  assert.deepEqual(deleted.state(), { pulls: 2, cancelled: false, locked: false });
+
+  const missingResult = fixture([encode({ success: true, result: null })]);
+  await assert.rejects(offlineApi("GET", settings, () => missingResult.response)(settings), {
+    message: "staging Workers API returned invalid settings",
+  });
+  assert.ok(timeout.mock.calls.length > 0);
+  for (const call of timeout.mock.calls) assert.deepEqual(call.arguments, [10_000]);
+});
+
 test("packaging refuses installed Kit asset drift after parity", async (t) => {
   const scratch = await mkdtemp(join(tmpdir(), "cutover-packaging-test-"));
   t.after(() => rm(scratch, { recursive: true, force: true }));
