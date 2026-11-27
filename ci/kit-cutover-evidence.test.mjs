@@ -414,6 +414,59 @@ test("isolated cutover cleanup CLI reports each failure and keeps the claim for 
   }
 });
 
+test("cutover inventory bounds entries across directories even for tiny files", async (t) => {
+  const scratch = await mkdtemp(join(tmpdir(), "cutover-inventory-count-"));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  assert.deepEqual(await inventory(scratch), {});
+  const invalidName = join(scratch, "bad name");
+  await writeFile(invalidName, "x");
+  await assert.rejects(inventory(scratch), /unsafe cutover asset name/);
+  await rm(invalidName);
+
+  const fileDigest = sha256("x");
+  const expected = {};
+  for (const directory of ["assets", "modules"]) {
+    await mkdir(join(scratch, directory));
+    for (let index = 0; index < 255; index += 1) {
+      const name = `${directory}/file-${index}`;
+      await writeFile(join(scratch, name), "x");
+      expected[name] = fileDigest;
+    }
+  }
+  // Two directories and 510 one-byte files use all 512 entries.
+  assert.deepEqual(await inventory(scratch), expected);
+
+  const extra = join(scratch, "assets", "extra");
+  await writeFile(extra, "x");
+  await assert.rejects(inventory(scratch), /cutover package entry count limit/);
+  await rm(extra);
+  await mkdir(extra);
+  await assert.rejects(inventory(scratch), /cutover package entry count limit/);
+
+  await writeFile(join(scratch, "assets", "one-more"), "x");
+  const { default: fs } = await import("node:fs/promises");
+  const { syncBuiltinESMExports } = await import("node:module");
+  const openDirectory = fs.opendir;
+  let entriesRead = 0;
+  const probe = t.mock.method(fs, "opendir", async (path) => {
+    const directory = await openDirectory(path);
+    return (async function* () {
+      for await (const entry of directory) {
+        entriesRead += 1;
+        yield entry;
+      }
+    })();
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(inventory(scratch), /cutover package entry count limit/);
+    assert.equal(entriesRead, 513);
+  } finally {
+    probe.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
+
 async function writePacketFixture(dir, extraNames = []) {
   for (const profile of ["hono", "kit"]) {
     await mkdir(join(dir, profile, "modules"), { recursive: true });
