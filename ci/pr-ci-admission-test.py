@@ -187,6 +187,12 @@ class AdmissionTest(TestCase):
         self.assertEqual(lookup(stamp), (stamp, 51, "synthetic"))
         self.assertIsNone(lookup(stamp, sha="d" * 40))
 
+        live = dict(pr, state="open", merge_commit_sha=merge_sha)
+        scan_scope["verify_current"](lambda _: live, pr, merge_sha)
+        live["merge_commit_sha"] = "d" * 40
+        with self.assertRaisesRegex(ValueError, "merge revision changed"):
+            scan_scope["verify_current"](lambda _: live, pr, merge_sha)
+
         latest_retarget = scan_scope["latest_retarget"]
         self.assertEqual(latest_retarget(lambda _: [], 4), "")
         ignored_events = [{"event": "commented"}] * 100

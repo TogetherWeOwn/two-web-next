@@ -324,6 +324,10 @@ write_allowlist_config
 pr_commit
 expect "merge_group: allowlist added in .gitleaks.toml does not silence the scan" 1 \
   "$(scan_rc merge_group refs/heads/main)"
+queue_base="$(git -C "${repo}" rev-parse HEAD^1)"
+git -C "${repo}" update-ref refs/remotes/origin/main HEAD
+expect "merge_group: an advanced base ref cannot replace the pinned policy" 1 \
+  "$(POLICY_REVISION="${queue_base}" scan_rc merge_group refs/heads/main)"
 
 new_repo mg-ignore
 write_stock_config

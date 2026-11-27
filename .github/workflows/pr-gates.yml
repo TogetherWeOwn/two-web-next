@@ -362,6 +362,13 @@ jobs:
                       base["ref"], base["repo"]["id"])
 
 
+          def verify_current(api, pr, merge_sha):
+              live = api(f"pulls/{pr['number']}")
+              if (live["state"] != "open" or identity(live) != identity(pr)
+                      or live["merge_commit_sha"] != merge_sha):
+                  raise ValueError("The pull request head, target, or merge revision changed")
+
+
           def collection(api, path, key):
               result = api(path + "&per_page=100")
               rows = result[key]
@@ -458,20 +465,14 @@ jobs:
               def api(path):
                   return json.loads(subprocess.check_output(["gh", "api", f"repos/{repo}/{path}"], timeout=15))
 
-              def verify_current():
-                  live = api(f"pulls/{pr['number']}")
-                  if (live["state"] != "open" or identity(live) != identity(pr)
-                          or live["merge_commit_sha"] != merge_sha):
-                      raise ValueError("The pull request head, target, or merge revision changed")
-
               deadline = time.monotonic() + 360
               while time.monotonic() < deadline:
-                  verify_current()
+                  verify_current(api, pr, merge_sha)
                   retarget = latest_retarget(api, pr["number"])
                   proof = source_scan(api, pr, run_id, retarget, merge_sha)
                   if (proof and proof == source_scan(api, pr, run_id, retarget, merge_sha)
                           and retarget == latest_retarget(api, pr["number"])):
-                      verify_current()
+                      verify_current(api, pr, merge_sha)
                       print(f"Verified source scan on {pr['head']['sha']}: {proof[2]}")
                       return
                   time.sleep(15)
