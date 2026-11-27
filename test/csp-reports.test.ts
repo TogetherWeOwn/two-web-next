@@ -143,14 +143,14 @@ describe("POST /csp-reports sink (TOG-10107)", () => {
     });
   });
 
-  it("cancels on the first over-cap chunk despite a lying content-length", async () => {
+  it("cancels one byte over the stream cap despite a lying content-length", async () => {
     let pulls = 0;
     const cancel = vi.fn();
     const stream = new ReadableStream(
       {
         pull(controller) {
           pulls += 1;
-          controller.enqueue(new TextEncoder().encode("y".repeat(1024)));
+          controller.enqueue(new Uint8Array(pulls <= 8 ? MAX_CSP_REPORT_BYTES / 8 : 1));
         },
         cancel,
       },
@@ -163,7 +163,7 @@ describe("POST /csp-reports sink (TOG-10107)", () => {
       duplex: "half",
     } as RequestInit);
     const capped = await readCappedBody(req);
-    expect(capped).toEqual({ text: "", truncated: true, bytes: 9 * 1024 });
+    expect(capped).toEqual({ text: "", truncated: true, bytes: MAX_CSP_REPORT_BYTES + 1 });
     // Eight chunks fit exactly; the ninth detects overflow, then no more pulls.
     expect(pulls).toBe(9);
     expect(cancel).toHaveBeenCalledOnce();
@@ -210,11 +210,37 @@ describe("POST /csp-reports sink (TOG-10107)", () => {
     await req.body?.cancel();
   });
 
-  it("accepts a body exactly at the cap", async () => {
+  it("accepts a body whose declared length is exactly at the cap", async () => {
     const body = "x".repeat(MAX_CSP_REPORT_BYTES);
-    const req = new Request("https://next.example.test/csp-reports", { method: "POST", body });
+    const req = new Request("https://next.example.test/csp-reports", {
+      method: "POST",
+      body,
+      headers: { "content-length": String(MAX_CSP_REPORT_BYTES) },
+    });
     expect(await readCappedBody(req)).toEqual({
       text: body,
+      truncated: false,
+      bytes: MAX_CSP_REPORT_BYTES,
+    });
+  });
+
+  it("accepts multiple chunks whose total is exactly at the cap", async () => {
+    const prefix = "x".repeat(MAX_CSP_REPORT_BYTES - 1);
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(prefix));
+        controller.enqueue(encoder.encode("y"));
+        controller.close();
+      },
+    });
+    const req = new Request("https://next.example.test/csp-reports", {
+      method: "POST",
+      body,
+      duplex: "half",
+    } as RequestInit);
+    expect(await readCappedBody(req)).toEqual({
+      text: `${prefix}y`,
       truncated: false,
       bytes: MAX_CSP_REPORT_BYTES,
     });

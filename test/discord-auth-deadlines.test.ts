@@ -398,31 +398,32 @@ describe("Discord auth deadlines", () => {
   });
 
   it.each([
-    ["single chunk over cap", DISCORD_HTTP_MAX_RESPONSE_BYTES + 1, 1],
-    ["multi-chunk over cap", Math.floor(DISCORD_HTTP_MAX_RESPONSE_BYTES / 2) + 1, 3],
-  ])("caps %s and classifies as provider rejection", async (_name, chunkSize, chunkCount) => {
-    const chunks: Uint8Array[] = [];
-    for (let i = 0; i < chunkCount; i++) {
-      chunks.push(new Uint8Array(chunkSize));
-    }
+    ["single chunk", [DISCORD_HTTP_MAX_RESPONSE_BYTES + 1]],
+    ["multiple chunks", [DISCORD_HTTP_MAX_RESPONSE_BYTES - 1, 2]],
+  ])("caps %s one byte over the limit", async (_name, chunkSizes) => {
     const cancel = vi.fn();
     const body = new ReadableStream<Uint8Array>({
       start(c) {
-        for (const chunk of chunks) c.enqueue(chunk);
-        // Leave single-chunk bodies open so the overflow cancel is observable:
-        // a pre-closed stream never invokes its cancel callback, unlike a real
-        // network body that is still open when the cap trips.
-        if (chunkCount > 1) c.close();
+        for (const size of chunkSizes) c.enqueue(new Uint8Array(size));
+        // Leave the stream open so the overflow cancel is observable.
       },
       cancel,
     });
     const res = await discordFetch(
       "https://example.test",
       {},
-      vi.fn(async () => new Response(body, { status: 200, statusText: "OK" })),
+      vi.fn(
+        async () =>
+          new Response(body, {
+            status: 200,
+            statusText: "OK",
+            headers: { "content-type": "application/json" },
+          }),
+      ),
     );
     expect(res.status).toBe(200);
     expect(res.statusText).toBe("OK");
+    expect(res.headers.get("content-type")).toBe("application/json");
     expect(await res.text()).toBe("");
     expect(body.locked).toBe(false);
     // Overflow must cancel the reader to stop the download and free the
@@ -432,16 +433,17 @@ describe("Discord auth deadlines", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("preserves exact-cap boundary and under-cap multi-chunk bodies byte-for-byte", async () => {
-    const exactCap = new Uint8Array(DISCORD_HTTP_MAX_RESPONSE_BYTES);
-    exactCap.fill(0xab);
+  it("preserves exact-cap and under-cap multi-chunk bodies byte-for-byte", async () => {
+    const exactCapPrefix = new Uint8Array(DISCORD_HTTP_MAX_RESPONSE_BYTES - 1);
+    exactCapPrefix.fill(0xab);
     const underCapChunk1 = new Uint8Array(1024);
     underCapChunk1.fill(0xcd);
     const underCapChunk2 = new Uint8Array(2048);
     underCapChunk2.fill(0xef);
     const bodyExact = new ReadableStream<Uint8Array>({
       start(c) {
-        c.enqueue(exactCap);
+        c.enqueue(exactCapPrefix);
+        c.enqueue(new Uint8Array([0xcd]));
         c.close();
       },
     });
@@ -460,7 +462,8 @@ describe("Discord auth deadlines", () => {
     expect(resExact.status).toBe(200);
     const bytesExact = new Uint8Array(await resExact.arrayBuffer());
     expect(bytesExact.byteLength).toBe(DISCORD_HTTP_MAX_RESPONSE_BYTES);
-    expect(bytesExact.every((b) => b === 0xab)).toBe(true);
+    expect(bytesExact.subarray(0, -1).every((b) => b === 0xab)).toBe(true);
+    expect(bytesExact.at(-1)).toBe(0xcd);
 
     const resUnder = await discordFetch(
       "https://example.test/under",
