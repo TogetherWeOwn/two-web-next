@@ -1,4 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { parseEventListQuery } from "../src/admin/event-list";
+import { parseFeaturedListQuery } from "../src/admin/featured-list-query";
+import {
+  parseActivityLogQuery,
+  parseJoinAttemptsQuery,
+  parseRosterQuery,
+} from "../src/admin/table-list";
+import { parseFeedGameScope } from "../src/events/feeds";
 import { limitRequestBody } from "../src/http/body-limit";
 import {
   exceedsByteLimit,
@@ -40,6 +48,27 @@ describe("inclusive length limits", () => {
     expect(exceedsByteLimit(Number.NaN, 6)).toBe(false);
     expect(exceedsUtf8ByteLimit("é😀", Number.NaN)).toBe(false);
     expect(fitsUtf8ByteLimit("é😀", Number.NaN)).toBe(false);
+  });
+});
+
+describe("query text length limits", () => {
+  it.each([
+    ["event search", (q: string) => parseEventListQuery({ q }).q],
+    ["featured search", (q: string) => parseFeaturedListQuery({ q }).q],
+    ["roster search", (roster_q: string) => parseRosterQuery({ roster_q }).q],
+    ["join attempts search", (q: string) => parseJoinAttemptsQuery({ q }).q],
+    ["activity log subject", (subject: string) => parseActivityLogQuery({ subject }).subject],
+    ["activity log causer", (causer: string) => parseActivityLogQuery({ causer }).causer],
+  ])("bounds %s at 128 UTF-16 code units after normalization", (_filter, parse) => {
+    const atLimit = "😀".repeat(64);
+    expect(parse(`\u0000 ${atLimit} `)).toBe(atLimit);
+    expect(parse(`\u0000 ${atLimit}x `)).toBe("");
+  });
+
+  it("accepts a trimmed feed game scope at 100 code points and refuses 101", () => {
+    const atLimit = "😀".repeat(100);
+    expect(parseFeedGameScope(` ${atLimit} `)).toBe(atLimit);
+    expect(parseFeedGameScope(` ${atLimit}😀 `)).toBeUndefined();
   });
 });
 

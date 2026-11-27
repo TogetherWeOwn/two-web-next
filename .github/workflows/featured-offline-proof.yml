@@ -82,6 +82,7 @@ jobs:
             "src/admin/table-list.ts" \
             "src/admin/event-list.ts" \
             "src/admin/featured-list-query.ts" \
+            "src/http/length-limit.ts" \
             "src/db/admin-schema.ts" \
             "src/db/schema.ts" \
             "src/featured.ts" \

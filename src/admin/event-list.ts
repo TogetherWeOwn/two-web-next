@@ -1,3 +1,5 @@
+import { exceedsCodeUnitLimit } from "../http/length-limit";
+
 export const EVENT_PAGE_SIZE = 25;
 
 export type EventSort = "title" | "starts_at" | "status";
@@ -18,7 +20,7 @@ export type EventListParams = Partial<Record<keyof EventListQuery, string>>;
 // (NULs stripped, then trimmed); overlong falls back to absent, never truncated.
 const EVENT_FREE_TEXT_MAX_LENGTH = 128;
 const boundEventFreeText = (value: string): string =>
-  value.length > EVENT_FREE_TEXT_MAX_LENGTH ? "" : value;
+  exceedsCodeUnitLimit(value, EVENT_FREE_TEXT_MAX_LENGTH) ? "" : value;
 
 /** Same-title rows on one page: only those accessible names take the ISO suffix (§4a). */
 export function pageTitleDuplicates(rows: readonly { title: string }[]): Set<string> {
