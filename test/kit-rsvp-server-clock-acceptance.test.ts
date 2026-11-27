@@ -14,6 +14,14 @@ import type { Env } from "../src/env";
 import { resolveKitEventDetail, type KitEventDetailStore } from "../src/events/kit-detail";
 import type { PublicEvent } from "../src/events/reads";
 import type { KitRequestSession } from "../src/kit-session";
+import { visibleText } from "./helpers/event-ongoing-acceptance";
+import {
+  attribute,
+  document,
+  elements,
+  tag,
+  testId,
+} from "./helpers/schedule-search-context-acceptance";
 
 const APP_URL = "https://next.example.test";
 const KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -184,23 +192,30 @@ async function renderAt(
   if (outcome.kind === "ok") {
     return {
       kind: outcome.kind,
-      html: renderDetail(outcome.model as unknown as Record<string, unknown>),
+      page: document(renderDetail(outcome.model as unknown as Record<string, unknown>)),
     };
   }
   if (outcome.kind === "gone") {
     return {
       kind: outcome.kind,
-      html: renderGone(outcome.model as unknown as Record<string, unknown>),
+      page: document(renderGone(outcome.model as unknown as Record<string, unknown>)),
     };
   }
   throw new Error(`expected event presentation, got ${outcome.kind}`);
 }
 
-function expectNoRsvpAction(html: string) {
-  expect(html).not.toContain('data-testid="rsvp-going"');
-  expect(html).not.toContain('data-testid="waitlist-join"');
-  expect(html).not.toContain('data-testid="rsvp-withdraw"');
-  expect(html).not.toContain(`action="${PATH}/rsvp"`);
+function expectNoRsvpAction(page: ReturnType<typeof document>) {
+  expect(testId(page, "rsvp-going")).toHaveLength(0);
+  expect(testId(page, "waitlist-join")).toHaveLength(0);
+  expect(testId(page, "rsvp-withdraw")).toHaveLength(0);
+  expect(
+    elements(
+      page,
+      (element) =>
+        attribute(element, "action") === `${PATH}/rsvp` ||
+        attribute(element, "formaction") === `${PATH}/rsvp`,
+    ),
+  ).toHaveLength(0);
 }
 
 describe("Kit RSVP closure uses the server render clock", () => {
@@ -213,22 +228,33 @@ describe("Kit RSVP closure uses the server render clock", () => {
       viewer: AFTER_END,
     },
   ])("$name", async ({ server, viewer }) => {
-    const { kind, html } = await renderAt(server, viewer);
+    const { kind, page } = await renderAt(server, viewer);
     expect(kind).toBe("ok");
-    expect(html).toContain('data-testid="event-past"');
-    expect(html).toContain("Sign-up record");
-    expectNoRsvpAction(html);
+    const [record] = testId(page, "event-past");
+    expect(record).toBeDefined();
+    expect(tag(record!, "h2").map(visibleText)).toContain("Sign-up record");
+    expectNoRsvpAction(page);
   });
 
   it.each(["published", "past"] as const)(
     "keeps the ended %s record and inert RSVP in moderator preview",
     async (status) => {
-      const { kind, html } = await renderAt(AFTER_END, BEFORE_END, status, true);
+      const { kind, page } = await renderAt(AFTER_END, BEFORE_END, status, true);
       expect(kind).toBe("ok");
-      expect(html).toContain('id="signup-record-heading"');
-      expect(html).toContain('disabled="" aria-describedby="preview-rsvp-hint"');
-      expect(html).toContain('id="preview-rsvp-hint">RSVP is disabled in preview.');
-      expectNoRsvpAction(html);
+      const heading = tag(page, "h2").find(
+        (node) => attribute(node, "id") === "signup-record-heading",
+      );
+      expect(heading).toBeDefined();
+      const button = tag(page, "button").find(
+        (node) =>
+          attribute(node, "aria-describedby") === "preview-rsvp-hint" &&
+          attribute(node, "disabled") !== undefined,
+      );
+      expect(button).toBeDefined();
+      const [hint] = elements(page, (node) => attribute(node, "id") === "preview-rsvp-hint");
+      expect(hint).toBeDefined();
+      expect(visibleText(hint!)).toBe("RSVP is disabled in preview.");
+      expectNoRsvpAction(page);
     },
   );
 
@@ -236,27 +262,28 @@ describe("Kit RSVP closure uses the server render clock", () => {
     { name: "a fast viewer cannot close a still-open event", viewer: AFTER_END },
     { name: "a still-open event stays open with matching clocks", viewer: BEFORE_END },
   ])("$name", async ({ viewer }) => {
-    const { kind, html } = await renderAt(BEFORE_END, viewer);
+    const { kind, page } = await renderAt(BEFORE_END, viewer);
     expect(kind).toBe("ok");
-    expect(html).toContain('data-testid="rsvp-going"');
-    expect(html).toContain(`action="${PATH}/rsvp"`);
-    expect(html).not.toContain('data-testid="rsvp-closed"');
+    const form = tag(page, "form").find((node) => attribute(node, "action") === `${PATH}/rsvp`);
+    expect(form).toBeDefined();
+    expect(testId(form!, "rsvp-going").some((node) => node.tagName === "button")).toBe(true);
+    expect(testId(page, "rsvp-closed")).toHaveLength(0);
   });
 
   it.each(["draft", "past"] as const)(
     "%s stays closed before the end on both clocks",
     async (status) => {
-      const { kind, html } = await renderAt(BEFORE_END, BEFORE_END, status);
+      const { kind, page } = await renderAt(BEFORE_END, BEFORE_END, status);
       expect(kind).toBe("ok");
-      expect(html).toContain('data-testid="rsvp-closed"');
-      expectNoRsvpAction(html);
+      expect(testId(page, "rsvp-closed").length).toBeGreaterThan(0);
+      expectNoRsvpAction(page);
     },
   );
 
   it("cancelled stays closed before the end on both clocks", async () => {
-    const { kind, html } = await renderAt(BEFORE_END, BEFORE_END, "cancelled");
+    const { kind, page } = await renderAt(BEFORE_END, BEFORE_END, "cancelled");
     expect(kind).toBe("gone");
-    expect(html).toContain('data-testid="event-cancelled"');
-    expectNoRsvpAction(html);
+    expect(testId(page, "event-cancelled").length).toBeGreaterThan(0);
+    expectNoRsvpAction(page);
   });
 });

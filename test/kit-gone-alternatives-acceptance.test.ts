@@ -17,6 +17,8 @@ import type { Env } from "../src/env";
 import type { EventLink, PublicEvent } from "../src/events/reads";
 import { resolveEventState, type EventStateStore } from "../src/kit-event-states";
 import app from "./app";
+import { visibleText } from "./helpers/event-ongoing-acceptance";
+import { attribute, document, tag, testId } from "./helpers/schedule-search-context-acceptance";
 
 const APP_URL = "https://next.example.test";
 const KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -202,53 +204,19 @@ async function honoGone() {
   } as unknown as Env);
 }
 
-// Visible-text extractor that never builds a rewritten copy of the markup: walk
-// angle-bracket tags and keep only the text runs between them. Exactly
-// equivalent to stripping /<[^>]+>/g (unterminated "<..." and empty "<>" are
-// kept literally), but CodeQL does not read it as an incomplete sanitizer
-// (cf. the token-walking skip in
-// test/kit-join-attempt-detail-pairing-acceptance.test.mjs).
-function textContent(inner: string): string {
-  let out = "";
-  let index = 0;
-  while (index < inner.length) {
-    const open = inner.indexOf("<", index);
-    if (open === -1) {
-      out += inner.slice(index);
-      break;
-    }
-    out += inner.slice(index, open);
-    const close = inner.indexOf(">", open + 1);
-    if (close === -1 || close === open + 1) {
-      out += "<";
-      index = open + 1;
-      continue;
-    }
-    index = close + 1;
-  }
-  return out.trim();
-}
-
-function links(html: string, testid: string) {
-  return [...html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/g)]
-    .filter((match) => match[1]!.includes(`data-testid="${testid}"`))
-    .map((match) => ({
-      href: match[1]!.match(/\bhref="([^"]+)"/)?.[1],
-      text: textContent(match[2]!),
+function links(page: ReturnType<typeof document>, testid: string) {
+  return testId(page, testid)
+    .filter((node) => node.tagName === "a")
+    .map((link) => ({
+      href: attribute(link, "href"),
+      text: visibleText(link),
     }));
-}
-
-function labelledAlternatives(html: string) {
-  const sections = [
-    ...html.matchAll(/<section\b[^>]*aria-labelledby="([^"]+)"[^>]*>([\s\S]*?)<\/section>/g),
-  ];
-  return sections.find((section) => section[2]!.includes(`href="/e/${FIRST_KEY}"`));
 }
 
 describe("Kit gone alternatives acceptance", () => {
   let render: Awaited<ReturnType<typeof buildPresentations>>;
   let model: Awaited<ReturnType<typeof goneModel>>;
-  let html: string;
+  let page: ReturnType<typeof document>;
 
   beforeAll(async () => {
     // No fixture may fall through to a network dependency.
@@ -258,13 +226,15 @@ describe("Kit gone alternatives acceptance", () => {
     render = await buildPresentations();
     model = await goneModel();
     // A complete renderer input isolates presentation defects from mapping defects.
-    html = render.gone({
-      ...model,
-      related: model.related.map((alternative, index) => ({
-        ...alternative,
-        datetime: INSTANTS[index],
-      })),
-    });
+    page = document(
+      render.gone({
+        ...model,
+        related: model.related.map((alternative, index) => ({
+          ...alternative,
+          datetime: INSTANTS[index],
+        })),
+      }),
+    );
   });
 
   afterAll(() => vi.unstubAllGlobals());
@@ -277,46 +247,62 @@ describe("Kit gone alternatives acceptance", () => {
   });
 
   it("renders each alternative's machine instant on its own time element", () => {
-    const items = [...html.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/g)];
+    const items = tag(page, "li");
     for (const [key, instant] of [
       [FIRST_KEY, INSTANTS[0]],
       [SECOND_KEY, INSTANTS[1]],
     ]) {
-      const item = items.find((candidate) => candidate[1]!.includes(`href="/e/${key}"`));
+      const item = items.find((candidate) =>
+        tag(candidate, "a").some((link) => attribute(link, "href") === `/e/${key}`),
+      );
       expect(item, `alternative ${key} must be a list item`).toBeDefined();
-      const time = item![1]!.match(/<time\b([^>]*)>([\s\S]*?)<\/time>/);
-      expect(time, `alternative ${key} must show its time`).not.toBeNull();
-      expect(time![1]!.match(/\bdatetime="([^"]+)"/)?.[1]).toBe(instant);
-      expect(textContent(time![2]!)).not.toBe("");
+      const [time] = tag(item!, "time");
+      expect(time, `alternative ${key} must show its time`).toBeDefined();
+      expect(attribute(time!, "datetime")).toBe(instant);
+      expect(visibleText(time!)).not.toBe("");
     }
   });
 
   it("exposes stable per-link testids without replacing the alternative destinations", () => {
-    expect(links(html, "event-cancelled-alternative")).toEqual([
+    expect(links(page, "event-cancelled-alternative")).toEqual([
       { href: `/e/${FIRST_KEY}`, text: "Chess finals" },
       { href: `/e/${SECOND_KEY}`, text: "Summer chess" },
     ]);
-    expect(html).toContain('data-testid="event-cancelled-alternatives"');
+    expect(testId(page, "event-cancelled-alternatives").length).toBeGreaterThan(0);
   });
 
   it("associates the alternatives section with a visible second-level heading", () => {
-    const section = labelledAlternatives(html);
-    expect(section, "alternatives need a section named by its heading").toBeDefined();
-    const headings = [...section![2]!.matchAll(/<h2\b[^>]*id="([^"]+)"[^>]*>([\s\S]*?)<\/h2>/g)];
-    const heading = headings.find((candidate) => section![1]!.split(/\s+/).includes(candidate[1]!));
+    const section = tag(page, "section").find((candidate) =>
+      tag(candidate, "a").some((link) => attribute(link, "href") === `/e/${FIRST_KEY}`),
+    );
+    expect(section, "alternatives need a section").toBeDefined();
+    const labels =
+      attribute(section!, "aria-labelledby")
+        ?.split(/[\t\n\f\r ]+/)
+        .filter(Boolean) ?? [];
+    const heading = tag(section!, "h2").find((candidate) =>
+      labels.includes(attribute(candidate, "id") ?? ""),
+    );
     expect(heading, "aria-labelledby must reference the alternatives h2").toBeDefined();
-    expect(textContent(heading![2]!)).not.toBe("");
-    expect(section![2]).toContain("<ul");
-    expect(section![2]).toContain(`href="/e/${SECOND_KEY}"`);
+    expect(visibleText(heading!)).not.toBe("");
+    const list = tag(section!, "ul").find(
+      (candidate) => attribute(candidate, "data-testid") === "event-cancelled-alternatives",
+    );
+    expect(list).toBeDefined();
+    expect(tag(list!, "a").map((link) => attribute(link, "href"))).toEqual([
+      `/e/${FIRST_KEY}`,
+      `/e/${SECOND_KEY}`,
+    ]);
   });
 
   it("keeps the empty 410 fallback usable without a phantom alternatives section", async () => {
-    const empty = render.gone(await goneModel([]));
+    const empty = document(render.gone(await goneModel([])));
     expect(links(empty, "event-cancelled-alternative")).toEqual([]);
-    expect(empty).not.toContain('data-testid="event-cancelled-alternatives"');
-    expect(empty).toContain('data-testid="event-cancelled-ics"');
-    expect(empty).toContain(`href="/events/${KEY}.ics"`);
-    expect(empty).toContain('href="/events"');
+    expect(testId(empty, "event-cancelled-alternatives")).toHaveLength(0);
+    expect(links(empty, "event-cancelled-ics").map((link) => link.href)).toContain(
+      `/events/${KEY}.ics`,
+    );
+    expect(tag(empty, "a").map((link) => attribute(link, "href"))).toContain("/events");
   });
 
   it("keeps missing suggestions' existing link and datetime contract", async () => {
@@ -324,12 +310,18 @@ describe("Kit gone alternatives acceptance", () => {
     expect(outcome.kind).toBe("missing");
     if (outcome.kind !== "missing") throw new Error("fixture did not resolve to missing");
     expect(outcome.status).toBe(404);
-    const missing = render.missing(outcome.model);
+    const missing = document(render.missing(outcome.model));
     expect(links(missing, "error-event-suggestion")).toEqual([
       { href: `/e/${FIRST_KEY}`, text: "Chess finals" },
     ]);
-    expect(missing).toContain(`datetime="${INSTANTS[0]}"`);
-    expect(missing).toContain('aria-labelledby="error-events-heading"');
+    const [suggestions] = testId(missing, "error-event-suggestions");
+    expect(suggestions).toBeDefined();
+    expect(attribute(suggestions!, "aria-labelledby")).toBe("error-events-heading");
+    const item = tag(suggestions!, "li").find((candidate) =>
+      testId(candidate, "error-event-suggestion").some((link) => link.tagName === "a"),
+    );
+    expect(item).toBeDefined();
+    expect(tag(item!, "time").map((time) => attribute(time, "datetime"))).toContain(INSTANTS[0]);
   });
 
   it("pins the served Hono 410 bytes and headers unchanged", async () => {
@@ -351,18 +343,15 @@ describe("Kit gone alternatives acceptance", () => {
   it("keeps the shared gone core while only Kit extends the alternatives surface", async () => {
     const response = await honoGone();
     expect(response.status).toBe(410);
-    const honoHtml = await response.text();
-    for (const core of [
-      'data-testid="event-cancelled">Cancelled',
-      "<h1>Chess night</h1>",
-      ">See upcoming events</a>",
-    ]) {
-      expect(honoHtml).toContain(core);
-      expect(html).toContain(core);
+    const honoPage = document(await response.text());
+    for (const gonePage of [honoPage, page]) {
+      expect(testId(gonePage, "event-cancelled").map(visibleText)).toContain("Cancelled");
+      expect(tag(gonePage, "h1").map(visibleText)).toContain("Chess night");
+      expect(tag(gonePage, "a").map(visibleText)).toContain("See upcoming events");
     }
-    expect(honoHtml).not.toContain("Chess finals");
-    expect(honoHtml).not.toContain('data-testid="event-cancelled-alternative"');
-    expect(html).toContain("Chess finals");
-    expect(links(html, "event-cancelled-alternative")).toHaveLength(2);
+    expect(visibleText(honoPage)).not.toContain("Chess finals");
+    expect(testId(honoPage, "event-cancelled-alternative")).toHaveLength(0);
+    expect(visibleText(page)).toContain("Chess finals");
+    expect(links(page, "event-cancelled-alternative")).toHaveLength(2);
   });
 });
