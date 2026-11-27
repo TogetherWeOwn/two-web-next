@@ -724,9 +724,21 @@ export async function assertFeaturedLegacyRedirects({ on, off, rollback, hono, d
   } finally {
     try {
       await sql.begin(async (tx) => {
+        // A timed-out fetch may leave the Worker rotating a bearer. Take
+        // the lock before reading the rows so teardown sees its successor.
+        await tx`set local lock_timeout = '10s'`;
+        await tx`lock table web_sessions in share row exclusive mode`;
         await tx`delete from featured_contents where created_by = ${moderatorId}`;
         await tx`delete from web_session_grace where user_id in (${moderatorId}, ${memberId})`;
         await tx`delete from web_sessions where user_id in (${moderatorId}, ${memberId})`;
+        const [{ present }] = await tx`
+          select exists (
+            select 1 from web_sessions where user_id in (${moderatorId}, ${memberId})
+            union all
+            select 1 from web_session_grace where user_id in (${moderatorId}, ${memberId})
+          ) as present
+        `;
+        assert.equal(present, false, "featured redirect fixture sessions and grace rows cleared");
       });
     } finally {
       await sql.end({ timeout: 1 });
