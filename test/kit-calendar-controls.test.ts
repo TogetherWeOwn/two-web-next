@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
+import { parseFragment } from "parse5";
 import { expect, it } from "vitest";
+import { attr, elements, textOf } from "./helpers/kit-edit-controls";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
@@ -14,27 +16,31 @@ const { compile } = webRequire("svelte/compiler") as {
     o: { generate: string; dev: boolean; filename: string },
   ) => { js: { code: string } };
 };
-const SCENARIOS = [
-  "default",
-  "calendar",
-  "hit",
-  "miss",
-  "outOfRange",
-  "plainSearch",
-  "gameOnly",
-  "error",
-];
-const Q = "q=Tom+%26+%22Jerry%22+%2B%C3%A9";
-const G = "game=Rock+%26+Roll";
+const query = 'Tom &copy; "Jerry" +é <b>';
+const game = "Rock &copy; Roll <b>";
+const Q = "q=Tom+%26copy%3B+%22Jerry%22+%2B%C3%A9+%3Cb%3E";
+const G = "game=Rock+%26copy%3B+Roll+%3Cb%3E";
 const FEED = `https://example.test/events.ics?${G}`;
 
-const tag = (b: string, id: string) =>
-  new RegExp(`<[a-z]+\\b[^>]*data-testid="${id}"[^>]*>`).exec(b)?.[0] ?? "";
-const attr = (t: string, n: string) =>
-  new RegExp(`\\s${n}="([^"]*)"`).exec(t)?.[1]?.replaceAll("&amp;", "&");
-const href = (b: string, id: string) => attr(tag(b, id), "href");
-const text = (b: string, id: string) =>
-  new RegExp(`data-testid="${id}"[^>]*>([^<]*)</p>`).exec(b)?.[1];
+type Elements = ReturnType<typeof elements>;
+const byTestId = (nodes: Elements, id: string) =>
+  nodes.find((el) => attr(el, "data-testid") === id);
+const href = (nodes: Elements, id: string) => {
+  const link = byTestId(nodes, id);
+  return link?.tagName === "a" ? attr(link, "href") : undefined;
+};
+const text = (nodes: Elements, id: string) => {
+  const paragraph = byTestId(nodes, id);
+  return paragraph?.tagName === "p" ? textOf(paragraph) : undefined;
+};
+const selectedGames = (nodes: Elements) =>
+  elements(byTestId(nodes, "events-game-filter")!).filter(
+    (el) => el.tagName === "option" && attr(el, "selected") !== undefined,
+  );
+const feedLabel = (nodes: Elements) =>
+  nodes.find((el) => el.tagName === "label" && attr(el, "for") === "calendar-feed-url");
+const searchForm = (nodes: Elements) =>
+  nodes.find((el) => el.tagName === "form" && attr(el, "role") === "search");
 
 it("renders calendar controls: escaped query links, hooks, search, game and subscription states", async () => {
   const scratch = mkdtempSync(join(tmpdir(), "kit-calendar-controls-"));
@@ -44,8 +50,24 @@ it("renders calendar controls: escaped query links, hooks, search, game and subs
     writeFileSync(
       entry,
       `import { render } from "svelte/server";
-import Fixture from ${JSON.stringify(join(root, "test/fixtures/kit-calendar-controls.svelte"))};
-export const bodies = Object.fromEntries(${JSON.stringify(SCENARIOS)}.map((scenario) => [scenario, render(Fixture, { props: { scenario } }).body]));`,
+import CalendarControls from ${JSON.stringify(join(root, "web/src/lib/CalendarControls.svelte"))};
+const q = ${JSON.stringify(query)}, game = ${JSON.stringify(game)};
+const state = { view: "list", month: "2026-03", q: "", past: false, page: 1 };
+const base = { state, appUrl: "https://example.test", games: ["Chess", game], gameFilter: null,
+  searching: false, pastCount: 0, emptyState: null, hasVisibleResults: true, outOfRange: false };
+const search = { ...base, searching: true, gameFilter: game, state: { ...state, q, game, past: true } };
+const scenarios = {
+  default: base,
+  calendar: { ...base, pastCount: 3, state: { ...state, view: "calendar", past: true } },
+  hit: search,
+  miss: { ...search, hasVisibleResults: false },
+  outOfRange: { ...search, hasVisibleResults: false, outOfRange: true },
+  plainSearch: { ...search, gameFilter: null, state: { ...search.state, game: undefined } },
+  gameOnly: { ...base, gameFilter: game, state: { ...state, game } },
+  error: { ...search, emptyState: "error" },
+};
+export const bodies = Object.fromEntries(Object.entries(scenarios).map(([id, props]) =>
+  [id, render(CalendarControls, { props }).body]));`,
     );
     await build({
       entryPoints: [entry],
@@ -72,44 +94,57 @@ export const bodies = Object.fromEntries(${JSON.stringify(SCENARIOS)}.map((scena
         },
       ],
     });
-    const { bodies: b } = (await import(pathToFileURL(outfile).href)) as {
+    const { bodies } = (await import(pathToFileURL(outfile).href)) as {
       bodies: Record<string, string>;
     };
+    const b = Object.fromEntries(
+      Object.entries(bodies).map(([id, html]) => [id, elements(parseFragment(html))]),
+    );
 
     // Default: list view, unscoped feed, hooks, no search, past closed.
     const d = b.default!;
-    expect(tag(d, "events-view-list")).toContain('aria-current="page"');
+    expect(attr(byTestId(d, "events-view-list")!, "aria-current")).toBe("page");
     expect(href(d, "events-view-calendar")).toBe("/events?view=calendar&month=2026-03");
     expect(text(d, "events-view-status")).toBe("Showing events as a list.");
     for (const id of ["events-search-status", "events-past-status", "calendar-month-status"])
       expect(text(d, id)).toBe("");
     expect(href(d, "events-past-archive-link")).toBe("/events/past");
     expect(href(d, "events-subscribe")).toBe("webcal://example.test/events.ics");
-    expect(d).toContain('href="https://example.test/events.ics"');
-    expect(d).not.toContain("events-search-clear");
-    expect(d).not.toContain('name="past"');
-    expect(d.match(/role="status"/g)).toHaveLength(5);
-    for (const zone of ["head", "subscribe", "actions"])
-      expect(d).toContain(`data-cal-zone="${zone}"`);
-    const copy = tag(d, "subscription-copy-button");
+    expect(d.filter((el) => el.tagName === "a").map((el) => attr(el, "href"))).toContain(
+      "https://example.test/events.ics",
+    );
+    expect(byTestId(d, "events-search-clear")).toBeUndefined();
+    expect(d.some((el) => attr(el, "name") === "past")).toBe(false);
+    expect(d.filter((el) => attr(el, "role") === "status")).toHaveLength(5);
+    const zones = d.map((el) => attr(el, "data-cal-zone"));
+    for (const zone of ["head", "subscribe", "actions"]) expect(zones).toContain(zone);
+    const copy = byTestId(d, "subscription-copy-button")!;
     expect(attr(copy, "data-copy-link")).toBe("https://example.test/events.ics");
-    expect(copy).toMatch(/data-copy-feed/);
-    expect(copy).toMatch(/\shidden/);
-    expect(tag(d, "subscription-copy-status")).toContain("data-copy-toast");
-    expect(tag(d, "subscription-feed-url")).toContain("readonly");
-    expect(d).toContain("Calendar feed URL</label>");
-    expect(d).toMatch(/<form method="get" action="\/events" role="search">/);
-    expect(tag(d, "events-search")).toContain('name="q"');
-    expect(tag(d, "events-game-filter")).toContain('name="game"');
-    expect(d).toMatch(/<option value="" selected[^>]*>All games<\/option>/);
+    expect(attr(copy, "data-copy-feed")).toBeDefined();
+    expect(attr(copy, "hidden")).toBeDefined();
+    expect(attr(byTestId(d, "subscription-copy-status")!, "data-copy-toast")).toBeDefined();
+    expect(attr(byTestId(d, "subscription-feed-url")!, "readonly")).toBeDefined();
+    expect(textOf(feedLabel(d)!)).toBe("Calendar feed URL");
+    const form = searchForm(d);
+    expect(form && [attr(form, "method"), attr(form, "action")]).toEqual(["get", "/events"]);
+    const search = byTestId(elements(form!), "events-search")!;
+    const gameSelect = byTestId(elements(form!), "events-game-filter")!;
+    expect([search.tagName, attr(search, "name")]).toEqual(["input", "q"]);
+    expect([gameSelect.tagName, attr(gameSelect, "name")]).toEqual(["select", "game"]);
+    expect(selectedGames(d).map((el) => [attr(el, "value"), textOf(el)])).toEqual([
+      ["", "All games"],
+    ]);
 
     // Calendar view with past open.
     const c = b.calendar!;
-    expect(tag(c, "events-view-calendar")).toContain('aria-current="page"');
+    expect(attr(byTestId(c, "events-view-calendar")!, "aria-current")).toBe("page");
     expect(text(c, "events-view-status")).toBe("Showing events as a calendar.");
     expect(text(c, "calendar-month-status")).toBe("March 2026");
     expect(text(c, "events-past-status")).toBe("Showing past events.");
-    expect(c).toMatch(/<input type="hidden" name="past" value="1"/);
+    const past = elements(searchForm(c)!).find(
+      (el) => el.tagName === "input" && attr(el, "name") === "past",
+    );
+    expect(past && [attr(past, "type"), attr(past, "value")]).toEqual(["hidden", "1"]);
 
     // Search + game: escaping across links, value, labels and selection.
     const h = b.hit!;
@@ -119,18 +154,20 @@ export const bodies = Object.fromEntries(${JSON.stringify(SCENARIOS)}.map((scena
     );
     expect(href(h, "events-search-clear")).toBe(`/events?${G}&past=1`);
     expect(href(h, "events-past-archive-link")).toBe(`/events/past?${Q}`);
-    expect(h).toContain("Continue search in past events</a>");
+    expect(textOf(byTestId(h, "events-past-archive-link")!)).toBe("Continue search in past events");
     expect(href(h, "events-subscribe")).toBe(`webcal://${FEED.slice(8)}`);
-    expect(attr(tag(h, "subscription-feed-url"), "value")).toBe(FEED);
-    expect(attr(tag(h, "subscription-copy-button"), "data-copy-link")).toBe(FEED);
-    expect(h).toContain("Rock &amp; Roll calendar feed URL</label>");
-    expect(tag(h, "events-search")).toContain('value="Tom &amp; &quot;Jerry&quot; +é"');
-    expect(h).toMatch(/<option value="Rock &amp; Roll" selected/);
-    expect(h).not.toMatch(/<option value="" selected/);
+    expect(attr(byTestId(h, "subscription-feed-url")!, "value")).toBe(FEED);
+    expect(attr(byTestId(h, "subscription-copy-button")!, "data-copy-link")).toBe(FEED);
+    expect(textOf(feedLabel(h)!)).toBe(`${game} calendar feed URL`);
+    expect(attr(byTestId(h, "events-search")!, "value")).toBe(query);
+    const selected = selectedGames(h);
+    expect(selected).toHaveLength(1);
+    expect(attr(selected[0]!, "value")).toBe(game);
+    expect(textOf(selected[0]!)).toBe(game);
 
     // Search statuses.
-    const S = '“Tom &amp; "Jerry" +é”';
-    const T = "“Rock &amp; Roll”";
+    const S = `“${query}”`;
+    const T = `“${game}”`;
     expect(text(h, "events-search-status")).toBe(`Results for ${S} in ${T}.`);
     expect(text(b.outOfRange!, "events-search-status")).toBe(`Results for ${S} in ${T}.`);
     expect(text(b.miss!, "events-search-status")).toBe(`Nothing matches ${S} in ${T}.`);
@@ -139,7 +176,7 @@ export const bodies = Object.fromEntries(${JSON.stringify(SCENARIOS)}.map((scena
 
     // Game only, and the error state.
     expect(text(b.gameOnly!, "events-search-status")).toBe(`Showing events for ${T}.`);
-    expect(b.gameOnly).not.toContain("events-search-clear");
+    expect(byTestId(b.gameOnly!, "events-search-clear")).toBeUndefined();
     expect(href(b.gameOnly!, "events-subscribe")).toBe(`webcal://${FEED.slice(8)}`);
     expect(text(b.error!, "events-search-status")).toBe("We couldn't load the calendar.");
     expect(href(b.error!, "events-search-clear")).toBe(`/events?${G}&past=1`);

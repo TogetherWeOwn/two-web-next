@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
+import { parseFragment } from "parse5";
 import { expect, it } from "vitest";
+import { attr, elements, textOf } from "./helpers/kit-edit-controls";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
@@ -74,46 +76,55 @@ it("renders standalone past drawer toggles and past cards", async () => {
         },
       ],
     });
-    const { bodies: b } = (await import(pathToFileURL(outfile).href)) as {
+    const { bodies } = (await import(pathToFileURL(outfile).href)) as {
       bodies: Record<string, string>;
     };
-    const tag = (html: string, id: string) =>
-      new RegExp(`<[^>]*data-testid="${id}"[^>]*>`).exec(html)?.[0] ?? "";
-    const href = (html: string, id: string) =>
-      /\shref="([^"]*)"/.exec(tag(html, id))?.[1]?.replaceAll("&amp;", "&");
+    const b = Object.fromEntries(
+      Object.entries(bodies).map(([id, html]) => [id, elements(parseFragment(html))]),
+    );
+    const byTestId = (nodes: ReturnType<typeof elements>, id: string) =>
+      nodes.find((el) => attr(el, "data-testid") === id);
+    const href = (nodes: ReturnType<typeof elements>, id: string) => {
+      const link = byTestId(nodes, id);
+      return link?.tagName === "a" ? attr(link, "href") : undefined;
+    };
     const query = "q=Tom+%26+%22Jerry%22&game=Rock+%26+Roll&past=1";
     expect(href(b.pager!, "events-pager-first")).toBe(`/events?${query}`);
     expect(href(b.pager!, "events-pager-prev")).toBe(`/events?${query}`);
     expect(href(b.pager!, "events-pager-next")).toBe(`/events?${query}&page=3`);
     expect(href(b.pager!, "events-pager-last")).toBe(`/events?${query}&page=4`);
-    expect(tag(b.pager!, "events-pager-status")).toContain('role="status"');
-    expect(b.pager).not.toContain("events-out-of-range");
-    expect(tag(b.oor!, "events-out-of-range")).toContain('role="status"');
-    expect(b.oor).toContain("Page 9 is outside the schedule");
+    expect(attr(byTestId(b.pager!, "events-pager-status")!, "role")).toBe("status");
+    expect(byTestId(b.pager!, "events-out-of-range")).toBeUndefined();
+    const notice = byTestId(b.oor!, "events-out-of-range")!;
+    expect(attr(notice, "role")).toBe("status");
+    expect(textOf(notice)).toContain("Page 9 is outside the schedule");
     expect(href(b.oor!, "events-pager-first")).toBe("/events?game=Rock+%26+Roll");
     expect(href(b.oor!, "events-pager-prev")).toBe("/events?game=Rock+%26+Roll&page=3");
-    expect(b.oor).not.toContain("events-pager-next");
-    expect(b.oor).not.toContain("events-pager-last");
-    expect(b.single).not.toContain("events-pager");
-    expect(b.single).not.toContain("events-past-toggle");
+    expect(byTestId(b.oor!, "events-pager-next")).toBeUndefined();
+    expect(byTestId(b.oor!, "events-pager-last")).toBeUndefined();
+    expect(b.single!.some((el) => attr(el, "data-testid")?.startsWith("events-pager"))).toBe(false);
+    expect(byTestId(b.single!, "events-past-toggle")).toBeUndefined();
     expect(href(b.listOpen!, "events-past-toggle")).toBe("/events?game=Rock+%26+Roll&page=2");
-    expect(b.listOpen).toContain('data-testid="events-past-list"');
-    expect(b.listOpen).not.toContain("<mark>");
-    expect(b.closed).toContain('href="/events?game=Rock+%26+Roll&amp;past=1&amp;page=2"');
-    expect(b.closed).not.toContain('data-testid="events-past-list"');
-    expect(b.open).toContain('href="/events?game=Rock+%26+Roll&amp;page=2"');
-    expect(b.calendar).toContain("view=calendar");
-    for (const html of [b.open!, b.search!, b.searchForced!]) {
-      expect(html).toContain('data-testid="events-past-list"');
-      expect(html).toContain("Past description");
-      expect(html).not.toContain("<mark>");
-      expect(html).not.toContain('data-testid="signin"');
-      expect(html).not.toContain('data-testid="event-discord-rsvp"');
+    expect(byTestId(b.listOpen!, "events-past-list")).toBeDefined();
+    expect(b.listOpen!.some((el) => el.tagName === "mark")).toBe(false);
+    expect(href(b.closed!, "events-past-toggle")).toBe("/events?game=Rock+%26+Roll&past=1&page=2");
+    expect(byTestId(b.closed!, "events-past-list")).toBeUndefined();
+    expect(href(b.open!, "events-past-toggle")).toBe("/events?game=Rock+%26+Roll&page=2");
+    expect(href(b.calendar!, "events-past-toggle")).toBe(
+      "/events?game=Rock+%26+Roll&view=calendar&month=2030-06",
+    );
+    for (const nodes of [b.open!, b.search!, b.searchForced!]) {
+      const list = byTestId(nodes, "events-past-list");
+      expect(list?.tagName).toBe("ul");
+      expect(textOf(list!)).toContain("Past description");
+      expect(nodes.some((el) => el.tagName === "mark")).toBe(false);
+      expect(byTestId(nodes, "signin")).toBeUndefined();
+      expect(byTestId(nodes, "event-discord-rsvp")).toBeUndefined();
     }
-    expect(b.search).not.toContain('data-testid="events-past-toggle"');
-    expect(b.searchForced).not.toContain('data-testid="events-past-toggle"');
-    expect(b.empty).not.toContain('data-testid="events-past-toggle"');
-    expect(b.empty).not.toContain('data-testid="events-past-list"');
+    expect(byTestId(b.search!, "events-past-toggle")).toBeUndefined();
+    expect(byTestId(b.searchForced!, "events-past-toggle")).toBeUndefined();
+    expect(byTestId(b.empty!, "events-past-toggle")).toBeUndefined();
+    expect(byTestId(b.empty!, "events-past-list")).toBeUndefined();
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
