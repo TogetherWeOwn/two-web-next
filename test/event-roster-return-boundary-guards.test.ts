@@ -30,7 +30,8 @@ import { MAX_RETURN_DESTINATION_BYTES, safeNext } from "../src/join/service";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import type { EventAttendee, PublicEvent } from "../src/events/reads";
 import { archiveContext } from "../src/events/archive-context";
-import { archiveEventHref, authReturnHref, attendeePageHref } from "../src/events/attendee-paths";
+import { archiveEventHref, attendeePageHref } from "../src/events/attendee-paths";
+import { authReturnHref } from "../src/events/auth-return.server";
 import { resolveKitEventDetail, type KitEventDetailStore } from "../src/events/kit-detail";
 
 const APP_URL = "https://next.example.test";

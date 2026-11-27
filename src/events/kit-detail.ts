@@ -77,7 +77,8 @@ import {
 } from "./reads";
 import type { SuggestedEvent } from "./suggestions";
 import { archiveContext } from "./archive-context";
-import { archiveEventHref, authReturnHref } from "./attendee-paths";
+import { archiveEventHref } from "./attendee-paths";
+import { authReturnHref } from "./auth-return.server";
 import { archiveReturnLink } from "./archive-links";
 import { waitlistPosition } from "./waitlist";
 

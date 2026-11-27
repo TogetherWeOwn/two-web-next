@@ -18,6 +18,35 @@ const env = {
   DISCORD_GUILD_ID: "123",
   DISCORD_BOT_TOKEN: "fixture",
 } as Env;
+
+function liveBodyAtByteLimit(over: number) {
+  const event = {
+    id: "1",
+    name: "Launch 🚀",
+    scheduled_start_time: "2030-01-02T20:00:00Z",
+    fixture_padding: "",
+  };
+  const limit = DISCORD_SNAPSHOT_MAX_BYTES + over;
+  event.fixture_padding = "x".repeat(limit - Buffer.byteLength(JSON.stringify([event])));
+  const json = JSON.stringify([event]);
+  const bytes = new TextEncoder().encode(json);
+  expect(bytes.byteLength).toBe(limit);
+  // The prefix is ASCII. Split after the first byte of the four-byte emoji.
+  const split = json.indexOf("🚀") + 1;
+  const cancel = vi.fn();
+  const body = new ReadableStream<Uint8Array>({
+    start(c) {
+      c.enqueue(bytes.subarray(0, split));
+      c.enqueue(bytes.subarray(split));
+      // Oversize must reject without waiting for EOF.
+      if (over === 0) c.close();
+    },
+    cancel,
+  });
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(body));
+  return { body, cancel };
+}
+
 describe("request-owned snapshot I/O deadlines", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -125,17 +154,22 @@ describe("request-owned snapshot I/O deadlines", () => {
       expect(entry.retryAt).toBe(0);
     },
   );
-  it("bounds streamed HTTP bytes and cancels oversized bodies before parsing or storage", async () => {
-    const cancel = vi.fn();
-    const body = new ReadableStream<Uint8Array>({
-      start(c) {
-        c.enqueue(new Uint8Array(DISCORD_SNAPSHOT_MAX_BYTES + 1));
-      },
-      cancel,
-    });
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(body));
+  it("accepts exactly the streamed HTTP byte cap and decodes a split UTF-8 character", async () => {
+    const { body, cancel } = liveBodyAtByteLimit(0);
+    const source = liveDiscordEventsSource(env);
+    const rows = await source.upcoming(new Date("2030-01-01T00:00:00Z"));
+    expect(rows.map((row) => row.title)).toEqual(["Launch 🚀"]);
+    expect(source.lastReadFailed()).toBe(false);
+    expect(cancel).not.toHaveBeenCalled();
+    expect(body.locked).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("cancels a streamed HTTP body one byte over the cap before parsing or storage", async () => {
+    const { body, cancel } = liveBodyAtByteLimit(1);
     const source = liveDiscordEventsSource(env);
     expect(await source.upcoming()).toEqual([]);
+    expect(source.lastReadFailed()).toBe(true);
     expect(source.lastReadFailure?.()?.reason).toBe("invalid_payload");
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(body.locked).toBe(false);

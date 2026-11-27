@@ -5,6 +5,7 @@
 // an empty list.
 
 import type { Env } from "../env";
+import { exceedsByteLimit } from "../http/length-limit";
 import type { DiscordTransient } from "../islands/contracts";
 import { admitScheduledEvent, type AdmittedScheduledEvent } from "./discord-transient-shape";
 import {
@@ -157,7 +158,7 @@ export function liveDiscordEventsSource(env: Env): DiscordEventsSource {
           if (controller.signal.aborted) throw new DiscordReadError({ reason: "aborted" });
           if (done) break;
           bytes += value.byteLength;
-          if (bytes > DISCORD_SNAPSHOT_MAX_BYTES)
+          if (exceedsByteLimit(bytes, DISCORD_SNAPSHOT_MAX_BYTES))
             throw new DiscordReadError({ reason: "invalid_payload" });
           json += decoder.decode(value, { stream: true });
         }
