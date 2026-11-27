@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { setImmediate } from "node:timers/promises";
+import { classifyLocalPromotionPath } from "./promotion-path-local.mjs";
 import { isPromotionPath, labelPromotionPath } from "./promotion-path.mjs";
 
 const pull = "/pulls/42";
@@ -159,4 +164,153 @@ test("ref changes prevent publication, including same-SHA retarget and a race du
   await assert.rejects(moved.run(), /refs or file count changed/);
   assert.deepEqual([...moved.labels], ["unrelated"]);
   assert.ok(moved.summary[0].includes("verdict **unknown**"));
+});
+
+test("local promotion evidence pins the full three-dot diff and rejects changed identities", (t) => {
+  const scratch = mkdtempSync(join(tmpdir(), "promotion-path-local-"));
+  t.after(() => rmSync(scratch, { force: true, recursive: true }));
+  const git = (...args) =>
+    execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", ...args], {
+      cwd: scratch,
+    });
+  const commit = (subject) => {
+    git("add", "-A");
+    git(
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.com",
+      "commit",
+      "-qm",
+      subject,
+    );
+    return git("rev-parse", "HEAD").toString("utf8").trim();
+  };
+  git("init", "-q", "--initial-branch=main");
+  mkdirSync(join(scratch, ".github/workflows"), { recursive: true });
+  mkdirSync(join(scratch, "docs"));
+  mkdirSync(join(scratch, "ci"));
+  for (const file of ["promotion-path-local.mjs", "promotion-path.mjs"]) {
+    writeFileSync(join(scratch, "ci", file), "trusted classifier source");
+  }
+  writeFileSync(join(scratch, ".github/workflows/old.yml"), "old workflow");
+  writeFileSync(join(scratch, "docs/guide.md"), "guide");
+  const mergeBase = commit("Common history");
+  writeFileSync(join(scratch, ".github/workflows/target.yml"), "target branch only");
+  const targetTip = commit("Advance the target");
+  git("checkout", "-q", "--detach", mergeBase);
+  writeFileSync(join(scratch, "docs/new\tnote.md"), "PR only");
+  const ordinaryHead = commit("Change docs");
+  git("mv", ".github/workflows/old.yml", "docs/archived.md");
+  const removedHead = commit("Rename a protected path out");
+  git("checkout", "-q", "--detach", ordinaryHead);
+  git("mv", "docs/guide.md", ".github/workflows/new.yml");
+  const addedHead = commit("Rename a protected path in");
+  git("checkout", "-q", "main");
+
+  const baseRepo = { full_name: "TogetherWeOwn/two-web-next", default_branch: "main" };
+  const baseMetadata = { ref: "main", sha: mergeBase, repo: baseRepo };
+  const classify = (head, alter = (_path, value) => value) => {
+    let snapshot = 0;
+    return classifyLocalPromotionPath(42, head, {
+      git,
+      readSource: (path) => readFileSync(join(scratch, path)),
+      read(path) {
+        if (path === pull) {
+          snapshot++;
+          return alter(
+            path,
+            { number: 42, state: "open", head: { sha: head }, base: baseMetadata },
+            snapshot,
+          );
+        }
+        assert.match(path, /^\/git\/ref\/heads\/(main|Main|release\/stable)$/);
+        const ref = `refs/${path.slice("/git/ref/".length)}`;
+        return alter(path, { ref, object: { type: "commit", sha: targetTip } }, snapshot);
+      },
+    });
+  };
+  assert.deepEqual(classify(ordinaryHead), {
+    number: 42,
+    head: ordinaryHead,
+    targetRef: "refs/heads/main",
+    targetTip,
+    reportedBase: mergeBase,
+    defaultRef: "refs/heads/main",
+    mergeBase,
+    classifierHead: targetTip,
+    verdict: "no",
+    matches: [],
+  });
+  for (const [head, match] of [
+    [removedHead, ".github/workflows/old.yml"],
+    [addedHead, ".github/workflows/new.yml"],
+  ]) {
+    const result = classify(head);
+    assert.equal(result.verdict, "yes");
+    assert.deepEqual(result.matches, [match]);
+  }
+  for (const base of [
+    { ...baseMetadata, ref: "Main" },
+    { ...baseMetadata, sha: targetTip },
+  ]) {
+    assert.throws(
+      () =>
+        classify(ordinaryHead, (path, value, snapshot) =>
+          path === pull && snapshot === 2 ? { ...value, base } : value,
+        ),
+      /PR or live branch changed/,
+    );
+  }
+  assert.throws(
+    () =>
+      classify(ordinaryHead, (path, value, snapshot) =>
+        path !== pull && snapshot === 2
+          ? { ...value, object: { ...value.object, sha: mergeBase } }
+          : value,
+      ),
+    /PR or live branch changed/,
+  );
+  assert.throws(
+    () =>
+      classify(ordinaryHead, (path, value, snapshot) =>
+        path === pull && snapshot === 2 ? { ...value, head: { sha: addedHead } } : value,
+      ),
+    /Open PR identity does not match/,
+  );
+  assert.throws(
+    () =>
+      classify(ordinaryHead, (path, value) =>
+        path !== pull ? { ...value, ref: "refs/heads/Main" } : value,
+      ),
+    /Missing exact-case branch ref/,
+  );
+  const releaseTarget = (path, value) => {
+    if (path === pull) return { ...value, base: { ...value.base, ref: "release/stable" } };
+    if (path.endsWith("/release/stable")) {
+      return { ...value, object: { ...value.object, sha: mergeBase } };
+    }
+    return value;
+  };
+  const release = classify(ordinaryHead, releaseTarget);
+  assert.equal(release.targetRef, "refs/heads/release/stable");
+  assert.equal(release.targetTip, mergeBase);
+  assert.equal(release.classifierHead, targetTip);
+  assert.throws(
+    () =>
+      classify(ordinaryHead, (path, value, snapshot) =>
+        path.endsWith("/heads/main") && snapshot === 2
+          ? { ...value, object: { ...value.object, sha: mergeBase } }
+          : releaseTarget(path, value),
+      ),
+    /PR or live branch changed/,
+  );
+  git("checkout", "-q", "--detach", mergeBase);
+  assert.throws(
+    () => classify(ordinaryHead),
+    /checkout must match the live upstream default branch/,
+  );
+  git("checkout", "-q", "main");
+  writeFileSync(join(scratch, "ci/promotion-path.mjs"), "dirty classifier source");
+  assert.throws(() => classify(ordinaryHead), /Classifier source differs/);
 });

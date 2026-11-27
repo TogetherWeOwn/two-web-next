@@ -11,6 +11,7 @@ import {
   selection,
   undoMessage,
   verifyEmberUndoVersion,
+  verifyOperatorDenial,
   verifyProducer,
   verifyUndoVersion,
 } from "./kit-cutover-deploy.mjs";
@@ -244,6 +245,55 @@ test("admin rollback admits only the recorded production Ember version with admi
     [...bindings, text("APP_URL", "https://other.example")],
   ]) {
     assert.throws(() => verifyEmberUndoVersion(withBindings(rejected), pin, sourceSha));
+  }
+});
+
+test("operator denial checks survive unused body cancellation failure", async (t) => {
+  const origin = "https://operator-probe.example";
+  const denialHeaders = {
+    "x-two-renderer": "kit",
+    "referrer-policy": "no-referrer",
+    "cache-control": "private, no-store",
+  };
+  const challenge = { "www-authenticate": "Bearer" };
+  const headerRefusal = { code: "ERR_ASSERTION" };
+  const statusRefusal = { ...headerRefusal, message: "operator route admits anonymous traffic" };
+  for (const [name, status, overrides, refusal] of [
+    ["accepts a 401 with a Bearer challenge", 401, challenge],
+    ["accepts a 404 without a challenge", 404, {}],
+    ["refuses a success", 200, {}, statusRefusal],
+    ["refuses a redirect", 302, {}, statusRefusal],
+    ["refuses a different renderer", 404, { "x-two-renderer": "hono" }, headerRefusal],
+    ["refuses a different referrer policy", 404, { "referrer-policy": "origin" }, headerRefusal],
+    ["refuses a cacheable response", 404, { "cache-control": "public" }, headerRefusal],
+    ["refuses a cookie", 404, { "set-cookie": "fixture=value" }, headerRefusal],
+    ["refuses a 401 without a Bearer challenge", 401, {}, headerRefusal],
+  ]) {
+    await t.test(name, async (subtest) => {
+      const cancel = subtest.mock.fn(async () => {
+        throw new Error("synthetic cancellation detail");
+      });
+      const warn = subtest.mock.method(console, "warn", () => {});
+      const response = new Response(new ReadableStream({ cancel }), {
+        status,
+        headers: { ...denialHeaders, ...overrides },
+      });
+      const verify = () =>
+        verifyOperatorDenial(origin, async (url, options) => {
+          assert.equal(url.href, `${origin}/admin/ops-overrides`);
+          assert.equal(options.redirect, "manual");
+          assert.ok(options.signal instanceof AbortSignal);
+          return response;
+        });
+
+      if (refusal) await assert.rejects(verify, refusal);
+      else await verify();
+      assert.equal(cancel.mock.callCount(), 1);
+      assert.deepEqual(
+        warn.mock.calls.map(({ arguments: args }) => args),
+        [["Could not cancel the unused operator denial response body"]],
+      );
+    });
   }
 });
 
