@@ -35,6 +35,32 @@ export function resolveStagingCandidate({ eventName, event, sha, ref, repository
   return candidate;
 }
 
+// One deploy-staging job has roughly 40 steps. Allow 64 KiB for step records,
+// job URLs and GitHub metadata, with headroom for workflow growth.
+const MAX_DEPLOY_JOBS_BYTES = 64 * 1024;
+
+async function readDeployJobs(body) {
+  if (!body) return null;
+  const reader = body.getReader();
+  const bytes = new Uint8Array(MAX_DEPLOY_JOBS_BYTES);
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return new Response(bytes.subarray(0, size)).json();
+      if (value.byteLength > bytes.length - size) {
+        // Request cancellation without delaying full smoke on the transport.
+        void reader.cancel().catch(() => undefined);
+        return null;
+      }
+      bytes.set(value, size);
+      size += value.byteLength;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 // Only the exact successful deploy attempt can prove that its smoke scope
 // was checked against adjacent staging. Old workflows lack the forward guard.
 export async function deploySmokeWasScoped(run, repository, fetchImpl = fetch) {
@@ -57,7 +83,7 @@ export async function deploySmokeWasScoped(run, repository, fetchImpl = fetch) {
       { redirect: "error", signal: AbortSignal.timeout(10_000) },
     );
     if (!response.ok) return false;
-    const { total_count, jobs } = await response.json();
+    const { total_count, jobs } = (await readDeployJobs(response.body)) ?? {};
     if (total_count !== 1 || !Array.isArray(jobs) || jobs.length !== 1) return false;
     const [job] = jobs;
     if (
