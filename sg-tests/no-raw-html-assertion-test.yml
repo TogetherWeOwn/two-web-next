@@ -1,0 +1,35 @@
+id: no-raw-html-assertion
+valid:
+  - |
+    const doc = parseRenderedPage(html);
+    const [heading] = renderedElements(doc, { tag: "h1" });
+    expect(renderedText(heading)).toBe("Welcome");
+    assert.equal(renderedAttribute(heading, "id"), "home-heading");
+  - await expect(page.locator('a[href="/join"]')).toBeVisible();
+  - expect(headers.get("content-type")).toMatch(/^text\/html/);
+  - expect(body).toContain("The lobby is open.");
+  - expect(body).toContain("<urlset>");
+  - assert.ok(body.includes(`<loc>${canonical}/</loc>`));
+  - expect(stdout).toContain("Options accept <input>");
+  - expect(body).toBe("<masked>");
+  - expect(body).toContain("&lt;script&gt;");
+  - expect(html).not.toContain("<script");
+  - assert.doesNotMatch(html, /<iframe\b/);
+  - assert.ok(!html.includes('<a href="/members/private">'));
+  - assert.equal(html.length, 0, 'body must omit <div id="private">');
+  - assert.equal(kitHomeHeadingText(html + '<div id="home-heading"></div>'), "");
+  - const mutant = html.replace('<h1 id="home-heading">', '<h2 id="home-heading">');
+invalid:
+  - expect(await response.text(), "Join link").toContain(`href="${joinPath}"`);
+  - expect(body).toMatch(/<main\b[^>]*>/i);
+  - assert.match(rendered.body, /data-testid="recovery-retry"/, label);
+  - assert.equal(response.text, '<p role="status">Ready</p>');
+  - assert.ok(answer.body.includes(`<h1>${signal} hot zone</h1>`), answer.label);
+  - assert(/<form\b/.test(html));
+  - expect(html.includes("<form")).toBe(true);
+  - if (!html.includes('aria-label="Primary"')) failures.push("missing navigation");
+  - const heading = html.match(new RegExp(`<h1 id="${id}">([^<]*)`));
+  - |
+    expect(body).toContain(
+      '<p role="status">Ready</p>',
+    );

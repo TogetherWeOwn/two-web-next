@@ -1,0 +1,101 @@
+id: no-raw-html-assertion
+language: TypeScript
+# The added-line gate filters these findings before enforcing them.
+severity: warning
+message: Use the shared DOM queries in ci/rendered-page.mjs or a Playwright locator for rendered HTML assertions.
+files:
+  - "{bin,ci,e2e,test,web}/**/{smoke,probe,probes,parity}/**/*.{ts,mts,cts,js,mjs,cjs}"
+  - "{bin,ci,e2e,test,web}/**/{smoke,probe,probes,parity}[-._]*.{ts,mts,cts,js,mjs,cjs}"
+  - "{bin,ci,e2e,test,web}/**/*[-._]{smoke,probe,probes,parity}.{ts,mts,cts,js,mjs,cjs}"
+  - "{bin,ci,e2e,test,web}/**/*[-._]{smoke,probe,probes,parity}[-._]*.{ts,mts,cts,js,mjs,cjs}"
+  - "{bin,ci,e2e,test,web}/**/{smoke,probe,probes,parity}.{ts,mts,cts,js,mjs,cjs}"
+rule:
+  any:
+    - pattern: expect($ACTUAL).$MATCHER($MARKUP)
+    - pattern: expect($ACTUAL, $MESSAGE).$MATCHER($MARKUP)
+    - pattern: assert.$MATCHER($ACTUAL, $MARKUP)
+    - pattern: assert.$MATCHER($ACTUAL, $MARKUP, $MESSAGE)
+    - all:
+        - matches: string-query
+        - inside:
+            any:
+              - inside:
+                  any:
+                    - pattern: expect($CONDITION).toBe(true)
+                    - pattern: expect($CONDITION).toBeTruthy()
+                  stopBy: end
+              - kind: arguments
+                inside:
+                  any:
+                    - pattern: assert.ok($QUERY)
+                    - pattern: assert.ok($QUERY, $MESSAGE)
+                    - pattern: assert($QUERY)
+                    - pattern: assert($QUERY, $MESSAGE)
+                    - pattern: check($QUERY)
+                    - pattern: check($QUERY, $MESSAGE)
+                    - pattern: check($QUERY, $MESSAGE, $DETAIL)
+              - pattern: "!$QUERY"
+                inside:
+                  kind: parenthesized_expression
+                  inside:
+                    kind: if_statement
+                    field: condition
+        - not:
+            inside:
+              matches: raw-query-context
+              stopBy: end
+    - all:
+        - matches: string-query
+        - not:
+            inside:
+              matches: raw-query-context
+              stopBy: end
+        - has:
+            field: function
+            kind: member_expression
+            has:
+              field: property
+              regex: "^(?:match|matchAll)$"
+constraints:
+  MATCHER:
+    regex: "^(?:toContain|toMatch|toBe|toEqual|toStrictEqual|match|equal|strictEqual|deepEqual|deepStrictEqual)$"
+  ACTUAL:
+    matches: response-body
+  MARKUP:
+    matches: markup
+  RECEIVER:
+    matches: response-body
+  NEEDLE:
+    matches: markup
+utils:
+  # Restrict the rule to response-shaped operands. This avoids comparing CLI
+  # help, source text, fixture inputs, and selector strings as if they were HTML.
+  response-body:
+    regex: '(?i)(?:\b[\w$]*(?:html|markup|body)\b|\.text\s*(?:\(\s*\))?\s*$)'
+  markup:
+    all:
+      - any:
+          - kind: string
+          - kind: template_string
+          - kind: regex
+          - pattern: new RegExp($SOURCE)
+          - pattern: new RegExp($SOURCE, $FLAGS)
+      # Common HTML structure and attributes. XML tags, CLI placeholders,
+      # CSS attribute selectors and escaped markup do not match by themselves.
+      - regex: '(?i)(?:<(?:\\?/)?(?:a|article|aside|body|button|details|div|fieldset|footer|form|h[1-6]|head|header|html|iframe|img|input|label|li|link|main|meta|nav|ol|option|p|script|section|select|span|style|summary|table|tbody|td|template|textarea|th|time|title|tr|ul)(?:[\s>/\[\\]|["\x27`])|(?:^|[\s"\x27`/]|\\b)(?:aria-[\w-]+|data-[\w-]+|class|href|id|role|src)\s*=)'
+  string-query:
+    # Bind operands through the call so markup in messages and other arguments
+    # cannot look like the expected HTML fragment.
+    any:
+      - pattern: $RECEIVER.includes($NEEDLE)
+      - pattern: $RECEIVER.startsWith($NEEDLE)
+      - pattern: $RECEIVER.endsWith($NEEDLE)
+      - pattern: $RECEIVER.match($NEEDLE)
+      - pattern: $RECEIVER.matchAll($NEEDLE)
+      - pattern: $NEEDLE.test($RECEIVER)
+  raw-query-context:
+    any:
+      - pattern: expect($ACTUAL).not.$NEGATIVE($EXPECTED)
+      - pattern: expect($ACTUAL, $MESSAGE).not.$NEGATIVE($EXPECTED)
+      - pattern: assert.doesNotMatch($ACTUAL, $EXPECTED)
+      - pattern: assert.doesNotMatch($ACTUAL, $EXPECTED, $MESSAGE)
