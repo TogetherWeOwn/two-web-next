@@ -186,6 +186,11 @@ class AdmissionTest(TestCase):
         stamp = runs[-1]["created_at"]
         self.assertEqual(lookup(stamp), (stamp, 51, "synthetic"))
         self.assertIsNone(lookup(stamp, sha="d" * 40))
+        sibling = add("pr-gates", "pr-lint", "gitleaks")[1]
+        runs[-1]["pull_requests"] = []
+        sibling["steps"] = steps("release")
+        sibling["steps"][1]["name"] = f"Scan PR 5 on 2:release at {merge_sha}"
+        self.assertEqual(lookup(stamp), (stamp, 51, "synthetic"))
 
         live = dict(pr, state="open", merge_commit_sha=merge_sha)
         scan_scope["verify_current"](lambda _: live, pr, merge_sha)

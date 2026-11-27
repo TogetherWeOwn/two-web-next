@@ -33,7 +33,6 @@ permissions:
   contents: read
   pull-requests: read # Read PR metadata and commit subjects for pr-lint.
 
-# Keep source updates, metadata edits, and user-provided dispatch input isolated.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && 'dispatch' || github.event.action == 'edited' && !github.event.changes.base && 'metadata' || 'source' }}-${{ github.event.pull_request.number || inputs.pr_number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -351,6 +350,7 @@ jobs:
 
           import json
           import os
+          import re
           import subprocess
           import time
           from pathlib import Path
@@ -432,22 +432,29 @@ jobs:
                   if cancelled_before_jobs or metadata_jobs(jobs):
                       continue
 
+                  scans = [job for job in jobs if job["name"] == "gitleaks" and job["run_attempt"] == run["run_attempt"]]
+                  steps = scans[0].get("steps", []) if len(scans) == 1 else []
+                  successful_steps = {step["name"] for step in steps if step["conclusion"] == "success"}
+                  receipts = {name for name in successful_steps if name.startswith("Scan PR ")}
+                  if not associations and len(receipts) == 1 and scans[0]["conclusion"] == "success":
+                      scope = re.fullmatch(r"Scan PR (\d+) on \d+:\S+ at [0-9a-f]{40}", next(iter(receipts)))
+                      if scope and scope[1] != str(pr["number"]):
+                          continue
+
                   # A newer attempt of an older source run can block an otherwise valid result.
                   if proof:
                       raise ValueError("An older source run was retried after the latest source run")
                   if run["status"] != "completed":
                       return None
-                  scans = [job for job in jobs if job["name"] == "gitleaks" and job["run_attempt"] == run["run_attempt"]]
                   if run["conclusion"] == "cancelled" or not scans:
                       raise ValueError("The latest source run did not finish Gitleaks")
                   if len(scans) != 1:
                       raise ValueError("Ambiguous source scan attempt")
                   scan = scans[0]
-                  successful_steps = {step["name"] for step in scan["steps"] if step["conclusion"] == "success"}
                   if (scan["status"] != "completed" or scan["conclusion"] != "success"
                           or "Scan the full history" not in successful_steps):
                       raise ValueError(f"The latest source scan did not pass: {scan['html_url']}")
-                  if target not in successful_steps:
+                  if receipts != {target}:
                       return None
                   scan_started = scan["started_at"]
                   if not isinstance(scan_started, str) or scan_started < started:
