@@ -491,6 +491,53 @@ Preserve all holds. Record exact-SHA startup and readiness, the bounded use wind
 and native cleanup or expiry even on failure or cancellation. An idle charge needs a
 dated owner exception with resource scope, cost, and expiry or review date.
 
+### Diagnose a queued shared staging deploy
+
+Open the existing `deploy` run titled `deploy <candidate SHA>`. For an
+automatic `workflow_run`, Actions `head_sha` can identify the workflow's
+`main` revision. Use the SHA in `display_title` to locate the candidate's CI.
+Read the run, its current attempt's job, and its pending deployments in one
+pass. Replace the example run ID for a new incident.
+
+```bash
+(
+  set -euo pipefail
+  run=repos/TogetherWeOwn/two-web-next/actions/runs/45686583838
+  metadata=$(gh api "$run")
+  jq '{display_title, head_sha, run_attempt, status, conclusion, html_url}' <<< "$metadata"
+  attempt=$(jq -er '.run_attempt' <<< "$metadata")
+  gh api "$run/attempts/$attempt/jobs" --jq '.jobs[] | select(.name == "deploy-staging") | {status, conclusion, runner_id, runner_name, html_url, steps: [.steps[]? | {name, status, conclusion}]}'
+  gh api "$run/pending_deployments" --jq '[.[] | .environment.name]'
+)
+```
+
+- **Runner queue.** A `queued` job with no runner, no steps and an empty
+  pending-deployments list is waiting for execution. Use the job's Actions
+  timeline to confirm runner pickup is pending. A `pending` run can also be
+  waiting for the shared `deploy-staging` concurrency group.
+- **Early skip.** A `completed` job with conclusion `skipped` and no steps
+  was filtered by the workflow's job-level condition. Check the trigger
+  event, repository, branch and CI conclusion in `deploy.yml`.
+- **Environment approval.** A `staging` entry in `pending_deployments`
+  identifies a pending environment gate. An empty list means no pending
+  approval was reported. The normal `staging` Environment has no required
+  reviewers.
+- **Deploy failure.** A `completed` job with conclusion `failure` has a
+  failed execution. Open the job link and identify the first failed step to
+  distinguish admission or setup failure from a deploy or verification
+  failure. If a job record is missing or a read fails, leave the cause open.
+
+During [run 45686583838](https://github.com/TogetherWeOwn/two-web-next/actions/runs/45686583838),
+[exact main CI passed](https://github.com/TogetherWeOwn/two-web-next/actions/runs/45677691590)
+while `deploy-staging` was queued without a runner or pending approval.
+While queued, keep the existing run link for its completion callback. On
+success, follow the automatic [staging E2E workflow](../.github/workflows/e2e-staging.yml)
+whose **Staging evidence** summary links back to that deploy run and attempt.
+For the served SHA, use the deploy's `Verify deployed revision` step
+(`bin/revision-check.mjs` checks `/up` for the exact commit and Worker Version
+ID) and `Verify /version reports the deployed commit` step
+(`bin/version-check.mjs` checks the same SHA and the upload timestamp).
+
 ### Neon web schema migrations (separate operator action)
 
 [db-migrate.yml](../.github/workflows/db-migrate.yml) is a **remote mutation**
