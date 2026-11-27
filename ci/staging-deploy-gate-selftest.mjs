@@ -73,6 +73,36 @@ test("bounded CI admission accepts a successful exact attempt", async () => {
   );
 });
 
+test("main push CI admits only the expected PR admission skip", async () => {
+  const evidence = fixture();
+  const admission = {
+    ...evidence.jobs.jobs[0],
+    name: "pr-admission",
+    conclusion: "skipped",
+  };
+  evidence.jobs.jobs.push(admission);
+  evidence.jobs.total_count += 1;
+  const admit = () => {
+    const responses = Object.values(evidence);
+    return requireSuccessfulCi(context("workflow_run"), {
+      token: "offline-stub",
+      fetchImpl: async () => Response.json(responses.shift()),
+    });
+  };
+
+  assert.deepEqual(await admit(), { sha, runId: run.id, runAttempt: run.run_attempt });
+
+  admission.name = "dependency-admission";
+  await assert.rejects(admit(), /Full CI jobs are not successful/);
+  admission.name = "pr-admission";
+  admission.conclusion = "failure";
+  await assert.rejects(admit(), /Full CI jobs are not successful/);
+  admission.conclusion = "skipped";
+  evidence.jobs.jobs.push({ ...admission });
+  evidence.jobs.total_count += 1;
+  await assert.rejects(admit(), /Ambiguous PR admission job/);
+});
+
 test("bounded CI admission refuses and cancels oversized evidence at every read", async () => {
   const evidence = Object.values(fixture());
   for (const [overLimit, path] of ciEvidencePaths.entries()) {
