@@ -11,7 +11,7 @@ import { attr, elements } from "./helpers/kit-edit-controls";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
 const { renderedElements, renderedText } = webRequire("../ci/rendered-page.mjs") as {
-  renderedElements(node: Dom.Node, selector: { tag: string }): Iterable<Dom.Element>;
+  renderedElements(node: Dom.Node, selector: { tag?: string }): Iterable<Dom.Element>;
   renderedText(node: Dom.Node): string;
 };
 const { compile } = webRequire("svelte/compiler") as {
@@ -92,11 +92,12 @@ it("renders calendar card actions and escapes search spans", async () => {
     const description = (nodes: ReturnType<typeof card>) =>
       nodes.find((el) => attr(el, "class")?.split(/\s+/).includes("schedule-text"));
 
-    const visitor = card("visitor");
+    const visitor = [...renderedElements(parseFragment(b.visitor!), {})];
     const cancelled = card("cancelled", false);
     expect(links(visitor)).toContain("/join/discord?next=%2Fevents%3Fpage%3D2");
     expect(links(visitor)).toContain("/e/a");
-    expect(renderedText(parseFragment(b.visitor!))).toContain("Spots open");
+    const badge = visitor.find((el) => attr(el, "data-testid") === "event-schedule-availability");
+    expect(badge && renderedText(badge)).toBe("Spots open");
     expect(testIds(card("member", false))).not.toContain("signin");
     expect(testIds(card("past", false))).not.toContain("signin");
     expect(testIds(cancelled)).not.toContain("signin");
