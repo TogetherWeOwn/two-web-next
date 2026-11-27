@@ -24,6 +24,11 @@ describe("activity parser edges: save-side counting and the All game", () => {
     expect(hundred.length).toBe(200); // a `.length` mutant refuses this row
     expect(parseActivityParam(hundred)).toEqual({ ok: true, game: hundred });
     expect(parseActivityParam("😀".repeat(101)).ok).toBe(false);
+    expect(parseActivityParam(` ${hundred} `)).toEqual({ ok: true, game: hundred });
+    expect(parseActivityParam(` ${hundred}😀 `)).toEqual({
+      ok: false,
+      message: "Unknown activity",
+    });
     expect(ACTIVITY_MAX_LENGTH).toBe(100);
   });
 
