@@ -958,6 +958,47 @@ function assertProductionBaselineScope(workflow) {
 const productionWorkflow = () =>
   readFileSync(new URL("../.github/workflows/deploy-production.yml", import.meta.url), "utf8");
 
+test("protected deploy admission requires the recovery pins for the selected mode", () => {
+  const { jobs } = parse(productionWorkflow());
+  const deploy = jobs["deploy-production"];
+  assert.equal(deploy.environment.name, "production");
+  assert.deepEqual(deploy.needs, ["preflight", "regression"]);
+  assert.equal(
+    jobs.preflight.outputs.rollback_version_id,
+    "${{ steps.rollback-target.outputs.version_id }}",
+  );
+  assert.equal(
+    jobs.preflight.outputs.rollback_commit,
+    "${{ steps.rollback-target.outputs.commit }}",
+  );
+  assert.equal(jobs.preflight.outputs.cutover_mode, "${{ steps.cutover.outputs.mode }}");
+  assert.equal(jobs.preflight.outputs.cutover_run, "${{ steps.cutover.outputs.run_id }}");
+  assert.equal(jobs.preflight.outputs.cutover_attempt, "${{ steps.cutover.outputs.run_attempt }}");
+
+  // Exercise the checked-in expression with successful dependencies. Actions
+  // resolves a missing job output to an empty string.
+  const admit = new Function("needs", `return (${deploy.if})`);
+  const receipt = {
+    sha: enabled.DEPLOY_SHA,
+    already_live: "",
+    rollback_version_id: "11111111-1111-1111-1111-111111111111",
+    rollback_commit: "b".repeat(40),
+    cutover_mode: "ember",
+    cutover_run: "21",
+    cutover_attempt: "3",
+  };
+  const starts = (outputs) => admit({ preflight: { outputs } });
+  assert.equal(starts(receipt), true);
+  for (const field of Object.keys(receipt).filter((field) => field !== "already_live")) {
+    assert.equal(starts({ ...receipt, [field]: "" }), false, `missing ${field}`);
+  }
+  assert.equal(starts({ ...receipt, already_live: "true" }), false);
+  assert.equal(
+    starts({ ...receipt, cutover_mode: "ordinary", cutover_run: "", cutover_attempt: "" }),
+    true,
+  );
+});
+
 test("production dead-letter baseline is scoped to the gradual and post-promotion smokes", () => {
   assertProductionBaselineScope(productionWorkflow());
 });
