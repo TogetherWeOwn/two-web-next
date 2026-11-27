@@ -4,6 +4,7 @@
 // shape; `games` the array shape.
 
 import { containsControlCharacters } from "../admin/validation-shared";
+import { exceedsCodePointLimit } from "../http/length-limit";
 
 export type ProfileAttrs = {
   bio: string | null;
@@ -71,14 +72,14 @@ export function validateProfile(
 
   const bioRaw = input.bio ?? null;
   if (bioRaw !== null && typeof bioRaw !== "string") errors.bio = "Bio must be text.";
-  else if (typeof bioRaw === "string" && [...bioRaw].length > 1000)
+  else if (typeof bioRaw === "string" && exceedsCodePointLimit(bioRaw, 1000))
     errors.bio = "Keep your bio to 1000 characters or fewer.";
   else if (typeof bioRaw === "string" && containsControlCharacters(bioRaw))
     errors.bio = "Remove control or invisible characters.";
 
   let gamesRaw: unknown = input.games;
   if (typeof input.games_text === "string") {
-    if ([...input.games_text].length > 1700) errors.games = "Games list is too long.";
+    if (exceedsCodePointLimit(input.games_text, 1700)) errors.games = "Games list is too long.";
     gamesRaw = input.games_text.split(/\r\n|\r|\n/);
   }
   const games: string[] = [];
@@ -93,7 +94,8 @@ export function validateProfile(
       // Check raw input: trim() would hide forbidden VT/FF/BOM at the edges.
       if (containsControlCharacters(g)) errors.games ??= "Remove control or invisible characters.";
       const t = g.trim();
-      if ([...t].length > 80) errors.games ??= "Keep each game name to 80 characters or fewer.";
+      if (exceedsCodePointLimit(t, 80))
+        errors.games ??= "Keep each game name to 80 characters or fewer.";
       if (t !== "" && !games.includes(t)) games.push(t);
     }
     if (games.length > 20) errors.games ??= "Add no more than 20 games.";

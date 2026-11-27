@@ -4,6 +4,7 @@
 // untouched.
 
 import { isPublicJoinUrl } from "../events/public-join-url";
+import { exceedsCodePointLimit } from "../http/length-limit";
 import {
   containsControlCharacters,
   fail,
@@ -72,7 +73,7 @@ function parseEventInput(
   }
   const title = text(data.title);
   if (!title) fields.title = "Give the event a title.";
-  else if ([...title].length > 100) fields.title = "Keep the title to 100 characters.";
+  else if (exceedsCodePointLimit(title, 100)) fields.title = "Keep the title to 100 characters.";
   // A supplied non-string must never silently clear saved text: null, blank
   // and omitted stay empty (timezone keeps its Europe/London default), but
   // objects, arrays, booleans and numbers are refused with the existing
@@ -93,28 +94,28 @@ function parseEventInput(
     }
   }
   const game = text(data.game);
-  if (game && [...game].length > 100) fields.game = "Keep the game to 100 characters.";
+  if (game && exceedsCodePointLimit(game, 100)) fields.game = "Keep the game to 100 characters.";
   const description = text(data.description);
-  if (description && [...description].length > 1000)
+  if (description && exceedsCodePointLimit(description, 1000))
     fields.description = "Keep the description to 1000 characters.";
   const accessibilityNotes = text(data.accessibility_notes);
-  if (accessibilityNotes && [...accessibilityNotes].length > 1000)
+  if (accessibilityNotes && exceedsCodePointLimit(accessibilityNotes, 1000))
     fields.accessibility_notes = "Keep accessibility notes to 1000 characters.";
   const timezone = str(data.timezone) ?? "Europe/London";
   if (!isKnownTimezone(timezone)) fields.timezone = `Unknown timezone: ${timezone}.`;
   const location = text(data.location);
-  if (location && [...location].length > 255)
+  if (location && exceedsCodePointLimit(location, 255))
     fields.location = "Keep the location to 255 characters.";
   const organizerName = text(data.organizer_name);
-  if (organizerName && [...organizerName].length > 500)
+  if (organizerName && exceedsCodePointLimit(organizerName, 500))
     fields.organizer_name = "Keep the organizer name to 500 characters.";
   const joinUrl = str(data.join_url);
-  if (joinUrl && [...joinUrl].length > 2048)
+  if (joinUrl && exceedsCodePointLimit(joinUrl, 2048))
     fields.join_url = "Keep the public joining link to 2048 characters.";
   else if (joinUrl && !isPublicJoinUrl(joinUrl))
     fields.join_url = "Enter a valid public HTTP or HTTPS link without sign-in credentials.";
   const joinInstructions = text(data.join_instructions);
-  if (joinInstructions && [...joinInstructions].length > 5000)
+  if (joinInstructions && exceedsCodePointLimit(joinInstructions, 5000))
     fields.join_instructions = "Keep joining instructions to 5000 characters.";
   // Check the submitted text, not its trimmed value: trim removes BOM.
   for (const field of [

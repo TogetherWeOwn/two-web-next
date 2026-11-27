@@ -4,6 +4,8 @@
 // limits without changing them: bio <= 1000 Unicode code points, raw games
 // text <= 1700, each trimmed game <= 80, at most 20 distinct nonblank names.
 
+import { exceedsCodePointLimit } from "../http/length-limit";
+
 export const PROFILE_BIO_LIMIT = 1000;
 export const PROFILE_GAMES_RAW_LIMIT = 1700;
 export const PROFILE_GAME_NAME_LIMIT = 80;
@@ -34,7 +36,7 @@ export const parseGamesText = (value: string): GamesComposition => {
   const overlong: number[] = [];
   value.split(/\r\n|\r|\n/).forEach((line, index) => {
     const trimmed = line.trim();
-    if ([...trimmed].length > PROFILE_GAME_NAME_LIMIT) overlong.push(index + 1);
+    if (exceedsCodePointLimit(trimmed, PROFILE_GAME_NAME_LIMIT)) overlong.push(index + 1);
     if (trimmed !== "" && !names.includes(trimmed)) names.push(trimmed);
   });
   return { names, raw: [...value].length, overlong };
