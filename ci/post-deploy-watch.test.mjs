@@ -19,8 +19,10 @@ const healthy = (versionId = PROMOTED) => ({
 function upFetch(answer) {
   return async (url) => {
     assert.equal(new URL(url).pathname, "/up");
-    const { status = 200, body } = await answer();
-    return { status, json: async () => body };
+    const response = await answer();
+    if (response instanceof Response) return response;
+    const { status = 200, body } = response;
+    return new Response(typeof body === "string" ? body : JSON.stringify(body), { status });
   };
 }
 
@@ -44,6 +46,54 @@ test("readiness: another live version stands the watch down, even when unhealthy
     const result = await probe(() => ({ status, body: healthy(OTHER) }));
     assert.equal(result.state, "superseded");
     assert.match(result.reason, new RegExp(OTHER));
+  }
+});
+
+test("readiness: only complete bodies within 16 KiB can provide version evidence", async () => {
+  for (const [version, status, expected] of [
+    [PROMOTED, 200, { state: "ok" }],
+    [OTHER, 503, { state: "superseded", reason: `production now serves ${OTHER}` }],
+  ]) {
+    const body = JSON.stringify({ ...healthy(version), extra: "é" });
+    const bytes = new TextEncoder().encode(body.padEnd(16 * 1024 - 1));
+    assert.equal(bytes.byteLength, 16 * 1024);
+    assert.deepEqual(await probe(() => new Response(bytes, { status })), expected);
+
+    // A complete, otherwise acceptable envelope precedes overflowing whitespace.
+    // No length header is present. Cancellation may stay pending after the refusal.
+    let pulls = 0;
+    let cancelled = false;
+    const stream = new ReadableStream(
+      {
+        pull(controller) {
+          pulls += 1;
+          if (pulls === 1) controller.enqueue(bytes);
+          else if (pulls === 2) controller.enqueue(Uint8Array.of(32));
+          else controller.close();
+        },
+        cancel() {
+          cancelled = true;
+          return new Promise(() => {});
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    assert.deepEqual(await probe(() => new Response(stream, { status })), {
+      state: "miss",
+      reason: "oversized /up response",
+    });
+    assert.equal(pulls, 2);
+    assert.equal(cancelled, true);
+    assert.equal(stream.locked, false);
+  }
+});
+
+test("readiness: empty and absent bodies are misses", async () => {
+  for (const body of ["", null]) {
+    assert.deepEqual(await probe(() => new Response(body)), {
+      state: "miss",
+      reason: "unreachable (SyntaxError)",
+    });
   }
 });
 
