@@ -414,6 +414,63 @@ test("qualification observes the fixed staging endpoint once without redirects o
   assert.ok(calls[0][1].signal instanceof AbortSignal);
 });
 
+test("qualification bounds the staging identity stream and accepts matching evidence", async () => {
+  const encoder = new TextEncoder();
+  const candidate = { sha: A, deployedAt };
+  const observeBody = (body) => observe({}, { fetchImpl: async () => new Response(body) });
+  const maxPadding = 2048 - JSON.stringify({ ...candidate, padding: "" }).length;
+  for (const [prefix, padding] of [
+    ["", "€"],
+    ["\uFEFF\uFEFF", "€".repeat(maxPadding)],
+  ]) {
+    const bytes = encoder.encode(prefix + JSON.stringify({ ...candidate, padding }));
+    const split = bytes.indexOf(0xe2) + 1;
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(bytes.subarray(0, 4));
+        controller.enqueue(bytes.subarray(4, split));
+        controller.enqueue(bytes.subarray(split));
+        controller.close();
+      },
+    });
+    assert.deepEqual(await observeBody(body), candidate);
+  }
+
+  await assert.rejects(observeBody(`\uFEFF\uFEFF\uFEFF${JSON.stringify(candidate)}`), {
+    message: "Staging identity is not JSON",
+  });
+
+  for (const chunks of [
+    [
+      encoder.encode(JSON.stringify({ ...candidate, padding: " ".repeat(maxPadding) })),
+      encoder.encode(" "),
+    ],
+    // An incomplete UTF-8 sequence exceeds the byte cap before it emits another code unit.
+    [encoder.encode(`\uFEFF\uFEFF${"€".repeat(2048)}`), Uint8Array.of(0xe2)],
+  ]) {
+    let pulls = 0;
+    let cancelled = false;
+    const body = new ReadableStream(
+      {
+        pull(controller) {
+          const chunk = chunks[pulls++];
+          if (chunk) controller.enqueue(chunk);
+          else controller.close();
+        },
+        cancel() {
+          cancelled = true;
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    await assert.rejects(observeBody(body), {
+      message: "Staging identity response too large",
+    });
+    assert.equal(cancelled, true);
+    assert.equal(pulls, 2);
+  }
+});
+
 test("identity evidence files retain only validated SHA and timestamp, never response data", () => {
   const directory = mkdtempSync(join(tmpdir(), "staging-identity-"));
   try {
