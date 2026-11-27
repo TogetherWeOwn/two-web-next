@@ -104,6 +104,7 @@ export async function prepareServingIsolation({
       raw = plan,
       hash = sha(raw),
       readiness = health,
+      connect: open = connect,
     } = {},
   ) =>
     runServingIsolation(
@@ -119,7 +120,7 @@ export async function prepareServingIsolation({
       {
         login,
         owner: migrationRole,
-        connect,
+        connect: open,
         fetchImpl(target) {
           assert.equal(operation, "forward");
           if (new URL(target).hostname === "api.cloudflare.com") {

@@ -21,6 +21,7 @@ import {
   assertMigrationPrefix,
   PLANETSCALE_PRODUCTION_BRANCH_ID,
   PLANETSCALE_PRODUCTION_HOST,
+  webMigrationLockKey,
 } from "./db-migrate.mjs";
 import { runRepair } from "./db-permissions-repair.mjs";
 import { runReadinessProjection } from "./db-readiness-projection.mjs";
@@ -555,6 +556,30 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
   const baselineRoles = await roles();
   const readiness = await probe(base, false);
   t.diagnostic("Web, Jobs and both Bot logins passed on the repaired 1033 baseline.");
+  const assertMigrationLockRefused = async (operation, options, expectedState) => {
+    const { digest } = await inspect(fresh);
+    const statements = [];
+    const client = fresh(migrator, "postgres", (_id, statement) => statements.push(statement));
+    await withClient(client, () =>
+      withClient(restore.admin(), (holder) =>
+        holder.begin(async (tx) => {
+          const [{ acquired }] =
+            await tx`select pg_try_advisory_xact_lock(${webMigrationLockKey}) as acquired`;
+          assert.equal(acquired, true, "Fixture must hold the Web migration lock");
+          await assert.rejects(isolate(operation, { ...options, connect: () => client }), {
+            code: "ERR_ASSERTION",
+            message: "Web migration lock held",
+          });
+          const trace = statements.join("\n");
+          assert.match(trace, /^select pg_try_advisory_xact_lock\b/im);
+          assert.doesNotMatch(trace, /^\s*(?:grant|revoke)\b/im);
+          await assert.rejects(client`select 1`, { code: "CONNECTION_ENDED" });
+          assert.equal(await isolate("readback", options), expectedState);
+          assert.equal((await inspect(fresh)).digest, digest);
+        }),
+      ),
+    );
+  };
   const forward = { readiness: { ...readiness, revision: { version_id: version } } };
   await t.test("failed serving postcheck rolls back ACLs and allows a clean retry", () =>
     assertServingPostcheckRollback({
@@ -569,7 +594,11 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
       }),
       probeBefore: () => probe(base, false),
       retryForward: async () => {
+        await assertMigrationLockRefused("forward", forward, "before");
         assert.equal(await isolate("forward", forward), "committed");
+        t.diagnostic(
+          "Held Web migration lock refused forward before ACL changes. Retry committed.",
+        );
       },
     }),
   );
@@ -593,7 +622,9 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
   t.diagnostic("Isolated 1037 preserved workload access and projected readiness.");
 
   const undo = { end: expandedEnd };
+  await assertMigrationLockRefused("undo", undo, "after");
   assert.equal(await isolate("undo", undo), "committed");
+  t.diagnostic("Held Web migration lock refused undo before ACL changes. Retry committed.");
   assert.equal(await isolate("readback", undo), "before");
   const { digest: restoredDigest } = await inspect(fresh);
   await assertDuplicateRefused("undo", undo);
@@ -694,9 +725,9 @@ test("PostgreSQL 18 branch replay preserves repair and Bot scope with alternate 
     await withClient(connect(provisioner), async (sql) => {
       for (const role of webRoles) await setPassword(sql, role, webPasswords[role]);
     });
-    const fresh = (role, database) =>
+    const fresh = (role, database, debug) =>
       webPasswords[role]
-        ? restore.connect(role, webPasswords[role], database)
+        ? restore.connect(role, webPasswords[role], database, debug)
         : connect(role, database);
     for (const role of webRoles) {
       await withClient(connect(role), (sql) => denies(sql`select current_user`, "28P01"));

@@ -26,6 +26,7 @@ import {
 } from "./kit-cutover-evidence.mjs";
 import { packageCutover } from "./kit-cutover-package.mjs";
 import { cloudflare, exercise, verifyServed } from "./kit-cutover-staging.mjs";
+import "./fixtures/kit-cutover-cleanup.mjs";
 import { KIT_ROUTE_FLAGS } from "./production-deploy-gate.mjs";
 import { sha256 } from "./worker-bundle-evidence.mjs";
 
