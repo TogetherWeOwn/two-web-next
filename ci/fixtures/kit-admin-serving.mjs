@@ -1516,7 +1516,15 @@ export async function assertKitQueuePreviewServing({
       target,
       profile,
       status,
-      { url = path, actor, method, origin, accept = "application/json", owned = false } = {},
+      {
+        url = path,
+        actor,
+        method,
+        origin,
+        accept = "application/json",
+        encoding = "identity",
+        owned = false,
+      } = {},
     ) {
       const cookie = actor ? await session(sql, actor, actor !== member) : undefined;
       const response = await visit(target, url, status, {
@@ -1524,6 +1532,7 @@ export async function assertKitQueuePreviewServing({
         owned,
         headers: {
           accept,
+          "accept-encoding": encoding,
           "cf-ray": requestId,
           "if-none-match": "*",
           "x-fixture-preview-profile": profile,
@@ -1536,19 +1545,25 @@ export async function assertKitQueuePreviewServing({
       return { ...response, cookie };
     }
     async function compareRefusal(profile, status, options, error, cookies = "none") {
-      const baseline = await read(targets.hono, profile, status, options);
-      const candidate = await read(targets.kit, profile, status, { ...options, owned: true });
-      assert.deepEqual(contract(candidate), contract(baseline));
-      assert.equal(candidate.text, baseline.text);
-      if (error) assert.deepEqual(JSON.parse(candidate.text), { error });
-      for (const result of [baseline, candidate]) {
-        assert.equal(result.headers.getSetCookie().length, cookies === "none" ? 0 : 1);
-        if (cookies === "renewed") assertRenewed(result);
-      }
-      if (cookies === "intended") {
-        assert.equal(candidate.headers.get("location"), "/auth/discord");
-        assert.ok(candidate.headers.getSetCookie()[0].startsWith("__Host-two_login_intended="));
-        assert.ok(candidate.headers.getSetCookie()[0] === baseline.headers.getSetCookie()[0]);
+      for (const encoding of ["identity", "gzip"]) {
+        const baseline = await read(targets.hono, profile, status, { ...options, encoding });
+        const candidate = await read(targets.kit, profile, status, {
+          ...options,
+          encoding,
+          owned: true,
+        });
+        assert.deepEqual(contract(candidate), contract(baseline), `${status} ${encoding} headers`);
+        assert.equal(candidate.text, baseline.text);
+        if (error) assert.deepEqual(JSON.parse(candidate.text), { error });
+        for (const result of [baseline, candidate]) {
+          assert.equal(result.headers.getSetCookie().length, cookies === "none" ? 0 : 1);
+          if (cookies === "renewed") assertRenewed(result);
+        }
+        if (cookies === "intended") {
+          assert.equal(candidate.headers.get("location"), "/auth/discord");
+          assert.ok(candidate.headers.getSetCookie()[0].startsWith("__Host-two_login_intended="));
+          assert.ok(candidate.headers.getSetCookie()[0] === baseline.headers.getSetCookie()[0]);
+        }
       }
     }
     function assertRenewed(result) {
@@ -1618,19 +1633,9 @@ export async function assertKitQueuePreviewServing({
       assert.equal(fallback.text, baseline.text);
     }
 
-    let baselineHeaders;
     let expectedReceipts = 0;
-    for (const [name, profile, owned, url = path] of [
-      ["hono", "on", false],
-      ["kit", "unset", false],
-      ["kit", "off", false],
-      ["kit", "on", true],
-      ["hono", "on", false, encodedPath],
-      ["kit", "on", false, encodedPath],
-    ]) {
-      const result = await read(targets[name], profile, 200, { actor: operatorId, owned, url });
-      baselineHeaders ??= contract(result);
-      assert.deepEqual(contract(result), baselineHeaders);
+    async function readSuccess(name, profile, options = {}) {
+      const result = await read(targets[name], profile, 200, { actor: operatorId, ...options });
       assert.equal(result.headers.get("cache-control"), "private, no-store");
       assert.equal(result.headers.getSetCookie().length, 1);
       assertRenewed(result);
@@ -1668,9 +1673,26 @@ export async function assertKitQueuePreviewServing({
           observedAt: { before: null, after: body.observedAt },
         },
       });
+      return contract(result);
     }
+    const baselineHeaders = await readSuccess("hono", "on");
+    for (const [name, profile, owned, url = path] of [
+      ["kit", "unset", false],
+      ["kit", "off", false],
+      ["kit", "on", true],
+      ["hono", "on", false, encodedPath],
+      ["kit", "on", false, encodedPath],
+    ]) {
+      assert.deepEqual(await readSuccess(name, profile, { owned, url }), baselineHeaders);
+    }
+    const gzipHeaders = await readSuccess("hono", "on", { encoding: "gzip" });
+    assert.deepEqual(
+      await readSuccess("kit", "on", { encoding: "gzip", owned: true }),
+      gzipHeaders,
+    );
+
     // This job owns the disposable DB. Reject only new operational preview
-    // receipts during these two requests, then restore the fixture schema.
+    // receipts during the refusal comparison, then restore the fixture schema.
     await sql`alter table activity_log add constraint fixture_queue_preview_audit_failure
       check (description is distinct from 'queue.failed.preview') not valid`;
     try {
