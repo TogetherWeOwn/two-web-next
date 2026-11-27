@@ -349,7 +349,9 @@ the next request. Activation follows the
 ### Event Markdown endpoints
 
 `KIT_ROUTE_EVENT_MARKDOWN=true` selects GET and HEAD on `/events.md` and
-`/e/<key>.md` with a literal mount and suffix and one non-empty key segment.
+the legacy `/e/:file{.+\.md}` suffix route. Literal single-segment URLs use
+the mounted Kit endpoint. Hono-matched nested paths and encoded mount or suffix
+aliases use the same Markdown handler with the original request.
 These reads use the same `events-read` budget as Hono and charge it before
 canonical redirects and conditional requests. The collection lists upcoming
 published rows. Detail reads are session-free, including the draft 403 for
@@ -357,9 +359,9 @@ moderators, the cancelled 410, the missing 404 and the past `noindex` response.
 
 The Markdown endpoint takes precedence over the generic event page when both
 are mounted. When the flag is off, Hono serves the suffix path even if the Kit
-event page is enabled. Encoded mount and suffix variants, trailing slashes,
-Kit data URLs, other methods and multisegment variants continue to Hono. The
-bare `/e/.md` path follows the generic event page route.
+event page is enabled. Trailing slashes, Kit data URLs, other methods and
+paths outside the suffix constraint keep their existing dispatch. The bare
+`/e/.md` path follows the generic event page route.
 
 Qualify the exact candidate through the [production release gate](../CONTRIBUTING.md#production-release-gate)
 before activating the binding. Clearing it restores Hono. Cached successful
