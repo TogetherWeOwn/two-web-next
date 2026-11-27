@@ -17,6 +17,7 @@ import {
   assertInstalledJoinAttemptDetail,
   assertKitAdminServing,
   assertKitAttendanceDisabled,
+  assertKitQueuePreviewServing,
   assertMixedAdminAuthRollback,
   prepareAdminFixture,
   prepareAdminPublishFixture,
@@ -1020,6 +1021,34 @@ export default {
       hono: honoWithSession,
       databaseUrl,
     });
+    const previewWorkers = [];
+    try {
+      await assertKitQueuePreviewServing({
+        worker,
+        honoWorker: join(repo, "src/worker.ts"),
+        scratch,
+        databaseUrl,
+        start: async (name, entry) => {
+          const instance = await startWorker(
+            `queue-preview-${name}`,
+            entry,
+            name === "hono" ? join(repo, "public") : assets,
+            secret,
+          );
+          previewWorkers.push(instance);
+          await listen(instance.child, instance.origin, () => instance.log);
+          return instance;
+        },
+      });
+    } finally {
+      await Promise.all(previewWorkers.map(stopWorker));
+    }
+    assert.ok(
+      previewWorkers.every(({ stopped }) => stopped),
+      "queue preview Workers did not stop",
+    );
+    console.log("PASS queue preview Workers stopped and synthetic fixture cleanup completed");
+
     const deleteFixture = await startWorker("kit-featured-delete", worker, assets, secret, {
       KIT_ROUTE_ADMIN: "true",
       KIT_PARITY_FIXTURE_ADMIN_FEATURED_DELETE: "true",

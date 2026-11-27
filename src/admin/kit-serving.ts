@@ -135,3 +135,10 @@ export function privateAdminResponse(request: Request, response: Response): Resp
     headers,
   });
 }
+
+export const KIT_QUEUE_PREVIEW_ROUTE = {
+  method: "GET",
+  path: "/admin/queue/failed/:id/preview",
+  enabled: true,
+} as const;
+export const KIT_QUEUE_PREVIEW_ID = "/admin/queue/failed/[id]/preview";
