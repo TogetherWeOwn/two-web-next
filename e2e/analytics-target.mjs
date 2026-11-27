@@ -24,7 +24,18 @@ export function requireAnalyticsTarget(args) {
   return { origin: rawOrigin, jurisdiction };
 }
 
-export async function readAnalyticsDocument({ origin, jurisdiction }, path) {
+/** @param {string} url @param {import("node:https").RequestOptions} options */
+function requestAnalyticsResponse(url, options) {
+  return new Promise((resolve, reject) => {
+    get(url, options, resolve).on("error", reject);
+  });
+}
+
+export async function readAnalyticsDocument(
+  { origin, jurisdiction },
+  path,
+  requestResponse = requestAnalyticsResponse,
+) {
   // The CLI validates origin before calling this reader. Only direct GETs.
   if (path !== ELIGIBLE_PATH && path !== PRIVACY_PATH) throw new Error("Unsupported fixture path");
   const options = {
@@ -33,9 +44,7 @@ export async function readAnalyticsDocument({ origin, jurisdiction }, path) {
     signal: AbortSignal.timeout(10_000),
     headers: { accept: "text/html", "cache-control": "no-cache" },
   };
-  const response = await new Promise((resolve, reject) => {
-    get(`${origin}${path}`, options, resolve).on("error", reject);
-  });
+  const response = await requestResponse(`${origin}${path}`, options);
   try {
     return await parseAnalyticsResponse(response, jurisdiction);
   } finally {
