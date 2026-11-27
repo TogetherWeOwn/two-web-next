@@ -554,6 +554,22 @@ async function rehearseRepairedServing(restore, fresh, directory, t) {
   assert.equal(originalGrants.length, originalObjects.length);
   const roles = () => withClient(restore.admin(), roleCatalog);
   const baselineRoles = await roles();
+  // Keep the row count and hashes intact while changing the restored history.
+  await withClient(restore.admin(), async (owner) => {
+    const last = base.rows.at(-1);
+    const changedTimestamp = String(BigInt(last.created_at) + 1n);
+    await owner`update drizzle.__drizzle_migrations set created_at = ${changedTimestamp}
+      where created_at = ${last.created_at}`;
+    const divergent = [...base.rows.slice(0, -1), { ...last, created_at: changedTimestamp }];
+    assert.deepEqual(await readServingLedger(owner), divergent);
+    await assert.rejects(isolate("readback"), /Migration history is not an exact prefix/);
+    assert.deepEqual(await readServingLedger(owner), divergent);
+    await owner`update drizzle.__drizzle_migrations set created_at = ${last.created_at}
+      where created_at = ${changedTimestamp}`;
+    assert.deepEqual(await readServingLedger(owner), base.rows);
+    assert.equal(await isolate("readback"), "before");
+  });
+  t.diagnostic("Readback refused the same-count timestamp mismatch and accepted the exact ledger.");
   const readiness = await probe(base, false);
   t.diagnostic("Web, Jobs and both Bot logins passed on the repaired 1033 baseline.");
   const assertMigrationLockRefused = async (operation, options, expectedState) => {
