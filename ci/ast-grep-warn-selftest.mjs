@@ -61,7 +61,7 @@ function checkByteLengthRuleCoverage() {
     );
     writeFileSync(
       join(directory, "web/src/fallback.svelte"),
-      `<script lang="legacy">const marker = "</SCRIPTURE>"; ${unsafe}</script>\n<svelte:head><script>${unsafe}</script></svelte:head>\n`,
+      `\uFEFF\uFEFF<script lang="legacy">const marker = "</SCRIPTURE>"; const over = left.byteLength > 0</script>\n<svelte:head><script>${unsafe}</script></svelte:head>\n`,
     );
 
     for (const file of ["src/probe.tsx", "src/probe.jsx"]) {
@@ -96,7 +96,7 @@ function checkByteLengthRuleCoverage() {
       "src/probe.tsx:2",
       `${jsPath}:1`,
       "web/src/fallback.svelte:1",
-      "web/src/fallback.svelte:3",
+      "web/src/fallback.svelte:2",
       `${sveltePath}:2`,
       `${sveltePath}:6`,
     ];
@@ -119,12 +119,14 @@ function checkByteLengthRuleCoverage() {
     const hosted = lint("refs/heads/main", "true");
     assert.equal(hosted.status, 1, hosted.error?.message ?? hosted.stderr);
     assert.match(hosted.stderr, /The CI checkout has missing tracked files/);
-    writeFileSync(join(directory, "ci/non-utf8.mjs"), Buffer.from([0xff]));
+    const broken = join(directory, "web/src/broken.svelte");
+    writeFileSync(broken, "<script>const bad = ;</script>");
+    assert.throws(() => scanByteLengthComparisons(directory), /broken\.svelte: could not parse/);
+    rmSync(broken);
+    const invalid = join(directory, "ci/non-utf8.mjs");
+    writeFileSync(invalid, Buffer.from([0xff]));
     assert.throws(() => scanByteLengthComparisons(directory), /ci\/non-utf8\.mjs: invalid UTF-8/);
-    writeFileSync(
-      join(directory, "ci/non-utf8.mjs"),
-      "// too large for ast-grep\n".repeat(200_001),
-    );
+    writeFileSync(invalid, "// too large for ast-grep\n".repeat(200_001));
     assert.throws(() => scanByteLengthComparisons(directory), /Incomplete ast-grep scan/);
     const badName = Buffer.concat([
       Buffer.from(`${directory}/ci/`),

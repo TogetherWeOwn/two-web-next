@@ -47,8 +47,9 @@ function scan(files, read) {
       const bytes = read(file);
       assert.ok(isUtf8(bytes), `${file}: invalid UTF-8`);
       const svelte = file.endsWith(".svelte");
-      const source = bytes.toString("utf8").replace(/^\uFEFF/, "");
+      let source = bytes.toString("utf8");
       const ranges = svelte ? svelteScriptRanges(source, file) : [{ start: 0, end: source.length }];
+      if (svelte && source.startsWith("\uFEFF")) source = source.slice(1); // Svelte offsets omit one BOM.
       for (const { start, end } of ranges) {
         assert.ok(start >= 0 && end >= start && end <= source.length, `${file}: invalid range`);
         if (start === end) continue;
