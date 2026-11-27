@@ -3,7 +3,15 @@ import "./fixtures/staging-lease-lifecycle.mjs";
 
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mock, test } from "node:test";
@@ -511,6 +519,93 @@ test("a deploy title is mandatory, exact, and lowercase", () => {
   ]) {
     assert.throws(() => candidate({ ...run, display_title: title }));
   }
+});
+
+test("a partial staging receipt write fails without publishing over earlier evidence", (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "staging-receipt-output-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const eventPath = join(directory, "event.json");
+  const summaryPath = join(directory, "summary.md");
+  const preloadPath = join(directory, "preload.mjs");
+  const cliPath = fileURLToPath(new URL("./staging-receipt.mjs", import.meta.url));
+  const earlierEvidence = Buffer.from("## Earlier qualified evidence\n\n- Synthetic receipt ✓\n");
+  writeFileSync(eventPath, JSON.stringify({ workflow_run: { ...run, id: 200, run_attempt: 1 } }));
+  writeFileSync(summaryPath, earlierEvidence);
+  writeFileSync(
+    preloadPath,
+    `import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+Date.now = () => ${now};
+globalThis.fetch = async (url) => {
+  switch (new URL(url).pathname) {
+    case "/up":
+      return Response.json({ revision: { commit: "${A}", version_id: "12345678-0123-4567-abcd-123456789abc" } });
+    case "/version":
+      return Response.json({ sha: "${A}", deployedAt: "${deployedAt}" });
+    default:
+      throw new Error("unexpected synthetic endpoint");
+  }
+};
+if (process.env.FAIL_RECEIPT_WRITE === "1") {
+  const append = fs.appendFileSync;
+  fs.appendFileSync = (path, receipt) => {
+    // Make the matched verdict visible on disk before simulating a failed write.
+    append(path, receipt.slice(0, receipt.indexOf("- **Soak eligibility**")));
+    throw new Error("synthetic write failure with private path detail");
+  };
+  syncBuiltinESMExports();
+}
+`,
+  );
+
+  const invoke = ({ failWrite = false, output = summaryPath } = {}) =>
+    spawnSync(process.execPath, ["--import", preloadPath, cliPath, "e2e"], {
+      cwd: directory,
+      encoding: "utf8",
+      timeout: 10_000,
+      env: {
+        FAIL_RECEIPT_WRITE: failWrite ? "1" : "0",
+        GITHUB_EVENT_NAME: "workflow_run",
+        GITHUB_EVENT_PATH: eventPath,
+        GITHUB_REPOSITORY: repository,
+        GITHUB_RUN_ATTEMPT: "1",
+        GITHUB_RUN_ID: failWrite ? "301" : "300",
+        GITHUB_SHA: C,
+        GITHUB_STEP_SUMMARY: output,
+        STAGING_CANDIDATE: A,
+        STAGING_JOB_STATUS: "success",
+        STAGING_SKIP_E2E: "false",
+      },
+    });
+
+  const success = invoke();
+  assert.equal(success.error, undefined);
+  assert.equal(success.status, 0, success.stderr);
+  assert.equal(success.stderr, "");
+  const previous = readFileSync(summaryPath);
+  assert.deepEqual(previous.subarray(0, earlierEvidence.length), earlierEvidence);
+  assert.match(previous.toString(), /Identity receipt matched at observation/);
+  assert.match(previous.toString(), /Pending successful qualification and 30-minute soak/);
+
+  const failure = invoke({ failWrite: true });
+  assert.equal(failure.error, undefined);
+  assert.equal(failure.stderr, "::warning::Staging evidence summary unavailable\n");
+  assert.equal(failure.stdout, "");
+  assert.ok(readFileSync(summaryPath).equals(previous), "earlier summary bytes must stay intact");
+  assert.equal(failure.status, 1);
+  assert.deepEqual(readdirSync(directory).sort(), ["event.json", "preload.mjs", "summary.md"]);
+
+  const directoryOutput = join(directory, "non-file-summary");
+  mkdirSync(directoryOutput);
+  const sentinelPath = join(directoryOutput, "earlier.md");
+  writeFileSync(sentinelPath, earlierEvidence);
+  const refused = invoke({ output: directoryOutput });
+  assert.equal(refused.error, undefined);
+  assert.equal(refused.status, 1);
+  assert.equal(refused.stdout, "");
+  assert.equal(refused.stderr, "::warning::Staging evidence summary unavailable\n");
+  assert.deepEqual(readdirSync(directoryOutput), ["earlier.md"]);
+  assert.deepEqual(readFileSync(sentinelPath), earlierEvidence);
 });
 
 test("untrusted, failed, non-main and missing deploy events fail closed", () => {
