@@ -6,10 +6,11 @@ import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
 import { parseFragment } from "parse5";
 import { expect, it } from "vitest";
-import { attr, elements, textOf } from "./helpers/kit-edit-controls";
+import { attr, elements, type textOf } from "./helpers/kit-edit-controls";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
+const { renderedText } = webRequire("../ci/rendered-page.mjs") as { renderedText: typeof textOf };
 const { compile } = webRequire("svelte/compiler") as {
   compile: (
     s: string,
@@ -79,8 +80,9 @@ it("renders standalone past drawer toggles and past cards", async () => {
     const { bodies } = (await import(pathToFileURL(outfile).href)) as {
       bodies: Record<string, string>;
     };
+    const htmlOptions = { scriptingEnabled: false };
     const b = Object.fromEntries(
-      Object.entries(bodies).map(([id, html]) => [id, elements(parseFragment(html))]),
+      Object.entries(bodies).map(([id, html]) => [id, elements(parseFragment(html, htmlOptions))]),
     );
     const byTestId = (nodes: ReturnType<typeof elements>, id: string) =>
       nodes.find((el) => attr(el, "data-testid") === id);
@@ -97,7 +99,7 @@ it("renders standalone past drawer toggles and past cards", async () => {
     expect(byTestId(b.pager!, "events-out-of-range")).toBeUndefined();
     const notice = byTestId(b.oor!, "events-out-of-range")!;
     expect(attr(notice, "role")).toBe("status");
-    expect(textOf(notice)).toContain("Page 9 is outside the schedule");
+    expect(renderedText(notice)).toContain("Page 9 is outside the schedule");
     expect(href(b.oor!, "events-pager-first")).toBe("/events?game=Rock+%26+Roll");
     expect(href(b.oor!, "events-pager-prev")).toBe("/events?game=Rock+%26+Roll&page=3");
     expect(byTestId(b.oor!, "events-pager-next")).toBeUndefined();
@@ -116,7 +118,7 @@ it("renders standalone past drawer toggles and past cards", async () => {
     for (const nodes of [b.open!, b.search!, b.searchForced!]) {
       const list = byTestId(nodes, "events-past-list");
       expect(list?.tagName).toBe("ul");
-      expect(textOf(list!)).toContain("Past description");
+      expect(renderedText(list!)).toContain("Past description");
       expect(nodes.some((el) => el.tagName === "mark")).toBe(false);
       expect(byTestId(nodes, "signin")).toBeUndefined();
       expect(byTestId(nodes, "event-discord-rsvp")).toBeUndefined();

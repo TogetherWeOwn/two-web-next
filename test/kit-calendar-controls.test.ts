@@ -6,10 +6,11 @@ import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
 import { parseFragment } from "parse5";
 import { expect, it } from "vitest";
-import { attr, elements, textOf } from "./helpers/kit-edit-controls";
+import { attr, elements, type textOf } from "./helpers/kit-edit-controls";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
+const { renderedText } = webRequire("../ci/rendered-page.mjs") as { renderedText: typeof textOf };
 const { compile } = webRequire("svelte/compiler") as {
   compile: (
     s: string,
@@ -31,7 +32,10 @@ const href = (nodes: Elements, id: string) => {
 };
 const text = (nodes: Elements, id: string) => {
   const paragraph = byTestId(nodes, id);
-  return paragraph?.tagName === "p" ? textOf(paragraph) : undefined;
+  if (paragraph?.tagName !== "p" || attr(paragraph, "role") !== "status") return;
+  if (paragraph.attrs.some(({ name }) => name === "hidden" || name === "aria-hidden")) return;
+  if (paragraph.childNodes.some((node) => "tagName" in node)) return;
+  return renderedText(paragraph);
 };
 const selectedGames = (nodes: Elements) =>
   elements(byTestId(nodes, "events-game-filter")!).filter(
@@ -124,14 +128,14 @@ export const bodies = Object.fromEntries(Object.entries(scenarios).map(([id, pro
     expect(attr(copy, "hidden")).toBeDefined();
     expect(attr(byTestId(d, "subscription-copy-status")!, "data-copy-toast")).toBeDefined();
     expect(attr(byTestId(d, "subscription-feed-url")!, "readonly")).toBeDefined();
-    expect(textOf(feedLabel(d)!)).toBe("Calendar feed URL");
+    expect(renderedText(feedLabel(d)!)).toBe("Calendar feed URL");
     const form = searchForm(d);
     expect(form && [attr(form, "method"), attr(form, "action")]).toEqual(["get", "/events"]);
     const search = byTestId(elements(form!), "events-search")!;
     const gameSelect = byTestId(elements(form!), "events-game-filter")!;
     expect([search.tagName, attr(search, "name")]).toEqual(["input", "q"]);
     expect([gameSelect.tagName, attr(gameSelect, "name")]).toEqual(["select", "game"]);
-    expect(selectedGames(d).map((el) => [attr(el, "value"), textOf(el)])).toEqual([
+    expect(selectedGames(d).map((el) => [attr(el, "value"), renderedText(el)])).toEqual([
       ["", "All games"],
     ]);
 
@@ -154,16 +158,17 @@ export const bodies = Object.fromEntries(Object.entries(scenarios).map(([id, pro
     );
     expect(href(h, "events-search-clear")).toBe(`/events?${G}&past=1`);
     expect(href(h, "events-past-archive-link")).toBe(`/events/past?${Q}`);
-    expect(textOf(byTestId(h, "events-past-archive-link")!)).toBe("Continue search in past events");
+    const archiveLink = byTestId(h, "events-past-archive-link")!;
+    expect(renderedText(archiveLink)).toBe("Continue search in past events");
     expect(href(h, "events-subscribe")).toBe(`webcal://${FEED.slice(8)}`);
     expect(attr(byTestId(h, "subscription-feed-url")!, "value")).toBe(FEED);
     expect(attr(byTestId(h, "subscription-copy-button")!, "data-copy-link")).toBe(FEED);
-    expect(textOf(feedLabel(h)!)).toBe(`${game} calendar feed URL`);
+    expect(renderedText(feedLabel(h)!)).toBe(`${game} calendar feed URL`);
     expect(attr(byTestId(h, "events-search")!, "value")).toBe(query);
     const selected = selectedGames(h);
     expect(selected).toHaveLength(1);
     expect(attr(selected[0]!, "value")).toBe(game);
-    expect(textOf(selected[0]!)).toBe(game);
+    expect(renderedText(selected[0]!)).toBe(game);
 
     // Search statuses.
     const S = `“${query}”`;
