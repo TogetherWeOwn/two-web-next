@@ -724,6 +724,29 @@ test("truncated CI jobs after preparation stop staging before the first queue", 
   assert.deepEqual(accepted.calls, mutationCalls);
 });
 
+test("a failed duplicate required job makes same-attempt CI evidence ambiguous", () => {
+  const ctx = context("workflow_run");
+  const evidence = fixture();
+  evidence.jobs.jobs = evidence.jobs.jobs.map((job, index) => ({ ...job, id: 101 + index }));
+
+  const accepted = executeStaging(ctx, evidence);
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.deepEqual(accepted.calls, mutationCalls);
+  assert.match(
+    accepted.stdout,
+    new RegExp(`Staging gate passed: ${sha}, full CI run ${run.id}, attempt ${run.run_attempt}`),
+  );
+
+  const check = evidence.jobs.jobs[1];
+  evidence.jobs.jobs.push({ ...check, id: 103, conclusion: "failure" });
+  evidence.jobs.total_count = evidence.jobs.jobs.length;
+
+  const refused = executeStaging(ctx, evidence);
+  assert.equal(refused.status, 1, refused.stderr);
+  assert.deepEqual(refused.calls, []);
+  assert.match(refused.stderr, /^Staging gate refused: Missing or ambiguous check job$/m);
+});
+
 for (const [family, archiveFlag, staticFlag, eventsFlag, homeFlag, joinFlag] of [
   ["archive", "true", "false", "false", "false", "false"],
   ["archive-static", "true", "true", "false", "false", "false"],
