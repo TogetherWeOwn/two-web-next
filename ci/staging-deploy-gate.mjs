@@ -155,9 +155,17 @@ export async function requireSuccessfulMainPushCi(
     );
   }
   requireEvidence(
+    evidence.jobs.filter((job) => job.name === "pr-admission").length <= 1,
+    "Ambiguous PR admission job",
+  );
+  requireEvidence(
     evidence.jobs.every(
       (job) =>
-        job.head_sha === target && job.status === "completed" && job.conclusion === "success",
+        job.head_sha === target &&
+        job.status === "completed" &&
+        // ci.yml only executes pr-admission on pull requests.
+        (job.conclusion === "success" ||
+          (job.name === "pr-admission" && job.conclusion === "skipped")),
     ),
     "Full CI jobs are not successful on the deployment SHA",
   );
