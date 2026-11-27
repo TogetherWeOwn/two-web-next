@@ -272,6 +272,43 @@ test("cutover inventory preserves filenames shared with object properties", asyn
   }
 });
 
+test("cutover package inventory rejects an external symlink before reading it", async (t) => {
+  const { default: fs, symlink } = await import("node:fs/promises");
+  const { syncBuiltinESMExports } = await import("node:module");
+
+  const scratch = await mkdtemp(join(tmpdir(), "cutover-package-symlink-test-"));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const packet = join(scratch, "packet");
+  const asset = join(packet, "assets", "fixture.txt");
+  const outside = join(scratch, "outside.txt");
+  const bytes = "synthetic packaged asset";
+  await mkdir(join(packet, "assets"), { recursive: true });
+  await writeFile(asset, bytes);
+  await writeFile(outside, bytes);
+
+  const read = t.mock.method(fs, "readFile");
+  // Inventory uses the named ESM export, which needs syncing after patch and restore.
+  syncBuiltinESMExports();
+  try {
+    assert.deepEqual(await inventory(packet), { "assets/fixture.txt": sha256(bytes) });
+    assert.equal(read.mock.callCount(), 1);
+    assert.equal(read.mock.calls[0].arguments[0], asset);
+    read.mock.resetCalls();
+
+    // Keep the bytes identical so a digest comparison cannot distinguish the replacement.
+    await rm(asset);
+    await symlink(outside, asset);
+    await assert.rejects(inventory(packet), {
+      code: "ERR_ASSERTION",
+      message: "cutover package requires regular files",
+    });
+    assert.equal(read.mock.callCount(), 0);
+  } finally {
+    read.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
+
 test("Ember upload CLI publishes only a valid native Wrangler receipt", async (t) => {
   const scratch = await mkdtemp(join(tmpdir(), "ember-upload-receipt-"));
   t.after(() => rm(scratch, { recursive: true, force: true }));
