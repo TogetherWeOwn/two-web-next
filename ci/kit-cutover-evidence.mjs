@@ -163,17 +163,31 @@ export function ledgerPrefixes(journal) {
     "1037_waitlist-offers",
     "1038_announcement-send-claims",
   ];
-  const start = journal.findIndex(({ tag }) => tag.startsWith("1033_"));
+  const start = journal.findIndex((entry) => entry?.tag === expectedTail[0]);
   assert.ok(start > 0, "cutover prefix missing");
   assert.deepEqual(
     journal.slice(start).map(({ tag }) => tag),
     expectedTail,
     "unexpected migration beyond the approved cutover window",
   );
-  const timestamps = journal.map(({ when }) => when);
+  const timestamps = journal.map((entry) => entry?.when);
   assert.ok(
     timestamps.every((when, i) => Number.isSafeInteger(when) && when > (timestamps[i - 1] ?? 0)),
     "invalid canonical ledger timestamps",
+  );
+  // Pin the ordered Drizzle entries through 1038. The rehearsal and the
+  // readiness contract otherwise both take their history from the same input.
+  const canonicalEntries = journal.map(({ idx, version, when, tag, breakpoints }) => ({
+    idx,
+    version,
+    when,
+    tag,
+    breakpoints,
+  }));
+  assert.equal(
+    sha256(JSON.stringify(canonicalEntries)),
+    "77c3066bd536ab24c020ca57296533985a724a1a17bd11ba9bf18fc1c88a257d",
+    "noncanonical cutover migration journal",
   );
   return {
     1033: timestamps.slice(0, start + 1),

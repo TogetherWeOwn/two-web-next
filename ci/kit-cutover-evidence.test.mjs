@@ -41,17 +41,10 @@ const digest = "b".repeat(64);
 const hono = "11111111-1111-1111-1111-111111111111";
 const kit = "22222222-2222-2222-2222-222222222222";
 const identity = { sourceSha, runId: "21", runAttempt: "3", digest };
-const ledgerJournal = [
-  "1032_event-public-join-details",
-  "1033_session-roles-checked-at",
-  "1034_event-echoes",
-  "1035_bot-reconciliation-intents",
-  "1036_event-sync-claim-started",
-  "1037_waitlist-offers",
-  "1038_announcement-send-claims",
-].map((tag, i) => ({ tag, when: 1700000000000 + i }));
-
 const inputs = await sourceInputs();
+// Keep the offline rehearsal usable after the repository adds later migrations.
+const cutoverEnd = inputs.journal.findIndex(({ tag }) => tag === "1038_announcement-send-claims");
+const ledgerJournal = inputs.journal.slice(0, cutoverEnd + 1);
 
 test("isolated Worker settings and deletion readback uses bounded offline streams", async (t) => {
   const account = "a".repeat(32);
@@ -860,12 +853,52 @@ test("cutover packaging cleans only its own incomplete packet", async (t) => {
   });
 });
 
-test("cutover ledger admits exactly 1033 or 1037 and exact version readiness", () => {
-  const prefixes = ledgerPrefixes(ledgerJournal);
+test("cutover ledger requires the canonical pre-1033 journal", async (t) => {
+  const timestamps = ledgerJournal.map(({ when }) => when);
+  assert.deepEqual(ledgerPrefixes(ledgerJournal), {
+    1033: timestamps.slice(0, 34),
+    1037: timestamps.slice(0, 38),
+  });
+  const last = ledgerJournal.at(-1);
   assert.throws(
-    () => ledgerPrefixes([...ledgerJournal, { tag: "1039_later", when: 1700000000007 }]),
+    () => ledgerPrefixes([...ledgerJournal, { ...last, tag: "1039_later", when: last.when + 1 }]),
     /approved cutover window/,
   );
+  const unorderedTail = structuredClone(ledgerJournal);
+  unorderedTail.at(-1).when = unorderedTail.at(-2).when;
+  assert.throws(() => ledgerPrefixes(unorderedTail), /invalid canonical ledger timestamps/);
+
+  const [first, second] = ledgerJournal.slice(2, 4);
+  for (const [label, replacement] of [
+    ["malformed tag", [first, { ...second, tag: "1001_bad/tag" }]],
+    ["missing tag", [first, { ...second, tag: undefined }]],
+    ["duplicate tag", [first, { ...second, tag: first.tag }]],
+    ["duplicate migration number", [first, { ...second, tag: "1000_other" }]],
+    ["unexpected historical tag", [first, { ...second, tag: "1001_other" }]],
+    ["missing historical entry", [first]],
+    [
+      "out-of-order tags",
+      [
+        { ...first, tag: second.tag },
+        { ...second, tag: first.tag },
+      ],
+    ],
+    ["changed historical timestamp in order", [first, { ...second, when: second.when + 1 }]],
+  ]) {
+    await t.test(label, () => {
+      const journal = [...ledgerJournal.slice(0, 2), ...replacement, ...ledgerJournal.slice(4)];
+      assert.throws(() => ledgerPrefixes(journal), /noncanonical cutover migration journal/);
+    });
+  }
+  await t.test("changed cutover timestamp in order", () => {
+    const journal = structuredClone(ledgerJournal);
+    journal.at(-5).when += 1;
+    assert.throws(() => ledgerPrefixes(journal), /noncanonical cutover migration journal/);
+  });
+});
+
+test("cutover ledger admits exactly 1033 or 1037 and exact version readiness", () => {
+  const prefixes = ledgerPrefixes(ledgerJournal);
   const body = {
     db: "ok",
     pending_migrations: 0,
