@@ -3,7 +3,9 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import { build } from "esbuild";
+import { html, parseFragment } from "parse5";
 import { expect, it } from "vitest";
+import { attr, elements, textOf } from "./helpers/kit-edit-controls";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
@@ -43,11 +45,25 @@ it("renders five named ranks with decorative token-coloured arcs", async () => {
   const url = `data:text/javascript;base64,${Buffer.from(result.outputFiles[0]!.text).toString("base64")}`;
   const { ranks } = (await import(url)) as { ranks: string[] };
   for (const [index, name] of ["Prospect", "Member", "Soldier", "Veteran", "Legend"].entries()) {
-    const html = ranks[index]!;
-    expect(html).toContain(name);
-    expect(html).toContain('aria-hidden="true"');
-    expect(html.match(/<path\b/g)).toHaveLength(5);
-    expect(html.match(/<path\b[^>]*class="[^"]*\blit\b[^"]*"/g)).toHaveLength(index + 1);
-    expect(html).not.toMatch(/<path\b[^>]*\sstyle=/);
+    for (const scriptingEnabled of [true, false]) {
+      const fragment = parseFragment(ranks[index]!, { scriptingEnabled });
+      expect(textOf(fragment).trim()).toBe(name);
+      const glyphs = elements(fragment).filter(
+        (node) => node.namespaceURI === html.NS.SVG && node.tagName === "svg",
+      );
+      expect(glyphs.map((glyph) => attr(glyph, "aria-hidden"))).toEqual(["true"]);
+      const paths = elements(glyphs[0]!).filter(
+        (node) => node.namespaceURI === html.NS.SVG && node.tagName === "path",
+      );
+      expect(paths).toHaveLength(5);
+      const litPaths = paths.filter((path) => {
+        const classes = attr(path, "class")?.split(/[\t\n\f\r ]+/);
+        return classes?.includes("lit");
+      });
+      expect(litPaths).toHaveLength(index + 1);
+      for (const path of paths) {
+        expect(attr(path, "style")).toBeUndefined();
+      }
+    }
   }
 }, 120000);

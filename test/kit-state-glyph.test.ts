@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
+import { html, parseFragment } from "parse5";
 import { describe, expect, it } from "vitest";
+import { attr, elements } from "./helpers/kit-edit-controls";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
@@ -64,16 +66,36 @@ export const states = Object.fromEntries(["upcoming", "live", "mine", "past"].ma
       const { states } = (await import(pathToFileURL(outfile).href)) as {
         states: Record<string, string>;
       };
-      for (const state of Object.values(states)) {
-        expect(state).toContain('aria-hidden="true"');
-        expect(state).toContain('focusable="false"');
+      const ring = { tag: "circle", radius: "7", fill: "none" };
+      const expectedShapes = {
+        upcoming: [ring],
+        live: [{ tag: "path", radius: undefined, fill: "currentColor" }, ring],
+        mine: [ring, { tag: "circle", radius: "3", fill: "currentColor" }],
+        past: [{ tag: "circle", radius: "8", fill: "currentColor" }],
+      };
+      for (const [state, expected] of Object.entries(expectedShapes)) {
+        for (const scriptingEnabled of [true, false]) {
+          const glyphs = elements(parseFragment(states[state]!, { scriptingEnabled })).filter(
+            (node) => node.namespaceURI === html.NS.SVG && node.tagName === "svg",
+          );
+          expect(glyphs, state).toHaveLength(1);
+          const glyph = glyphs[0]!;
+          expect(attr(glyph, "aria-hidden"), state).toBe("true");
+          expect(attr(glyph, "focusable"), state).toBe("false");
+          const shapes = elements(glyph).slice(1);
+          const names = shapes.map((node) => node.tagName);
+          const radii = shapes.map((node) => attr(node, "r"));
+          const fills = shapes.map((node) => attr(node, "fill"));
+          expect(
+            shapes.map((node) => node.namespaceURI),
+            state,
+          ).toEqual(expected.map(() => html.NS.SVG));
+          expect(names, state).toEqual(expected.map(({ tag }) => tag));
+          expect(radii, state).toEqual(expected.map(({ radius }) => radius));
+          expect(fills, state).toEqual(expected.map(({ fill }) => fill));
+          if (state === "past") expect(attr(glyph, "fill")).not.toBe("none");
+        }
       }
-      expect(states.upcoming).toContain('fill="none"');
-      expect(states.upcoming).not.toContain("<path");
-      expect(states.live).toContain("<path");
-      expect(states.mine).toContain('r="3"');
-      expect(states.past).toContain('r="8" fill="currentColor"');
-      expect(states.past).not.toContain('fill="none"');
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }

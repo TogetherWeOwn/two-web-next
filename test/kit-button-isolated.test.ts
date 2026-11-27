@@ -1,41 +1,57 @@
+import { html, parseFragment } from "parse5";
 import { expect, it } from "vitest";
+import { attr, elements, textOf } from "./helpers/kit-edit-controls";
 import { createKitSsrRenderer } from "./helpers/kit-ssr-render";
 
-it("renders button and navigation states with safe native semantics", async () => {
-  const { renderPage, cleanup } = await createKitSsrRenderer(
-    "test/fixtures/kit-button-isolated.svelte",
-  );
-  try {
-    const html = renderPage({});
-    const allButtons = html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g) ?? [];
-    const buttons = allButtons.filter((button) => !button.includes(" hidden"));
-    const links = html.match(/<a\b[^>]*>[\s\S]*?<\/a>/g) ?? [];
-    expect(allButtons.filter((button) => button.includes(" hidden"))).toHaveLength(4);
-    expect(buttons).toHaveLength(7);
-    expect(links).toHaveLength(4);
-    expect(buttons[0]).toContain('type="submit"');
-    expect(buttons[1]).toContain('type="button"');
-    expect(buttons[1]).toContain('aria-disabled="true"');
-    expect(buttons[1]).toContain("Event is full");
-    expect(buttons[1]).toContain('aria-label="Join Raid Night · Event is full"');
-    expect(buttons[2]).toContain('type="button"');
-    expect(buttons[2]).toContain('aria-busy="true"');
-    expect(buttons[2]).toContain("Saving…");
-    expect(buttons[3]).toContain("leave");
-    expect(buttons[4]).toContain("on-accent");
-    expect(buttons[4]).toMatch(/\blg\b/);
-    expect(buttons[4]).toContain("full-width");
-    expect(buttons[4]).toContain("Continue");
-    expect(links[0]).toContain('href="/e/raid"');
-    expect(links[0]).toContain('aria-label="Details for Raid Night"');
-    for (const link of links.slice(1, 3)) {
-      expect(link).toContain('aria-disabled="true"');
-      expect(link).not.toMatch(/\shref=/);
-      expect(link).toContain('tabindex="0"');
+it.each([true, false])(
+  "renders button and navigation states with safe native semantics with scripting enabled set to %s",
+  async (scriptingEnabled) => {
+    const { renderPage, cleanup } = await createKitSsrRenderer(
+      "test/fixtures/kit-button-isolated.svelte",
+    );
+    try {
+      const nodes = elements(parseFragment(renderPage({}), { scriptingEnabled }));
+      const allButtons = nodes.filter((node) => node.tagName === "button");
+      const hiddenButtons = allButtons.filter((button) => attr(button, "hidden") !== undefined);
+      const buttons = allButtons.filter((button) => attr(button, "hidden") === undefined);
+      const links = nodes.filter((node) => node.tagName === "a");
+      expect(allButtons.every((button) => button.namespaceURI === html.NS.HTML)).toBe(true);
+      expect(hiddenButtons).toHaveLength(4);
+      for (const button of hiddenButtons) {
+        expect(attr(button, "type")).toBe("submit");
+        expect(attr(button, "disabled")).toBeDefined();
+      }
+      expect(buttons).toHaveLength(7);
+      expect(links).toHaveLength(4);
+      expect(links.every((link) => link.namespaceURI === html.NS.HTML)).toBe(true);
+      expect(attr(buttons[0]!, "type")).toBe("submit");
+      expect(attr(buttons[1]!, "type")).toBe("button");
+      expect(attr(buttons[1]!, "aria-disabled")).toBe("true");
+      expect(textOf(buttons[1]!).trim()).toBe("Join Raid Night · Event is full");
+      expect(attr(buttons[1]!, "aria-label")).toBe("Join Raid Night · Event is full");
+      expect(attr(buttons[2]!, "type")).toBe("button");
+      expect(attr(buttons[2]!, "aria-busy")).toBe("true");
+      expect(textOf(buttons[2]!).trim()).toBe("Saving…");
+      expect(textOf(buttons[3]!)).toContain("leave");
+      expect(attr(buttons[4]!, "class")?.split(/[\t\n\f\r ]+/)).toEqual(
+        expect.arrayContaining(["on-accent", "lg", "full-width"]),
+      );
+      expect(textOf(buttons[4]!).trim()).toBe("Continue");
+      expect(attr(links[0]!, "href")).toBe("/e/raid");
+      expect(attr(links[0]!, "aria-label")).toBe("Details for Raid Night");
+      for (const link of links.slice(1, 3)) {
+        expect(attr(link, "aria-disabled")).toBe("true");
+        expect(attr(link, "href")).toBeUndefined();
+        for (const descendant of elements(link).slice(1)) {
+          expect(attr(descendant, "href")).toBeUndefined();
+        }
+        expect(attr(link, "tabindex")).toBe("0");
+      }
+      expect(attr(links[1]!, "aria-label")).toBe("Reserve Raid Night · Event is full");
+      expect(attr(links[2]!, "aria-busy")).toBe("true");
+    } finally {
+      cleanup();
     }
-    expect(links[1]).toContain('aria-label="Reserve Raid Night · Event is full"');
-    expect(links[2]).toContain('aria-busy="true"');
-  } finally {
-    cleanup();
-  }
-}, 120000);
+  },
+  120000,
+);
