@@ -109,6 +109,26 @@ it("binds the published tag to the pin and reports the exact reviewed workflow b
   });
 });
 
+it("accepts a lightweight release tag and rejects a mismatched object type", (t) => {
+  const f = fixture(t);
+  f.git("tag", "-f", TAG, f.pin);
+  const evidence = {
+    ...f.evidence,
+    ref: { ...f.evidence.ref, object: { type: "commit", sha: f.git("rev-parse", REF) } },
+  };
+
+  const result = f.verify(JSON.stringify(evidence));
+  expect(result.stderr).toBe("");
+  expect(result.status).toBe(0);
+  expect(JSON.parse(result.stdout)).toMatchObject({ tag: TAG, tagObject: f.pin, pin: f.pin });
+
+  evidence.ref.object.type = "tag";
+  expectRefusal(
+    f.verify(JSON.stringify(evidence)),
+    "release tag object type differs from captured tag ref",
+  );
+});
+
 it("refuses a different proposed pin even when both workflow blobs match", (t) => {
   const f = fixture(t);
   expectRefusal(f.verify(undefined, f.reviewed), "peeled commit does not match the proposed pin");
