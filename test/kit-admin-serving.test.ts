@@ -1,6 +1,8 @@
+import { drizzle } from "drizzle-orm/pg-proxy";
 import { Context } from "hono";
 import { expect, it, vi } from "vitest";
 import { fetchKitAdminForm } from "../src/admin/kit-form-fetch";
+import { fetchKitFeaturedLegacy } from "../src/admin/kit-featured-legacy-fetch";
 import {
   adminFormPath,
   admitsKitAdmin,
@@ -10,7 +12,8 @@ import {
 } from "../src/admin/kit-serving";
 import { STAGING_APP_URL } from "../src/qa";
 import { type HookDispatchDeps, dispatchHookRequest, ROUTE_MANIFEST } from "../src/route-ownership";
-import { MODERATOR, env as baseEnv } from "./helpers/member-data";
+import { createMemorySessionStore } from "../src/sessions";
+import { MEMBER, MODERATOR, cookieFor, env as baseEnv } from "./helpers/member-data";
 
 const loopback = "http://127.0.0.1:8787";
 const operator = "/admin/ops-overrides";
@@ -48,6 +51,69 @@ it("requires the original path, origin and mounted form ID", () => {
     events + "/:key/publish",
   );
   expect(adminFormPath(events + "/%30/publish")).toBeUndefined();
+});
+
+const featuredBookmarks = "/admin/featured-contents";
+const featuredEditRoute = `${featuredBookmarks}/[id]/edit`;
+
+it.each([
+  ["GET", featuredBookmarks, featuredBookmarks, "/admin/featured"],
+  ["GET", `${featuredBookmarks}/create`, `${featuredBookmarks}/create`, "/admin/featured/new"],
+  ["HEAD", `${featuredBookmarks}/91/edit`, featuredEditRoute, "/admin/featured/27"],
+])("serves the guarded Kit bookmark %s %s", async (method, path, routeId, location) => {
+  const store = createMemorySessionStore();
+  const query = vi.fn(async (_statement: string, _params: unknown[]) => ({ rows: [[27]] }));
+  const bindings = {
+    ...env,
+    KIT_ROUTE_ADMIN: "true",
+    KIT_PARITY_FIXTURE_ADMIN_FEATURED_REDIRECTS: "true",
+    SESSION_STORE: store,
+    ADMIN_DB: drizzle(query),
+  };
+  const honoFetch = vi.fn(async () => new Response(null, { status: 404 }));
+  for (const [cookie, status] of [
+    [undefined, 302],
+    [await cookieFor(store, MEMBER), 403],
+    [await cookieFor(store, MODERATOR), 301],
+  ] as const) {
+    const request = new Request(`${loopback}${path}?next=%2Felsewhere`, {
+      method,
+      headers: cookie ? { cookie } : {},
+    });
+    const event = { request, url: new URL(request.url), route: { id: routeId }, locals: {} };
+    const response = await dispatchHookRequest(event, {
+      appUrl: loopback,
+      admin: {
+        env: bindings,
+        completeForm: () => {
+          throw new Error("unexpected form submission");
+        },
+      },
+      honoFetch,
+      resolve: async (owned) =>
+        fetchKitFeaturedLegacy(
+          owned.request,
+          bindings,
+          (owned.locals as { requestId: string }).requestId,
+        ),
+    });
+    expect(response.status).toBe(status);
+    expect(response.headers.get("x-two-renderer")).toBe("kit");
+    expect(response.headers.get("location")).toBe(
+      status === 301 ? location : status === 302 ? "/auth/discord" : null,
+    );
+    expect(response.headers.get("cache-control")).toContain("no-store");
+    if (method === "HEAD" || status === 301) expect(await response.text()).toBe("");
+    if (status !== 301) expect(query).not.toHaveBeenCalled();
+  }
+  expect(honoFetch).not.toHaveBeenCalled();
+  if (routeId === featuredEditRoute) {
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls[0]?.slice(0, 2)).toEqual([
+      'select "id" from "featured_contents" where "featured_contents"."legacy_id" = $1',
+      ["91"],
+    ]);
+  } else expect(query).not.toHaveBeenCalled();
 });
 
 it.each([
