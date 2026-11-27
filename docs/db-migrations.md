@@ -340,7 +340,9 @@ changes grants and role memberships. It changes neither schema nor ledger rows.
 
 On a read-only connection to the pinned Web database, use
 `planServingIsolation(tx, identity, version, artifact)` from
-`ci/db-serving-ledger-isolation.mjs` to capture catalog metadata. Pass the
+`ci/db-serving-ledger-isolation.mjs` to capture catalog metadata. The plan
+records `two_web_app` as its serving role. Forward, readback and undo require
+that same login even if another login has identical ACLs. Pass the
 Hono staging packet's `{ sourceSha, digest }` in `artifact`. The forward check
 matches the live Worker's version, source tag and Hono manifest annotation to
 that packet. Rehearse the delta, inverse and effective rights
@@ -358,8 +360,10 @@ SHA-256 digest in the `production` Environment under
 `PRODUCTION_DB_ISOLATION_PLAN`, and `PRODUCTION_DB_ISOLATION_PLAN_SHA256`.
 Use `PRODUCTION_DB_ISOLATION_CF_ACCOUNT_ID` and
 `PRODUCTION_DB_ISOLATION_CF_READ_TOKEN` for the forward traffic check. Keep
-the same plan and credential available for `readback` and `undo`. If the
-workflow outcome is uncertain, classify the state before retrying. The
+the same plan, credential and approved revision available for `readback` and
+`undo`. Plans captured before the serving role field was added require their
+original approved revision for recovery. If the workflow outcome is uncertain,
+classify the state before retrying. The
 isolated state requires no caller authority on the ledger and all reviewed
 Web/Jobs privileges. An unclassified state needs investigation before retry.
 
