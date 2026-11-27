@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -278,6 +278,89 @@ exit 31
   assert.deepEqual(await inventory(assets), kitFiles);
   assert.equal(await readFile(output, "utf8"), "existing_output=fixture\n");
   assert.equal(await readFile(summary, "utf8"), "Existing fixture summary\n");
+});
+
+test("cutover select publishes only verified producer outputs", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "kit-cutover-select-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const script = fileURLToPath(new URL("./kit-cutover-deploy.mjs", import.meta.url));
+  const priorOutput = "previous=preserved\n";
+  const own = { full_name: "TogetherWeOwn/two-web-next", fork: false, id: 23 };
+  const producer = {
+    id: 21,
+    run_attempt: 3,
+    repository: own,
+    head_repository: own,
+    head_sha: sourceSha,
+    path: ".github/workflows/xfs-qualification.yml",
+    head_branch: "main",
+    event: "workflow_dispatch",
+    status: "completed",
+    conclusion: "success",
+  };
+  const ember = {
+    CUTOVER_MODE: "ember",
+    CUTOVER_PIN: `21:3:${digest}`,
+    CUTOVER_UNDO_VERSION: hono,
+    INPUT_SHA: sourceSha,
+    DEPLOY_SHA: sourceSha,
+    GITHUB_EVENT_NAME: "workflow_dispatch",
+    GITHUB_REF: "refs/heads/main",
+    PRODUCTION_AUTO_PROMOTE_DISABLED: "true",
+    GITHUB_TOKEN: "synthetic",
+  };
+
+  const fetchStub = `data:text/javascript,${encodeURIComponent(`
+    globalThis.fetch = async (input) => {
+      const { attempt, jobs } = JSON.parse(process.env.SYNTHETIC_CUTOVER_PRODUCER);
+      const { pathname, search } = new URL(input);
+      const attemptPath = "/repos/TogetherWeOwn/two-web-next/actions/runs/21/attempts/3";
+      if (attempt && pathname === attemptPath && !search) return Response.json(attempt);
+      if (jobs && pathname === attemptPath + "/jobs" && search === "?per_page=100&page=1") {
+        return Response.json(jobs);
+      }
+      throw new Error("unexpected producer lookup");
+    };
+  `)}`;
+
+  function select(name, env, responses = {}) {
+    const path = join(dir, name);
+    writeFileSync(path, priorOutput);
+    const result = spawnSync(process.execPath, ["--import", fetchStub, script, "select"], {
+      env: {
+        ...env,
+        GITHUB_OUTPUT: path,
+        SYNTHETIC_CUTOVER_PRODUCER: JSON.stringify(responses),
+      },
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    assert.ifError(result.error);
+    return { ...result, output: readFileSync(path, "utf8") };
+  }
+
+  await t.test("refused Ember producer preserves the existing output", () => {
+    const rejected = { ...producer, run_attempt: 2 };
+    const result = select("refused", ember, { attempt: rejected });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /inconsistent GitHub attempt metadata/);
+    assert.equal(result.output, priorOutput);
+  });
+
+  await t.test("verified Ember producer publishes mode, run and attempt", () => {
+    const result = select("verified", ember, {
+      attempt: producer,
+      jobs: { total_count: 1, jobs: [completedCutoverJob(identity)] },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.output, `${priorOutput}mode=ember\nrun_id=21\nrun_attempt=3\n`);
+  });
+
+  await t.test("ordinary selection publishes only mode without fetching", () => {
+    const result = select("ordinary", {});
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.output, `${priorOutput}mode=ordinary\n`);
+  });
 });
 
 test("cutover requires explicit protected selection and the paired Hono UUID", () => {
