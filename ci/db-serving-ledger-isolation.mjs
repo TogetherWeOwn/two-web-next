@@ -251,6 +251,15 @@ function parsePlan(raw, hash) {
   return plan;
 }
 
+export class ServingIsolationCleanupError extends Error {
+  constructor(outcome) {
+    super(
+      "Database serving ledger isolation connection cleanup failed after an acknowledged outcome.",
+    );
+    this.outcome = outcome;
+  }
+}
+
 export async function runServingIsolation(operation, end, env, options = {}) {
   const { connect = migrationClient, fetchImpl = fetch, login = app, owner = migrator } = options;
   assert.ok(["forward", "undo", "readback"].includes(operation) && approvedEnds.has(end));
@@ -268,8 +277,10 @@ export async function runServingIsolation(operation, end, env, options = {}) {
   assert.equal(config.url.pathname, "/postgres");
   const readOnly = operation === "readback";
   const client = connect(config, { readOnly });
+  let outcome;
+  let closeFailed = false;
   try {
-    return await client.begin(
+    outcome = await client.begin(
       readOnly ? "isolation level repeatable read read only" : "isolation level read committed",
       async (tx) => {
         await tx`set local search_path = pg_catalog, pg_temp`;
@@ -325,6 +336,14 @@ export async function runServingIsolation(operation, end, env, options = {}) {
       },
     );
   } finally {
-    await client.end({ timeout: 5 });
+    try {
+      // Postgres resolves end() after either a graceful close or its bounded force-close.
+      await client.end({ timeout: 5 });
+    } catch {
+      closeFailed = true;
+    }
   }
+  // Reaching this point requires acknowledgement from begin() after COMMIT.
+  if (closeFailed) throw new ServingIsolationCleanupError(outcome);
+  return outcome;
 }

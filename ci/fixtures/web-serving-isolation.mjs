@@ -105,9 +105,10 @@ export async function prepareServingIsolation({
       hash = sha(raw),
       readiness = health,
       connect: open = connect,
+      execute = runServingIsolation,
     } = {},
   ) =>
-    runServingIsolation(
+    execute(
       operation,
       end,
       {
