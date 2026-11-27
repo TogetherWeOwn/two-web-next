@@ -18,6 +18,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { URL, fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
+import type { DefaultTreeAdapterTypes as Dom } from "parse5";
+import * as renderedPage from "../ci/rendered-page.mjs";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SiteHeader } from "../src/pages";
 import type { Session } from "../src/env";
@@ -33,6 +35,7 @@ import { renderEventsHtml } from "../src/kit-events-html";
 import app from "./app";
 import { EVENT_KEY, pageShellFixture } from "./helpers/page-shells";
 
+const { parseRenderedPage, renderedAttribute, renderedElements, renderedText: text } = renderedPage;
 const APP_URL = "https://next.example.test";
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
 
@@ -75,47 +78,113 @@ const nonMemberSession: Session = {
 const honoHeader = (props: Parameters<typeof SiteHeader>[0]): string =>
   SiteHeader(props)!.toString() as string;
 
-const primaryNavOf = (html: string): string => {
-  const nav = html.match(/<nav[^>]*aria-label="Primary"[^>]*>([\s\S]*?)<\/nav>/);
-  if (!nav) throw new Error("Primary nav is missing");
-  return nav[1]!;
-};
+type Root = string | Dom.ParentNode | Dom.ParentNode[];
+type Attributes = Record<string, string>;
+function dom(root: Root) {
+  if (typeof root !== "string") return Array.isArray(root) ? root : [root];
+  return [true, false].map((scriptingEnabled) =>
+    parseRenderedPage(root, { sourceCodeLocationInfo: true, scriptingEnabled }),
+  );
+}
+const start = (node: Dom.Element) => node.sourceCodeLocation?.startOffset;
+const elementsOf = (root: Root, tag?: string, includeInactive = false) => [
+  ...renderedElements(dom(root)[0]!, { tag, includeInactive }),
+];
+function markup(root: Root, matches: (node: Dom.Element) => boolean) {
+  const nodes = dom(root).flatMap((page) => elementsOf(page, undefined, true).filter(matches));
+  return [...new Map(nodes.map((node) => [start(node) ?? node, node])).values()];
+}
+function find(root: Root, tag: string, attrs: Attributes, label?: string, partial = false) {
+  return elementsOf(root, tag).find(
+    (element) =>
+      (partial || element.attrs.length === Object.keys(attrs).length) &&
+      Object.entries(attrs).every(([name, value]) => renderedAttribute(element, name) === value) &&
+      (label === undefined || labelOf(element) === label),
+  );
+}
+const withAttribute = (root: Root, name: string, value?: string, tag?: string) =>
+  markup(root, (element) => {
+    if (tag && element.tagName !== tag) return false;
+    return element.attrs.some((attr) => {
+      const matches = attr.name === name && (!attr.namespace || attr.prefix === "xlink");
+      return matches && (value === undefined || attr.value === value);
+    });
+  });
+function activeScope(page: Dom.ParentNode, tag: string, label?: string): Dom.Element {
+  const all = label ? withAttribute(page, "aria-label", label, tag) : elementsOf(page, tag, true);
+  // HTML parsing can move a later element ahead of the first one in the source.
+  const [scope] = all.sort((a, b) => (start(a) ?? Infinity) - (start(b) ?? Infinity));
+  if (scope?.sourceCodeLocation?.endTag && elementsOf(page, tag).includes(scope)) return scope;
+  throw new Error(`Expected an active, explicitly closed first ${label ?? tag}`);
+}
+const headerOf = (root: Root) => dom(root).map((page) => activeScope(page, "header"));
+const primaryNavOf = (root: Root) => dom(root).map((page) => activeScope(page, "nav", "Primary"));
 
-const headerOf = (html: string): string => {
-  const header = html.match(/<header\b[^>]*>([\s\S]*?)<\/header>/);
-  if (!header) throw new Error("header is missing");
-  return header[1]!;
-};
+function headerSource(html: string): string {
+  const location = headerOf(html)[0]!.sourceCodeLocation!;
+  return html.slice(location.startTag!.endOffset, location.endTag!.startOffset);
+}
+const boardHref = "/leaderboards/members";
+const navLabel = (nav: Root, href: string, current?: string) =>
+  labelOf(find(nav, "a", current ? { href, "aria-current": current } : { href }));
+const signIn = (root: Root, href: string) =>
+  find(root, "a", { href, "data-testid": "signin" }, undefined, true);
+const joinHref = (next: string) => `/join?next=${encodeURIComponent(next)}`;
+const joinCta = (root: Root, next: string, attrs: Attributes = {}) =>
+  find(root, "a", { ...attrs, class: "btn", href: joinHref(next) }, "Join the Discord");
+const skipLink = (root: Root) =>
+  find(root, "a", { class: "skip-link", href: "#main" }, "Skip to content", true);
+function labelOf(node?: Dom.Element) {
+  if (!node || renderedAttribute(node, "aria-labelledby")) return;
+  for (let el: Dom.ParentNode | null = node; el && "tagName" in el; el = el.parentNode)
+    if (renderedAttribute(el, "aria-hidden") === "true") return;
+  const label = text(node).trim();
+  if ((renderedAttribute(node, "aria-label") ?? label) !== label) return;
+  const [, span, extra] = elementsOf(node, undefined, true);
+  if (extra || (span && (span.tagName !== "span" || span.attrs.length))) return;
+  return !span || text(span).trim() === label ? label : undefined;
+}
+function joinChrome(root: Dom.Element[]) {
+  const caption = find(root, "span", { class: "account-caption" }, "Welcome, guest");
+  const join = find(root, "a", { class: "btn", href: "/join" }, "Join with Discord");
+  const parent = join?.parentNode;
+  if (!caption || parent?.nodeName !== "div" || parent.attrs.length) return false;
+  const children = parent.childNodes.filter((node) => "tagName" in node || text(node).trim());
+  return children.length === 2 && children[0] === caption && children[1] === join;
+}
 
 const assertSkipAndLandmarks = (html: string, opts: { account: boolean }): void => {
-  expect(html.match(/<a\b[^>]*href="#main"[^>]*>/g)).toHaveLength(1);
-  expect(html).toContain('class="skip-link" href="#main"');
-  expect(html).toContain("Skip to content");
-  expect(html.match(/<main\b[^>]*>/g)).toHaveLength(1);
-  const main = html.match(/<main\b[^>]*>/)![0]!;
-  expect(main).toContain('id="main"');
-  expect(main).toContain('tabindex="-1"');
-  for (const nav of html.match(/<nav\b[^>]*>/g) ?? []) expect(nav).toMatch(/aria-label="[^"]+"/);
-  if (opts.account) {
-    expect(html).toContain('aria-label="Account"');
-  } else {
-    expect(html).not.toContain('aria-label="Account"');
-  }
+  const page = dom(html);
+  expect(withAttribute(page, "href", "#main", "a")).toHaveLength(1);
+  expect(skipLink(page)).toBeDefined();
+  expect(markup(page, (node) => node.tagName === "main")).toHaveLength(1);
+  expect(find(page, "main", { id: "main", tabindex: "-1" }, undefined, true)).toBeDefined();
+  for (const nav of markup(page, (node) => node.tagName === "nav"))
+    expect(renderedAttribute(nav, "aria-label")).toMatch(/.+/s);
+  if (opts.account)
+    expect(find(page, "nav", { "aria-label": "Account" }, undefined, true)).toBeDefined();
+  else expect(withAttribute(page, "aria-label", "Account")).toHaveLength(0);
 };
 
 const assertPrimaryOrder = (html: string, opts: { leaderboard: boolean; home?: boolean }): void => {
   const nav = opts.home ? headerOf(html) : primaryNavOf(html);
-  const home = nav.indexOf('href="/"');
-  const events = nav.indexOf('href="/events"');
+  const hrefs = elementsOf(nav, "a").map((link) => {
+    const href = renderedAttribute(link, "href");
+    if (href === "/" || href === "/events" || href === boardHref)
+      expect(renderedAttribute(link, "tabindex")).toBeUndefined();
+    return href;
+  });
+  const home = hrefs.indexOf("/");
+  const events = hrefs.indexOf("/events");
   expect(home).toBeGreaterThanOrEqual(0);
   expect(events).toBeGreaterThanOrEqual(0);
   expect(home).toBeLessThan(events);
   if (opts.leaderboard) {
-    const board = nav.indexOf('href="/leaderboards/members"');
+    const board = hrefs.indexOf(boardHref);
     expect(board).toBeGreaterThanOrEqual(0);
     expect(events).toBeLessThan(board);
   } else {
-    expect(nav).not.toContain('href="/leaderboards/members"');
+    expect(withAttribute(nav, "href", boardHref)).toHaveLength(0);
   }
 };
 
@@ -426,8 +495,9 @@ describe("oracle: Hono ordinary sign-in", () => {
     [DETAIL_NEXT, ordinaryUrl(DETAIL_NEXT)],
   ] as const)("signs %s through the ordinary round trip", (loginReturnTo, href) => {
     const html = honoHeader({ active: "events", loginReturnTo });
-    expect(html).toContain(`href="${href}" data-testid="signin"`);
-    expect(html).toContain("Sign in with Discord");
+    const link = signIn(html, href);
+    expect(link).toBeDefined();
+    expect(labelOf(link)).toBe("Sign in with Discord");
     expect(html).not.toContain("/join/discord");
   });
 
@@ -446,39 +516,40 @@ describe("oracle: Hono membership-based board navigation", () => {
     ["member", memberSession, true],
   ] as const)("offers the board link to members only (%s)", (_label, session, offered) => {
     const nav = primaryNavOf(honoHeader({ session, active: "home" }));
-    expect(nav.includes('href="/leaderboards/members"')).toBe(offered);
+    expect(withAttribute(nav, "href", boardHref).length > 0).toBe(offered);
   });
 
   it("marks the board link current only on the board itself", () => {
     const onBoard = primaryNavOf(honoHeader({ session: memberSession, active: "leaderboard" }));
-    expect(onBoard).toContain(
-      '<a href="/leaderboards/members" aria-current="page">Leaderboard</a>',
-    );
-    expect(onBoard).toContain('<a href="/events">Events</a>');
+    expect(navLabel(onBoard, boardHref, "page")).toBe("Leaderboard");
+    expect(navLabel(onBoard, "/events")).toBe("Events");
     const away = primaryNavOf(honoHeader({ session: memberSession, active: "home" }));
-    expect(away).toContain('<a href="/leaderboards/members">Leaderboard</a>');
-    expect(away).not.toContain('href="/leaderboards/members" aria-current');
+    expect(navLabel(away, boardHref)).toBe("Leaderboard");
+    const current = withAttribute(away, "href", boardHref).map((link) =>
+      renderedAttribute(link, "aria-current"),
+    );
+    expect(current).toEqual([undefined]);
   });
 });
 
 describe("oracle: Hono current-section semantics", () => {
   it("marks the schedule as the current page", () => {
     const nav = primaryNavOf(honoHeader({ active: "events", loginReturnTo: SIMPLE_NEXT }));
-    expect(nav).toContain('<a href="/events" aria-current="page">Events</a>');
+    expect(navLabel(nav, "/events", "page")).toBe("Events");
   });
 
   it("marks detail descendants as the current location, not page", () => {
     const nav = primaryNavOf(
       honoHeader({ session: memberSession, active: "event", loginReturnTo: DETAIL_NEXT }),
     );
-    expect(nav).toContain('<a href="/events" aria-current="location">Events</a>');
-    expect(nav).not.toContain('aria-current="page">Events');
+    expect(navLabel(nav, "/events", "location")).toBe("Events");
+    expect(withAttribute(nav, "aria-current", "page")).toHaveLength(0);
   });
 
   it("marks home as the current page with Events unmarked", () => {
     const nav = primaryNavOf(honoHeader({ session: memberSession, active: "home" }));
-    expect(nav).toContain('<a href="/" aria-current="page">Home</a>');
-    expect(nav).toContain('<a href="/events">Events</a>');
+    expect(navLabel(nav, "/", "page")).toBe("Home");
+    expect(navLabel(nav, "/events")).toBe("Events");
   });
 });
 
@@ -487,17 +558,16 @@ describe("oracle: Hono account overrides stay intact", () => {
     const html = honoHeader({
       cta: { href: "/auth/discord?next=%2Fprofile", label: "Continue" },
     });
-    expect(html).toContain('href="/auth/discord?next=%2Fprofile" data-testid="signin"');
-    expect(html).toContain("Continue");
+    const link = signIn(html, "/auth/discord?next=%2Fprofile");
+    expect(link).toBeDefined();
+    expect(labelOf(link)).toBe("Continue");
     expect(html).not.toContain("Sign in with Discord");
   });
 
   it("renders the join action on static leaves for every visitor", () => {
     const html = honoHeader({ joinAction: true });
-    expect(html).toContain(
-      '<div><span class="account-caption">Welcome, guest</span><a class="btn" href="/join">Join with Discord</a></div>',
-    );
-    expect(html).not.toContain('data-testid="signin"');
+    expect(joinChrome(headerOf(html))).toBe(true);
+    expect(withAttribute(html, "data-testid", "signin")).toHaveLength(0);
   });
 
   it("lets children replace the account area", () => {
@@ -508,22 +578,22 @@ describe("oracle: Hono account overrides stay intact", () => {
     });
     // Without children the default guest chrome renders; with member children
     // the schedule shell passes Open Discord instead (pinned by integration).
-    expect(html).toContain('data-testid="signin"');
+    expect(find(html, "a", { "data-testid": "signin" }, undefined, true)).toBeDefined();
   });
 
   it("drops the account area on sessionless pages", () => {
     const html = honoHeader({ active: "event", account: false });
-    expect(html).not.toContain('aria-label="Account"');
-    expect(html).not.toContain('data-testid="signin"');
+    expect(withAttribute(html, "aria-label", "Account")).toHaveLength(0);
+    expect(withAttribute(html, "data-testid", "signin")).toHaveLength(0);
     expect(html).not.toContain("Sign out");
   });
 
   it("renders member chrome for signed-in viewers without a sign-in link", () => {
     const html = honoHeader({ session: memberSession, active: "home" });
-    expect(html).toContain('<form method="post" action="/logout">');
-    expect(html).toContain('<span class="account-caption">Signed in</span>');
-    expect(html).toContain('<span class="who">Vic</span>');
-    expect(html).not.toContain('data-testid="signin"');
+    expect(find(html, "form", { method: "post", action: "/logout" })).toBeDefined();
+    expect(find(html, "span", { class: "account-caption" }, "Signed in")).toBeDefined();
+    expect(find(html, "span", { class: "who" }, "Vic")).toBeDefined();
+    expect(withAttribute(html, "data-testid", "signin")).toHaveLength(0);
   });
 });
 
@@ -534,12 +604,10 @@ describe("oracle: Hono served schedule/detail/cancelled/board/static", () => {
     expect(res.status).toBe(200);
     const html = await res.text();
     const header = headerOf(html);
-    expect(header).toContain(`href="${ordinaryUrl("/events")}" data-testid="signin"`);
-    expect(primaryNavOf(html)).toContain('<a href="/events" aria-current="page">Events</a>');
-    expect(primaryNavOf(html)).not.toContain('href="/leaderboards/members"');
-    expect(html).toContain(
-      `href="/join?next=${encodeURIComponent("/events")}">Join the Discord</a>`,
-    );
+    expect(signIn(header, ordinaryUrl("/events"))).toBeDefined();
+    expect(navLabel(primaryNavOf(html), "/events", "page")).toBe("Events");
+    expect(withAttribute(primaryNavOf(html), "href", boardHref)).toHaveLength(0);
+    expect(joinCta(html, "/events")).toBeDefined();
   });
 
   it("serves guest detail with ordinary sign-in, location semantics and no board link", async () => {
@@ -547,46 +615,44 @@ describe("oracle: Hono served schedule/detail/cancelled/board/static", () => {
     const res = await app.request(`${fixture.env.APP_URL}/e/${EVENT_KEY}`, {}, fixture.env);
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(headerOf(html)).toContain(
-      `href="${ordinaryUrl(`/e/${EVENT_KEY}`)}" data-testid="signin"`,
-    );
-    expect(primaryNavOf(html)).toContain('<a href="/events" aria-current="location">Events</a>');
-    expect(primaryNavOf(html)).not.toContain('href="/leaderboards/members"');
+    expect(signIn(headerOf(html), ordinaryUrl(`/e/${EVENT_KEY}`))).toBeDefined();
+    expect(navLabel(primaryNavOf(html), "/events", "location")).toBe("Events");
+    expect(withAttribute(primaryNavOf(html), "href", boardHref)).toHaveLength(0);
   });
 
   it("serves member detail with the board link, location semantics and member chrome", async () => {
     const html = await (await pageShellFixture().request(`/e/${EVENT_KEY}`)).text();
-    expect(primaryNavOf(html)).toContain('<a href="/leaderboards/members">Leaderboard</a>');
-    expect(primaryNavOf(html)).toContain('<a href="/events" aria-current="location">Events</a>');
-    expect(headerOf(html)).toContain('<form method="post" action="/logout">');
-    expect(headerOf(html)).not.toContain('data-testid="signin"');
+    expect(navLabel(primaryNavOf(html), boardHref)).toBe("Leaderboard");
+    expect(navLabel(primaryNavOf(html), "/events", "location")).toBe("Events");
+    expect(find(headerOf(html), "form", { method: "post", action: "/logout" })).toBeDefined();
+    expect(withAttribute(headerOf(html), "data-testid", "signin")).toHaveLength(0);
   });
 
   it("serves cancelled detail sessionless: location, no account, no board link", async () => {
     const res = await pageShellFixture("cancelled").request(`/e/${EVENT_KEY}`);
     expect(res.status).toBe(410);
     const html = await res.text();
-    expect(primaryNavOf(html)).toContain('<a href="/events" aria-current="location">Events</a>');
-    expect(html).not.toContain('aria-label="Account"');
-    expect(primaryNavOf(html)).not.toContain('href="/leaderboards/members"');
+    expect(navLabel(primaryNavOf(html), "/events", "location")).toBe("Events");
+    expect(withAttribute(html, "aria-label", "Account")).toHaveLength(0);
+    expect(withAttribute(primaryNavOf(html), "href", boardHref)).toHaveLength(0);
   });
 
   it("serves the member board with its own item current and member chrome", async () => {
     const res = await pageShellFixture().request("/leaderboards/members");
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(primaryNavOf(html)).toContain(
-      '<a href="/leaderboards/members" aria-current="page">Leaderboard</a>',
-    );
-    expect(primaryNavOf(html)).toContain('<a href="/events">Events</a>');
-    expect(headerOf(html)).toContain('<span class="who">Fixture member</span>');
+    expect(navLabel(primaryNavOf(html), boardHref, "page")).toBe("Leaderboard");
+    expect(navLabel(primaryNavOf(html), "/events")).toBe("Events");
+    expect(find(headerOf(html), "span", { class: "who" }, "Fixture member")).toBeDefined();
   });
 
   it("serves static leaves with join chrome, no board link and no current section", async () => {
     const html = await (await app.request(`${APP_URL}/about`, {}, baseEnv)).text();
-    expect(headerOf(html)).toContain('<a class="btn" href="/join">Join with Discord</a>');
-    expect(primaryNavOf(html)).not.toContain('href="/leaderboards/members"');
-    expect(primaryNavOf(html)).not.toContain("aria-current");
+    expect(
+      find(headerOf(html), "a", { class: "btn", href: "/join" }, "Join with Discord"),
+    ).toBeDefined();
+    expect(withAttribute(primaryNavOf(html), "href", boardHref)).toHaveLength(0);
+    expect(withAttribute(primaryNavOf(html), "aria-current")).toHaveLength(0);
   });
 
   it("keeps static leaves and cancelled detail sessionless under a throwing store", async () => {
@@ -621,8 +687,9 @@ describe("kit default header: ordinary sign-in", () => {
     "signs %s through the ordinary round trip",
     (loginReturnTo) => {
       const html = kit.renderSiteHeader({ loginReturnTo });
-      expect(html).toContain(`href="${ordinaryUrl(loginReturnTo)}" data-testid="signin"`);
-      expect(html).toContain("Sign in with Discord");
+      const link = signIn(html, ordinaryUrl(loginReturnTo));
+      expect(link).toBeDefined();
+      expect(labelOf(link)).toBe("Sign in with Discord");
     },
   );
 
@@ -636,27 +703,28 @@ describe("kit default header: ordinary sign-in", () => {
   it("offers no board link without membership, even with a return destination", () => {
     for (const loginReturnTo of [null, SIMPLE_NEXT, UNICODE_NEXT]) {
       const nav = primaryNavOf(kit.renderSiteHeader({ loginReturnTo }));
-      expect(nav).not.toContain('href="/leaderboards/members"');
+      expect(withAttribute(nav, "href", boardHref)).toHaveLength(0);
     }
   });
 
   it("drops the account area when hidden, like the sessionless oracle", () => {
     const html = kit.renderSiteHeader({ loginReturnTo: SIMPLE_NEXT, hideAccount: true });
-    expect(html).not.toContain('aria-label="Account"');
-    expect(html).not.toContain('data-testid="signin"');
+    expect(withAttribute(html, "aria-label", "Account")).toHaveLength(0);
+    expect(withAttribute(html, "data-testid", "signin")).toHaveLength(0);
     expect(html).not.toContain("Sign out");
   });
 
   it("preserves the skip target, landmarks and keyboard order", () => {
     const html = kit.renderSiteHeader({ loginReturnTo: SIMPLE_NEXT });
-    expect(html).toContain('class="skip-link" href="#main"');
-    expect(html).toContain("Skip to content");
-    for (const nav of html.match(/<nav\b[^>]*>/g) ?? []) expect(nav).toMatch(/aria-label="[^"]+"/);
+    const page = dom(html);
+    expect(withAttribute(page, "href", "#main", "a")).toHaveLength(1);
+    expect(skipLink(page)).toBeDefined();
+    for (const nav of markup(page, (node) => node.tagName === "nav"))
+      expect(renderedAttribute(nav, "aria-label")).toMatch(/.+/s);
     assertPrimaryOrder(html, { leaderboard: false });
-    const header = headerOf(`<header>${html}</header>`);
-    expect(header.indexOf('aria-label="Primary"')).toBeLessThan(
-      header.indexOf('aria-label="Account"'),
-    );
+    const labels = elementsOf(headerOf(page), "nav").map((n) => renderedAttribute(n, "aria-label"));
+    expect(labels.indexOf("Primary")).toBeGreaterThanOrEqual(0);
+    expect(labels.indexOf("Primary")).toBeLessThan(labels.indexOf("Account"));
   });
 });
 
@@ -667,36 +735,38 @@ describe("kit default header: ordinary sign-in", () => {
 describe("kit home: board discovery", () => {
   it("exposes the board link to members away from the board", () => {
     const nav = primaryNavOf(kit.renderHome(baseHomeData({ session: kitMemberSession })));
-    expect(nav).toContain('<a href="/leaderboards/members">Leaderboard</a>');
+    expect(navLabel(nav, boardHref)).toBe("Leaderboard");
   });
 
   it("offers no board link to guests", () => {
     const html = kit.renderHome(baseHomeData({ session: null }));
-    expect(primaryNavOf(html)).not.toContain('href="/leaderboards/members"');
-    expect(headerOf(html)).toMatch(/<a href="\/auth\/discord"[^>]* data-testid="signin"/);
-    expect(headerOf(html)).toContain("Welcome, guest");
+    expect(withAttribute(primaryNavOf(html), "href", boardHref)).toHaveLength(0);
+    expect(signIn(headerOf(html), "/auth/discord")).toBeDefined();
+    expect(text(headerOf(html)[0]!)).toContain("Welcome, guest");
   });
 
   it("offers no board link to signed-in non-members", () => {
     const html = kit.renderHome(baseHomeData({ session: kitNonMemberSession }));
-    expect(primaryNavOf(html)).not.toContain('href="/leaderboards/members"');
-    expect(headerOf(html)).toContain('<form method="post" action="/logout">');
-    expect(headerOf(html)).toContain('<span class="who">Newcomer</span>');
+    expect(withAttribute(primaryNavOf(html), "href", boardHref)).toHaveLength(0);
+    expect(find(headerOf(html), "form", { method: "post", action: "/logout" })).toBeDefined();
+    expect(find(headerOf(html), "span", { class: "who" }, "Newcomer")).toBeDefined();
   });
 
   it("renders member chrome for members without a sign-in link", () => {
     const header = headerOf(kit.renderHome(baseHomeData({ session: kitMemberSession })));
-    expect(header).toContain('<form method="post" action="/logout">');
-    expect(header).toContain('<span class="sr-only">Signed in</span>');
-    expect(header).toContain('<span class="who">Vic</span>');
-    expect(header).not.toContain('data-testid="signin"');
+    expect(find(header, "form", { method: "post", action: "/logout" })).toBeDefined();
+    expect(find(header, "span", { class: "sr-only" }, "Signed in")).toBeDefined();
+    expect(find(header, "span", { class: "who" }, "Vic")).toBeDefined();
+    expect(withAttribute(header, "data-testid", "signin")).toHaveLength(0);
   });
 
   it("marks home current with Events unmarked", () => {
     for (const session of [null, kitNonMemberSession, kitMemberSession]) {
       const html = kit.renderHome(baseHomeData({ session }));
-      expect(headerOf(html)).toMatch(/<a class="brand" href="\/" aria-current="page">/);
-      expect(primaryNavOf(html)).toContain('<a href="/events">Events</a>');
+      expect(
+        find(headerOf(html), "a", { class: "brand", href: "/", "aria-current": "page" }),
+      ).toBeDefined();
+      expect(navLabel(primaryNavOf(html), "/events")).toBe("Events");
     }
   });
 
@@ -720,8 +790,8 @@ describe("kit home: board discovery", () => {
 describe("kit event detail: header and navigation", () => {
   it("signs guests through the ordinary round trip with the page destination", () => {
     const html = kit.renderEventDetail(baseDetailModel({ path: DETAIL_NEXT }));
-    expect(headerOf(html)).toContain(`href="${ordinaryUrl(DETAIL_NEXT)}" data-testid="signin"`);
-    expect(headerOf(html)).not.toContain("/join/discord");
+    expect(signIn(headerOf(html), ordinaryUrl(DETAIL_NEXT))).toBeDefined();
+    expect(headerSource(html)).not.toContain("/join/discord");
   });
 
   it("exposes the board link to members away from the board", () => {
@@ -730,16 +800,16 @@ describe("kit event detail: header and navigation", () => {
         baseDetailModel({ viewerMember: true, viewerUsername: "Vic", showJoinPitch: false }),
       ),
     );
-    expect(nav).toContain('<a href="/leaderboards/members">Leaderboard</a>');
+    expect(navLabel(nav, boardHref)).toBe("Leaderboard");
   });
 
   it("offers no board link to guests or signed-in non-members", () => {
     const guest = primaryNavOf(kit.renderEventDetail(baseDetailModel()));
-    expect(guest).not.toContain('href="/leaderboards/members"');
+    expect(withAttribute(guest, "href", boardHref)).toHaveLength(0);
     const nonMember = primaryNavOf(
       kit.renderEventDetail(baseDetailModel({ viewerMember: false, viewerUsername: "Newcomer" })),
     );
-    expect(nonMember).not.toContain('href="/leaderboards/members"');
+    expect(withAttribute(nonMember, "href", boardHref)).toHaveLength(0);
   });
 
   it.each([[false], [true]] as const)(
@@ -754,8 +824,8 @@ describe("kit event detail: header and navigation", () => {
           }),
         ),
       );
-      expect(nav).toContain('<a href="/events" aria-current="location">Events</a>');
-      expect(nav).not.toContain('aria-current="page">Events');
+      expect(navLabel(nav, "/events", "location")).toBe("Events");
+      expect(withAttribute(nav, "aria-current", "page")).toHaveLength(0);
     },
   );
 
@@ -763,9 +833,9 @@ describe("kit event detail: header and navigation", () => {
     const header = headerOf(
       kit.renderEventDetail(baseDetailModel({ viewerMember: true, viewerUsername: "Vic" })),
     );
-    expect(header).toContain('<form method="post" action="/logout">');
-    expect(header).toContain('<span class="who">Vic</span>');
-    expect(header).not.toContain('data-testid="signin"');
+    expect(find(header, "form", { method: "post", action: "/logout" })).toBeDefined();
+    expect(find(header, "span", { class: "who" }, "Vic")).toBeDefined();
+    expect(withAttribute(header, "data-testid", "signin")).toHaveLength(0);
   });
 
   it("preserves the skip target, landmarks and keyboard order for guests", () => {
@@ -789,16 +859,17 @@ describe("kit event detail: join and RSVP entry points keep the join flow", () =
     const html = kit.renderEventDetail(baseDetailModel({ joinReturnTo }));
     const expected = loginUrl(joinReturnTo);
     expect(expected).toContain("/join/discord?next=");
-    expect(html).toContain(`data-login-url="${expected}"`);
-    expect(html).toContain(`<a href="${expected}">Log in with Discord</a>`);
-    expect(html).not.toContain(`data-login-url="${ordinaryUrl(joinReturnTo)}"`);
+    expect(withAttribute(html, "data-login-url", expected)).not.toHaveLength(0);
+    expect(find(html, "a", { href: expected }, "Log in with Discord")).toBeDefined();
+    expect(withAttribute(html, "data-login-url", ordinaryUrl(joinReturnTo))).toHaveLength(0);
   });
 
   it("keeps the join pitch on the join funnel with the page destination", () => {
     const path = `/e/${EVENT_KEY}`;
     const html = kit.renderEventDetail(baseDetailModel({ path, showJoinPitch: true }));
-    expect(html).toContain('data-testid="event-join-pitch"');
-    expect(html).toContain(`href="/join?next=${encodeURIComponent(path)}"`);
+    const pitch = find(html, "section", { "data-testid": "event-join-pitch" }, undefined, true);
+    expect(pitch).toBeDefined();
+    expect(pitch && joinCta(pitch, path, { "data-testid": "discord-join" })).toBeDefined();
   });
 
   it("shows no guest RSVP entry or pitch to members", () => {
@@ -806,7 +877,7 @@ describe("kit event detail: join and RSVP entry points keep the join flow", () =
       baseDetailModel({ viewerMember: true, viewerUsername: "Vic", showJoinPitch: false }),
     );
     expect(html).not.toContain("Log in with Discord");
-    expect(html).not.toContain('data-testid="event-join-pitch"');
+    expect(withAttribute(html, "data-testid", "event-join-pitch")).toHaveLength(0);
   });
 });
 
@@ -817,17 +888,17 @@ describe("kit event detail: join and RSVP entry points keep the join flow", () =
 describe("kit cancelled detail: sessionless location", () => {
   it("marks Events as the current location, not page", () => {
     const nav = primaryNavOf(kit.renderEventGone(baseGoneModel()));
-    expect(nav).toContain('<a href="/events" aria-current="location">Events</a>');
-    expect(nav).not.toContain('aria-current="page">Events');
+    expect(navLabel(nav, "/events", "location")).toBe("Events");
+    expect(withAttribute(nav, "aria-current", "page")).toHaveLength(0);
   });
 
   it("carries no account area and no board link", () => {
     const html = kit.renderEventGone(baseGoneModel());
-    expect(html).not.toContain('aria-label="Account"');
-    expect(html).not.toContain('data-testid="signin"');
+    expect(withAttribute(html, "aria-label", "Account")).toHaveLength(0);
+    expect(withAttribute(html, "data-testid", "signin")).toHaveLength(0);
     expect(html).not.toContain("Sign out");
-    expect(primaryNavOf(html)).not.toContain('href="/leaderboards/members"');
-    expect(html).toContain('data-testid="event-cancelled"');
+    expect(withAttribute(primaryNavOf(html), "href", boardHref)).toHaveLength(0);
+    expect(find(html, "p", { "data-testid": "event-cancelled" }, undefined, true)).toBeDefined();
   });
 
   it("preserves the skip target, landmarks and keyboard order", () => {
@@ -844,16 +915,18 @@ describe("kit cancelled detail: sessionless location", () => {
 describe("kit member board: own item current with member chrome", () => {
   it("marks the board current with Events unmarked", () => {
     const nav = primaryNavOf(kit.renderBoard(baseBoardData()));
-    expect(nav).toContain('<a href="/leaderboards/members" aria-current="page">Leaderboard</a>');
-    expect(nav).toContain('<a href="/events">Events</a>');
+    expect(navLabel(nav, boardHref, "page")).toBe("Leaderboard");
+    expect(navLabel(nav, "/events")).toBe("Events");
   });
 
   it("serves member chrome, never guest chrome", () => {
-    const header = headerOf(kit.renderBoard(baseBoardData()));
-    expect(header).toContain('<form method="post" action="/logout">');
-    expect(header).toContain('<span class="who">Vic</span>');
-    expect(header).not.toContain("Welcome, guest");
-    expect(header).not.toContain("Sign in with Discord");
+    const html = kit.renderBoard(baseBoardData());
+    const header = headerOf(html);
+    expect(find(header, "form", { method: "post", action: "/logout" })).toBeDefined();
+    expect(find(header, "span", { class: "who" }, "Vic")).toBeDefined();
+    const source = headerSource(html);
+    expect(source).not.toContain("Welcome, guest");
+    expect(source).not.toContain("Sign in with Discord");
   });
 });
 
@@ -865,15 +938,13 @@ describe("kit schedule: ordinary sign-in, page semantics, no invented link", () 
         { ...baseScheduleData({ loginReturnTo }) } as never,
         scheduleHeaders,
       );
-      expect(rendered.body).toContain(`href="${ordinaryUrl(loginReturnTo)}" data-testid="signin"`);
+      expect(signIn(rendered.body, ordinaryUrl(loginReturnTo))).toBeDefined();
     },
   );
 
   it("marks the schedule as the current page", async () => {
     const rendered = await renderEventsHtml({ ...baseScheduleData() } as never, scheduleHeaders);
-    expect(primaryNavOf(rendered.body)).toContain(
-      '<a href="/events" aria-current="page">Events</a>',
-    );
+    expect(navLabel(primaryNavOf(rendered.body), "/events", "page")).toBe("Events");
   });
 
   it.each([[false], [true]] as const)("carries no board link (member=%s)", async (member) => {
@@ -881,7 +952,7 @@ describe("kit schedule: ordinary sign-in, page semantics, no invented link", () 
       { ...baseScheduleData({ member }) } as never,
       scheduleHeaders,
     );
-    expect(primaryNavOf(rendered.body)).not.toContain('href="/leaderboards/members"');
+    expect(withAttribute(primaryNavOf(rendered.body), "href", boardHref)).toHaveLength(0);
   });
 
   it("keeps the guest join CTA on the join funnel and member chrome intact", async () => {
@@ -889,46 +960,44 @@ describe("kit schedule: ordinary sign-in, page semantics, no invented link", () 
       { ...baseScheduleData({ member: false, loginReturnTo: UNICODE_NEXT }) } as never,
       scheduleHeaders,
     );
-    expect(guest.body).toContain(
-      `href="/join?next=${encodeURIComponent(UNICODE_NEXT)}">Join the Discord</a>`,
-    );
+    expect(joinCta(guest.body, UNICODE_NEXT)).toBeDefined();
     const member = await renderEventsHtml(
       { ...baseScheduleData({ member: true }) } as never,
       scheduleHeaders,
     );
-    expect(headerOf(member.body)).toContain('<a class="btn" href="/discord">Open Discord</a>');
-    expect(headerOf(member.body)).not.toContain('data-testid="signin"');
+    expect(
+      find(headerOf(member.body), "a", { class: "btn", href: "/discord" }, "Open Discord"),
+    ).toBeDefined();
+    expect(withAttribute(headerOf(member.body), "data-testid", "signin")).toHaveLength(0);
   });
 });
 
 describe("kit past archive: ordinary sign-in with schedule semantics", () => {
   it("signs through the ordinary round trip with the normalized destination", () => {
     const html = kit.renderPast(basePastData({ page: 3, q: "" }));
-    expect(headerOf(html)).toContain(`href="${ordinaryUrl(PAST_NEXT)}" data-testid="signin"`);
-    expect(headerOf(html)).not.toContain("/join/discord");
+    expect(signIn(headerOf(html), ordinaryUrl(PAST_NEXT))).toBeDefined();
+    expect(headerSource(html)).not.toContain("/join/discord");
   });
 
   it("marks the schedule as the current page with no board link", () => {
     const nav = primaryNavOf(kit.renderPast(basePastData()));
-    expect(nav).toContain('<a href="/events" aria-current="page">Events</a>');
-    expect(nav).not.toContain('href="/leaderboards/members"');
+    expect(navLabel(nav, "/events", "page")).toBe("Events");
+    expect(withAttribute(nav, "href", boardHref)).toHaveLength(0);
   });
 });
 
 describe("kit static leaf: join chrome without session or board link", () => {
   it("renders join chrome for every visitor without a sign-in link", () => {
     const html = kit.renderAbout(aboutPageData(APP_URL));
-    expect(headerOf(html)).toContain(
-      '<div><span class="account-caption">Welcome, guest</span><a class="btn" href="/join">Join with Discord</a></div>',
-    );
-    expect(headerOf(html)).not.toContain('data-testid="signin"');
-    expect(headerOf(html)).not.toContain("Sign out");
+    expect(joinChrome(headerOf(html))).toBe(true);
+    expect(withAttribute(headerOf(html), "data-testid", "signin")).toHaveLength(0);
+    expect(headerSource(html)).not.toContain("Sign out");
   });
 
   it("carries no board link and no current primary section", () => {
     const nav = primaryNavOf(kit.renderAbout(aboutPageData(APP_URL)));
-    expect(nav).not.toContain('href="/leaderboards/members"');
-    expect(nav).not.toContain("aria-current");
+    expect(withAttribute(nav, "href", boardHref)).toHaveLength(0);
+    expect(withAttribute(nav, "aria-current")).toHaveLength(0);
   });
 
   it("bundles no database or session modules", () => {

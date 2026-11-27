@@ -76,12 +76,15 @@ function isInactive(element) {
 }
 
 /** @param {Node} root */
-function* renderedNodes(root) {
+function* renderedNodes(root, includeInactive = false) {
   const pending = [root];
   while (pending.length > 0) {
     const node = pending.pop();
-    if (node.nodeName === "#comment" || ("tagName" in node && isInactive(node))) continue;
+    if (node.nodeName === "#comment" || (!includeInactive && "tagName" in node && isInactive(node)))
+      continue;
     yield node;
+    if (includeInactive && "tagName" in node && node.tagName === "template" && "content" in node)
+      pending.push(node.content);
     if ("childNodes" in node) {
       for (let index = node.childNodes.length - 1; index >= 0; index--) {
         pending.push(node.childNodes[index]);
@@ -93,10 +96,11 @@ function* renderedNodes(root) {
 /**
  * Match elements in document order. `tag` is an HTML tag and `role` is an explicit attribute.
  * @param {Node} root
- * @param {{ tag?: string, id?: string, role?: string }} selector
+ * `includeInactive` also searches hidden markup and template contents for absence checks.
+ * @param {{ tag?: string, id?: string, role?: string, includeInactive?: boolean }} selector
  */
-export function* renderedElements(root, { tag, id, role }) {
-  for (const node of renderedNodes(root)) {
+export function* renderedElements(root, { tag, id, role, includeInactive = false }) {
+  for (const node of renderedNodes(root, includeInactive)) {
     if (!("tagName" in node)) continue;
     if (tag !== undefined && (node.namespaceURI !== HTML_NAMESPACE || node.tagName !== tag))
       continue;
