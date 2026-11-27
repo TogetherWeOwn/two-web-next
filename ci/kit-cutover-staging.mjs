@@ -220,23 +220,36 @@ function databaseUrl() {
   );
 }
 
-export async function cleanup({ claim, worker, names }, api, database) {
+export async function cleanup({ claim, worker, names }, workerApi, database) {
   const marker = await readFile(claim, "utf8").catch((error) => {
     if (error.code === "ENOENT") return null;
-    throw error;
+    throw new Error("Could not read isolated cleanup claim");
   });
   if (marker === null) return;
-  assert.equal(marker, worker, "isolated cleanup claim mismatch");
+  if (marker !== worker) throw new Error("Isolated cleanup claim mismatch");
+
+  const failures = [];
   const target = `scripts/${worker}`;
   try {
+    const api = workerApi ?? cloudflare();
     if ((await api(`${target}/settings`)) !== null) {
       await api(target, "DELETE");
       assert.ok((await api(`${target}/settings`)) === null, "isolated Worker cleanup failed");
     }
-  } finally {
-    await removeFixture(database, names);
+  } catch {
+    failures.push("Worker");
   }
-  await rm(claim);
+  try {
+    await removeFixture(database ?? databaseUrl(), names);
+  } catch {
+    failures.push("database and login");
+  }
+  if (failures.length) {
+    throw new Error(`Could not verify isolated cleanup: ${failures.join(", ")}`);
+  }
+  await rm(claim).catch(() => {
+    throw new Error("Could not clear isolated cleanup claim");
+  });
 }
 
 async function deployPacket(dir, scratch, proof, origin, inputs, api, credentials) {
@@ -452,11 +465,7 @@ export async function rehearseIsolatedCutover(
 if (import.meta.main) {
   const ctx = context();
   if (process.argv[2] === "--cleanup") {
-    try {
-      await cleanup(ctx, cloudflare(), databaseUrl());
-    } catch {
-      throw new Error("Could not verify isolated Worker, database and login cleanup");
-    }
+    await cleanup(ctx);
   } else {
     await qualify(process.argv[2], process.argv[3], ctx);
   }

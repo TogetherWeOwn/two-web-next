@@ -239,6 +239,181 @@ test("packaging refuses installed Kit asset drift after parity", async (t) => {
   }
 });
 
+test("isolated cutover cleanup CLI reports each failure and keeps the claim for retry", async (t) => {
+  const scratch = await mkdtemp(join(tmpdir(), "cutover-cleanup-test-"));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const worker = `${STAGING_WORKER}-21-3`;
+  const dbHost = "ep-cleanup.example.neon.tech";
+  const claim = join(scratch, "kit-cutover-claimed.json");
+  const preload = `
+    import assert from "node:assert/strict";
+    import fs from "node:fs/promises";
+    import { registerHooks, syncBuiltinESMExports } from "node:module";
+    import { join } from "node:path";
+    const claimOperation = process.env.FAKE_CLAIM_OPERATION;
+    if (claimOperation) {
+      const claimPath = join(process.env.RUNNER_TEMP, "kit-cutover-claimed.json");
+      const original = fs[claimOperation];
+      fs[claimOperation] = async (path, ...args) => {
+        if (path === claimPath) throw Object.assign(new Error("raw claim I/O detail"), { code: "EIO" });
+        return original(path, ...args);
+      };
+      syncBuiltinESMExports();
+    }
+    let deleted = process.env.FAKE_WORKER === "absent";
+    globalThis.fetch = async (url, { method }) => {
+      const target = "https://api.cloudflare.com/client/v4/accounts/${"a".repeat(32)}/workers/scripts/${worker}";
+      if (method === "DELETE") {
+        assert.equal(url, target);
+        console.log("Worker delete");
+        if (process.env.FAKE_WORKER === "fail") throw new Error("raw Worker detail");
+        deleted = true;
+      } else {
+        assert.equal(method, "GET");
+        assert.equal(url, target + "/settings");
+        console.log("Worker settings");
+        if (deleted) return new Response(null, { status: 404 });
+      }
+      return Response.json({ success: true, result: {} });
+    };
+    globalThis.fakePostgres = (url) => {
+      assert.equal(url, "postgresql://two_web_cutover_owner:fixture@${dbHost}/two_web_cutover?sslmode=verify-full");
+      const execute = async (template, name) => {
+        if (template[0].startsWith("DROP DATABASE")) {
+          assert.equal(name, "two_web_cutover_21_3");
+          console.log("Database drop");
+          if (process.env.FAKE_DATABASE === "fail") throw new Error("raw database detail");
+        } else if (template[0].startsWith("DROP ROLE")) {
+          assert.equal(name, "two_web_cutover_21_3_runtime");
+          console.log("Login drop");
+        } else {
+          assert.match(template[0], /^SELECT/);
+          console.log("Database and login verification");
+          return [{ db: false, login: false }];
+        }
+      };
+      // The client uses the same callable for SQL and synchronous identifiers.
+      return Object.assign((query, ...values) => typeof query === "string" ? query : execute(query, ...values), {
+        end: async () => {},
+      });
+    };
+    registerHooks({
+      resolve(specifier, context, nextResolve) {
+        if (specifier === "postgres") {
+          return { url: "data:text/javascript,export default globalThis.fakePostgres", shortCircuit: true };
+        }
+        return nextResolve(specifier, context);
+      },
+    });
+  `;
+  function run(workerMode, databaseMode, claimOperation = "") {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        `data:text/javascript,${encodeURIComponent(preload)}`,
+        "ci/kit-cutover-staging.mjs",
+        "--cleanup",
+      ],
+      {
+        encoding: "utf8",
+        timeout: 5_000,
+        env: {
+          GITHUB_ACTIONS: "true",
+          RUNNER_ENVIRONMENT: "github-hosted",
+          GITHUB_REF: "refs/heads/main",
+          GITHUB_EVENT_NAME: "workflow_dispatch",
+          GITHUB_RUN_ID: "21",
+          GITHUB_RUN_ATTEMPT: "3",
+          CUTOVER_PROFILE: "ember",
+          RUNNER_TEMP: scratch,
+          CLOUDFLARE_ACCOUNT_ID: "a".repeat(32),
+          CLOUDFLARE_API_TOKEN: workerMode === "unconfigured" ? "" : "fixture",
+          KIT_CUTOVER_TEST_DATABASE_HOST: dbHost,
+          KIT_CUTOVER_TEST_DATABASE_URL:
+            databaseMode === "unconfigured"
+              ? ""
+              : `postgresql://two_web_cutover_owner:fixture@${dbHost}/two_web_cutover`,
+          FAKE_WORKER: workerMode,
+          FAKE_DATABASE: databaseMode,
+          FAKE_CLAIM_OPERATION: claimOperation,
+        },
+      },
+    );
+    assert.ifError(result.error);
+    assert.doesNotMatch(result.stdout + result.stderr, /raw (Worker|database|claim I\/O) detail/);
+    return result;
+  }
+
+  const workerCleanup = ["Worker settings", "Worker delete", "Worker settings"];
+  const databaseCleanup = ["Database drop", "Login drop", "Database and login verification"];
+  for (const [workerMode, databaseMode, failures, operations] of [
+    ["fail", "fail", "Worker, database and login", [...workerCleanup.slice(0, 2), "Database drop"]],
+    ["fail", "ok", "Worker", [...workerCleanup.slice(0, 2), ...databaseCleanup]],
+    ["ok", "fail", "database and login", [...workerCleanup, "Database drop"]],
+    ["unconfigured", "ok", "Worker", databaseCleanup],
+    ["ok", "unconfigured", "database and login", workerCleanup],
+  ]) {
+    await t.test(`Worker ${workerMode}, database ${databaseMode}`, async () => {
+      await writeFile(claim, worker);
+      const result = run(workerMode, databaseMode);
+      assert.equal(result.status, 1, result.stderr);
+      assert.deepEqual(result.stdout.trim().split("\n"), operations);
+      assert.equal(await readFile(claim, "utf8"), worker);
+      assert.equal(
+        result.stderr.split("\n").find((line) => line.startsWith("Error: ")),
+        `Error: Could not verify isolated cleanup: ${failures}`,
+      );
+    });
+  }
+  await t.test("successful retry tolerates a Worker already removed", async () => {
+    const result = run("absent", "ok");
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(result.stdout.trim().split("\n"), ["Worker settings", ...databaseCleanup]);
+    assert.equal(result.stderr, "");
+    await assert.rejects(readFile(claim, "utf8"), { code: "ENOENT" });
+  });
+  await t.test("successful cleanup deletes and verifies the Worker", async () => {
+    await writeFile(claim, worker);
+    const result = run("ok", "ok");
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(result.stdout.trim().split("\n"), [...workerCleanup, ...databaseCleanup]);
+    assert.equal(result.stderr, "");
+    await assert.rejects(readFile(claim, "utf8"), { code: "ENOENT" });
+  });
+  await t.test("missing claim needs no configuration", () => {
+    const result = run("unconfigured", "unconfigured");
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout + result.stderr, "");
+  });
+  await t.test("mismatched claim stays private and prevents cleanup", async () => {
+    const foreignMarker = "untrusted claim contents";
+    await writeFile(claim, foreignMarker);
+    const result = run("ok", "ok");
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(result.stdout, "");
+    assert.match(result.stderr, /^Error: Isolated cleanup claim mismatch$/m);
+    assert.ok(!result.stderr.includes(foreignMarker));
+    assert.equal(await readFile(claim, "utf8"), foreignMarker);
+  });
+  for (const [operation, diagnostic, calls] of [
+    ["readFile", "read", []],
+    ["rm", "clear", [...workerCleanup, ...databaseCleanup]],
+  ]) {
+    await t.test(`claim ${diagnostic} failure preserves the claim`, async () => {
+      await writeFile(claim, worker);
+      const result = run("ok", "ok", operation);
+      assert.equal(result.status, 1, result.stderr);
+      assert.equal(result.stdout.trim(), calls.join("\n"));
+      assert.equal(
+        result.stderr.split("\n").find((line) => line.startsWith("Error: ")),
+        `Error: Could not ${diagnostic} isolated cleanup claim`,
+      );
+      assert.equal(await readFile(claim, "utf8"), worker);
+    });
+  }
+});
+
 async function writePacketFixture(dir, extraNames = []) {
   for (const profile of ["hono", "kit"]) {
     await mkdir(join(dir, profile, "modules"), { recursive: true });
