@@ -222,22 +222,24 @@ test("the Markdown fixture preserves a proof error through database teardown", a
   const proofError = new Error("Synthetic proof failure");
   const report = t.mock.method(console, "error", () => {});
   const rejectCleanup = () => Promise.reject(new Error(privateDetail));
-  const sql = Object.assign(t.mock.fn(rejectCleanup), { end: t.mock.fn(rejectCleanup) });
+  const sql = Object.assign(t.mock.fn(rejectCleanup), { end: t.mock.fn() });
   sql.mock.mockImplementationOnce(() => Promise.reject(proofError));
-  await assert.rejects(
-    assertEventMarkdownParity({
-      hono: { origin: "http://127.0.0.1:1" },
-      startKit: async () => {},
-      databaseUrl: "postgres://127.0.0.1:1/fixture",
-      connectDatabase: () => sql,
-    }),
-    (error) => error === proofError,
-  );
+  const proof = assertEventMarkdownParity({
+    hono: { origin: "http://127.0.0.1:1" },
+    startKit: async () => {},
+    databaseUrl: "postgres://127.0.0.1:1/fixture",
+    connectDatabase: () => sql,
+  });
+  await assert.rejects(proof, (error) => error === proofError);
   assert.equal(sql.mock.callCount(), 2);
   const message = "Event Markdown fixture database cleanup failed";
-  const cleanupOnly = withEventMarkdownDatabaseCleanup(async () => {}, sql, "synthetic", []);
-  await assert.rejects(cleanupOnly, { message });
+  const cleanupOnly = (client) =>
+    withEventMarkdownDatabaseCleanup(async () => {}, client, "synthetic", []);
+  await assert.rejects(cleanupOnly(sql), { message });
+  const closeFailure = Object.assign(() => {}, { end: t.mock.fn(rejectCleanup) });
+  await assert.rejects(cleanupOnly(closeFailure), { message });
   assert.equal(sql.end.mock.callCount(), 2);
+  assert.equal(closeFailure.end.mock.callCount(), 1);
   const diagnostics = report.mock.calls.map((call) => call.arguments);
   assert.deepEqual(diagnostics, [[message]]);
 });
@@ -295,10 +297,8 @@ test("a bind timeout marks only the final attempt and redacts all Worker output"
 
 test("a deferred rollback Worker starts its first HTTP probe when readiness is awaited", async (t) => {
   const runner = readFileSync(new URL("./kit-worker-e2e.mjs", import.meta.url), "utf8");
-  assert.match(
-    runner.split("assertEventDetailRollback({")[1],
-    /reportPhase,\s+deferHttpReadiness: true,/,
-  );
+  const rollbackCall = runner.split("assertEventDetailRollback({")[1];
+  assert.match(rollbackCall, /reportPhase,\s+deferHttpReadiness: true,/);
   const fetch = t.mock.method(globalThis, "fetch", async () => new Response());
   const reportPhase = t.mock.fn();
   const worker = await startLoopbackWorker(
