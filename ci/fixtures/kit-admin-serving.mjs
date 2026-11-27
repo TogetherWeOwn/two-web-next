@@ -1148,9 +1148,17 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
     assert.match(repeated.headers.get("location") ?? "", /^\/admin\/events\/[0-9A-Z]{26}$/);
     assert.notEqual(repeated.headers.get("location"), eventPath);
 
+    const featuredTitle = "Fixture admin feature";
+    const featuredBody = new URLSearchParams({ title: featuredTitle });
+    const memberDenied = await visit(kit, "/admin/featured", 403, {
+      ...form,
+      headers: { ...form.headers, cookie: member },
+      body: featuredBody,
+    });
+    assert.equal(memberDenied.headers.getSetCookie().length, 0);
     const saved = await visit(kit, "/admin/featured", 303, {
       ...form,
-      body: new URLSearchParams({ title: "Fixture admin feature" }),
+      body: featuredBody,
     });
     const featuredPath = saved.headers.get("location");
     assert.match(featuredPath ?? "", /^\/admin\/featured\/\d+$/);
@@ -1159,6 +1167,63 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
     form.headers.cookie = moderator;
     const baseline = edit.text.match(/name="saved_baseline" value="([0-9a-f]{64})"/)?.[1];
     assert.ok(baseline, "Kit renders the saved version in the native form");
+    for (const target of [kit, off]) {
+      for (const path of ["/admin/featured", featuredPath]) {
+        const body = new URLSearchParams({ body: "Keep this featured draft" });
+        if (path === featuredPath) body.set("saved_baseline", baseline);
+        const rejected = await visit(target, path, 422, { ...form, body, owned: target === kit });
+        assert.match(rejected.headers.get("content-type") ?? "", /^text\/html\b/);
+        assert.equal(rejected.headers.get("location"), null);
+        assert.equal(rejected.headers.getSetCookie().length, 0);
+        assert.match(rejected.text, /<div\b[^>]*role="alert"[^>]*data-testid="form-errors"/);
+        assert.match(rejected.text, /<a href="#f-title">Headline: Give it a headline\.<\/a>/);
+        assert.match(rejected.text, /<p\b[^>]*id="f-title-error"[^>]*>Give it a headline\.<\/p>/);
+        const draft = rejected.text.match(
+          /<form\b([^>]*\bdata-event-editor=""[^>]*)>([\s\S]*?)<\/form>/,
+        );
+        assert.ok(draft, "validation returns the featured editor form");
+        assert.equal(draft[1].match(/\smethod="([^"]*)"/)?.[1], "post");
+        assert.equal(draft[1].match(/\saction="([^"]*)"/)?.[1], path);
+        const formBody = draft[2];
+        const titleInput = formBody.match(/<input\b[^>]*name="title"[^>]*>/)?.[0] ?? "";
+        assert.match(titleInput, /\baria-invalid="true"/);
+        assert.match(titleInput, /\baria-describedby="f-title-error"/);
+        assert.match(
+          formBody,
+          /<textarea\b[^>]*name="body"[^>]*>\s*Keep this featured draft\s*<\/textarea>/,
+        );
+        if (path === featuredPath) {
+          assert.ok(formBody.includes(`name="saved_baseline" value="${baseline}"`));
+        }
+      }
+    }
+    const featuredRows = await sql`
+      select created_by as actor, title from featured_contents
+      where created_by in (${moderatorId}, ${memberId})
+    `;
+    assert.deepEqual(
+      [...featuredRows],
+      [{ actor: moderatorId, title: featuredTitle }],
+      "only the accepted moderator creation persists",
+    );
+    const featuredAudit = await sql`
+      select causer_id as actor, subject_id::text as id, description from activity_log
+      where causer_id in (${moderatorId}, ${memberId}) and subject_type = 'FeaturedContent'
+    `;
+    assert.deepEqual(
+      [...featuredAudit],
+      [
+        {
+          actor: moderatorId,
+          id: featuredPath.split("/").at(-1),
+          description: `created featured content ${featuredTitle}`,
+        },
+      ],
+      "only the accepted creation adds a featured audit row",
+    );
+    console.log(
+      "PASS installed featured create and edit retain invalid drafts through Kit and Hono",
+    );
     await visit(hono, featuredPath, 303, {
       ...form,
       owned: false,
@@ -1327,7 +1392,7 @@ export async function assertKitAdminServing({ kit, nativeCreate, off, hono, data
       // Audit rows are append-only and are isolated by the synthetic actor.
       // The hosted job discards the disposable database at teardown.
       await sql.begin(async (tx) => {
-        await tx`delete from featured_contents where created_by = ${moderatorId}`;
+        await tx`delete from featured_contents where created_by in (${moderatorId}, ${memberId})`;
         await tx`delete from events where created_by = ${moderatorId}`;
         await tx`delete from web_session_grace where user_id in (${moderatorId}, ${memberId})`;
         await tx`delete from web_sessions where user_id in (${moderatorId}, ${memberId})`;
