@@ -1022,9 +1022,17 @@ export default {
       ...vars,
       KIT_PARITY_FIXTURE_ADMIN_EVENT_CREATE_REDIRECT: "true",
     });
-    const [admin, nativeCreate] = await Promise.all([adminStart, createStart]);
+    const editStart = startWorker("kit-admin-native-edit", worker, assets, secret, {
+      KIT_ROUTE_ADMIN: "true",
+      KIT_PARITY_FIXTURE_ADMIN_EVENT_EDIT_REDIRECT: "true",
+    });
+    const [admin, nativeCreate, nativeEdit] = await Promise.all([
+      adminStart,
+      createStart,
+      editStart,
+    ]);
     await Promise.all(
-      [admin, nativeCreate].map((instance) =>
+      [admin, nativeCreate, nativeEdit].map((instance) =>
         listen(instance.child, instance.origin, () => instance.log),
       ),
     );
@@ -1038,6 +1046,7 @@ export default {
     await assertKitAdminServing({
       kit: admin,
       nativeCreate,
+      nativeEdit,
       off: kitWithSession,
       hono: honoWithSession,
       databaseUrl,

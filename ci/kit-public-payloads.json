@@ -290,6 +290,11 @@
       "reads": "events/view + roster members (audited, failed audit refuses the render)"
     },
     {
+      "route": "GET /admin/events/:key/edit",
+      "binding": "web/src/routes/admin/events/[key]/edit/+server.ts",
+      "reads": "moderator admission in the admin dispatcher (redirect without event lookup)"
+    },
+    {
       "route": "GET /admin/activity-log",
       "binding": "web/src/routes/admin/activity-log/+page.server.ts",
       "reads": "activity log (audited)"
