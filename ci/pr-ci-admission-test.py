@@ -129,9 +129,9 @@ class AdmissionTest(TestCase):
     def test_metadata_checks_use_the_latest_source_scan(self):
         pr, runs, add, api = self.actions_fixture()
         merge_sha = "c" * 40
-        def steps(ref):
+        def steps(ref, number=4):
             return [{"name": name, "conclusion": "success"}
-                    for name in ("Scan the full history", f"Scan PR 4 on 2:{ref} at {merge_sha}")]
+                    for name in ("Scan the full history", f"Scan PR {number} on 2:{ref} at {merge_sha}")]
 
         source = add("pr-gates", "pr-lint", "gitleaks")[1]
         source["steps"] = steps("main")
@@ -185,12 +185,15 @@ class AdmissionTest(TestCase):
         retarget["steps"] = steps("release")
         stamp = runs[-1]["created_at"]
         self.assertEqual(lookup(stamp), (stamp, 51, "synthetic"))
+        with patch.dict(retarget, steps=retarget["steps"] + retarget["steps"][1:]):
+            self.assertIsNone(lookup(stamp))
         self.assertIsNone(lookup(stamp, sha="d" * 40))
         sibling = add("pr-gates", "pr-lint", "gitleaks")[1]
         runs[-1]["pull_requests"] = []
-        sibling["steps"] = steps("release")
-        sibling["steps"][1]["name"] = f"Scan PR 5 on 2:release at {merge_sha}"
+        sibling["steps"] = steps("release", 5)
         self.assertEqual(lookup(stamp), (stamp, 51, "synthetic"))
+        with patch.dict(sibling["steps"][1], name=f"Scan PR 04 on 2:release at {merge_sha}"):
+            self.assertIsNone(lookup(stamp))
 
         live = dict(pr, state="open", merge_commit_sha=merge_sha)
         scan_scope["verify_current"](lambda _: live, pr, merge_sha)

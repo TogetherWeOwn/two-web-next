@@ -6,8 +6,6 @@ name: pr-gates
 # workflow with sequential jobs, so a PR push occupies one runner slot at a
 # time instead of two parallel `pr-lint` + `secret-scan` runs.
 #
-# Metadata runs publish both required checks and verify the source scan result.
-#
 # Same-repository pull requests use included 2-vCPU capacity when enabled.
 # The GitHub-hosted fallback is ubuntu-latest.
 
@@ -434,14 +432,13 @@ jobs:
 
                   scans = [job for job in jobs if job["name"] == "gitleaks" and job["run_attempt"] == run["run_attempt"]]
                   steps = scans[0].get("steps", []) if len(scans) == 1 else []
-                  successful_steps = {step["name"] for step in steps if step["conclusion"] == "success"}
-                  receipts = {name for name in successful_steps if name.startswith("Scan PR ")}
+                  successful_steps = [step["name"] for step in steps if step["conclusion"] == "success"]
+                  receipts = [name for name in successful_steps if name.startswith("Scan PR ")]
                   if not associations and len(receipts) == 1 and scans[0]["conclusion"] == "success":
-                      scope = re.fullmatch(r"Scan PR (\d+) on \d+:\S+ at [0-9a-f]{40}", next(iter(receipts)))
+                      scope = re.fullmatch(r"Scan PR ([1-9][0-9]*) on [1-9][0-9]*:\S+ at [0-9a-f]{40}", receipts[0])
                       if scope and scope[1] != str(pr["number"]):
                           continue
 
-                  # A newer attempt of an older source run can block an otherwise valid result.
                   if proof:
                       raise ValueError("An older source run was retried after the latest source run")
                   if run["status"] != "completed":
@@ -454,7 +451,7 @@ jobs:
                   if (scan["status"] != "completed" or scan["conclusion"] != "success"
                           or "Scan the full history" not in successful_steps):
                       raise ValueError(f"The latest source scan did not pass: {scan['html_url']}")
-                  if receipts != {target}:
+                  if receipts != [target]:
                       return None
                   scan_started = scan["started_at"]
                   if not isinstance(scan_started, str) or scan_started < started:

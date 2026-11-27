@@ -99,7 +99,7 @@ expect() {
 expect_fixture() {
   local rc fingerprint log="${work}/last-plain.log"
   fingerprint="$(git -C "${repo}" rev-parse HEAD):fixture.txt:github-pat:1"
-  rc="$(scan_rc pull_request "${2:-main}")"
+  rc="$(scan_rc "${3:-pull_request}" "${2:-main}")"
   # Gitleaks can style the verbose Secret field even when output is redirected.
   sed -E $'s/\033\\[[0-9;]*m//g' "${work}/last.log" > "${log}"
   cases=$((cases + 1))
@@ -261,7 +261,6 @@ printf 'more docs\n' >> "${repo}/README.md"
 pr_commit
 expect "pr: unfetched base branch fails the scan" 2 "$(scan_rc pull_request missing-branch)"
 
-# Same submitted head, different synthetic merge SHA and base policy.
 new_repo pr-retarget
 write_allowlist_config
 base_commit
@@ -326,8 +325,8 @@ expect "merge_group: allowlist added in .gitleaks.toml does not silence the scan
   "$(scan_rc merge_group refs/heads/main)"
 queue_base="$(git -C "${repo}" rev-parse HEAD^1)"
 git -C "${repo}" update-ref refs/remotes/origin/main HEAD
-expect "merge_group: an advanced base ref cannot replace the pinned policy" 1 \
-  "$(POLICY_REVISION="${queue_base}" scan_rc merge_group refs/heads/main)"
+POLICY_REVISION="${queue_base}" expect_fixture \
+  "merge_group: an advanced base ref cannot replace the pinned policy" refs/heads/main merge_group
 
 new_repo mg-ignore
 write_stock_config
