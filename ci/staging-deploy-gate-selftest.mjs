@@ -1180,30 +1180,161 @@ function stagingReads({
   served = activeVersion,
   compare = forward,
   deployments = [stagedDeployment],
+  deploymentResponse,
+  compareResponse,
 } = {}) {
   return async (url, options) => {
     switch (String(url)) {
       case `https://api.cloudflare.com/client/v4/accounts/${stagingGuardEnv.CLOUDFLARE_ACCOUNT_ID}/workers/scripts/two-web-next/deployments`:
         assert.equal(options.headers.Authorization, "Bearer fake-cloudflare");
-        return Response.json({
-          success: true,
-          result: { deployments },
-        });
+        return deploymentResponse ?? Response.json({ success: true, result: { deployments } });
       case "https://next.togetherweown.com/up":
         assert.equal(Object.hasOwn(options.headers, "Authorization"), false);
         return Response.json({ revision: { version_id: served, commit: live } });
       case `https://api.github.com/repos/${repository}/compare/${otherSha}...${sha}?per_page=1`:
         assert.equal(options.headers.Authorization, "Bearer fake-github");
         assert.notEqual(compare, null, "Equal SHA or a mismatched version must avoid comparing");
-        return Response.json(compare);
+        return compareResponse ?? Response.json(compare);
       default:
         assert.fail(`Unexpected request ${url}`);
     }
   };
 }
 
+function stagingProviderStream(chunks, { abandon = false, cancel } = {}) {
+  let index = 0;
+  return new Response(
+    new ReadableStream(
+      {
+        pull(controller) {
+          if (index < chunks.length) controller.enqueue(chunks[index++]);
+          else if (!abandon) controller.close();
+        },
+        cancel,
+      },
+      { highWaterMark: 0 },
+    ),
+  );
+}
+
+const rolloutProviderCases = [
+  {
+    field: "deploymentResponse",
+    source: "Cloudflare deployment state",
+    limit: 1024 * 1024,
+    valid: { success: true, result: { deployments: [stagedDeployment] } },
+  },
+  {
+    field: "compareResponse",
+    source: "GitHub commit ancestry",
+    limit: 8 * 1024 * 1024,
+    valid: forward,
+  },
+];
+
+test("staging bounds chunked provider replies and cancels unfinished bodies", {
+  timeout: 2_000,
+}, async (t) => {
+  for (const { field, source, limit, valid } of rolloutProviderCases) {
+    await t.test(source, async () => {
+      const admit = (response) =>
+        requireForwardStaging(stagingGuardEnv, stagingReads({ [field]: response }));
+      const error = { message: `Cannot read ${source} for staging rollout` };
+      const prefix = Buffer.from(JSON.stringify(valid));
+      const remainder = Buffer.alloc(limit - prefix.byteLength, 0x20);
+      const atLimit = stagingProviderStream([prefix, remainder]);
+      assert.equal(await admit(atLimit), otherSha);
+
+      const oversized = stagingProviderStream([prefix, remainder, Buffer.from(" ")]);
+      await assert.rejects(admit(oversized), error);
+
+      let cancelled = false;
+      const abandoned = stagingProviderStream([prefix, remainder, Buffer.from(" ")], {
+        abandon: true,
+        cancel() {
+          cancelled = true;
+          return new Promise(() => {});
+        },
+      });
+      await assert.rejects(admit(abandoned), error);
+      assert.equal(cancelled, true);
+      assert.equal(abandoned.body.locked, false);
+    });
+  }
+});
+
+test("staging sanitizes abandoned and malformed provider replies", {
+  timeout: 2_000,
+}, async (t) => {
+  for (const { field, source, valid } of rolloutProviderCases) {
+    await t.test(source, async (t) => {
+      const admit = (response) =>
+        requireForwardStaging(stagingGuardEnv, stagingReads({ [field]: response }));
+      const reason = (error) => {
+        assert.equal(error.message, `Cannot read ${source} for staging rollout`);
+        assert.equal(error.cause, undefined);
+        return true;
+      };
+      await assert.rejects(admit(new Response(null)), reason);
+      await assert.rejects(admit(stagingProviderStream([])), reason);
+      await assert.rejects(admit(new Response("provider-private invalid JSON")), reason);
+
+      const deadline = new AbortController();
+      t.mock.method(AbortSignal, "timeout", () => deadline.signal);
+      let cancelled = false;
+      const response = new Response(
+        new ReadableStream(
+          {
+            start(controller) {
+              controller.enqueue(Buffer.from(JSON.stringify(valid)));
+            },
+            pull(controller) {
+              deadline.abort(new Error("provider-private timeout"));
+              // Simulate EOF arriving after the deadline if the reader leaves the stream open.
+              queueMicrotask(() => {
+                if (!cancelled) controller.close();
+              });
+            },
+            cancel() {
+              cancelled = true;
+              return Promise.reject(new Error("provider-private cancellation"));
+            },
+          },
+          { highWaterMark: 0 },
+        ),
+      );
+      await assert.rejects(admit(response), reason);
+      assert.equal(cancelled, true);
+      assert.equal(response.body.locked, false);
+    });
+  }
+});
+
 test("staging admits the same SHA or a forward candidate independent of the main tip", async () => {
-  assert.equal(await requireForwardStaging(stagingGuardEnv, stagingReads()), otherSha);
+  const deployments = Array.from({ length: 99 }, (_, index) => ({
+    created_on: new Date(Date.UTC(2026, 10, 24, 0, index)).toISOString(),
+    versions: [
+      { version_id: activeVersion, percentage: 50 },
+      { version_id: "23456789-2345-2345-2345-23456789abcd", percentage: 50 },
+    ],
+    annotations: { "workers/message": "é".repeat(500) },
+  }));
+  const addedLine = `+${"x".repeat(170)}${"\\".repeat(22)}\n`;
+  const compare = {
+    ...forward,
+    commits: [{ sha: "d".repeat(40) }],
+    files: Array.from({ length: 300 }, (_, index) => ({
+      filename: `synthetic-${index}.txt`,
+      patch: `@@ -0,0 +1,100 @@\n${addedLine.repeat(100)}`,
+    })),
+  };
+  assert.equal(
+    await requireForwardStaging(
+      stagingGuardEnv,
+      stagingReads({ deployments: [...deployments, stagedDeployment], compare }),
+    ),
+    otherSha,
+  );
   assert.equal(
     await requireForwardStaging(stagingGuardEnv, stagingReads({ live: sha, compare: null })),
     sha,
@@ -1228,6 +1359,10 @@ test("staging refuses an older or divergent candidate and a lagging edge", async
 });
 
 test("staging refuses a newer split deployment and ambiguous or malformed timestamps", async () => {
+  await assert.rejects(
+    requireForwardStaging(stagingGuardEnv, stagingReads({ deployments: [], compare: null })),
+    /Missing active staging deployment/,
+  );
   const split = {
     created_on: "2026-11-25T01:00:00.000001-05:00",
     versions: [{ version_id: activeVersion, percentage: 40 }],
