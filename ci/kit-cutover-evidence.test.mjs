@@ -21,6 +21,7 @@ import {
 import { packageCutover } from "./kit-cutover-package.mjs";
 import { cloudflare, exercise, verifyServed } from "./kit-cutover-staging.mjs";
 import { KIT_ROUTE_FLAGS } from "./production-deploy-gate.mjs";
+import { sha256 } from "./worker-bundle-evidence.mjs";
 
 const sourceSha = "a".repeat(40);
 const digest = "b".repeat(64);
@@ -203,6 +204,121 @@ test("isolated qualification refuses changed packet bytes and preserves earlier 
   assert.equal(result.stdout, "");
   assert.deepEqual(await readFile(proofPath), earlierProof);
   assert.deepEqual((await readdir(scratch)).sort(), ["kit-cutover-packet", "proof.json"]);
+});
+
+test("cutover packaging cleans only its own incomplete packet", async (t) => {
+  const scratch = await mkdtemp(join(tmpdir(), "cutover-packet-cleanup-test-"));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const repo = join(scratch, "repo");
+  const wrangler = { version: "1.2.3" };
+  const name = "two-web-next-production";
+  const assets = join(scratch, "installed");
+  const publicAssets = join(repo, "public");
+  const stub = "node_modules/.bin/wrangler";
+  const files = {
+    "wrangler.jsonc": JSON.stringify({ env: { production: { name, main: "src/worker.ts" } } }),
+    "web/wrangler.production.jsonc": JSON.stringify({
+      name,
+      main: ".svelte-kit/cloudflare/_worker.js",
+      assets: { directory: ".svelte-kit/cloudflare" },
+      vars: Object.fromEntries(KIT_ROUTE_FLAGS.map((flag) => [flag, "false"])),
+      triggers: { crons: [] },
+      workers_dev: false,
+      preview_urls: false,
+    }),
+    "drizzle/meta/_journal.json": JSON.stringify({ entries: [] }),
+    "package-lock.json": JSON.stringify({ packages: { "node_modules/wrangler": wrangler } }),
+    "node_modules/wrangler/package.json": JSON.stringify(wrangler),
+    [stub]:
+      '#!/bin/sh\n[ "$5" = --outdir ] || exit 2\nprintf "// synthetic Hono\\n" > "$6/worker.js"\n',
+  };
+  for (const [name, bytes] of Object.entries(files)) {
+    const path = join(repo, name);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, bytes, { mode: name === stub ? 0o700 : 0o600 });
+  }
+  await mkdir(assets);
+  await writeFile(join(assets, "_worker.js"), "// synthetic facade");
+  await writeFile(join(assets, "kit-adapter.js"), "// synthetic Kit adapter");
+  const assetIdentity = {
+    files: Object.fromEntries(
+      Object.entries(await inventory(assets)).map(([name, hash]) => [`cloudflare/${name}`, hash]),
+    ),
+  };
+  const context = { sourceSha, runId: identity.runId, runAttempt: identity.runAttempt };
+  for (const [key, value] of Object.entries({
+    RUNNER_TEMP: scratch,
+    GITHUB_OUTPUT: join(scratch, "output"),
+    GITHUB_STEP_SUMMARY: join(scratch, "summary"),
+  })) {
+    const previous = process.env[key];
+    t.after(() => {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    });
+    process.env[key] = value;
+  }
+  const pack = (packet) => packageCutover(packet, repo, { assets }, assetIdentity, context);
+
+  await t.test("removes the incomplete packet and preserves the original failure", async () => {
+    const packet = join(scratch, "incomplete");
+    // Hono asset inventory fails after the packet has received its Kit assets and modules.
+    await assert.rejects(pack(packet), { code: "ENOENT", path: publicAssets, syscall: "lstat" });
+    await assert.rejects(lstat(packet), { code: "ENOENT" });
+  });
+
+  await t.test("reports the packaging and cleanup errors when removal fails", async (t) => {
+    const { default: fsPromises } = await import("node:fs/promises");
+    const { syncBuiltinESMExports } = await import("node:module");
+    const packet = join(scratch, "cleanup-failure");
+    const cleanupError = Object.assign(new Error("synthetic packet removal refusal"), {
+      code: "EACCES",
+      path: packet,
+    });
+    const remove = fsPromises.rm;
+    const mockedRemove = t.mock.method(fsPromises, "rm", async (path, options) => {
+      if (path === packet) throw cleanupError;
+      return remove(path, options);
+    });
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(pack(packet), (error) => {
+        assert.ok(error instanceof AggregateError);
+        assert.equal(error.errors.length, 2);
+        const [original, cleanup] = error.errors;
+        assert.equal(original.code, "ENOENT");
+        assert.equal(original.path, publicAssets);
+        assert.equal(original.syscall, "lstat");
+        assert.equal(cleanup, cleanupError);
+        return true;
+      });
+    } finally {
+      mockedRemove.mock.restore();
+      syncBuiltinESMExports();
+    }
+  });
+
+  await t.test("removes the packet after manifest verification refuses empty assets", async () => {
+    const packet = join(scratch, "manifest-refusal");
+    await mkdir(publicAssets);
+    await assert.rejects(pack(packet), /missing Worker assets/);
+    await assert.rejects(lstat(packet), { code: "ENOENT" });
+    await rm(publicAssets, { recursive: true, force: true });
+  });
+
+  await t.test("keeps a verified packet and preserves it on admission failure", async () => {
+    await mkdir(publicAssets);
+    await writeFile(join(publicAssets, "fixture.txt"), "synthetic Hono asset");
+    const packet = join(scratch, "complete");
+    await pack(packet);
+    const manifestDigest = sha256(await readFile(join(packet, "manifest.json")));
+    const pin = { ...context, digest: manifestDigest };
+    const fixtureInputs = await sourceInputs(repo);
+    await verifyPackage(packet, pin, fixtureInputs);
+
+    await assert.rejects(pack(packet), { code: "EEXIST", path: packet, syscall: "mkdir" });
+    await verifyPackage(packet, pin, fixtureInputs);
+  });
 });
 
 test("cutover ledger admits exactly 1033 or 1037 and exact version readiness", () => {
