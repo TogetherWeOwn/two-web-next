@@ -698,7 +698,8 @@ export async function assertFeaturedLegacyRedirects({ on, off, rollback, hono, d
     // disposable table lock into the classified outage response.
     await sql.begin(async (tx) => {
       await tx`lock table featured_contents in access exclusive mode`;
-      await Promise.all(
+      // Keep the lock and defer row cleanup until every probe has settled.
+      const outcomes = await Promise.allSettled(
         targets.map(async (target) => {
           const outage = await visit(target, edit(legacyId), 503, {
             owned: target === on,
@@ -712,6 +713,13 @@ export async function assertFeaturedLegacyRedirects({ on, off, rollback, hono, d
           renewedModerator(outage.headers);
         }),
       );
+      const failures = outcomes.filter((outcome) => outcome.status === "rejected");
+      if (failures.length > 0) {
+        throw new AggregateError(
+          failures.map((failure) => failure.reason),
+          "Featured redirect outage probes failed",
+        );
+      }
     });
   } finally {
     try {
