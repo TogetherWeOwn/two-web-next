@@ -14,6 +14,19 @@
 // contract through loadEventsPage/renderEventsHtml against the same fixture.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import app from "./app";
+import {
+  all,
+  attr,
+  find,
+  link,
+  parse,
+  sourceElements,
+  sourceTestId,
+  testId,
+  testLink,
+  text,
+  withClass,
+} from "./helpers/kit-page-queries";
 import type { Db } from "../src/db/index";
 import { events } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
@@ -278,39 +291,14 @@ describe.skipIf(!process.env.DATABASE_URL)("events index journey (agent-testdb)"
     expect(res.headers.get(KIT_RENDERER_HEADER)).toBeNull();
 
     const html = await res.text();
-    // Seeded rows.
-    expect(html).toContain("Acceptance list seed Alpha");
-    expect(html).toContain("Acceptance list seed Beta");
-    expect(html).toContain(`data-testid="${EVENT_CARD_TESTID}"`);
-    // Calendar controls: island identity, view toggles, search, archive + subscribe.
-    expect(html).toContain('data-island="events-calendar"');
-    expect(html).toContain(`data-testid="${EVENTS_CALENDAR_TESTID}"`);
-    expect(html).toContain(`data-testid="${EVENTS_LIST_TESTID}"`);
-    expect(html).toContain(`data-testid="${EVENTS_CONTENT_TESTID}"`);
-    expect(html).toContain(`data-testid="${EVENTS_VIEW_LIST_TESTID}"`);
-    expect(html).toContain(`data-testid="${EVENTS_VIEW_CALENDAR_TESTID}"`);
-    expect(html).toContain(`data-testid="${EVENTS_SEARCH_TESTID}"`);
-    expect(html).toContain(`data-testid="${EVENTS_PAST_ARCHIVE_LINK_TESTID}"`);
-    expect(html).toContain(`data-testid="${EVENTS_SUBSCRIBE_TESTID}"`);
-    expect(html).toContain('<form method="get" action="/events"');
-    expect(html).toContain('name="q"');
-    expect(html).toContain('<script src="/islands/events-calendar.js"');
-    // Navigation: primary Events current, canonical, markdown alternate.
-    expect(html).toContain('aria-label="Primary"');
-    expect(html).toContain('<a href="/events" aria-current="page">Events</a>');
-    expect(html).toContain('<link rel="canonical" href="https://next.example.test/events"');
-    expect(html).toContain('href="/events.md"');
-    expect(html).toContain('class="skip-link"');
-    expect(html).toContain('id="main"');
-    // Guest chrome: header sign-in plus the in-page join CTA, never member chrome.
-    expect(html).toContain("Welcome, guest");
-    expect(html).toContain('data-testid="signin"');
-    expect(html).toContain("/auth/discord?next=%2Fevents");
-    expect(html).toContain("Join the Discord");
-    expect(html).toContain("/join?next=%2Fevents");
-    expect(html).not.toContain("Sign out");
-    expect(html).not.toContain("Open Discord");
-    expect(html).not.toContain('data-testid="join-result"');
+    const page = parse(html);
+    expectListing(html, page);
+    expect(find(page, "input", { name: "q" })).toBeDefined();
+    expect(withClass(page, "a", "skip-link")).toBeDefined();
+    expect(find(page, "main", { id: "main" })).toBeDefined();
+    const account = find(find(page, "header"), "nav", { "aria-label": "Account" });
+    expect(sourceElements(account, undefined, { "data-testid": "signin" })).toHaveLength(1);
+    expect(testLink(account, "signin", "/auth/discord?next=%2Fevents")).toBeDefined();
   });
 
   it("Kit load+render preserves the seeded Hono listing contract", async () => {
@@ -337,31 +325,41 @@ describe.skipIf(!process.env.DATABASE_URL)("events index journey (agent-testdb)"
     expect(rendered.headers["content-type"]).toBe("text/html; charset=UTF-8");
     expectCookieVaryToken(rendered.headers.vary ?? "");
 
-    const html = rendered.body;
-    expect(html).toContain("Acceptance list seed Alpha");
-    expect(html).toContain("Acceptance list seed Beta");
-    expect(html).toContain(`data-testid="${EVENT_CARD_TESTID}"`);
-    expect(html).toContain('data-island="events-calendar"');
-    expect(html).toContain(`data-testid="${EVENTS_CALENDAR_TESTID}"`);
-    expect(html).toContain(`data-testid="${EVENTS_LIST_TESTID}"`);
-    expect(html).toContain(`data-testid="${EVENTS_CONTENT_TESTID}"`);
-    expect(html).toContain(`data-testid="${EVENTS_VIEW_LIST_TESTID}"`);
-    expect(html).toContain(`data-testid="${EVENTS_VIEW_CALENDAR_TESTID}"`);
-    expect(html).toContain(`data-testid="${EVENTS_SEARCH_TESTID}"`);
-    expect(html).toContain(`data-testid="${EVENTS_PAST_ARCHIVE_LINK_TESTID}"`);
-    expect(html).toContain(`data-testid="${EVENTS_SUBSCRIBE_TESTID}"`);
-    expect(html).toContain('<form method="get" action="/events"');
-    expect(html).toContain('<script src="/islands/events-calendar.js"');
-    expect(html).toContain('aria-label="Primary"');
-    expect(html).toContain('<a href="/events" aria-current="page">Events</a>');
-    expect(html).toContain('<link rel="canonical" href="https://next.example.test/events"');
-    expect(html).toContain('href="/events.md"');
-    expect(html).toContain("Welcome, guest");
-    expect(html).toContain("/auth/discord?next=%2Fevents");
-    expect(html).toContain("Join the Discord");
-    expect(html).toContain("/join?next=%2Fevents");
-    expect(html).not.toContain("Sign out");
-    expect(html).not.toContain("Open Discord");
-    expect(html).not.toContain('data-testid="join-result"');
+    expectListing(rendered.body);
   });
 });
+
+function expectListing(html: string, page = parse(html)): void {
+  const cards = all(page, undefined, { "data-testid": EVENT_CARD_TESTID }).map(text);
+  expect(cards.some((card) => card?.includes("Acceptance list seed Alpha"))).toBe(true);
+  expect(cards.some((card) => card?.includes("Acceptance list seed Beta"))).toBe(true);
+  expect(find(page, undefined, { "data-island": "events-calendar" })).toBeDefined();
+  for (const id of [
+    EVENTS_CALENDAR_TESTID,
+    EVENTS_LIST_TESTID,
+    EVENTS_CONTENT_TESTID,
+    EVENTS_VIEW_LIST_TESTID,
+    EVENTS_VIEW_CALENDAR_TESTID,
+    EVENTS_SEARCH_TESTID,
+    EVENTS_PAST_ARCHIVE_LINK_TESTID,
+    EVENTS_SUBSCRIBE_TESTID,
+  ]) {
+    expect(testId(page, id), id).toBeDefined();
+  }
+  expect(find(page, "form", { method: "get", action: "/events" })).toBeDefined();
+  expect(sourceElements(page, "script", {}, false).map((node) => attr(node, "src"))).toContain(
+    "/islands/events-calendar.js",
+  );
+  const nav = find(page, "nav", { "aria-label": "Primary" });
+  expect(text(find(nav, "a", { href: "/events", "aria-current": "page" }))).toBe("Events");
+  expect(find(page, "link", { rel: "canonical", href: `${APP_URL}/events` })).toBeDefined();
+  expect(find(page, "link", { href: "/events.md" })).toBeDefined();
+  expect(text(page)).toContain("Welcome, guest");
+  expect(link(page, "/auth/discord?next=%2Fevents")).toBeDefined();
+  expect(text(link(page, "/join?next=%2Fevents"))).toContain("Join the Discord");
+  expect(html).not.toContain("Sign out");
+  expect(html).not.toContain("Open Discord");
+  expect(sourceTestId(html, "join-result")).toBeUndefined();
+  // Check the token in raw-text payloads as well as parsed elements.
+  expect(html).not.toContain("join-result");
+}
