@@ -6,7 +6,6 @@ import type { Env } from "../../../../src/env";
 import { internalErrorHandler, notFoundHandler } from "../../../../src/error-responses";
 import { safeRequestId } from "../../../../src/http/request-log";
 import { upRoute, versionRoute } from "../../../../src/index";
-import { fetchKitCspReports } from "../../../../src/kit-csp-reports-fetch";
 import { crossOriginRefusal } from "../../../../src/same-origin";
 
 const routes = [
@@ -49,8 +48,4 @@ export function kitOpsFamily() {
 // The hook admits the exact routes and supplies host, origin and global headers.
 export function respondToOps({ request, locals }: Pick<RequestEvent, "request" | "locals">) {
   return ops.fetch(request, env, requestContext(locals.requestId));
-}
-
-export function respondToCsp({ request }: Pick<RequestEvent, "request">) {
-  return fetchKitCspReports(request, env) ?? new Response(null, { status: 404 });
 }

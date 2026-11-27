@@ -355,7 +355,13 @@ jobs:
     # soaked green) or production already serves the target: preflight
     # succeeds with an empty sha or already_live=true, and this job stands
     # down so the run stays green without deploying.
-    if: needs.preflight.outputs.sha != '' && needs.preflight.outputs.already_live != 'true'
+    # Require the recovery pins before entering the production Environment.
+    if: >-
+      needs.preflight.outputs.sha != '' && needs.preflight.outputs.already_live != 'true' &&
+      needs.preflight.outputs.rollback_version_id != '' && needs.preflight.outputs.rollback_commit != '' &&
+      needs.preflight.outputs.cutover_mode != '' &&
+      (needs.preflight.outputs.cutover_mode == 'ordinary' ||
+       (needs.preflight.outputs.cutover_run != '' && needs.preflight.outputs.cutover_attempt != ''))
     # Read by auto-rollback below: the promoted version id is set as soon as
     # the gradual action resolves the upload, and verify_outcome says whether
     # the post-100% smoke failed.

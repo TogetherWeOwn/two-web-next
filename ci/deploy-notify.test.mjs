@@ -317,6 +317,55 @@ test("an unconfigured webhook warns and sends nothing; a refused or non-https on
   );
 });
 
+test("notify cancels unread webhook bodies without changing the HTTP outcome", async (t) => {
+  const configured = deployEnv({
+    PAPERCLIP_DEPLOY_WEBHOOK_URL: "https://hooks.example/fire",
+    PAPERCLIP_DEPLOY_WEBHOOK_SECRET: "fixture-secret",
+  });
+  for (const status of [202, 401]) {
+    for (const cleanupFails of [false, true]) {
+      await t.test(`HTTP ${status}, cleanup fails: ${cleanupFails}`, async (subtest) => {
+        const warning = subtest.mock.method(console, "warn", () => {});
+        let reads = 0;
+        let cancellations = 0;
+        const stream = new ReadableStream(
+          {
+            pull(controller) {
+              reads++;
+              controller.error(new Error("response body must stay unread"));
+            },
+            cancel() {
+              cancellations++;
+              if (cleanupFails) throw new Error("fixture cleanup failed");
+            },
+          },
+          { highWaterMark: 0 },
+        );
+        const result = notify(configured, {
+          now: NOW,
+          fetchImpl: async () => new Response(stream, { status }),
+        });
+        if (status === 202) {
+          assert.deepEqual(await result, {
+            sent: true,
+            payload: buildPayload(configured, { now: NOW }),
+          });
+        } else {
+          await assert.rejects(result, { message: "deploy-notify webhook answered HTTP 401" });
+        }
+        assert.equal(reads, 0);
+        assert.equal(cancellations, 1);
+        assert.deepEqual(
+          warning.mock.calls.map((call) => call.arguments),
+          cleanupFails
+            ? [["::warning::deploy-notify could not cancel the webhook response body"]]
+            : [],
+        );
+      });
+    }
+  }
+});
+
 test("CLI never prints the secret", () => {
   const result = spawnSync(process.execPath, ["ci/deploy-notify.mjs"], {
     encoding: "utf8",

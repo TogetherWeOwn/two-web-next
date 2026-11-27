@@ -1,7 +1,7 @@
 // Test-only fetch stub for CLI spawn tests (never imported by shipped code).
 // Activated with `node --import ./ci/test-fetch-stub.mjs <script>`, it replaces
 // the global fetch with canned responses from FETCH_STUB_JSON, a JSON array of
-// `{ match, status, body, fail, sequence }`. The first entry whose `match`
+// `{ match, status, body, chunks, fail, sequence }`. The first entry whose `match`
 // substring appears in the request URL wins; `sequence` serves one entry per
 // call in order (for retry tests); `fail: true` rejects like a transport
 // error. Anything unmatched rejects so a test never touches the network.
@@ -21,8 +21,19 @@ globalThis.fetch = async (input) => {
         : stub;
       if (behavior.fail) throw new TypeError("fetch failed");
       const status = behavior.status ?? 200;
-      const body = behavior.body ?? {};
-      return Response.json(body, { status });
+      if (behavior.chunks) {
+        const encoder = new TextEncoder();
+        const chunks = behavior.chunks[Symbol.iterator]();
+        const stream = new ReadableStream({
+          pull(controller) {
+            const { done, value } = chunks.next();
+            if (done) controller.close();
+            else controller.enqueue(encoder.encode(value));
+          },
+        });
+        return new Response(stream, { status, statusText: behavior.statusText });
+      }
+      return Response.json(behavior.body ?? {}, { status });
     }
   }
   throw new Error(`unexpected fetch ${url}`);

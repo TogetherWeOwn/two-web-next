@@ -221,8 +221,8 @@ export async function runPreflight(env = process.env) {
     },
     onnotice: () => {},
   });
+  const rows = {};
   try {
-    const rows = {};
     await client.unsafe("BEGIN READ ONLY");
     try {
       await client.unsafe("SET LOCAL statement_timeout = '30s'");
@@ -239,27 +239,33 @@ export async function runPreflight(env = process.env) {
       }
       throw error;
     }
-    const expectedSet = new Set(EXPECTED_SEQUENCES);
-    const output = {
-      table_owners: rows.table_owners,
-      sequences: rows.sequences.filter((row) => expectedSet.has(row.name)),
-      all_sequences: rows.sequences,
-      schema_acl: rows.schema_acl,
-      create_booleans: rows.create_booleans[0] ?? null,
-      table_grants: rows.table_grants,
-      default_acl: rows.default_acl,
-      owner_counts: rows.owner_counts,
-      c3: checkSequenceNames(rows.sequences.map((row) => row.name)),
-      c2: rows.create_booleans[0] ?? null,
-    };
-    const text = JSON.stringify(output, null, 2);
-    console.log(text);
-    if (env.PREFLIGHT_OUTFILE) writeFileSync(env.PREFLIGHT_OUTFILE, `${text}\n`);
-    if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `${summarize(output)}\n`);
-    return output;
-  } finally {
-    await client.end({ timeout: 5 });
+  } catch (error) {
+    try {
+      await client.end({ timeout: 5 });
+    } catch {
+      // As with rollback, cleanup is best-effort once the run has failed.
+    }
+    throw error;
   }
+  await client.end({ timeout: 5 });
+  const expectedSet = new Set(EXPECTED_SEQUENCES);
+  const output = {
+    table_owners: rows.table_owners,
+    sequences: rows.sequences.filter((row) => expectedSet.has(row.name)),
+    all_sequences: rows.sequences,
+    schema_acl: rows.schema_acl,
+    create_booleans: rows.create_booleans[0] ?? null,
+    table_grants: rows.table_grants,
+    default_acl: rows.default_acl,
+    owner_counts: rows.owner_counts,
+    c3: checkSequenceNames(rows.sequences.map((row) => row.name)),
+    c2: rows.create_booleans[0] ?? null,
+  };
+  const text = JSON.stringify(output, null, 2);
+  console.log(text);
+  if (env.PREFLIGHT_OUTFILE) writeFileSync(env.PREFLIGHT_OUTFILE, `${text}\n`);
+  if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `${summarize(output)}\n`);
+  return output;
 }
 
 function selftest() {

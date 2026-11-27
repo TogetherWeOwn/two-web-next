@@ -54,6 +54,7 @@ import {
   isKitAdminRsvpForm,
   kitAdminAdmission,
   KIT_ADMIN_OPS_ROUTES,
+  KIT_FEATURED_UNPUBLISH_PATH,
   KIT_QUEUE_PREVIEW_ID,
   KIT_QUEUE_PREVIEW_ROUTE,
   privateAdminResponse,
@@ -1274,6 +1275,13 @@ async function dispatchKitAdminRequest(
     request.method === "POST"
       ? adminFormPath(url.pathname, legacyCreate ? "/admin/events/[key]" : routeId)
       : undefined;
+  if (
+    formPath === KIT_FEATURED_UNPUBLISH_PATH &&
+    (env.KIT_PARITY_FIXTURE_ADMIN_FEATURED_UNPUBLISH !== "true" ||
+      !fixtureRequest(request, deps.appUrl))
+  ) {
+    return null;
+  }
   const fixture =
     env.KIT_PARITY_FIXTURE_ADMIN_EVENT_CREATE_REDIRECT === "true" &&
     fixtureRequest(request, deps.appUrl);

@@ -1,14 +1,23 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
+import { parse } from "yaml";
 import { fileURLToPath } from "node:url";
 import { first, preRollback, soakEnv, trustedReads } from "../test/fixtures/staging-soak-http.mjs";
 import { verifyOrdinaryLedger } from "./check-production-secrets.mjs";
-import { verifyReady, verifyStagingProof } from "./kit-cutover-evidence.mjs";
+import {
+  productionUploadConfig,
+  verifyReady,
+  verifyStagingProof,
+} from "./kit-cutover-evidence.mjs";
 import {
   selection,
   undoMessage,
+  uploadCutover,
   verifyEmberUndoVersion,
   verifyOperatorDenial,
   verifyProducer,
@@ -25,6 +34,24 @@ const undoDigest = "c".repeat(64);
 const hono = "11111111-1111-1111-1111-111111111111";
 const kit = "22222222-2222-2222-2222-222222222222";
 const identity = { sourceSha, runId: "21", runAttempt: "3", digest };
+const proofUpload = {
+  name: "Retain successful isolated cutover proof",
+  status: "completed",
+  conclusion: "success",
+};
+
+function completedCutoverJob({ runId, runAttempt }) {
+  return {
+    id: 25,
+    name: "isolated-cutover",
+    run_id: Number(runId),
+    run_attempt: Number(runAttempt),
+    status: "completed",
+    conclusion: "success",
+    steps: [proofUpload],
+  };
+}
+
 const emberUndoVersion = {
   id: kit,
   annotations: {
@@ -215,6 +242,21 @@ test("admin rollback admits only the recorded production Ember version with admi
     pin,
     sourceSha,
   );
+  for (const required of bindings) {
+    assert.throws(
+      () => verifyEmberUndoVersion(withBindings([...bindings, { ...required }]), pin, sourceSha),
+      assert.AssertionError,
+      `must reject duplicate ${required.name} bindings even when their values agree`,
+    );
+    const wrongType = bindings.map((binding) =>
+      binding.name === required.name ? { ...binding, type: "json" } : binding,
+    );
+    assert.throws(
+      () => verifyEmberUndoVersion(withBindings(wrongType), pin, sourceSha),
+      assert.AssertionError,
+      `must reject a non-plain-text ${required.name} binding even with the expected text`,
+    );
+  }
   for (const mismatch of [{ undo: hono }, { undoDigest: digest }]) {
     assert.throws(() => verifyEmberUndoVersion(version, { ...pin, ...mismatch }, sourceSha));
   }
@@ -278,7 +320,7 @@ test("operator denial checks survive unused body cancellation failure", async (t
   }
 });
 
-test("only exact successful main XFS dispatch metadata can produce a cutover packet", async (t) => {
+test("cutover producer requires the exact main attempt and its successful proof upload", async (t) => {
   const own = { full_name: "TogetherWeOwn/two-web-next", fork: false, id: 23 };
   const run = {
     id: 21,
@@ -292,20 +334,43 @@ test("only exact successful main XFS dispatch metadata can produce a cutover pac
     status: "completed",
     conclusion: "success",
   };
-  assert.equal(
-    (await verifyProducer(identity, "synthetic", async () => Response.json(run))).runAttempt,
-    "3",
+  const workflow = parse(readFileSync(new URL("../" + run.path, import.meta.url), "utf8"));
+  const upload = workflow.jobs["isolated-cutover"].steps.find((step) =>
+    step.uses?.startsWith("actions/upload-artifact@"),
   );
-  await assert.rejects(
-    verifyProducer(identity, "synthetic", async () => Response.json({ ...run, run_attempt: 2 })),
-    /attempt metadata/,
-  );
-
+  assert.equal(upload.name, proofUpload.name);
+  assert.equal(upload.with.name, "kit-cutover-proof-${{ github.run_attempt }}");
+  assert.equal(upload.with["if-no-files-found"], "error");
+  const job = completedCutoverJob(identity);
+  const check = (attempt = run, isolated = job) =>
+    verifyProducer(identity, "synthetic", async (url) => {
+      const parsed = new URL(url);
+      const path = parsed.pathname;
+      if (path.endsWith("/runs/21/attempts/3")) return Response.json(attempt);
+      assert.ok(path.endsWith("/runs/21/attempts/3/jobs"));
+      assert.equal(parsed.search, "?per_page=100&page=1");
+      return Response.json({ total_count: 1, jobs: [isolated] });
+    });
+  assert.equal((await check()).runAttempt, "3");
+  await assert.rejects(check({ ...run, run_attempt: 2 }), /attempt metadata/);
+  await assert.rejects(check({ ...run, conclusion: "failure" }), /attempt metadata/);
+  for (const event of ["push", "pull_request"]) {
+    await assert.rejects(check({ ...run, event }), /attempt metadata/);
+  }
+  for (const changes of [
+    { steps: [] },
+    { steps: [{ ...proofUpload, conclusion: "failure" }] },
+    { steps: [{ ...proofUpload, conclusion: "skipped" }] },
+    { conclusion: "skipped", steps: [] },
+    { run_attempt: 2 },
+  ]) {
+    await assert.rejects(check(run, { ...job, ...changes }), /proof upload did not succeed/);
+  }
   const mismatches = {
     "wrong source SHA": { head_sha: "d".repeat(40) },
     "wrong source branch": { head_branch: "release" },
     "different workflow": { path: ".github/workflows/archive-hono-recovery.yml" },
-    "XFS workflow on another ref": { path: `${run.path}@release` },
+    "XFS workflow on another ref": { path: run.path + "@release" },
     "push event": { event: "push" },
     "pull request event": { event: "pull_request" },
     "foreign run repository": { repository: { ...own, full_name: "Elsewhere/repo" } },
@@ -314,9 +379,8 @@ test("only exact successful main XFS dispatch metadata can produce a cutover pac
     "unfinished run": { status: "in_progress" },
     "cancelled run": { conclusion: "cancelled" },
   };
-
   for (const [label, mismatch] of Object.entries(mismatches)) {
-    await t.test(`refuses ${label}`, async () => {
+    await t.test("refuses " + label, async () => {
       await assert.rejects(
         verifyProducer(identity, "synthetic", async () => Response.json({ ...run, ...mismatch })),
         { message: "pure Hono recovery run refused: inconsistent GitHub attempt metadata" },
@@ -324,7 +388,6 @@ test("only exact successful main XFS dispatch metadata can produce a cutover pac
     });
   }
 });
-
 test("a newer main tip and a newer staging allocation have different effects on cutover evidence", async () => {
   const successor = "d".repeat(40);
   const repository = preRollback.head_repository.full_name;
@@ -358,12 +421,17 @@ test("a newer main tip and a newer staging allocation have different effects on 
   const own = { full_name: "TogetherWeOwn/two-web-next", fork: false, id: 23 };
   const successorPin = { ...identity, sourceSha: successor, runId: "22" };
   const readIsolatedRun = async (input) => {
-    const path = new URL(input).pathname;
+    const { pathname, search } = new URL(input);
+    const path = pathname.replace(/\/jobs$/, "");
     const pin = [identity, successorPin].find(
       ({ runId, runAttempt }) =>
         path === `/repos/${own.full_name}/actions/runs/${runId}/attempts/${runAttempt}`,
     );
     assert.ok(pin);
+    if (pathname !== path) {
+      assert.equal(search, "?per_page=100&page=1");
+      return Response.json({ total_count: 1, jobs: [completedCutoverJob(pin)] });
+    }
     return Response.json({
       id: Number(pin.runId),
       run_attempt: Number(pin.runAttempt),
@@ -494,4 +562,53 @@ test("ordinary promotion requires the full ledger for an Ember undo version", as
   assert.equal(readLedger.mock.callCount(), 1);
 
   await verifyOrdinaryLedger({}, () => assert.fail("ordinary rollback target must not probe"));
+});
+
+test("Ember upload validates the deployment attempt before writing the package config", async (t) => {
+  const scratch = await mkdtemp(join(tmpdir(), "ember-upload-attempt-"));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const directory = join(scratch, "kit");
+  const configPath = join(directory, "wrangler.json");
+  const env = {
+    GITHUB_RUN_ID: "99",
+    GITHUB_RUN_ATTEMPT: "2",
+    GITHUB_OUTPUT: join(scratch, "step-output"),
+    WRANGLER_OUTPUT_FILE_PATH: join(scratch, "upload-receipt"),
+  };
+  const pin = { ...identity, mode: "ember" };
+  const inputs = {
+    root: { env: { production: {} } },
+    kit: { name: "fixture-worker", vars: { KIT_ROUTE_EMBER_PAGES: "false" } },
+  };
+  const upload = t.mock.fn(() => kit);
+  await mkdir(directory);
+  await writeFile(env.GITHUB_OUTPUT, "mode=ember\n");
+  for (const invalid of [
+    { GITHUB_RUN_ID: undefined },
+    { GITHUB_RUN_ATTEMPT: undefined },
+    { GITHUB_RUN_ID: "9e1" },
+    { GITHUB_RUN_ATTEMPT: "02" },
+  ]) {
+    await assert.rejects(
+      uploadCutover(scratch, "kit", pin, inputs, { ...env, ...invalid }, upload),
+      /invalid deployment attempt/,
+    );
+    assert.deepEqual(await readdir(directory), []);
+    assert.equal(await readFile(env.GITHUB_OUTPUT, "utf8"), "mode=ember\n");
+    await assert.rejects(readFile(env.WRANGLER_OUTPUT_FILE_PATH), { code: "ENOENT" });
+    assert.equal(upload.mock.callCount(), 0);
+  }
+
+  assert.equal(await uploadCutover(scratch, "kit", pin, inputs, env, upload), kit);
+  const config = productionUploadConfig("kit", inputs, "ember");
+  assert.equal(await readFile(configPath, "utf8"), JSON.stringify(config));
+  assert.equal(upload.mock.callCount(), 1);
+  assert.deepEqual(upload.mock.calls[0].arguments, [
+    "kit",
+    directory,
+    config,
+    `${sourceSha}-99-2`,
+    { message: `two-web-cutover-kit:${digest}`, output: env.WRANGLER_OUTPUT_FILE_PATH },
+  ]);
+  assert.equal(await readFile(env.GITHUB_OUTPUT, "utf8"), `mode=ember\nversion_id=${kit}\n`);
 });

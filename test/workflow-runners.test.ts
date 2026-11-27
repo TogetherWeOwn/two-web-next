@@ -101,9 +101,8 @@ const verifiedLocalRefs = new Map([
 const verifiedHostedOrgReusables = new Map([
   ["review-rules.yml@8059ac2b121b63443db656b1e10e927b8af8133c", "runs-on-json"],
   ["test-guard.yml@8059ac2b121b63443db656b1e10e927b8af8133c", "runs-on-json"],
-  ["pr-size.yml@ac9ce8d63e0cebd19ede904ac79137190c329964", "runs-on"],
-  ["pr-size-gate.yml@ac9ce8d63e0cebd19ede904ac79137190c329964", "runs-on"],
-  ["pr-size-weekly.yml@ac9ce8d63e0cebd19ede904ac79137190c329964", "runs-on"],
+  ["pr-size-gate.yml@649943c1ed8a1af8f8760e075f3923237dd72e50", "runs-on"],
+  ["pr-size-weekly.yml@649943c1ed8a1af8f8760e075f3923237dd72e50", "runs-on"],
 ]);
 
 function isVerifiedFrozenLocal(uses: string) {

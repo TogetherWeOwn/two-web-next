@@ -127,6 +127,9 @@ const DESTRUCTIVE_PATTERNS = [
 ];
 
 const ROLLBACK_SAFE_NOTE = /^--\s*rollback-safe:\s*\S.{9,}$/m;
+// Individual checked-in migrations are under 4 KiB. Leave room for growth
+// while capping the decoded response bytes passed to the statement scan.
+const MAX_MIGRATION_SQL_BYTES = 64 * 1024;
 
 function stripSqlComments(sql) {
   return String(sql)
@@ -157,8 +160,37 @@ async function migrationSqlAt({ repository, ref, tag, token, fetchImpl }) {
       signal: AbortSignal.timeout(10_000),
     },
   );
-  if (!response.ok) throw new Error(`Migration ${tag} lookup failed (HTTP ${response.status})`);
-  return response.text();
+  const lookupFailure = `Migration ${tag} lookup failed`;
+  if (!response.ok) throw new Error(`${lookupFailure} (HTTP ${response.status})`);
+  if (!response.body) throw new Error(`${lookupFailure}: invalid raw SQL body`);
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let bytes = 0;
+  let sql = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        sql += decoder.decode();
+        break;
+      }
+      bytes += value.byteLength;
+      if (bytes > MAX_MIGRATION_SQL_BYTES) break;
+      sql += decoder.decode(value, { stream: true });
+    }
+  } catch {
+    throw new Error(`${lookupFailure}: invalid raw SQL body`);
+  } finally {
+    // Cancel unread bytes without letting cleanup delay or mask a refusal.
+    void reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+  if (bytes > MAX_MIGRATION_SQL_BYTES) {
+    throw new Error(`${lookupFailure}: raw SQL exceeds ${MAX_MIGRATION_SQL_BYTES} bytes`);
+  }
+  if (sql.length === 0) throw new Error(`${lookupFailure}: invalid raw SQL body`);
+  return sql;
 }
 
 // Migrations the target adds since the rollback target's commit, and the
@@ -331,11 +363,12 @@ export async function assertRollbackDrillGreen({ repository, token, fetchImpl = 
   return latest.id;
 }
 
-// Workflows that deploy to staging or test it: the drill waits until none of
-// them is queued or running, so it never moves staging under a journey run.
+// Active deploy and qualification runs reported by the standalone lane check.
+// The scheduled and manual drill uses the deploy-staging concurrency group.
 export const STAGING_LANE_WORKFLOWS = ["deploy.yml", "e2e-staging.yml"];
 
 export async function stagingBusyRuns({ repository, token, fetchImpl = fetch }) {
+  const invalidListing = "Staging lane lookup returned an invalid run listing";
   const busy = [];
   for (const file of STAGING_LANE_WORKFLOWS) {
     for (const status of ["in_progress", "queued", "waiting"]) {
@@ -353,8 +386,17 @@ export async function stagingBusyRuns({ repository, token, fetchImpl = fetch }) 
         },
       );
       if (!response.ok) throw new Error(`Staging lane lookup failed (HTTP ${response.status})`);
-      for (const run of (await response.json()).workflow_runs ?? []) {
-        if (Number.isSafeInteger(run?.id)) busy.push(`${file} run ${run.id}`);
+      let runs;
+      try {
+        runs = (await response.json())?.workflow_runs;
+      } catch {
+        throw new Error(invalidListing);
+      }
+      if (!Array.isArray(runs)) throw new Error(invalidListing);
+      for (const run of runs) {
+        const id = run?.id;
+        if (!Number.isSafeInteger(id) || id <= 0) throw new Error(invalidListing);
+        busy.push(`${file} run ${id}`);
       }
     }
   }

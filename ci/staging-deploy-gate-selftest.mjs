@@ -439,10 +439,18 @@ test("each Ember opt-in probes the exact staging GET after revision verification
     [path, 503, "kit", 1],
   ]);
   for (const [path, status, marker, expected] of [...cases, ["/join/callback", 200, "kit", 1]]) {
-    const stub = `globalThis.fetch = async (url, options) => {
+    const stub = `const timeout = AbortSignal.timeout;
+    let probeSignal;
+    AbortSignal.timeout = (ms) => {
+      if (ms !== 10_000) throw new Error("Unexpected probe timeout");
+      probeSignal = timeout(ms);
+      return probeSignal;
+    };
+    globalThis.fetch = async (url, options) => {
       if (url !== "https://next.togetherweown.com${path}" || options.method !== "GET" ||
           options.credentials !== "omit" || options.headers ||
-          options.redirect !== "manual" || options.cache !== "no-store" || !options.signal) {
+          options.redirect !== "manual" || options.cache !== "no-store" ||
+          !probeSignal || options.signal !== probeSignal) {
         throw new Error("Unexpected probe request");
       }
       return new Response(null, {status: ${status}, headers: ${JSON.stringify(marker ? { "x-two-renderer": marker } : {})}});
@@ -491,6 +499,52 @@ test("the staging Kit renderer probe fails after six Hono responses", () => {
   assert.match(result.stderr, /GET \/ did not return x-two-renderer: kit/);
   assert.match(result.stderr, /^Probe requests: 6$/m);
   assert.match(result.stderr, /^Retry delays: 10000,10000,10000,10000,10000$/m);
+});
+
+test("the staging Kit renderer probe preserves observations when body cancellation rejects", async (t) => {
+  const cases = [
+    { status: 200, renderer: "kit", failure: null },
+    { status: 200, renderer: "hono", failure: "did not return x-two-renderer: kit" },
+    { status: 503, renderer: "kit", failure: "returned HTTP 503; expected 200" },
+  ];
+  for (const { status, renderer, failure } of cases) {
+    await t.test(`HTTP ${status} / ${renderer}`, () => {
+      const result = runKitProbe(
+        "/join",
+        `let calls = 0;
+        let cancellations = 0;
+        globalThis.fetch = async () => {
+          calls += 1;
+          return new Response(new ReadableStream({
+            cancel() {
+              cancellations += 1;
+              throw new Error("synthetic cancellation detail");
+            }
+          }), {status: ${status}, headers: {"x-two-renderer": ${JSON.stringify(renderer)}}});
+        };
+        process.on("exit", () => {
+          console.error("Probe requests:", calls);
+          console.error("Body cancellations:", cancellations);
+          console.error("Retry delays:", JSON.stringify(retryDelays));
+        });`,
+        {},
+      );
+      const attempts = failure ? 6 : 1;
+      assert.ifError(result.error);
+      assert.equal(result.status, failure ? 1 : 0, result.stderr);
+      assert.equal(
+        result.stdout,
+        failure ? "" : "GET /join: HTTP 200, x-two-renderer: kit (attempt 1)\n",
+      );
+      assert.deepEqual(result.stderr.trimEnd().split("\n"), [
+        ...Array(attempts).fill("Warning: could not cancel the staging Kit response body"),
+        ...(failure ? [`Staging Kit renderer check failed: GET /join ${failure}`] : []),
+        `Probe requests: ${attempts}`,
+        `Body cancellations: ${attempts}`,
+        `Retry delays: ${failure ? "[10000,10000,10000,10000,10000]" : "[]"}`,
+      ]);
+    });
+  }
 });
 
 const denied = [
@@ -1180,30 +1234,161 @@ function stagingReads({
   served = activeVersion,
   compare = forward,
   deployments = [stagedDeployment],
+  deploymentResponse,
+  compareResponse,
 } = {}) {
   return async (url, options) => {
     switch (String(url)) {
       case `https://api.cloudflare.com/client/v4/accounts/${stagingGuardEnv.CLOUDFLARE_ACCOUNT_ID}/workers/scripts/two-web-next/deployments`:
         assert.equal(options.headers.Authorization, "Bearer fake-cloudflare");
-        return Response.json({
-          success: true,
-          result: { deployments },
-        });
+        return deploymentResponse ?? Response.json({ success: true, result: { deployments } });
       case "https://next.togetherweown.com/up":
         assert.equal(Object.hasOwn(options.headers, "Authorization"), false);
         return Response.json({ revision: { version_id: served, commit: live } });
       case `https://api.github.com/repos/${repository}/compare/${otherSha}...${sha}?per_page=1`:
         assert.equal(options.headers.Authorization, "Bearer fake-github");
         assert.notEqual(compare, null, "Equal SHA or a mismatched version must avoid comparing");
-        return Response.json(compare);
+        return compareResponse ?? Response.json(compare);
       default:
         assert.fail(`Unexpected request ${url}`);
     }
   };
 }
 
+function stagingProviderStream(chunks, { abandon = false, cancel } = {}) {
+  let index = 0;
+  return new Response(
+    new ReadableStream(
+      {
+        pull(controller) {
+          if (index < chunks.length) controller.enqueue(chunks[index++]);
+          else if (!abandon) controller.close();
+        },
+        cancel,
+      },
+      { highWaterMark: 0 },
+    ),
+  );
+}
+
+const rolloutProviderCases = [
+  {
+    field: "deploymentResponse",
+    source: "Cloudflare deployment state",
+    limit: 1024 * 1024,
+    valid: { success: true, result: { deployments: [stagedDeployment] } },
+  },
+  {
+    field: "compareResponse",
+    source: "GitHub commit ancestry",
+    limit: 8 * 1024 * 1024,
+    valid: forward,
+  },
+];
+
+test("staging bounds chunked provider replies and cancels unfinished bodies", {
+  timeout: 2_000,
+}, async (t) => {
+  for (const { field, source, limit, valid } of rolloutProviderCases) {
+    await t.test(source, async () => {
+      const admit = (response) =>
+        requireForwardStaging(stagingGuardEnv, stagingReads({ [field]: response }));
+      const error = { message: `Cannot read ${source} for staging rollout` };
+      const prefix = Buffer.from(JSON.stringify(valid));
+      const remainder = Buffer.alloc(limit - prefix.byteLength, 0x20);
+      const atLimit = stagingProviderStream([prefix, remainder]);
+      assert.equal(await admit(atLimit), otherSha);
+
+      const oversized = stagingProviderStream([prefix, remainder, Buffer.from(" ")]);
+      await assert.rejects(admit(oversized), error);
+
+      let cancelled = false;
+      const abandoned = stagingProviderStream([prefix, remainder, Buffer.from(" ")], {
+        abandon: true,
+        cancel() {
+          cancelled = true;
+          return new Promise(() => {});
+        },
+      });
+      await assert.rejects(admit(abandoned), error);
+      assert.equal(cancelled, true);
+      assert.equal(abandoned.body.locked, false);
+    });
+  }
+});
+
+test("staging sanitizes abandoned and malformed provider replies", {
+  timeout: 2_000,
+}, async (t) => {
+  for (const { field, source, valid } of rolloutProviderCases) {
+    await t.test(source, async (t) => {
+      const admit = (response) =>
+        requireForwardStaging(stagingGuardEnv, stagingReads({ [field]: response }));
+      const reason = (error) => {
+        assert.equal(error.message, `Cannot read ${source} for staging rollout`);
+        assert.equal(error.cause, undefined);
+        return true;
+      };
+      await assert.rejects(admit(new Response(null)), reason);
+      await assert.rejects(admit(stagingProviderStream([])), reason);
+      await assert.rejects(admit(new Response("provider-private invalid JSON")), reason);
+
+      const deadline = new AbortController();
+      t.mock.method(AbortSignal, "timeout", () => deadline.signal);
+      let cancelled = false;
+      const response = new Response(
+        new ReadableStream(
+          {
+            start(controller) {
+              controller.enqueue(Buffer.from(JSON.stringify(valid)));
+            },
+            pull(controller) {
+              deadline.abort(new Error("provider-private timeout"));
+              // Simulate EOF arriving after the deadline if the reader leaves the stream open.
+              queueMicrotask(() => {
+                if (!cancelled) controller.close();
+              });
+            },
+            cancel() {
+              cancelled = true;
+              return Promise.reject(new Error("provider-private cancellation"));
+            },
+          },
+          { highWaterMark: 0 },
+        ),
+      );
+      await assert.rejects(admit(response), reason);
+      assert.equal(cancelled, true);
+      assert.equal(response.body.locked, false);
+    });
+  }
+});
+
 test("staging admits the same SHA or a forward candidate independent of the main tip", async () => {
-  assert.equal(await requireForwardStaging(stagingGuardEnv, stagingReads()), otherSha);
+  const deployments = Array.from({ length: 99 }, (_, index) => ({
+    created_on: new Date(Date.UTC(2026, 10, 24, 0, index)).toISOString(),
+    versions: [
+      { version_id: activeVersion, percentage: 50 },
+      { version_id: "23456789-2345-2345-2345-23456789abcd", percentage: 50 },
+    ],
+    annotations: { "workers/message": "é".repeat(500) },
+  }));
+  const addedLine = `+${"x".repeat(170)}${"\\".repeat(22)}\n`;
+  const compare = {
+    ...forward,
+    commits: [{ sha: "d".repeat(40) }],
+    files: Array.from({ length: 300 }, (_, index) => ({
+      filename: `synthetic-${index}.txt`,
+      patch: `@@ -0,0 +1,100 @@\n${addedLine.repeat(100)}`,
+    })),
+  };
+  assert.equal(
+    await requireForwardStaging(
+      stagingGuardEnv,
+      stagingReads({ deployments: [...deployments, stagedDeployment], compare }),
+    ),
+    otherSha,
+  );
   assert.equal(
     await requireForwardStaging(stagingGuardEnv, stagingReads({ live: sha, compare: null })),
     sha,
@@ -1228,6 +1413,10 @@ test("staging refuses an older or divergent candidate and a lagging edge", async
 });
 
 test("staging refuses a newer split deployment and ambiguous or malformed timestamps", async () => {
+  await assert.rejects(
+    requireForwardStaging(stagingGuardEnv, stagingReads({ deployments: [], compare: null })),
+    /Missing active staging deployment/,
+  );
   const split = {
     created_on: "2026-11-25T01:00:00.000001-05:00",
     versions: [{ version_id: activeVersion, percentage: 40 }],
@@ -1244,6 +1433,68 @@ test("staging refuses a newer split deployment and ambiguous or malformed timest
         stagingReads({ deployments: [stagedDeployment, entry] }),
       ),
       reason,
+    );
+  }
+});
+
+function recordStagingReads(calls, overrides) {
+  const read = stagingReads();
+  return async (url, options) => {
+    const host = new URL(url).hostname;
+    calls.push(host);
+    const response = await read(url, options);
+    return overrides[host] ?? response;
+  };
+}
+
+test("staging stops before reading the edge when Cloudflare deployment evidence is unavailable or incomplete", async () => {
+  const deployment = { success: true, result: { deployments: [stagedDeployment] } };
+  for (const [name, response, message] of [
+    [
+      "HTTP failure with a valid envelope",
+      Response.json(deployment, { status: 503 }),
+      "Cannot read Cloudflare deployment state for staging rollout",
+    ],
+    [
+      "unsuccessful envelope with deployment data",
+      Response.json({ ...deployment, success: false }),
+      "Missing active staging deployment",
+    ],
+    [
+      "successful envelope without deployments",
+      Response.json({ success: true, result: {} }),
+      "Missing active staging deployment",
+    ],
+  ]) {
+    const calls = [];
+    const read = recordStagingReads(calls, { "api.cloudflare.com": response });
+    await assert.rejects(requireForwardStaging(stagingGuardEnv, read), { message }, name);
+    assert.deepEqual(calls, ["api.cloudflare.com"], name);
+  }
+});
+
+test("staging refuses incomplete or inconsistent ahead evidence from GitHub", async () => {
+  for (const [name, changes] of [
+    ["missing base commit", { base_commit: undefined }],
+    ["missing behind count", { behind_by: undefined }],
+    ["missing total count", { total_commits: undefined }],
+    ["positive behind count", { behind_by: 1 }],
+    ["zero ahead count", { ahead_by: 0, total_commits: 0 }],
+    ["non-integer ahead count", { ahead_by: 1.5, total_commits: 1.5 }],
+    ["mismatched total count", { total_commits: 3 }],
+  ]) {
+    const calls = [];
+    const response = Response.json({ ...forward, ...changes });
+    const read = recordStagingReads(calls, { "api.github.com": response });
+    await assert.rejects(
+      requireForwardStaging(stagingGuardEnv, read),
+      { message: `Staging rollout refused: ${sha} is not a verified descendant of ${otherSha}` },
+      name,
+    );
+    assert.deepEqual(
+      calls,
+      ["api.cloudflare.com", "next.togetherweown.com", "api.github.com"],
+      name,
     );
   }
 });
