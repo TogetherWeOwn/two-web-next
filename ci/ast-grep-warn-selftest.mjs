@@ -1,18 +1,24 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  addedByteLengthComparisons,
-  scanByteLengthComparisons,
-} from "./raw-byte-length-ratchet.mjs";
+import { fileURLToPath } from "node:url";
+import { scanByteLengthComparisons } from "./raw-byte-length-ratchet.mjs";
 
 function checkByteLengthRuleCoverage() {
   const directory = mkdtempSync(join(tmpdir(), "ast-grep-byte-length-"));
   try {
-    for (const path of ["ci", "public", "web/src", "web/scripts"]) {
+    for (const path of ["ci", "public", "src/http", "web/src", "web/scripts"]) {
       mkdirSync(join(directory, path), { recursive: true });
     }
     const comparison = "left.byteLength > right.byteLength";
@@ -24,7 +30,10 @@ function checkByteLengthRuleCoverage() {
     const git = (...args) => execFileSync("git", args, { cwd: directory });
     git("init", "--quiet");
     git("add", "--", nodePath);
-    const base = git("write-tree").toString().trim();
+    git("config", "user.name", "Fixture");
+    git("config", "user.email", "fixture@example.org");
+    git("-c", "core.hooksPath=/dev/null", "commit", "-qm", "Fixture", "--no-gpg-sign");
+    git("update-ref", "refs/remotes/origin/main", "HEAD");
     writeFileSync(join(directory, ".gitignore"), `${nodePath}\n`);
     writeFileSync(join(directory, nodePath), `${unsafe}// ast-grep-ignore\n${unsafe}`);
     writeFileSync(join(directory, jsPath), unsafe);
@@ -48,27 +57,53 @@ function checkByteLengthRuleCoverage() {
       `<script>let total = left.byteLength;</script>\n<p>left.byteLength &gt; max</p>\n`,
     );
 
-    const findings = scanByteLengthComparisons(directory);
-    assert.deepEqual([...new Set(findings.map(({ file }) => file))].sort(), [
-      nodePath,
-      jsPath,
-      sveltePath,
-    ]);
-    assert.ok(
-      findings.some(({ file, language }) => file === sveltePath && language === "JavaScript"),
-    );
-    assert.deepEqual(addedByteLengthComparisons(directory, base, findings), [
-      { file: nodePath, text: comparison, line: 3 },
-      { file: jsPath, text: comparison, line: 1 },
-      { file: sveltePath, text: comparison, line: 2 },
-      {
-        file: sveltePath,
-        text: "new TextEncoder().encode(href).byteLength <= maxBytes",
-        line: 6,
-      },
+    for (const file of ["src/probe.tsx", "src/probe.jsx"]) {
+      writeFileSync(
+        join(directory, file),
+        "// ast-grep-ignore\nconst view = <div>{left.byteLength > max}</div>;\n",
+      );
+    }
+    const root = fileURLToPath(new URL("..", import.meta.url));
+    for (const path of [
+      "package.json",
+      "sgconfig.yml",
+      "sg-rules",
+      "ci/raw-byte-length-ratchet.mjs",
+      "ci/http-boundary-suppressions.mjs",
+    ]) {
+      cpSync(join(root, path), join(directory, path), { recursive: true });
+    }
+    symlinkSync(join(root, "node_modules"), join(directory, "node_modules"));
+    const event = join(directory, "event.json");
+    writeFileSync(event, "{}");
+    const lint = spawnSync("npm", ["run", "scan:fetch-await"], {
+      cwd: directory,
+      encoding: "utf8",
+      env: { ...process.env, GITHUB_EVENT_PATH: event },
+    });
+    assert.equal(lint.status, 1, lint.error?.message ?? lint.stderr);
+    assert.deepEqual(lint.stderr.match(/^.+:\d+(?=: Use the shared byte-limit helpers for )/gm), [
+      `${nodePath}:3`,
+      "src/probe.jsx:2",
+      "src/probe.tsx:2",
+      `${jsPath}:1`,
+      `${sveltePath}:2`,
+      `${sveltePath}:6`,
     ]);
     writeFileSync(join(directory, "ci/non-utf8.mjs"), Buffer.from([0xff]));
     assert.throws(() => scanByteLengthComparisons(directory), /ci\/non-utf8\.mjs: invalid UTF-8/);
+    writeFileSync(
+      join(directory, "ci/non-utf8.mjs"),
+      "// too large for ast-grep\n".repeat(200_001),
+    );
+    assert.throws(() => scanByteLengthComparisons(directory), /Incomplete ast-grep scan/);
+    const badName = Buffer.concat([
+      Buffer.from(`${directory}/ci/`),
+      Buffer.of(0xff),
+      Buffer.from(".mjs"),
+    ]);
+    writeFileSync(badName, unsafe);
+    assert.throws(() => scanByteLengthComparisons(directory), /Git returned non-UTF-8 paths/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -78,21 +113,10 @@ function checkByteLengthRuleCoverage() {
 const fixture = join("src", `ast-grep-warning-selftest-${process.pid}.test.ts`);
 try {
   writeFileSync(fixture, "expect(true).toBe(true);\n");
-  const result = spawnSync(
-    "npx",
-    [
-      "-y",
-      "--package",
-      "@ast-grep/cli@0.50.0",
-      "ast-grep",
-      "scan",
-      "--filter",
-      "^ts-vacuous-literal-expect$",
-    ],
-    {
-      encoding: "utf8",
-    },
-  );
+  const args = ["-y", "--package", "@ast-grep/cli@0.50.0", "ast-grep", "scan"];
+  const result = spawnSync("npx", [...args, "--filter", "^ts-vacuous-literal-expect$"], {
+    encoding: "utf8",
+  });
   const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
   if (result.error || result.status !== 0) {
     throw new Error(output || result.error?.message || "ast-grep scan exited non-zero");

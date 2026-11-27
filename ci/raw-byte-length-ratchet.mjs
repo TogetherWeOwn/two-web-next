@@ -1,20 +1,20 @@
 import assert from "node:assert/strict";
 import { isUtf8 } from "node:buffer";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const config = fileURLToPath(new URL("../sgconfig.yml", import.meta.url));
-const rules = "^no-raw-byte-length-comparison(-svelte-js)?$";
+const rules = "^no-raw-byte-length-comparison(-svelte-js|-tsx)?$";
 const maxBuffer = 8 * 1024 * 1024;
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, maxBuffer });
 const appSource = /^(?:src|web\/src|assets)\//;
 const nodeScript = /\.(?:mjs|js)$/;
 const inScope = (file) =>
   (nodeScript.test(file) && !file.startsWith("public/")) ||
-  (appSource.test(file) && /\.(?:ts|mts|cts|cjs)$/.test(file)) ||
+  (appSource.test(file) && /\.(?:ts|mts|cts|cjs|tsx|jsx)$/.test(file)) ||
   (file.startsWith("web/src/") && file.endsWith(".svelte"));
 
 function scan(files, read) {
@@ -29,7 +29,7 @@ function scan(files, read) {
       // Use an equal-length replacement so directives cannot hide matches or move their locations.
       writeFileSync(path, bytes.toString("utf8").replaceAll("ast-grep-ignore", "ast-grep-checks"));
     }
-    const output = execFileSync(
+    const { status, error, stdout, stderr } = spawnSync(
       "npx",
       [
         "-y",
@@ -43,12 +43,18 @@ function scan(files, read) {
         rules,
         "--warning",
         "--json=compact",
+        "--inspect=summary",
         "--no-ignore",
         "hidden",
       ],
       { cwd: snapshot, encoding: "utf8", maxBuffer },
     );
-    return JSON.parse(output);
+    assert.equal(status, 0, error?.message ?? stderr);
+    assert.ok(
+      stderr.includes(`scannedFileCount=${files.length},skippedFileCount=0`),
+      `Incomplete ast-grep scan:\n${stderr}`,
+    );
+    return JSON.parse(stdout);
   } finally {
     rmSync(snapshot, { recursive: true, force: true });
   }
@@ -56,6 +62,7 @@ function scan(files, read) {
 
 export function scanByteLengthComparisons(cwd) {
   const paths = git(cwd, "ls-files", "--cached", "--others", "--exclude-standard", "-z");
+  assert.ok(isUtf8(paths), "Git returned non-UTF-8 paths");
   const files = [...new Set(paths.toString("utf8").split("\0").filter(inScope))];
   return scan(files, (file) => {
     const path = join(cwd, file);
@@ -80,7 +87,7 @@ function comparisons(findings) {
   );
 }
 
-export function addedByteLengthComparisons(cwd, base, findings) {
+function addedByteLengthComparisons(cwd, base, findings) {
   const current = comparisons(findings);
   const eligible = [...new Set(current.map(({ file }) => file))].filter(
     (file) =>
@@ -89,6 +96,7 @@ export function addedByteLengthComparisons(cwd, base, findings) {
   if (!eligible.length) return current;
 
   const tree = git(cwd, "--literal-pathspecs", "ls-tree", "-rz", base, "--", ...eligible);
+  assert.ok(isUtf8(tree), "Git returned non-UTF-8 base paths");
   const objects = new Map();
   for (const entry of tree.toString("utf8").split("\0")) {
     if (!entry.startsWith("100")) continue;
@@ -113,8 +121,7 @@ export function addedByteLengthComparisons(cwd, base, findings) {
 
 function comparisonBase(cwd) {
   const eventPath = process.env.GITHUB_EVENT_PATH;
-  if (!eventPath) return git(cwd, "merge-base", "HEAD", "origin/main").toString().trim();
-  const event = JSON.parse(readFileSync(eventPath, "utf8"));
+  const event = eventPath ? JSON.parse(readFileSync(eventPath, "utf8")) : {};
   if (event.pull_request) {
     const parents = git(cwd, "show", "-s", "--format=%P", "HEAD").toString().trim().split(" ");
     assert.ok(
@@ -123,13 +130,11 @@ function comparisonBase(cwd) {
     );
     return parents[0];
   }
-  return git(
-    cwd,
-    "rev-parse",
-    "--verify",
-    "--end-of-options",
-    `${event.merge_group?.base_sha ?? event.before ?? "HEAD^1"}^{commit}`,
-  )
+  const base = event.merge_group?.base_sha ?? event.before;
+  const args = base
+    ? ["rev-parse", "--verify", "--end-of-options", `${base}^{commit}`]
+    : ["merge-base", "HEAD", "origin/main"];
+  return git(cwd, ...args)
     .toString()
     .trim();
 }
