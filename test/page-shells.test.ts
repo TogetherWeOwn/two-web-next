@@ -174,7 +174,7 @@ it.each([
           // Main's signed-in tab recovery controller is first-party, not vendor JS.
           '<script src="/islands/auth-status.js" defer data-testid="auth-tab-sync">',
         ];
-  expect(html.match(/<script\b[^>]*>/g)).toEqual(scripts);
+  expect(html.match(/<script(?=[\t\n\f\r />])[^>]*>/gi)).toEqual(scripts);
 });
 
 it.each([

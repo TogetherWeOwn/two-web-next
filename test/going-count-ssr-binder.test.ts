@@ -160,8 +160,9 @@ describe("Event page going-count SSR wiring", () => {
     expect(html).toContain('role="status" data-testid="event-going-count"');
     expect(html).toContain("<span data-count>3 of 10 going</span>");
     expect(html).toContain("data-spots>7 of 10 spots left</span>");
-    const badge = html.match(/<span data-count>[\s\S]*?<\/p>/)?.[0];
-    expect(badge?.replace(/<[^>]*>/g, "")).toBe("3 of 10 going · 7 of 10 spots left");
+    expect(html).toMatch(
+      /<span data-count>3 of 10 going<\/span> · <span [^>]*\bdata-spots>7 of 10 spots left<\/span><\/span><\/p>/,
+    );
     // Silent on first render: the announcement node exists but is empty.
     expect(html).toContain("data-announcement></span>");
   });
