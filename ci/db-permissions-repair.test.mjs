@@ -102,7 +102,7 @@ test("executor authority replays committed provision and revoke without another 
   }
 });
 
-test("repair close failures preserve only acknowledged outcomes", async (t) => {
+test("repair reports fixed failure details while preserving acknowledged outcomes", async (t) => {
   const hash = (value) => createHash("sha256").update(value).digest("hex");
   const inventory = JSON.parse(read("db-permissions-repair-inventory.json"));
   const owner = "repair_owner";
@@ -162,57 +162,138 @@ test("repair close failures preserve only acknowledged outcomes", async (t) => {
       migrator_ready: repaired,
     }),
   });
+  const assertFailure = (operation, fixture, code, detail, env = fixtureEnv) => {
+    // Substitute postgres before loading the CLI, so the subprocess cannot connect.
+    const cli = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        fileURLToPath(new URL("fixtures/db-repair-close/preload.mjs", import.meta.url)),
+        fileURLToPath(new URL("db-permissions-repair.mjs", import.meta.url)),
+        operation,
+      ],
+      { env: { ...env, REPAIR_CLOSE_FIXTURE: JSON.stringify(fixture) }, encoding: "utf8" },
+    );
+    assert.ifError(cli.error);
+    assert.equal(cli.signal, null);
+    assert.equal(cli.stdout, "");
+    assert.equal(cli.stderr, "");
+    assert.equal(cli.status, code);
+    const protectedStep = shell(
+      workflow.jobs.repair.steps.at(-1).run,
+      { OPERATION: operation, FIXTURE_STATUS: String(cli.status) },
+      `node() {
+        printf 'fixture stdout'; printf 'fixture driver detail' >&2; return "$FIXTURE_STATUS";
+      }`,
+    );
+    assert.equal(protectedStep.status, 1);
+    assert.equal(protectedStep.stdout, "");
+    assert.equal(protectedStep.stderr, `${detail}\n`);
+  };
 
-  for (const { operation, acknowledge, states, outcome, code } of [
+  await t.test("invalid plan emits the admission label", () => {
+    assertFailure("forward", {}, 30, "Plan or endpoint admission failed.", {
+      ...fixtureEnv,
+      PRODUCTION_DB_REPAIR_PLAN_SHA256: "0".repeat(64),
+    });
+  });
+  await t.test("stale identity emits the session label", () => {
+    const stalePlan = JSON.stringify({ ...JSON.parse(plan), identity: hash("postgres\0retired") });
+    assertFailure("forward", {}, 31, "Connection or session setup failed.", {
+      ...fixtureEnv,
+      PRODUCTION_DB_REPAIR_PLAN: stalePlan,
+      PRODUCTION_DB_REPAIR_PLAN_SHA256: hash(stalePlan),
+    });
+  });
+  await t.test("unclassified catalog emits the readback label", () => {
+    assertFailure(
+      "readback",
+      { states: [{ ...snapshot(false), digest: "d".repeat(64) }] },
+      40,
+      "Readback phase failed.",
+    );
+  });
+
+  for (const {
+    operation,
+    acknowledge,
+    states,
+    outcome,
+    code,
+    detail,
+    rejectStatement,
+    sqlstate,
+  } of [
     {
       operation: "forward",
       acknowledge: true,
       states: [false, true],
       outcome: "committed",
       code: 12,
+      detail: "Connection close failed after the transaction was acknowledged.",
     },
-    { operation: "undo", acknowledge: true, states: [true, false], outcome: "committed", code: 12 },
+    {
+      operation: "undo",
+      acknowledge: true,
+      states: [true, false],
+      outcome: "committed",
+      code: 12,
+      detail: "Connection close failed after the transaction was acknowledged.",
+    },
     {
       operation: "forward",
       acknowledge: false,
       states: [false, true],
       outcome: "committed",
-      code: 1,
+      code: 39,
+      detail: "Transaction completion was not acknowledged.",
     },
-    { operation: "readback", acknowledge: true, states: [false], outcome: "before", code: 13 },
-    { operation: "readback", acknowledge: true, states: [true], outcome: "after", code: 14 },
+    {
+      operation: "readback",
+      acknowledge: true,
+      states: [false],
+      outcome: "before",
+      code: 13,
+      detail: "Connection close failed after reading the approved pre-repair state.",
+    },
+    {
+      operation: "readback",
+      acknowledge: true,
+      states: [true],
+      outcome: "after",
+      code: 14,
+      detail: "Connection close failed after reading the approved post-repair state.",
+    },
+    {
+      operation: "forward",
+      states: [],
+      rejectStatement: "lock table public.discord_event_snapshots",
+      sqlstate: "55P03",
+      code: 41,
+      detail: "Snapshot lock was unavailable.",
+    },
+    {
+      operation: "forward",
+      states: [],
+      rejectStatement: "lock table drizzle.__drizzle_migrations",
+      sqlstate: "55P03",
+      code: 42,
+      detail: "Ledger or catalog lock was unavailable.",
+    },
+    {
+      operation: "forward",
+      states: [],
+      rejectStatement: "lock table drizzle.__drizzle_migrations",
+      sqlstate: "42501",
+      code: 34,
+      detail: "Ledger or catalog lock phase failed.",
+    },
   ]) {
-    await t.test(`${operation} ${outcome}, acknowledged=${acknowledge}`, async () => {
-      const fixture = { states: states.map(snapshot), acknowledge };
+    await t.test(`${operation} exit ${code}`, async () => {
+      const fixture = { states: states.map(snapshot), acknowledge, rejectStatement, sqlstate };
       const transactionError = new Error("fixture transaction driver detail");
       const events = [];
-      // Substitute postgres before loading the CLI, so the subprocess cannot connect.
-      const cli = spawnSync(
-        process.execPath,
-        [
-          "--import",
-          fileURLToPath(new URL("fixtures/db-repair-close/preload.mjs", import.meta.url)),
-          fileURLToPath(new URL("db-permissions-repair.mjs", import.meta.url)),
-          operation,
-        ],
-        { env: { ...fixtureEnv, REPAIR_CLOSE_FIXTURE: JSON.stringify(fixture) }, encoding: "utf8" },
-      );
-      assert.ifError(cli.error);
-      assert.equal(cli.signal, null);
-      assert.equal(cli.stdout, "");
-      assert.equal(cli.stderr, "");
-      const protectedStep = shell(
-        workflow.jobs.repair.steps.at(-1).run,
-        { OPERATION: operation, FIXTURE_STATUS: String(cli.status) },
-        'node() { return "$FIXTURE_STATUS"; }',
-      );
-      assert.equal(protectedStep.status, 1);
-      assert.equal(protectedStep.stdout, "");
-      assert.equal(
-        protectedStep.stderr,
-        "Database permissions operation did not confirm an outcome.\n",
-      );
-      assert.equal(cli.status, code);
+      assertFailure(operation, fixture, code, detail);
 
       await assert.rejects(
         runRepair(operation, fixtureEnv, () =>
@@ -228,7 +309,12 @@ test("repair close failures preserve only acknowledged outcomes", async (t) => {
       );
       const mutations =
         operation === "readback" ? 0 : inventory.filter(([, , parent]) => !parent).length + 5;
-      assert.deepEqual(events, ["begin", ...Array(mutations).fill("mutation"), outcome, "end:5"]);
+      assert.deepEqual(
+        events,
+        rejectStatement
+          ? ["begin", "end:5"]
+          : ["begin", ...Array(mutations).fill("mutation"), outcome, "end:5"],
+      );
     });
   }
 });

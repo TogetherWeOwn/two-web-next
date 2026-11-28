@@ -1,5 +1,12 @@
-export function repairClientWithCloseFailure({ states, acknowledge }, events, transactionError) {
+export function repairClientWithCloseFailure(
+  { states, acknowledge, rejectStatement, sqlstate },
+  events,
+  transactionError,
+) {
   const tx = ([sql]) => {
+    if (rejectStatement && sql.startsWith(rejectStatement)) {
+      throw Object.assign(transactionError, { code: sqlstate });
+    }
     if (sql.startsWith("select pg_catalog.current_database()")) {
       return [{ database: "postgres", authenticated: "repair_owner", effective: "repair_owner" }];
     }
