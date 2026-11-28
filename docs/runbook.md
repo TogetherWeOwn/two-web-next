@@ -784,10 +784,13 @@ Use the approved executor login for every snapshot. Run `ci/db-permissions-repai
 - `PRODUCTION_DB_REPAIR_PLAN_SHA256` pins the exact plan bytes.
 
 If `forward` or `undo` fails, is interrupted, or ends without a commit confirmation,
-run the approved `readback` before approving another write. The message `Database permissions
-operation did not confirm an outcome.` can follow an acknowledged commit if connection cleanup
-rejects. If `readback` cannot classify the state, stop writes and compare a read-only catalog
-snapshot against both pins before approving recovery.
+run the approved `readback` before approving another write. The workflow can
+report a fixed failure phase and distinguish an unavailable snapshot lock from an
+unavailable ledger or catalog lock. It suppresses raw driver output. If connection
+cleanup fails after an acknowledged outcome, the workflow reports the close
+failure and still fails the job. If `readback` cannot classify the state, stop
+writes and compare a read-only catalog snapshot against both pins before
+approving recovery.
 Keep the executor authority and pins through the 30-minute watch and recovery window, then verify their removal.
 Dispatch `forward` and `provision` at the approved protected `main` tip. If
 `main` advances during recovery, keep the same approval SHA for `undo`,

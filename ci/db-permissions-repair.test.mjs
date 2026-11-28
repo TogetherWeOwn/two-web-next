@@ -102,7 +102,7 @@ test("executor authority replays committed provision and revoke without another 
   }
 });
 
-test("repair close failures preserve only acknowledged outcomes", async (t) => {
+test("repair reports fixed failure details while preserving acknowledged outcomes", async (t) => {
   const hash = (value) => createHash("sha256").update(value).digest("hex");
   const inventory = JSON.parse(read("db-permissions-repair-inventory.json"));
   const owner = "repair_owner";
@@ -163,27 +163,83 @@ test("repair close failures preserve only acknowledged outcomes", async (t) => {
     }),
   });
 
-  for (const { operation, acknowledge, states, outcome, code } of [
+  for (const {
+    operation,
+    acknowledge,
+    states,
+    outcome,
+    code,
+    detail,
+    rejectStatement,
+    sqlstate,
+  } of [
     {
       operation: "forward",
       acknowledge: true,
       states: [false, true],
       outcome: "committed",
       code: 12,
+      detail: "Connection close failed after the transaction was acknowledged.",
     },
-    { operation: "undo", acknowledge: true, states: [true, false], outcome: "committed", code: 12 },
+    {
+      operation: "undo",
+      acknowledge: true,
+      states: [true, false],
+      outcome: "committed",
+      code: 12,
+      detail: "Connection close failed after the transaction was acknowledged.",
+    },
     {
       operation: "forward",
       acknowledge: false,
       states: [false, true],
       outcome: "committed",
-      code: 1,
+      code: 39,
+      detail: "Transaction completion was not acknowledged.",
     },
-    { operation: "readback", acknowledge: true, states: [false], outcome: "before", code: 13 },
-    { operation: "readback", acknowledge: true, states: [true], outcome: "after", code: 14 },
+    {
+      operation: "readback",
+      acknowledge: true,
+      states: [false],
+      outcome: "before",
+      code: 13,
+      detail: "Connection close failed after reading the approved pre-repair state.",
+    },
+    {
+      operation: "readback",
+      acknowledge: true,
+      states: [true],
+      outcome: "after",
+      code: 14,
+      detail: "Connection close failed after reading the approved post-repair state.",
+    },
+    {
+      operation: "forward",
+      states: [],
+      rejectStatement: "lock table public.discord_event_snapshots",
+      sqlstate: "55P03",
+      code: 41,
+      detail: "Snapshot lock was unavailable.",
+    },
+    {
+      operation: "forward",
+      states: [],
+      rejectStatement: "lock table drizzle.__drizzle_migrations",
+      sqlstate: "55P03",
+      code: 42,
+      detail: "Ledger or catalog lock was unavailable.",
+    },
+    {
+      operation: "forward",
+      states: [],
+      rejectStatement: "lock table drizzle.__drizzle_migrations",
+      sqlstate: "42501",
+      code: 34,
+      detail: "Ledger or catalog lock phase failed.",
+    },
   ]) {
-    await t.test(`${operation} ${outcome}, acknowledged=${acknowledge}`, async () => {
-      const fixture = { states: states.map(snapshot), acknowledge };
+    await t.test(`${operation} exit ${code}`, async () => {
+      const fixture = { states: states.map(snapshot), acknowledge, rejectStatement, sqlstate };
       const transactionError = new Error("fixture transaction driver detail");
       const events = [];
       // Substitute postgres before loading the CLI, so the subprocess cannot connect.
@@ -210,7 +266,7 @@ test("repair close failures preserve only acknowledged outcomes", async (t) => {
       assert.equal(protectedStep.stdout, "");
       assert.equal(
         protectedStep.stderr,
-        "Database permissions operation did not confirm an outcome.\n",
+        `Database permissions operation did not confirm an outcome.\n${detail}\n`,
       );
       assert.equal(cli.status, code);
 
@@ -228,7 +284,12 @@ test("repair close failures preserve only acknowledged outcomes", async (t) => {
       );
       const mutations =
         operation === "readback" ? 0 : inventory.filter(([, , parent]) => !parent).length + 5;
-      assert.deepEqual(events, ["begin", ...Array(mutations).fill("mutation"), outcome, "end:5"]);
+      assert.deepEqual(
+        events,
+        rejectStatement
+          ? ["begin", "end:5"]
+          : ["begin", ...Array(mutations).fill("mutation"), outcome, "end:5"],
+      );
     });
   }
 });

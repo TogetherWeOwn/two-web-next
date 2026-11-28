@@ -31,6 +31,23 @@ const preservedFields = [
   "policies",
   "roles",
 ];
+// The protected workflow maps these codes to fixed messages and discards both
+// process streams. Never encode a driver message, SQL, or catalog value here.
+const failure = {
+  admission: 30,
+  session: 31,
+  migrationLock: 32,
+  snapshotLock: 33,
+  catalogLocks: 34,
+  writerGuard: 35,
+  precondition: 36,
+  mutation: 37,
+  verification: 38,
+  transactionEnd: 39,
+  readback: 40,
+  snapshotLockUnavailable: 41,
+  catalogLockUnavailable: 42,
+};
 const defaults = [
   ["r", "TABLES", "two_web_app", ["INSERT", "SELECT", "UPDATE", "DELETE"]],
   ["r", "TABLES", "two_web_backup", ["SELECT"]],
@@ -155,29 +172,35 @@ async function awaitWriterGuard(tx) {
   assert.fail("A database writer is active");
 }
 
-async function executeRepair(tx, config, plan, direction) {
+async function executeRepair(tx, config, plan, direction, enterPhase) {
   await tx`set local search_path = pg_catalog`;
   await tx`set local lock_timeout = '2s'`;
   await tx`set local statement_timeout = '15s'`;
   await tx`set local transaction_timeout = '30s'`;
   await assertProductionIdentity(tx, config);
   if (direction === "readback") {
+    enterPhase(failure.readback);
     const state = await readState(tx);
     if (state.digest === plan.before) return "before";
     if (state.digest === plan.after) return "after";
     throw new Error("Unclassified repair state");
   }
 
+  enterPhase(failure.migrationLock);
   const [{ acquired }] =
     await tx`select pg_try_advisory_xact_lock(${webMigrationLockKey}) as acquired`;
   assert.equal(acquired, true);
   // Drain snapshot mutations before the guard in both directions. EXCLUSIVE
   // conflicts with row writes and SELECT FOR UPDATE, while admitting plain
   // reads. The transaction releases the drain on both commit and rollback.
+  enterPhase(failure.snapshotLock);
   await tx`lock table public.discord_event_snapshots in exclusive mode`;
   // Keep the ledger stable and block concurrent GRANTs, which lock catalogs directly.
+  enterPhase(failure.catalogLocks);
   await tx`lock table drizzle.__drizzle_migrations, pg_catalog.pg_class, pg_catalog.pg_attribute in share row exclusive mode nowait`;
+  enterPhase(failure.writerGuard);
   await awaitWriterGuard(tx);
+  enterPhase(failure.precondition);
   const forward = direction === "forward";
   const initial = await readState(tx);
   assert.equal(initial.digest, forward ? plan.before : plan.after);
@@ -194,10 +217,12 @@ async function executeRepair(tx, config, plan, direction) {
   }
   await checkAuthority(tx, plan);
 
+  enterPhase(failure.mutation);
   for (const statement of statements(plan, forward)) {
     await tx.unsafe(statement);
   }
 
+  enterPhase(failure.verification);
   const final = await readState(tx);
   assert.equal(final.digest, forward ? plan.after : plan.before);
   checkInventory(final, plan, forward);
@@ -213,7 +238,7 @@ class RepairCloseError extends Error {
   }
 }
 
-export async function runRepair(direction, env, connect = migrationClient) {
+export async function runRepair(direction, env, connect = migrationClient, enterPhase = () => {}) {
   assert.ok(["forward", "undo", "readback"].includes(direction));
   const plan = parsePlan(env.PRODUCTION_DB_REPAIR_PLAN, env.PRODUCTION_DB_REPAIR_PLAN_SHA256);
   const config = migrationConnectionConfig(
@@ -223,13 +248,18 @@ export async function runRepair(direction, env, connect = migrationClient) {
   );
   assert.equal(config.url.pathname, "/postgres");
   const readOnly = direction === "readback";
+  enterPhase(failure.session);
   const client = connect(config, { readOnly });
   let outcome;
   let closeFailed = false;
   try {
     outcome = await client.begin(
       readOnly ? "isolation level repeatable read read only" : "isolation level read committed",
-      (tx) => executeRepair(tx, config, plan, direction),
+      async (tx) => {
+        const result = await executeRepair(tx, config, plan, direction, enterPhase);
+        enterPhase(failure.transactionEnd);
+        return result;
+      },
     );
   } finally {
     try {
@@ -244,15 +274,23 @@ export async function runRepair(direction, env, connect = migrationClient) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  let phase = failure.admission;
   try {
     // Exit codes convey only fixed states. The workflow suppresses both streams.
-    const result = await runRepair(process.argv[2], process.env);
+    const result = await runRepair(process.argv[2], process.env, migrationClient, (current) => {
+      phase = current;
+    });
     process.exitCode = { committed: 0, before: 10, after: 11 }[result] ?? 1;
   } catch (error) {
     // Cleanup failure stays non-success even with an acknowledged outcome.
-    process.exitCode =
-      error instanceof RepairCloseError
-        ? ({ committed: 12, before: 13, after: 14 }[error.outcome] ?? 1)
-        : 1;
+    if (error instanceof RepairCloseError) {
+      process.exitCode = { committed: 12, before: 13, after: 14 }[error.outcome] ?? 1;
+    } else if (error?.code === "55P03" && phase === failure.snapshotLock) {
+      process.exitCode = failure.snapshotLockUnavailable;
+    } else if (error?.code === "55P03" && phase === failure.catalogLocks) {
+      process.exitCode = failure.catalogLockUnavailable;
+    } else {
+      process.exitCode = phase;
+    }
   }
 }
