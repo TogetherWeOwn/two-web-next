@@ -220,6 +220,36 @@ const OUT_OF_SCOPE = [
     claim: "kept for 90 days",
     reason: "bot-owned, retention runs in Discord",
   },
+  {
+    anchor: "Your event RSVPs",
+    claim: "15 minutes",
+    reason: "bot-owned, Discord reminder scheduler in two-bot-next",
+  },
+  {
+    anchor: "Cloudflare retains unsampled Web Analytics data",
+    claim: "7 days",
+    reason: "external Cloudflare Web Analytics retention",
+  },
+  {
+    anchor: "Cloudflare retains unsampled Web Analytics data",
+    claim: "6 months",
+    reason: "external Cloudflare Web Analytics retention",
+  },
+  {
+    anchor: "Version 8 names togetherweown.com",
+    claim: "7 days",
+    reason: "external Cloudflare Web Analytics retention",
+  },
+  {
+    anchor: "Version 8 names togetherweown.com",
+    claim: "6 months",
+    reason: "external Cloudflare Web Analytics retention",
+  },
+  {
+    anchor: "Version 8 names togetherweown.com",
+    claim: "15-minute",
+    reason: "bot-owned, Discord reminder scheduler in two-bot-next",
+  },
 ];
 
 // Every cookie lifetime in src must be one of these; each is pinned by a CLAIMS row above.

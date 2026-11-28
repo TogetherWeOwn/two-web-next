@@ -137,7 +137,7 @@ for (const twin of ["Hono", "Kit"] as const) {
         await expect(
           page.getByRole("heading", { name: "Who we are, and what this covers", exact: true }),
         ).toBeVisible();
-        await expect(page.locator('[data-testid="privacy-version"]')).toContainText("Version 6");
+        await expect(page.locator('[data-testid="privacy-version"]')).toContainText("Version 8");
         await expect(page.locator("script")).toHaveCount(0);
         expect(await page.locator("html").evaluate((node) => node.scrollWidth)).toBeLessThanOrEqual(
           viewport.width,

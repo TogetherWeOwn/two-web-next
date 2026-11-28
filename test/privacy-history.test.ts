@@ -15,7 +15,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 describe("previous published policy metadata authority", () => {
   it("lists exactly the production-confirmed earlier set, newest-first, with stable ids", () => {
-    expect(PREVIOUS_PUBLISHED_POLICIES.map(({ id }) => id)).toEqual(["v5"]);
+    expect(PREVIOUS_PUBLISHED_POLICIES.map(({ id }) => id)).toEqual(["v6", "v5"]);
     for (const [index, entry] of PREVIOUS_PUBLISHED_POLICIES.entries()) {
       expect(entry.version).toBeLessThan(POLICY_VERSION);
       expect(entry.id).toBe(`v${entry.version}`);
@@ -32,7 +32,7 @@ describe("previous published policy metadata authority", () => {
   });
 
   it("pins the v5 entry to its verified retained source, offline", () => {
-    const entry = PREVIOUS_PUBLISHED_POLICIES[0]!;
+    const entry = PREVIOUS_PUBLISHED_POLICIES.find(({ id }) => id === "v5")!;
     expect(entry.sourceCommit).toBe("1846a6f2fbf2c956b07f72fb8c0eee76cb92c0ad");
     expect(
       execFileSync("git", ["hash-object", entry.sourcePath], {
@@ -48,12 +48,11 @@ describe("previous published policy metadata authority", () => {
     ).toBe(entry.sourcePath);
   });
 
-  it("resolves the eligible stable id to its own entry", () => {
-    const entry = PREVIOUS_PUBLISHED_POLICIES[0]!;
+  it.each(PREVIOUS_PUBLISHED_POLICIES)("resolves $id to its own entry", (entry) => {
     expect(checkPublishedPolicyTarget(entry.id)).toEqual({ ok: true, target: entry });
   });
 
-  it.each(["v1", "v2", "v3", "v4", "v6", "v7", "v0", "v999", "latest", ""])(
+  it.each(["v1", "v2", "v3", "v4", "v7", "v8", "v0", "v999", "latest", ""])(
     "refuses current/future/unpublished/unknown target %j locally with bounded remediation",
     (id) => {
       const result = checkPublishedPolicyTarget(id);
