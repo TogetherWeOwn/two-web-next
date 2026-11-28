@@ -45,6 +45,25 @@ export function publicLabel(pluginId) {
   return labels[pluginId] ?? `ZAP alert ${pluginId}`;
 }
 
+export function parseHttpUri(raw) {
+  // Do not coerce values, resolve relative paths, or let URL repair whitespace
+  // and backslashes into apparent evidence. Unproved URIs remain non-exempt.
+  if (
+    typeof raw !== "string" ||
+    !/^https?:\/\/[^/]/i.test(raw) ||
+    /[\u0000- \u007f\s\\]/.test(raw) ||
+    /%(?![\da-f]{2})/i.test(raw)
+  ) {
+    return null;
+  }
+  try {
+    const uri = new URL(raw);
+    return uri.username || uri.password ? null : uri;
+  } catch {
+    return null;
+  }
+}
+
 export function validateBudget(budget, fail) {
   const ignoreByPlugin = new Map();
   if (!budget || typeof budget !== "object" || Array.isArray(budget)) {
@@ -81,6 +100,17 @@ export function validateBudget(budget, fail) {
     if (entry.uriPrefix !== undefined && typeof entry.uriPrefix !== "string") {
       fail("invalid_budget", `invalid budget: ignore entry ${i} uriPrefix must be a string`);
       continue;
+    }
+    if (entry.getUri !== undefined) {
+      const uri = parseHttpUri(entry.getUri);
+      if (
+        entry.uriPrefix !== undefined ||
+        uri?.protocol !== "https:" ||
+        `${uri.origin}${uri.pathname}` !== entry.getUri
+      ) {
+        fail("invalid_budget", `invalid budget: ignore entry ${i} needs one exact HTTPS GET URI`);
+        continue;
+      }
     }
     if (!ignoreByPlugin.has(pluginId)) ignoreByPlugin.set(pluginId, []);
     ignoreByPlugin.get(pluginId).push(entry);

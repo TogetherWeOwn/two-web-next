@@ -230,12 +230,15 @@ describe("ZAP scoped exemption requires complete target-path evidence", () => {
     expectBlocked(summarize(report([other]), budget));
   });
 
-  it("keeps the exception inventory and zero budgets unchanged", () => {
+  it("pins the exception inventory and zero budgets", () => {
     expect(budget.maxMedium).toBe(0);
     expect(budget.maxLow).toBe(0);
-    expect(budget.ignore).toHaveLength(1);
-    expect(budget.ignore[0]).toMatchObject({ pluginId: "10096", uriPrefix: "/cdn-cgi/" });
-    expect(budget.ignore[0].why.length).toBeGreaterThan(0);
+    expect(budget.ignore).toMatchObject([
+      { pluginId: "10096", uriPrefix: "/cdn-cgi/" },
+      { pluginId: "10038", getUri: "https://next.togetherweown.com/cdn-cgi/rum" },
+      { pluginId: "10063", getUri: "https://next.togetherweown.com/cdn-cgi/rum" },
+    ]);
+    for (const entry of budget.ignore) expect(entry.why.length).toBeGreaterThan(0);
   });
 
   it.each([{ site: [] }, { site: [{ alerts: [] }] }, report([])])(
@@ -294,5 +297,58 @@ describe("ZAP scoped exemption requires complete target-path evidence", () => {
     expect(publicText).not.toContain(canary);
     expect(publicText).not.toContain("scan.example.invalid");
     expect(publicText).not.toContain("private-evidence-canary");
+  });
+});
+
+describe("ZAP staging RUM GET exemption", () => {
+  const staging = "https://next.togetherweown.com";
+  const rum = `${staging}/cdn-cgi/rum`;
+  const stagingReport = (alerts: object[], siteName = staging) => ({
+    site: [{ "@name": siteName, alerts }],
+  });
+
+  it.each([
+    ["10038", "2"],
+    ["10063", "1"],
+  ])("subtracts only the reported staging RUM GET for plugin %s", (pluginid, riskcode) => {
+    const edgeOnly = { ...finding([instance(rum)], "1", riskcode), pluginid };
+    expect(summarize(stagingReport([edgeOnly]), budget).verdict).toBe("PASS");
+
+    const otherInstances = [
+      { uri: rum, method: "POST" },
+      { uri: rum },
+      instance(`${rum}?probe=1`),
+      instance(`${rum}#probe`),
+      instance(`${rum}/`),
+      instance(`${rum}-other`),
+      instance(`${staging}/privacy`),
+      instance("https://other.example.invalid/cdn-cgi/rum"),
+    ];
+    const mixed = {
+      ...finding([instance(rum), ...otherInstances], otherInstances.length + 1, riskcode),
+      pluginid,
+    };
+    const result = summarize(stagingReport([mixed]), budget);
+    expectBlocked(result, otherInstances.length);
+    expect(result.alerts[0].count).toBe(otherInstances.length);
+    expectBlocked(summarize(stagingReport([edgeOnly], origin), budget));
+    expectBlocked(summarize(stagingReport([{ ...edgeOnly, count: "2" }]), budget));
+    expectBlocked(summarize(stagingReport([{ ...edgeOnly, riskcode: "3" }]), budget));
+  });
+
+  it.each([
+    { getUri: "" },
+    { getUri: "/cdn-cgi/rum" },
+    { getUri: `http://next.togetherweown.com/cdn-cgi/rum` },
+    { getUri: `${rum}?` },
+    { getUri: `${rum}#fragment` },
+    { getUri: rum, uriPrefix: "/cdn-cgi/" },
+  ])("fails closed on malformed exact GET policy %j", (scope) => {
+    const result = summarize(stagingReport([]), {
+      ...budget,
+      ignore: [{ ...scope, pluginId: "10038", why: "fixture" }],
+    });
+    expect(result.error_code).toBe("invalid_evidence");
+    expect(result.errors).toEqual([{ code: "invalid_budget" }]);
   });
 });

@@ -51,15 +51,22 @@ any other host.
   invalid site/URI evidence, credentials, relative URLs, parser-repaired whitespace
   or backslashes, and invalid percent escapes cannot establish an exemption.
   Query/fragment matches, foreign origins and lookalike paths remain counted.
+- An exact `getUri` exemption matches only a reported `GET` with that literal
+  HTTPS URL and the same containing-site origin. It cannot be combined with
+  `uriPrefix` or include a query or fragment. The scanner still visits the
+  endpoint and checks it for every other plugin.
 - Before subtracting any scoped instances, the explicit `count` must be a
   non-negative safe integer (number or canonical integer string) equal to the
   supplied instance-list length. Missing, malformed or inconsistent counts fail
   closed with a diagnostic that contains only structural indexes, not raw input.
   Without instances the alert stays; with complete evidence, only proven edge
   hits are subtracted and every unproved or Worker-served hit remains counted.
-  The committed exception remains plugin 10096 on `/cdn-cgi/`; Medium and Low
-  budgets remain zero. High is still non-exemptible. This proof requirement does
-  not change structurally valid empty-scan behavior, including `site: []`.
+  The committed exceptions cover plugin 10096 under `/cdn-cgi/` and plugins
+  10038 and 10063 for `GET https://next.togetherweown.com/cdn-cgi/rum`. The
+  latter response is a Cloudflare-managed HTML 404 without CSP or
+  Permissions-Policy. Cloudflare serves the endpoint independently of the
+  Worker. Medium and Low budgets remain zero. High is still non-exemptible.
+  Structurally valid empty scans, including `site: []`, still pass.
 
 ## Scalar and structured-verdict contract
 
