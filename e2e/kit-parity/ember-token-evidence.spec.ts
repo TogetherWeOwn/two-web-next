@@ -107,6 +107,9 @@ for (const target of targets) {
           });
           const response = await page.goto(`${target.origin}${target.path}`);
           expect(response?.status()).toBe(200);
+          const shell = page.locator(
+            target.name === "kit-events" ? ".base-theme:has(> .ember-header)" : ".base-theme",
+          );
           if (target.name === "kit") {
             expect(response?.headers()["x-two-renderer"]).toBe("kit");
             await expect(page.getByTestId("past-events")).toBeVisible();
@@ -124,7 +127,6 @@ for (const target of targets) {
           }
           if ("cta" in target) {
             expect(response?.headers()["x-two-renderer"]).toBe("kit");
-            const shell = page.locator(".base-theme");
             const cta = page.locator(target.cta);
             await expect(cta).toBeVisible();
             if (state === "forced-colors") {
@@ -146,7 +148,7 @@ for (const target of targets) {
             await expect(page.locator(".skip-link")).toBeFocused();
             await expect(page.locator(".skip-link")).toBeVisible();
           }
-          const metrics = await page.locator(".base-theme").evaluate((shell: any) => {
+          const metrics = await shell.evaluate((shell: any) => {
             const browser = globalThis as any;
             const style = browser.getComputedStyle(shell);
             const focus = browser.getComputedStyle(browser.document.activeElement);

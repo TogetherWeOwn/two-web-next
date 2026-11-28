@@ -1,37 +1,3 @@
-/* Use the existing shell stylesheet for the cutover routes and SSR fallback. */
-.base-theme:is(.ember-home, :has(> .ember-header)) {
-  --ember-cta: linear-gradient(135deg, var(--accent-hi), var(--ember));
-  background-color: var(--theme-page, var(--g0));
-  background-image: radial-gradient(
-    ellipse 900px 620px at 88% 4%,
-    #ff0e522e,
-    #5701ae1f 38%,
-    transparent 70%
-  );
-  background-repeat: no-repeat;
-  background-size: 100% 42rem;
-}
-.base-theme:is(.ember-home, :has(> .ember-header))
-  :is(
-    :is(.hero-action, .schedule-heading) .btn,
-    .ember-home-account .primary,
-    .join-primary,
-    .ember-header-join
-  ) {
-  background-image: var(--ember-cta);
-}
-@media (hover: hover) {
-  .base-theme:is(.ember-home, :has(> .ember-header))
-    :where(
-      :is(.hero-action, .schedule-heading) .btn,
-      .ember-home-account .primary,
-      .join-primary,
-      .ember-header-join
-    ):hover {
-    --ember-cta: linear-gradient(135deg, #ffb85e, var(--accent-hi));
-  }
-}
-
 [id="menu-sheet"] .menu-sheet {
   display: contents;
 }
