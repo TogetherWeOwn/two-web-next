@@ -1,8 +1,12 @@
 @import "../../../vendor/design-kit/tokens.css";
 
 .base-theme:is(.ember-home, :has(> .ember-header)) {
-  --ember-cta: linear-gradient(135deg, var(--accent-hi), var(--ember));
-  background-color: var(--theme-page, var(--g0));
+  --ember-cta: linear-gradient(
+    135deg,
+    var(--two-color-accent-hover),
+    var(--two-color-accent-default)
+  );
+  background-color: var(--theme-page, var(--two-color-bg-canvas));
   background-image: radial-gradient(
     ellipse 900px 620px at 88% 4%,
     color-mix(in srgb, var(--two-color-grad-magenta) 18%, transparent),
@@ -22,7 +26,7 @@
     background-image: var(--ember-cta);
     @media (hover: hover) {
       &:hover {
-        --ember-cta: linear-gradient(135deg, #ffb85e, var(--accent-hi));
+        --ember-cta: linear-gradient(135deg, #ffb85e, var(--two-color-accent-hover));
       }
     }
   }
