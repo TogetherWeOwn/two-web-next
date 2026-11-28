@@ -16,6 +16,7 @@ describe("Ember footer", () => {
   it("renders the community description and labelled footer navigation", () => {
     expect(html).toMatch(/<footer\b/);
     expect(html).toMatch(/<p\b[^>]*>Together We Own · adult gaming community<\/p>/);
+    expect(html).not.toContain("1998");
     expect(html).toMatch(/<nav\b[^>]*aria-label="Footer"/);
     for (const [path, label] of [
       ["/about", "About"],
