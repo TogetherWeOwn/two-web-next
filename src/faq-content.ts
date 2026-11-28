@@ -84,15 +84,15 @@ export const FAQS: Array<{
       ],
       [
         "How do I RSVP, and what do the answers mean?",
-        "Log in with Discord first — signed-out visitors get a log-in prompt instead of a button. Use I'm in for an open seat, or Join the waitlist when full. Going (You're in) reserves a seat; it is not measured attendance. Waitlisted is a place in line, not a held seat. One answer per member per event: changing your mind updates the same answer. Use Can't make it to withdraw, or Leave the waitlist to leave the line, when those controls are available.",
+        "On the website, log in with Discord first — signed-out visitors get a log-in prompt instead of a button. Use I'm in to mark yourself Going (Going expresses your plan to show up; it is not measured attendance), and use Can't make it to withdraw. Inside Discord, you can also answer with /rsvp as Going, Interested, or Declined. Event seat caps and waitlists are not active at launch.",
       ],
       [
-        "How do waitlist promotions work?",
-        "While the event is published, taking RSVPs and not ended, a released seat promotes the earliest waiting member in first-in, first-out (FIFO) order. Reload the event to check your current answer and position. Do not rely on a notification: the site cannot guarantee Discord delivery. Leaving and rejoining is a new place in line, not your old priority.",
+        "Do I get event reminders in Discord?",
+        "If you RSVP inside Discord with /rsvp as Going or Interested (not Declined), our bot posts at most one best-effort reminder in that event's Discord channel during the final 15 minutes before start. Reminders are channel-only (never DMs) with notification pings suppressed, or a count-only summary if the attendee list is very large.",
       ],
       [
-        "What if my RSVP is syncing, or I couldn't confirm it?",
-        "Saved. Syncing to Discord. means your answer is saved and the Discord mirror is pending, not that the reservation failed. Do not save again to force sync. An unknown result — We couldn't confirm your RSVP. Check the event before trying again. — is different: use Refresh the event and check your current answer before another write. For session expiry, throttling, closed events or a persistent mirror delay, follow the recovery guide.",
+        "What if my website RSVP says syncing, or I couldn't confirm it?",
+        "Saved. Syncing to Discord. means your website RSVP is saved and the event listing mirror to Discord is pending — not that your RSVP failed (your individual RSVP answer is not sent to Discord). Do not submit again to force sync. An unknown result — We couldn't confirm your RSVP. Check the event before trying again. — is different: use Refresh the event and check your current answer before another write. For session expiry, throttling, or closed events, follow the recovery guide.",
         {
           label: "RSVP recovery guide",
           href: "https://github.com/TogetherWeOwn/two-web-next/blob/main/docs/rsvp-recovery.md",
@@ -137,7 +137,7 @@ export const FAQS: Array<{
     items: [
       [
         "What do you store about me, and what are the rules?",
-        "We store Discord user IDs, timestamps, and channel IDs — enough to count joins honestly. We never store message content, email, location, or voice audio. Ask anytime to be removed and we delete your rows.",
+        "We store Discord user IDs, timestamps, and channel IDs — enough to run events, ranks, and honest join counts. We never store message content, email, location, or voice audio, and there are no ads, ad trackers, or tracking cookies (only cookieless Cloudflare Web Analytics for page speed). Ask anytime to be removed and we delete your rows, subject to the narrow evidence exceptions in the privacy policy.",
         { label: "Privacy policy", href: "/privacy" },
       ],
     ],

@@ -1,5 +1,5 @@
 import type { FC } from "hono/jsx";
-import { canonicalUrl } from "../seo";
+import { canonicalUrl, PAGE_DESCRIPTIONS } from "../seo";
 import { JOIN_HREF, Leaf } from "../page-shell";
 import { RULES, RULES_INTRO } from "../rules-content";
 
@@ -15,6 +15,7 @@ export const Rules: FC<{ appUrl: string; lastUpdated: { iso: string; label: stri
   <Leaf
     title="House rules — Together We Own"
     canonical={canonicalUrl(appUrl, "/rules")}
+    description={PAGE_DESCRIPTIONS.rules}
     headingId="rules-heading"
     heading="House rules"
   >

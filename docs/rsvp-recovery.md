@@ -9,9 +9,9 @@ incident diagnosis or a delivery guarantee.
 
 ## Read the answer before the sync notice
 
-The answer and the Discord mirror are different things. **Going** reserves a
-seat; it is not attendance. **Waitlisted** records a place in line, not a held
-seat. A sync notice describes the mirror, not a different seat allocation.
+**Going** records your plan to attend. Launch events have no seat caps or
+waitlists. Website RSVPs stay on the website. The Discord mirror carries public
+event details such as the title, time, location and description.
 
 Use the first matching branch below. If the page cannot show a current answer,
 stop and use [private support](#private-support-and-escalation); do not guess
@@ -19,13 +19,14 @@ that a request succeeded or failed.
 
 ### Going — You're in
 
-Your answer is Going and you have a seat. This does not prove you attended.
+Your answer is Going. It records your plans and does not show whether you attended.
 Check the event's current time and status before setting off. To change your
-mind, use **Can't make it** when available to withdraw the answer and release
-the seat. Do not submit another RSVP just to check whether you are Going.
+mind, use **Can't make it** when available to withdraw. Do not submit another
+RSVP just to check whether you are Going.
 
 ### Waitlisted — You're on the waitlist
 
+This branch applies only to a website event configured with a seat cap.
 **You're on the waitlist — #2 in line** is an example position, not a seat or a
 promise of entry. While the event is published, taking RSVPs and not ended,
 a released seat promotes the earliest waiting member in first-in, first-out
@@ -42,9 +43,9 @@ guarantee Discord delivery.
 
 ### Saved. Syncing to Discord.
 
-The answer is saved; the Discord mirror is pending. This does not mean the
-reservation failed. Going still means a seat and Waitlisted still means a
-place without a seat. Do not save again to force mirroring.
+Your website answer is saved. The event listing mirror to Discord is pending.
+Your individual answer and identity stay on the website. Do not save again
+to force mirroring.
 
 After a short wait, reload the event once to check the current answer and sync
 notice. For a **persistent mirror delay** — it is still pending after that
@@ -54,10 +55,11 @@ completion time or notification.
 
 ### Synced to Discord.
 
-The saved answer has a mirror stamp. This does not prove attendance or delivery
-of a notification to you. Check the event page for the current answer; no extra
-save is needed to confirm it. Report a persistent discrepancy through private
-support rather than trying to repair Discord yourself.
+A previous mirror pass recorded a sync stamp on your saved website answer.
+The stamp does not confirm that later event edits have reached Discord, or
+prove attendance or delivery of a notification. Check the event page for
+your current answer. If a discrepancy persists, contact private support
+without submitting your RSVP again.
 
 ### We couldn't confirm your RSVP. Check the event before trying again.
 

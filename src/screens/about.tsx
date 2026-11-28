@@ -1,12 +1,13 @@
 import type { FC } from "hono/jsx";
 import { ABOUT_FACTS, ABOUT_LEAD, ABOUT_STRAP } from "../about-content";
-import { canonicalUrl } from "../seo";
+import { canonicalUrl, PAGE_DESCRIPTIONS } from "../seo";
 import { JOIN_HREF, Leaf } from "../page-shell";
 
 export const About: FC<{ appUrl: string }> = ({ appUrl }) => (
   <Leaf
     title="About — Together We Own"
     canonical={canonicalUrl(appUrl, "/about")}
+    description={PAGE_DESCRIPTIONS.about}
     headingId="about-heading"
     heading="About Together We Own"
   >

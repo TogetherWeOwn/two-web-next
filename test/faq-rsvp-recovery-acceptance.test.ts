@@ -110,40 +110,37 @@ function eventsText(renderer: keyof typeof outputs) {
 
 const meanings = [
   [
-    "Going is a seat, not measured attendance",
-    /going/i,
-    /seat|reserv/i,
-    /(?:not|isn't|does not|doesn't)[^.]{0,100}attend/i,
+    "Going expresses plans without measuring attendance",
+    /I'm in to mark yourself Going/,
+    /Going expresses your plan to show up/,
+    /not measured attendance/,
   ],
   [
-    "Waitlisted is a place in line, not a held seat",
-    /waitlist/i,
-    /position|place|line|queue/i,
-    /(?:not|isn't|does not|doesn't)[^.]{0,90}(?:held|hold|seat|reserv)/i,
+    "launch events are uncapped and there are three Discord RSVP answers",
+    /\/rsvp as Going, Interested, or Declined/,
+    /Event seat caps and waitlists are not active at launch/,
   ],
   [
-    "released seats promote in FIFO order",
-    /releas|withdraw|opens? up|freed/i,
-    /promot/i,
-    /FIFO|first.in.first.out|order[^.]{0,50}(?:join|line)|(?:first|earliest|oldest)[^.]{0,50}(?:wait|line)/i,
+    "Discord reminders are best-effort with a count-only fallback",
+    /Going or Interested \(not Declined\)/,
+    /at most one best-effort reminder/,
+    /final 15 minutes/,
+    /count-only summary/,
   ],
   [
-    "members check the event instead of relying on delivery",
-    /reload|refresh/i,
-    /(?:no|not|cannot|can't|does not|doesn't|don't|never)[^.]{0,100}(?:notif|alert)/i,
-    /(?:not|cannot|can't|does not|doesn't|don't|never)[^.]{0,100}(?:guarantee|deliver)|no[^.]{0,50}(?:delivery|guarantee)/i,
-    /Discord/i,
+    "reminders stay in the event channel with pings suppressed",
+    /event's Discord channel/,
+    /channel-only \(never DMs\)/,
+    /notification pings suppressed/,
   ],
+  ["members can withdraw a website answer", /Can't make it/, /to withdraw/],
   [
-    "changing and withdrawing an answer remain available",
-    /chang|updat/i,
-    /withdraw|can't make it|leave the waitlist/i,
-  ],
-  [
-    "saved and pending mirror are not a failed reservation",
+    "saved means the website answer is saved and only the event listing mirrors",
     /Saved|saved/i,
     /sync|mirror/i,
     /(?:not|isn't|does not|doesn't)[^.]{0,100}fail/i,
+    /event listing mirror to Discord is pending/,
+    /individual RSVP answer is not sent to Discord/,
   ],
   [
     "unknown results require checking before another write",
@@ -160,6 +157,7 @@ for (const renderer of ["Hono", "Kit", "Markdown"] as const) {
       expect(text).toMatch(/Events page/i);
       expect(text).toMatch(/Discord/i);
       expect(text).toMatch(/log.?in|sign.?in/i);
+      expect(text).not.toMatch(/join the waitlist|FIFO|waitlist promotions/i);
     });
     for (const [name, ...requirements] of meanings) {
       it(name, () => {
@@ -236,6 +234,12 @@ describe("focused RSVP recovery guide and support boundaries", () => {
         `source reference: ${source}`,
       ).toBe(true);
     }
+  });
+
+  it("treats the sync stamp as an earlier mirror pass", () => {
+    const branch = guidanceFor(recoveryGuide().body, /Synced to Discord\./);
+    expect(branch).toMatch(/previous mirror pass/i);
+    expect(branch).toMatch(/does not confirm that later event edits have reached Discord/i);
   });
 
   for (const [name, outcome, next, stop] of [

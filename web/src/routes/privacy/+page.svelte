@@ -1,6 +1,6 @@
 <script lang="ts">
 import Shell from "#lib/Shell.svelte";
-import { canonicalUrl } from "../../../../src/seo";
+import { canonicalUrl, PAGE_DESCRIPTIONS } from "../../../../src/seo";
 import { PREVIOUS_PUBLISHED_POLICIES } from "../../../../src/privacy-history";
 import type { PageProps } from "./$types";
 
@@ -32,6 +32,7 @@ const canonical = $derived(canonicalUrl(appUrl, "/privacy"));
   restoredWrite={data.restoredWrite}
   title="Privacy policy"
   {canonical}
+  description={PAGE_DESCRIPTIONS.privacy}
   theme="content"
   {leafCss}
   accountChrome={joinChrome}

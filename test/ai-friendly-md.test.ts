@@ -259,6 +259,9 @@ describe("md builders (pure, DB-free)", () => {
     expect(body).toContain("Discord");
     expect(body).not.toMatch(/training/i);
     expect(body).not.toMatch(/member directory/i);
+    expect(body).toContain("profiles are members-only and never appear here");
+    expect(body).toContain("website RSVPs, Discord reminders");
+    expect(body).not.toMatch(/Steam|\/u\/|waitlist/i);
   });
 
   it("llms.txt uses explicit labels, never blurb fragments", () => {
