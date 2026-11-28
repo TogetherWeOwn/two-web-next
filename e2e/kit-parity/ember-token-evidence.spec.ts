@@ -10,7 +10,7 @@ const targets = [
   { name: "hono", origin: HONO_ORIGIN, path: "/" },
   { name: "kit", origin: KIT_ORIGIN, path: "/events/past" },
   { name: "kit-home", origin: KIT_ORIGIN, path: "/", cta: ".hero-action .btn" },
-  { name: "kit-events", origin: KIT_ORIGIN, path: "/events", cta: ".ember-header-join:visible" },
+  { name: "kit-events", origin: KIT_ORIGIN, path: "/events", cta: ".schedule-heading .btn" },
   { name: "kit-join", origin: KIT_ORIGIN, path: "/join", cta: ".join-primary" },
 ] as const;
 const states = ["default", "reduced-motion", "forced-colors", "keyboard-focus"] as const;

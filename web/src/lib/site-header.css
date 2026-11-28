@@ -12,13 +12,18 @@
   background-size: 100% 42rem;
 }
 .base-theme:is(.ember-home, :has(> .ember-header))
-  :is(.hero-action .btn, .ember-home-account .primary, .join-primary, .ember-header-join) {
+  :is(
+    :is(.hero-action, .schedule-heading) .btn,
+    .ember-home-account .primary,
+    .join-primary,
+    .ember-header-join
+  ) {
   background-image: var(--ember-cta);
 }
 @media (hover: hover) {
   .base-theme:is(.ember-home, :has(> .ember-header))
     :where(
-      .hero-action .btn,
+      :is(.hero-action, .schedule-heading) .btn,
       .ember-home-account .primary,
       .join-primary,
       .ember-header-join
