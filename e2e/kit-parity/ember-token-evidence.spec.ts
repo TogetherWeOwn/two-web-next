@@ -9,7 +9,9 @@ import { withKitOfflineBrowser } from "../../ci/kit-offline-browser.mjs";
 const targets = [
   { name: "hono", origin: HONO_ORIGIN, path: "/" },
   { name: "kit", origin: KIT_ORIGIN, path: "/events/past" },
-  { name: "kit-join", origin: KIT_ORIGIN, path: "/join" },
+  { name: "kit-home", origin: KIT_ORIGIN, path: "/", cta: ".hero-action .btn" },
+  { name: "kit-events", origin: KIT_ORIGIN, path: "/events", cta: ".ember-header-join:visible" },
+  { name: "kit-join", origin: KIT_ORIGIN, path: "/join", cta: ".join-primary" },
 ] as const;
 const states = ["default", "reduced-motion", "forced-colors", "keyboard-focus"] as const;
 
@@ -115,8 +117,27 @@ for (const target of targets) {
               page.getByRole("heading", { level: 1, name: "Play with people who show up." }),
             ).toBeVisible();
             await expect(page.getByTestId("join-oneclick")).toBeVisible();
+          } else if (target.name === "kit-events") {
+            await expect(page.locator("#events-heading")).toBeVisible();
           } else {
             await expect(page.locator("#home-heading")).toBeVisible();
+          }
+          if ("cta" in target) {
+            expect(response?.headers()["x-two-renderer"]).toBe("kit");
+            const shell = page.locator(".base-theme");
+            const cta = page.locator(target.cta);
+            await expect(cta).toBeVisible();
+            if (state === "forced-colors") {
+              await expect(shell).toHaveCSS("background-image", "none");
+              await expect(cta).toHaveCSS("background-image", "none");
+            } else {
+              await expect(shell).toHaveCSS("background-color", "rgb(21, 16, 15)");
+              await expect(shell).toHaveCSS("background-image", /^radial-gradient\(/);
+              await expect(cta).toHaveCSS(
+                "background-image",
+                "linear-gradient(135deg, rgb(255, 170, 71), rgb(255, 156, 54))",
+              );
+            }
           }
           await page.evaluate(() => (globalThis as any).document.fonts.ready);
 
@@ -155,7 +176,8 @@ for (const target of targets) {
           const name = `ember-${target.name}-${viewport.size.width}-${state}`;
           await page.screenshot({
             path: testInfo.outputPath(`${name}.png`),
-            fullPage: target.name === "kit-join",
+            fullPage:
+              target.name === "kit-join" || (target.name === "kit-home" && state === "default"),
           });
           if (target.name === "kit" && viewport.size.width === 390 && state === "default") {
             await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));

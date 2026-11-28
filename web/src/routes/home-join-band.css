@@ -1,7 +1,9 @@
 :root .base-theme .join-band {
-  background: var(--ember);
+  background: var(--ember) linear-gradient(90deg, var(--accent-hi), var(--ember) 68%, #f07b28);
   color: var(--on-accent);
-  box-shadow: 0 0 0 100vmax var(--ember);
+  box-shadow:
+    -100vmax 0 0 100vmax var(--accent-hi),
+    100vmax 0 0 100vmax #f07b28;
   clip-path: inset(0 -100vmax);
   display: flex;
   align-items: center;
