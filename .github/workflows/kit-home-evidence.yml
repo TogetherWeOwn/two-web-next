@@ -39,10 +39,8 @@ jobs:
           '["guest","member","guestEvents","memberEvents","staleCounts","quietOnline","nonmember","sessionOutage","eventsOutage","missingCounts","joinFailed","joinAdded","alreadyMember"]') }}
     env:
       COMPARE_HOME_INTRO: ${{ github.head_ref == 'feat/ember-home-guest-intro' }}
-      BASELINE_SHA: >-
-        ${{ (github.head_ref == 'feat/ember-home-guest-intro' || github.head_ref == 'feat/ember-home-standing') &&
-        github.event.pull_request.base.sha ||
-        inputs.comparison == 'ember-bands' && '96af1900ade28ec2cc61904579de338054214add' || '9d09c1adcc528020b4e8a74575a6848e99b95271' }}
+      PINNED_BASELINE: >-
+        ${{ inputs.comparison == 'ember-bands' && '96af1900ade28ec2cc61904579de338054214add' || '9d09c1adcc528020b4e8a74575a6848e99b95271' }}
     steps:
       - name: Check out pinned fixture tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -56,10 +54,23 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           path: after
           persist-credentials: false
-      - name: Check out original app
+      # Keep PR-derived revisions out of manual runs, which can write to the main cache scope.
+      - name: Check out original app from the PR base
+        id: pr-base
+        if: >-
+          github.event_name == 'pull_request' &&
+          (github.head_ref == 'feat/ember-home-guest-intro' || github.head_ref == 'feat/ember-home-standing') &&
+          github.event.pull_request.base.sha != ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ env.BASELINE_SHA }}
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: before
+          persist-credentials: false
+      - name: Check out original app from the pinned baseline
+        if: steps.pr-base.outcome == 'skipped'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.PINNED_BASELINE }}
           path: before
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -69,6 +80,7 @@ jobs:
       - name: Verify immutable checkouts
         env:
           FINAL_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BASELINE_SHA: ${{ steps.pr-base.outcome == 'success' && github.event.pull_request.base.sha || env.PINNED_BASELINE }}
         run: |
           test "$(git -C tooling rev-parse HEAD)" = 5ab8dbbef925d03f19809963c06e7edd04032bee
           test "$(git -C after rev-parse HEAD)" = "$FINAL_SHA"
