@@ -19,7 +19,7 @@ that a request succeeded or failed.
 
 ### Going — You're in
 
-Your answer is Going. It records your plans, not measured attendance.
+Your answer is Going. It records your plans and does not show whether you attended.
 Check the event's current time and status before setting off. To change your
 mind, use **Can't make it** when available to withdraw. Do not submit another
 RSVP just to check whether you are Going.

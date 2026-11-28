@@ -7,6 +7,7 @@
 // sitemap side: only published keys are ever emitted, and /events/past is
 // never a sitemap entry.
 
+import { PRODUCTION_APEX } from "./http/robots";
 import { PUBLIC_ROUTE_SLOTS } from "./seo-slots";
 
 export type SitemapUrl = {
@@ -55,8 +56,7 @@ export const PAGE_DESCRIPTIONS = {
   faq: "Answers to what newcomers ask about Together We Own: Discord joining, first-week voice nights, trust ranks, events, and profile privacy.",
   rules:
     "Five house rules for Together We Own (18+): adults only, respect the room, voice-first, play fair, and moderators have the last word.",
-  privacy:
-    "Plain-English privacy policy for togetherweown.com: Discord sign-in only, no ads or ad trackers, cookieless speed metrics, and how deletion works.",
+  privacy: `Plain-English privacy policy for ${PRODUCTION_APEX}: Discord sign-in only, no ads or ad trackers, cookieless speed metrics, and how deletion works.`,
 } as const;
 
 // Brand share image (rich unfurls): one approved static asset reused as the
