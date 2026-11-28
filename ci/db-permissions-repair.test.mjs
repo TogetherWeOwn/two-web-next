@@ -162,6 +162,57 @@ test("repair reports fixed failure details while preserving acknowledged outcome
       migrator_ready: repaired,
     }),
   });
+  const assertFailure = (operation, fixture, code, detail, env = fixtureEnv) => {
+    // Substitute postgres before loading the CLI, so the subprocess cannot connect.
+    const cli = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        fileURLToPath(new URL("fixtures/db-repair-close/preload.mjs", import.meta.url)),
+        fileURLToPath(new URL("db-permissions-repair.mjs", import.meta.url)),
+        operation,
+      ],
+      { env: { ...env, REPAIR_CLOSE_FIXTURE: JSON.stringify(fixture) }, encoding: "utf8" },
+    );
+    assert.ifError(cli.error);
+    assert.equal(cli.signal, null);
+    assert.equal(cli.stdout, "");
+    assert.equal(cli.stderr, "");
+    assert.equal(cli.status, code);
+    const protectedStep = shell(
+      workflow.jobs.repair.steps.at(-1).run,
+      { OPERATION: operation, FIXTURE_STATUS: String(cli.status) },
+      `node() {
+        printf 'fixture stdout'; printf 'fixture driver detail' >&2; return "$FIXTURE_STATUS";
+      }`,
+    );
+    assert.equal(protectedStep.status, 1);
+    assert.equal(protectedStep.stdout, "");
+    assert.equal(protectedStep.stderr, `${detail}\n`);
+  };
+
+  await t.test("invalid plan emits the admission label", () => {
+    assertFailure("forward", {}, 30, "Plan or endpoint admission failed.", {
+      ...fixtureEnv,
+      PRODUCTION_DB_REPAIR_PLAN_SHA256: "0".repeat(64),
+    });
+  });
+  await t.test("stale identity emits the session label", () => {
+    const stalePlan = JSON.stringify({ ...JSON.parse(plan), identity: hash("postgres\0retired") });
+    assertFailure("forward", {}, 31, "Connection or session setup failed.", {
+      ...fixtureEnv,
+      PRODUCTION_DB_REPAIR_PLAN: stalePlan,
+      PRODUCTION_DB_REPAIR_PLAN_SHA256: hash(stalePlan),
+    });
+  });
+  await t.test("unclassified catalog emits the readback label", () => {
+    assertFailure(
+      "readback",
+      { states: [{ ...snapshot(false), digest: "d".repeat(64) }] },
+      40,
+      "Readback phase failed.",
+    );
+  });
 
   for (const {
     operation,
@@ -242,33 +293,7 @@ test("repair reports fixed failure details while preserving acknowledged outcome
       const fixture = { states: states.map(snapshot), acknowledge, rejectStatement, sqlstate };
       const transactionError = new Error("fixture transaction driver detail");
       const events = [];
-      // Substitute postgres before loading the CLI, so the subprocess cannot connect.
-      const cli = spawnSync(
-        process.execPath,
-        [
-          "--import",
-          fileURLToPath(new URL("fixtures/db-repair-close/preload.mjs", import.meta.url)),
-          fileURLToPath(new URL("db-permissions-repair.mjs", import.meta.url)),
-          operation,
-        ],
-        { env: { ...fixtureEnv, REPAIR_CLOSE_FIXTURE: JSON.stringify(fixture) }, encoding: "utf8" },
-      );
-      assert.ifError(cli.error);
-      assert.equal(cli.signal, null);
-      assert.equal(cli.stdout, "");
-      assert.equal(cli.stderr, "");
-      const protectedStep = shell(
-        workflow.jobs.repair.steps.at(-1).run,
-        { OPERATION: operation, FIXTURE_STATUS: String(cli.status) },
-        'node() { return "$FIXTURE_STATUS"; }',
-      );
-      assert.equal(protectedStep.status, 1);
-      assert.equal(protectedStep.stdout, "");
-      assert.equal(
-        protectedStep.stderr,
-        `Database permissions operation did not confirm an outcome.\n${detail}\n`,
-      );
-      assert.equal(cli.status, code);
+      assertFailure(operation, fixture, code, detail);
 
       await assert.rejects(
         runRepair(operation, fixtureEnv, () =>

@@ -100,7 +100,6 @@ jobs:
             readback:10) printf '%s\n' 'Database permissions match the approved pre-repair state.' ;;
             readback:11) printf '%s\n' 'Database permissions match the approved post-repair state.' ;;
             *)
-              printf '%s\n' 'Database permissions operation did not confirm an outcome.' >&2
               case "$status" in
                 12) printf '%s\n' 'Connection close failed after the transaction was acknowledged.' ;;
                 13) printf '%s\n' 'Connection close failed after reading the approved pre-repair state.' ;;
@@ -118,6 +117,7 @@ jobs:
                 40) printf '%s\n' 'Readback phase failed.' ;;
                 41) printf '%s\n' 'Snapshot lock was unavailable.' ;;
                 42) printf '%s\n' 'Ledger or catalog lock was unavailable.' ;;
+                *) printf '%s\n' 'Database permissions operation did not confirm an outcome.' ;;
               esac >&2
               exit 1 ;;
           esac

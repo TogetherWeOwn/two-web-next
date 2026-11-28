@@ -796,7 +796,9 @@ Dispatch `forward` and `provision` at the approved protected `main` tip. If
 `main` advances during recovery, keep the same approval SHA for `undo`,
 `readback`, and `revoke`. Those operations use the approved ancestor only
 when its workflow and revision selector match the dispatch revision.
-Before rolling out changes to either file, close any open recovery window.
+Before merging a change to either file, close any open recovery window and
+remove its admission pins. An existing pin cannot select its approved ancestor
+through a changed workflow or revision selector.
 Start new repairs from an approved revision that includes the selector.
 
 When `main` advances after qualification, fetch the current protected tip.
