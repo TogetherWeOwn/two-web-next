@@ -1,10 +1,12 @@
 import { jsx } from "hono/jsx/jsx-runtime";
+import { html as htmlSyntax, parse, type DefaultTreeAdapterMap } from "parse5";
 import { describe, expect, it } from "vitest";
 import { FeaturedFormPage, FeaturedPage } from "../src/admin/pages";
 import type { FeaturedRow } from "../src/admin/store";
 import { parseFeaturedListQuery } from "../src/admin/table-list";
 import { currentlyVisible, featuredStatus, type FeaturedWindow } from "../src/featured-status";
 import { FeaturedContentItem, Home } from "../src/pages";
+import { attr, elements } from "./helpers/kit-edit-controls";
 
 const now = new Date("2026-09-30T20:00:00Z");
 const before = new Date(now.getTime() - 1);
@@ -58,10 +60,29 @@ const home = (saved: FeaturedRow, imageHosts?: string) =>
     }),
   );
 const articles = (html: string) => html.match(/<article\b[\s\S]*?<\/article>/g);
-// The dirty-navigation island is an external script with no inline code:
-// strip island tags before asserting the page carries no inline script/style.
-const withoutIslands = (html: string) =>
-  html.replace(/<script\b[^>]*src="\/islands\/[^"]*"[^>]*><\/script>/g, "");
+
+function inlineCode(html: string): string[] {
+  const nodes = elements(parse(html, { scriptingEnabled: false, sourceCodeLocationInfo: true }));
+  for (const node of nodes) {
+    if (node.tagName === "template" && node.namespaceURI === htmlSyntax.NS.HTML) {
+      elements((node as DefaultTreeAdapterMap["template"]).content, nodes);
+    }
+  }
+  return nodes.flatMap((node) => {
+    const attributes = node.attrs
+      .filter(({ name }) => name === "style" || name.startsWith("on"))
+      .map(({ name }) => `<${node.tagName}> ${name}`);
+    // An island is allowed only as a complete external script with an empty body.
+    const externalIsland =
+      attr(node, "src")?.startsWith("/islands/") &&
+      node.childNodes.length === 0 &&
+      node.sourceCodeLocation?.endTag;
+    if (node.tagName === "style" || (node.tagName === "script" && !externalIsland)) {
+      attributes.push(`<${node.tagName}>`);
+    }
+    return attributes;
+  });
+}
 
 // Local rows only: these tests never open a database or public/staging endpoint.
 describe("featured publish-window status", () => {
@@ -182,7 +203,7 @@ describe("featured SSR preview", () => {
     expect(articles(html)).toEqual(articles(home(saved)));
     expect(articles(html)?.[0]).toContain(saved.title);
     expect(articles(html)?.[0]).toContain(`<p>${saved.body}</p>`);
-    expect(withoutIslands(html)).not.toMatch(/<(?:script|style)\b|\sstyle=|\son\w+=/i);
+    expect(inlineCode(html)).toEqual([]);
   });
 
   // Intentional contract change: a saved preview is not guest homepage eligibility.
@@ -258,8 +279,18 @@ describe("featured SSR preview", () => {
       String(jsx(FeaturedPage, { rows: [row], query, now })),
       item(row),
     ]) {
-      expect(withoutIslands(html)).not.toMatch(/<(?:script|style)\b|\sstyle=|\son\w+=/i);
+      expect(inlineCode(html)).toEqual([]);
     }
     expect(edit(row)).toContain('<link rel="stylesheet" href="/styles.css"/>');
+  });
+
+  it("allows empty external island scripts while reporting inline code in parsed markup", () => {
+    expect(inlineCode('<script src="/islands/fixture.js"></script>')).toEqual([]);
+    expect(
+      inlineCode(
+        '<script src="/islands/fixture.js" ONLOAD="">inline</script>' +
+          '<template><STYLE></STYLE><div STYLE=""></div></template>',
+      ),
+    ).toEqual(["<script> onload", "<script>", "<style>", "<div> style"]);
   });
 });

@@ -98,17 +98,19 @@ class Node {
     return this.querySelectorAll(selector)[0] ?? null;
   }
 }
+const fixtureEntities: Record<string, string> = {
+  "&#39;": "'",
+  "&quot;": '"',
+  "&amp;": "&",
+  "&lt;": "<",
+  "&gt;": ">",
+};
 // Small parser for trusted JSX fixture markup, not a second hand-written action set.
 function parse(html: string) {
   const page = new Node();
   const stack = [page];
   const decode = (s: string) =>
-    s
-      .replace(/&#39;/g, "'")
-      .replace(/&quot;/g, '"')
-      .replace(/&amp;/g, "&")
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">");
+    s.replace(/&(?:#39|quot|amp|lt|gt);/g, (entity) => fixtureEntities[entity]!);
   for (const token of html.match(/<[^>]*>|[^<]+/g) ?? []) {
     if (token.startsWith("</")) {
       stack.pop();
@@ -308,6 +310,12 @@ function browser(
 }
 
 describe("RsvpButton shipped binder", () => {
+  it("decodes rendered text and attributes once, preserving literal entity text", () => {
+    const page = parse('<span data-title="&amp;lt; &quot; &amp;">&amp;gt; &lt; &#39;</span>');
+    expect(page.querySelector("[data-title]")?.getAttribute("data-title")).toBe('&lt; " &');
+    expect(page.textContent).toBe("&gt; < '");
+  });
+
   it.each([403, 409])(
     "handles a %i JSON outcome instead of losing it after headers arrive",
     async (status) => {
