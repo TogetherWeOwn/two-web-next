@@ -20,7 +20,7 @@ function pg(command, args) {
   }
 }
 
-export function fixtureCluster(directory) {
+export function fixtureCluster(directory, { locale } = {}) {
   mkdirSync(directory, { mode: 0o700 });
   const data = join(directory, "db");
   const passwordFile = join(directory, "bootstrap.pw");
@@ -28,7 +28,7 @@ export function fixtureCluster(directory) {
   writeFileSync(passwordFile, password, { mode: 0o600 });
   try {
     pg("initdb", [
-      "--no-locale",
+      locale ? `--locale=${locale}` : "--no-locale",
       "--encoding=UTF8",
       "--username",
       bootstrap,

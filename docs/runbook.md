@@ -783,6 +783,13 @@ Use the approved executor login for every snapshot. Run `ci/db-permissions-repai
 - `PRODUCTION_DB_REPAIR_PLAN` holds the `before` and `after` digests, `identity` fingerprint and `owners` in inventory order.
 - `PRODUCTION_DB_REPAIR_PLAN_SHA256` pins the exact plan bytes.
 
+Derive the `after` digest with
+[`ci/db-permissions-repair-post-pin.sql`](../ci/db-permissions-repair-post-pin.sql).
+Run it read-only under the approved executor and bind the projected POST
+catalog as JSON text in parameter `$1`. It orders grantor and grantee names
+with the same C collation as the snapshot query, including on databases with a
+different default locale.
+
 If `forward` or `undo` fails, is interrupted, or ends without a commit confirmation,
 run the approved `readback` before approving another write. The workflow can
 report a fixed failure phase and distinguish an unavailable snapshot lock from an
