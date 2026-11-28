@@ -146,7 +146,8 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
   <meta property="og:description" content={PROFILE_SHARE_DESCRIPTION} />
   <meta property="og:image" content={shareImageUrl(canonical)} />
   <meta property="og:image:alt" content="Together We Own community logo" />
-  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:image" content={shareImageUrl(canonical)} />
   <meta name="twitter:title" content={title} />
   <meta name="twitter:description" content={PROFILE_SHARE_DESCRIPTION} />
   <link rel="alternate" type="application/rss+xml" title="Together We Own Events" href="/events.rss" />

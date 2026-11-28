@@ -289,7 +289,7 @@ describe.each(cases)(
         { property: "og:url", content: `${APP_URL}/members/${MEMBER_ID}` },
         { property: "og:title", content: title },
         { property: "og:description", content: "A member of Together We Own." },
-        { name: "twitter:card", content: "summary" },
+        { name: "twitter:card", content: "summary_large_image" },
         { name: "twitter:title", content: title },
         { name: "twitter:description", content: "A member of Together We Own." },
       ])

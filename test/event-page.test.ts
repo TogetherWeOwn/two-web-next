@@ -436,7 +436,7 @@ describe("Event page parity (fixture-only)", () => {
     for (const tag of ['property="og:description"', 'name="twitter:description"']) {
       expect(html).toContain(`${tag} content="${esc(description)}"`);
     }
-    expect(html).toContain('name="twitter:card" content="summary"');
+    expect(html).toContain('name="twitter:card" content="summary_large_image"');
     expect(html).not.toContain("<script> & friends");
     expect(html).toContain(`property="og:image" content="${APP_URL}/og-1200x630.png"`);
     expect(html).toContain('property="og:image:alt" content="Together We Own community logo"');
