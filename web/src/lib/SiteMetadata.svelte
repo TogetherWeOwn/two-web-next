@@ -66,7 +66,8 @@ const themeStylesheet = $derived(
     {#if description}<meta property="og:description" content={description} />{/if}
     <meta property="og:image" content={shareImageUrl(canonical)} />
     <meta property="og:image:alt" content="Together We Own community logo" />
-    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content={shareImageUrl(canonical)} />
     <meta name="twitter:title" content={share} />
     {#if description}<meta name="twitter:description" content={description} />{/if}
   {/if}

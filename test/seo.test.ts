@@ -182,7 +182,7 @@ describe("share meta parity (TOG-5624)", () => {
     expect(html).toContain('<meta property="og:url" content="https://next.example.test/"');
     expect(html).toContain('<meta property="og:type" content="website"');
     expect(html).toContain('<meta property="og:site_name" content="Together We Own"');
-    expect(html).toContain('<meta name="twitter:card" content="summary"');
+    expect(html).toContain('<meta name="twitter:card" content="summary_large_image"');
     expect(html).toContain('<meta property="og:description"');
     expect(html).toContain(
       '<meta property="og:image" content="https://next.example.test/og-1200x630.png"',
@@ -196,7 +196,7 @@ describe("share meta parity (TOG-5624)", () => {
     const html = await (await app.request("/about", {}, env)).text();
     expect(html).toContain('<link rel="canonical" href="https://next.example.test/about"');
     expect(html).toContain('<meta property="og:url" content="https://next.example.test/about"');
-    expect(html).toContain('<meta name="twitter:card" content="summary"');
+    expect(html).toContain('<meta name="twitter:card" content="summary_large_image"');
     expect(html).toContain('type="application/rss+xml"');
     expect(html).toContain('href="/events.rss"');
   });

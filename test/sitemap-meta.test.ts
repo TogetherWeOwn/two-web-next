@@ -270,7 +270,7 @@ describe("share meta home + join (ShareMetaTagsTest.php:28,39,61)", () => {
       `<meta property="og:url" content="${canonical}"`,
       `<meta property="og:title" content="${title}"`,
       `<meta property="og:description" content="${description}"`,
-      '<meta name="twitter:card" content="summary"',
+      '<meta name="twitter:card" content="summary_large_image"',
       `<meta name="twitter:title" content="${title}"`,
       `<meta name="twitter:description" content="${description}"`,
     ]) {

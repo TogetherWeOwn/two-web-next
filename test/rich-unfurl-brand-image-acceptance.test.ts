@@ -219,6 +219,7 @@ function shareCopyOf(html: string): ShareCopy {
   const descriptions = metaContents(html, "property", "og:description");
   const robots = metaContents(html, "name", "robots");
   const images = metaContents(html, "property", "og:image");
+  expect(metaContents(html, "name", "twitter:image")).toEqual(images);
   const alts = metaContents(html, "property", "og:image:alt");
   expect(canonical.length, "at most one canonical").toBeLessThanOrEqual(1);
   expect(titles.length, "at most one og:title").toBeLessThanOrEqual(1);
@@ -267,6 +268,7 @@ function expectRichUnfurl(
   expect(images, `${page}: exact brand asset on the canonical origin`).toEqual([
     `${new URL(canonical).origin}/og-1200x630.png`,
   ]);
+  expect(metaContents(html, "name", "twitter:image"), `${page}: twitter:image`).toEqual(images);
   const alts = metaContents(html, "property", "og:image:alt");
   expect(alts, `${page}: exactly one og:image:alt`).toHaveLength(1);
   expect(alts, `${page}: exact community-logo alt`).toEqual(["Together We Own community logo"]);
@@ -739,6 +741,10 @@ describe("Kit home and both profile routes emit the exact brand image", () => {
     expect(metaContents(head, "property", "og:image:alt")).toEqual([
       "Together We Own community logo",
     ]);
+    expect(metaContents(head, "name", "twitter:card")).toEqual(["summary_large_image"]);
+    expect(metaContents(head, "name", "twitter:image")).toEqual([
+      "https://next.example.test/og-1200x630.png",
+    ]);
   });
 
   it.each([
@@ -760,6 +766,10 @@ describe("Kit home and both profile routes emit the exact brand image", () => {
         metaContents(head, "property", "og:image:alt"),
         `${route}: exactly one brand alt`,
       ).toEqual(["Together We Own community logo"]);
+      expect(metaContents(head, "name", "twitter:card")).toEqual(["summary_large_image"]);
+      expect(metaContents(head, "name", "twitter:image")).toEqual([
+        "https://next.example.test/og-1200x630.png",
+      ]);
       expect(metaContents(head, "name", "robots")).toEqual(["noindex, nofollow"]);
       for (const leak of [HEAD_CANARY, "private-bio-canary", "profileavatarcanary"]) {
         expect(head, `${route}: no private share data (${leak})`).not.toContain(leak);

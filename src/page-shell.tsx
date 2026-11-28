@@ -92,7 +92,8 @@ export const Layout: FC<
             ) : null}
             <meta property="og:image" content={shareImageUrl(canonical)} />
             <meta property="og:image:alt" content="Together We Own community logo" />
-            <meta name="twitter:card" content="summary" />
+            <meta name="twitter:card" content="summary_large_image" />
+            <meta name="twitter:image" content={shareImageUrl(canonical)} />
             <meta name="twitter:title" content={shareTitle ?? title} />
             {shareDescription ? (
               <meta name="twitter:description" content={shareDescription} />
