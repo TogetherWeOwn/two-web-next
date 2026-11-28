@@ -5,9 +5,9 @@
   </div>
   <ul class="hl" role="list" data-testid="home-highlights">
     <li>
-      <p class="hl-cadence">Est. 1998 · 18+</p>
+      <p class="hl-cadence">18+</p>
       <h3>Grown-ups, mostly evenings</h3>
-      <p>We've played together since 1998: forum years, then voice years. It's an adult clan, and we're mostly on in the evenings.</p>
+      <p>We've played together since the forum days. These days, you'll find us in voice, mostly in the evenings.</p>
     </li>
     <li>
       <p class="hl-cadence">Voice-first</p>

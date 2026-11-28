@@ -5,7 +5,7 @@ import type { PublicEvent } from "../src/events/reads";
 import { Layout } from "../src/pages";
 
 const APP_URL = "https://next.example.test";
-const DEFAULT_DESCRIPTION = "Together We Own: a close-knit adult gaming community, founded 1998.";
+const DEFAULT_DESCRIPTION = "Together We Own: a close-knit adult gaming community.";
 const EVENT_DESCRIPTION = 'Bring <b>your board</b> & "friends". Don\'t miss it!';
 const ESCAPED_DESCRIPTION =
   "Bring &lt;b&gt;your board&lt;/b&gt; &amp; &quot;friends&quot;. Don&#39;t miss it!";

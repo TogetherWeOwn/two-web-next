@@ -75,10 +75,7 @@ export const Layout: FC<
         <title>{title}</title>
         <meta
           name="description"
-          content={
-            shareDescription ||
-            "Together We Own: a close-knit adult gaming community, founded 1998."
-          }
+          content={shareDescription || "Together We Own: a close-knit adult gaming community."}
         />
         {canonical ? (
           <>
@@ -249,7 +246,7 @@ export const SiteHeader: FC<
 // component so a new leaf cannot ship without a way back to it.
 export const SiteFooter: FC = () => (
   <footer>
-    Together We Own · adult gaming community · founded 1998
+    Together We Own · adult gaming community
     <nav aria-label="Site">
       <a href="/about">About</a> <a href="/faq">FAQ</a> <a href="/rules">House rules</a>{" "}
       <a href="/privacy">Privacy</a>

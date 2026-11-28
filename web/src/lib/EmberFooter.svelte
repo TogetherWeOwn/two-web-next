@@ -1,6 +1,6 @@
 <footer class="ember-footer">
   <div class="footer-content">
-    <p>Together We Own · adult gaming community · founded&nbsp;1998</p>
+    <p>Together We Own · adult gaming community</p>
     <nav aria-label="Footer">
       <a href="/about">About</a>
       <a href="/faq">FAQ</a>
