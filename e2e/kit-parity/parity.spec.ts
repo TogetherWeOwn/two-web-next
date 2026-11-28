@@ -1465,7 +1465,7 @@ for (const target of targets) {
             page.getByRole("heading", { level: 1, name: "Play with people who show up." }),
           ).toBeVisible();
           await expect(
-            page.getByText("A Discord gaming community · founded 1998 · English"),
+            page.getByText("An 18+ evening Discord gaming community · English"),
           ).toBeVisible();
           await expect(page.locator("#join-steps-heading")).toHaveText(
             "What happens when you join",

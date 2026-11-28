@@ -1,7 +1,7 @@
 <script lang="ts">
 import ContentLeaf from "#lib/ContentLeaf.svelte";
 import Shell from "#lib/Shell.svelte";
-import { canonicalUrl } from "../../../../src/seo";
+import { canonicalUrl, PAGE_DESCRIPTIONS } from "../../../../src/seo";
 import { RULES_INTRO } from "../../../../src/rules-content";
 import type { PageProps } from "./$types";
 
@@ -27,6 +27,7 @@ let { data }: PageProps = $props();
   restoredWrite={data.restoredWrite}
   title="House rules"
   canonical={canonicalUrl(data.appUrl, "/rules")}
+  description={PAGE_DESCRIPTIONS.rules}
   theme="content"
   leafCss={data.leafCss}
   accountChrome={accountJoin}

@@ -49,6 +49,16 @@ export const stripTrailingSlash = (url: string) => url.replace(/\/+$/, "");
 export const canonicalUrl = (appUrl: string, path: string): string =>
   `${stripTrailingSlash(appUrl)}${path}`;
 
+export const PAGE_DESCRIPTIONS = {
+  about:
+    "Together We Own is an 18+ voice-first adult gaming community. No application or interview — turn up in voice and play.",
+  faq: "Answers to what newcomers ask about Together We Own: Discord joining, first-week voice nights, trust ranks, events, and profile privacy.",
+  rules:
+    "Five house rules for Together We Own (18+): adults only, respect the room, voice-first, play fair, and moderators have the last word.",
+  privacy:
+    "Plain-English privacy policy for togetherweown.com: Discord sign-in only, no ads or ad trackers, cookieless speed metrics, and how deletion works.",
+} as const;
+
 // Brand share image (rich unfurls): one approved static asset reused as the
 // og:image on every canonical page — no new artwork, no per-event covers.
 // PNG, not the SVG logo: Discord and X crawlers unfurl PNG reliably while

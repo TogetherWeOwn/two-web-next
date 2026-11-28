@@ -347,11 +347,18 @@ const leafMarkdownAlternate = (canonical: string): string | undefined => {
 };
 
 export const Leaf: FC<
-  PropsWithChildren<{ title: string; canonical: string; headingId: string; heading: string }>
-> = ({ title, canonical, headingId, heading, children }) => (
+  PropsWithChildren<{
+    title: string;
+    canonical: string;
+    description?: string;
+    headingId: string;
+    heading: string;
+  }>
+> = ({ title, canonical, description, headingId, heading, children }) => (
   <Layout
     title={title}
     canonical={canonical}
+    shareDescription={description}
     theme="content"
     markdownAlternate={leafMarkdownAlternate(canonical)}
   >

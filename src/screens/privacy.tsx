@@ -1,5 +1,5 @@
 import type { FC } from "hono/jsx";
-import { canonicalUrl } from "../seo";
+import { canonicalUrl, PAGE_DESCRIPTIONS } from "../seo";
 import { JOIN_HREF, Leaf } from "../page-shell";
 import { PREVIOUS_PUBLISHED_POLICIES } from "../privacy-history";
 
@@ -17,6 +17,7 @@ export const Privacy: FC<{ appUrl: string; version: number; html: string }> = ({
   <Leaf
     title="Privacy policy — Together We Own"
     canonical={canonicalUrl(appUrl, "/privacy")}
+    description={PAGE_DESCRIPTIONS.privacy}
     headingId="privacy-heading"
     heading="Privacy policy"
   >

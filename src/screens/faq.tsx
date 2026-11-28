@@ -1,5 +1,5 @@
 import type { FC } from "hono/jsx";
-import { canonicalUrl } from "../seo";
+import { canonicalUrl, PAGE_DESCRIPTIONS } from "../seo";
 import { JOIN_HREF, Leaf } from "../page-shell";
 import { FAQS } from "../faq-content";
 
@@ -15,6 +15,7 @@ export const Faq: FC<{ appUrl: string; lastReviewed: { iso: string; label: strin
   <Leaf
     title="FAQ — Together We Own"
     canonical={canonicalUrl(appUrl, "/faq")}
+    description={PAGE_DESCRIPTIONS.faq}
     headingId="faq-heading"
     heading="Frequently asked questions"
   >

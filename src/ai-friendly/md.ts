@@ -337,7 +337,7 @@ const MD_PAGES: Array<{ path: string; md: string; label: string; blurb: string }
     md: "/faq.md",
     label: "FAQ",
     blurb:
-      "Short answers newcomers actually ask: joining, first week, ranks, events, tickets, profiles.",
+      "Short answers for newcomers: joining, the first week, ranks, website RSVPs, Discord reminders, tickets and profiles.",
   },
   {
     path: "/rules",

@@ -1,7 +1,7 @@
 <script lang="ts">
 import ContentLeaf from "#lib/ContentLeaf.svelte";
 import Shell from "#lib/Shell.svelte";
-import { canonicalUrl } from "../../../../src/seo";
+import { canonicalUrl, PAGE_DESCRIPTIONS } from "../../../../src/seo";
 import type { PageProps } from "./$types";
 
 // Markup contract of About (src/screens/about.tsx): the same strap, lead,
@@ -29,6 +29,7 @@ const { appUrl, strap, lead, facts, leafCss } = $derived(data);
   restoredWrite={data.restoredWrite}
   title="About"
   canonical={canonicalUrl(appUrl, "/about")}
+  description={PAGE_DESCRIPTIONS.about}
   theme="content"
   {leafCss}
   accountChrome={accountJoin}

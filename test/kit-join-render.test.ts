@@ -32,6 +32,7 @@ afterAll(() => cleanup?.());
 describe("Kit join SSR", () => {
   it("renders the safe handoff and invite fallback without a widget", () => {
     const html = renderPage(joinData());
+    expect(html).toContain("An 18+ evening Discord gaming community · English");
     expect(html).toContain('href="/join/discord?next=%2Fevents&amp;source=web-homepage"');
     expect(html).toContain('href="https://discord.gg/invite"');
     expect(html).toContain('data-testid="join-widget-fallback"');

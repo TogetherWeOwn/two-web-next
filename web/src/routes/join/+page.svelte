@@ -40,6 +40,7 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
 
 <SiteMetadata
   title="Join Together We Own"
+  exactTitle="Join Together We Own"
   canonical={canonicalUrl(appUrl, "/join")}
   description={JOIN_INTRO}
   theme="join"
@@ -69,7 +70,7 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
   <div class="ember-join">
     <div class="join-identity">
       <img src="/icons/icon-192.png" alt="" />
-      <div><strong>Together We Own</strong><p>A Discord gaming community · founded 1998 · English</p></div>
+      <div><strong>Together We Own</strong><p>An 18+ evening Discord gaming community · English</p></div>
     </div>
     <h1 id="join-heading">Play with people <em>who show up.</em></h1>
     <p class="join-lede">{JOIN_INTRO}</p>
