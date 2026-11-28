@@ -1,5 +1,8 @@
 @import "../lib/ember-palette.css";
 
+:root .base-theme.ember-home {
+  --theme-page: var(--g0);
+}
 .ember-home-top,
 .ember-home-menu[open] nav {
   border-bottom: 1px solid var(--color-hair2);

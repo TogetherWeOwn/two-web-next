@@ -141,6 +141,12 @@ for (const target of targets) {
               );
             }
           }
+          if (target.name === "kit-home" && viewport.name === "mobile" && state === "default") {
+            await expect(page.locator("[data-kit-site-header]")).toHaveCSS(
+              "background-color",
+              "rgb(21, 16, 15)",
+            );
+          }
           await page.evaluate(() => (globalThis as any).document.fonts.ready);
 
           if (state === "keyboard-focus") {
