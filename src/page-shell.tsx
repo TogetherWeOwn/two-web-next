@@ -4,7 +4,7 @@ import type { HeaderSession, Session } from "./env";
 import { HOME_JOIN_RESULT_COPY, HOME_NOTICES } from "./home-copy";
 import { LEAF_CRITICAL_CSS } from "./leaf-critical-css";
 import type { JoinResult } from "./return-journey";
-import { shareImageUrl } from "./seo";
+import { SITE_DESCRIPTION, shareImageUrl } from "./seo";
 
 const SITE_NAME = "Together We Own";
 
@@ -73,13 +73,7 @@ export const Layout: FC<
         <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" sizes="180x180" />
         {robots ? <meta name="robots" content={robots} /> : null}
         <title>{title}</title>
-        <meta
-          name="description"
-          content={
-            shareDescription ||
-            "Together We Own: a close-knit adult gaming community, founded 1998."
-          }
-        />
+        <meta name="description" content={shareDescription || SITE_DESCRIPTION} />
         {canonical ? (
           <>
             <link rel="canonical" href={canonical} />
@@ -249,7 +243,7 @@ export const SiteHeader: FC<
 // component so a new leaf cannot ship without a way back to it.
 export const SiteFooter: FC = () => (
   <footer>
-    Together We Own · adult gaming community · founded 1998
+    Together We Own · adult gaming community
     <nav aria-label="Site">
       <a href="/about">About</a> <a href="/faq">FAQ</a> <a href="/rules">House rules</a>{" "}
       <a href="/privacy">Privacy</a>

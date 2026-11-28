@@ -14,14 +14,13 @@
 // Attendee names stay in the visible HTML gated by membership; JSON-LD only
 // repeats the public title, dates, venue text, description and canonical URL.
 
-import { canonicalUrl, stripTrailingSlash } from "./seo";
+import { SITE_DESCRIPTION, canonicalUrl, stripTrailingSlash } from "./seo";
 
 export const ORGANIZATION_ID_SUFFIX = "/#organization";
 export const WEBSITE_ID_SUFFIX = "/#website";
 export const ONLINE_EVENT_ATTENDANCE_MODE = "https://schema.org/OnlineEventAttendanceMode";
 
 const SITE_NAME = "Together We Own";
-const SITE_DESCRIPTION = "Together We Own: a close-knit adult gaming community, founded 1998.";
 
 /** Minimal public fields the Event node repeats from the visible page. */
 export interface JsonLdEventInput {

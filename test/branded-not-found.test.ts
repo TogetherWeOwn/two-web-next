@@ -38,7 +38,7 @@ it("preserves the mounted wildcard document and headers for GET and HEAD", async
     headers: Object.fromEntries(get.headers),
   }).toMatchInlineSnapshot(`
     {
-      "bytes": 3405,
+      "bytes": 3375,
       "headers": {
         "cache-control": "no-store, private",
         "content-security-policy": "default-src 'self'; base-uri 'self'; connect-src 'self'; object-src 'none'; img-src 'self' https://cdn.discordapp.com; frame-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self'; report-to csp-endpoint",
@@ -59,7 +59,7 @@ it("preserves the mounted wildcard document and headers for GET and HEAD", async
         "x-robots-tag": "noindex, nofollow",
         "x-xss-protection": "0",
       },
-      "sha256": "c2b71718bed14306e558914729529cfd1f9c5ea880f828c62f546c006b9fab70",
+      "sha256": "109bb8356c21f970688d371c7b3374a75a4fa074ea35b01d5a1a50f902e4e999",
     }
   `);
   expect(head.status).toBe(get.status);

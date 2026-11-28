@@ -260,6 +260,10 @@ describe("Kit home SSR render: guest intro", () => {
       .split('<section class="week-band"')[0]!;
     expect(intro).toContain('aria-labelledby="community-heading" data-testid="home-guest-intro"');
     expect(intro).toContain('id="community-heading">What happens here.</h2>');
+    expect(intro).toContain('<p class="hl-cadence">18+</p>');
+    expect(intro).toContain(
+      "We've played together since the forum days. These days, you'll find us in voice, mostly in the evenings.",
+    );
     expect(Array.from(intro.matchAll(/<li>.*?<h3>(.*?)<\/h3>/gs), ([, title]) => title)).toEqual([
       "Grown-ups, mostly evenings",
       "Turn up, say hello",

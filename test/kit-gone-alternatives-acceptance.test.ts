@@ -332,19 +332,15 @@ describe("Kit gone alternatives acceptance", () => {
     expect(missing).toContain('aria-labelledby="error-events-heading"');
   });
 
-  it("pins the served Hono 410 bytes and headers unchanged", async () => {
+  it("pins the served Hono 410 bytes and headers", async () => {
     const response = await honoGone();
     expect(response.status).toBe(410);
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
     const bytes = new Uint8Array(await response.arrayBuffer());
-    // Re-captured after combining the Ember Hours font/theme chrome with
-    // Logo/Icon 1's header lockup, favicon and og:image card, then after the
-    // Mona Sans preload moved to mona-sans-latin-wght.woff2 (the only byte
-    // change: renaming it back reproduces the previous pin). The gone-page
-    // content and response headers retain their existing contract.
+    // Pin the full response, including the shared footer copy.
     expect(createHash("sha256").update(bytes).digest("hex")).toBe(
-      "f8b21e6394dd0a8ed4d494d6b055995d9162f5e041d7ed9d9bce7ef120c028cc",
+      "3ebb1205f5df613c9fb8b5a61338b9a24c378b54564ff3f75beb394a19e2cbce",
     );
   });
 

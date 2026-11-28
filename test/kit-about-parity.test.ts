@@ -211,10 +211,13 @@ describe("Kit /about parity with Hono", () => {
     expect(forbidden).toEqual([]);
   });
 
-  it("renders the identical content section", async () => {
+  it("renders matching content and footer copy", async () => {
     const kitHtml = renderPage(aboutPageData(APP_URL));
     const { html: honoHtml } = await honoAbout();
     expect(contentSectionOf(kitHtml)).toBe(contentSectionOf(honoHtml));
+    const footerCopy = /<footer[^>]*>\s*Together We Own · adult gaming community\s*<nav\b/;
+    expect(kitHtml).toMatch(footerCopy);
+    expect(honoHtml).toMatch(footerCopy);
   });
 
   it("keeps the semantic and a11y contract", () => {

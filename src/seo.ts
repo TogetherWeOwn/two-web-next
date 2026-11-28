@@ -50,6 +50,8 @@ export const stripTrailingSlash = (url: string) => url.replace(/\/+$/, "");
 export const canonicalUrl = (appUrl: string, path: string): string =>
   `${stripTrailingSlash(appUrl)}${path}`;
 
+export const SITE_DESCRIPTION = "Together We Own: a close-knit adult gaming community.";
+
 export const PAGE_DESCRIPTIONS = {
   about:
     "Together We Own is an 18+ voice-first adult gaming community. No application or interview — turn up in voice and play.",

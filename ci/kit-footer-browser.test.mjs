@@ -99,7 +99,7 @@ test("footer remains usable at desktop and mobile widths", { timeout: 120000 }, 
           );
           assert.equal(
             await footer.locator("p").textContent(),
-            "Together We Own · adult gaming community · founded 1998",
+            "Together We Own · adult gaming community",
           );
           const nav = footer.getByRole("navigation", { name: "Footer" });
           const evidence = `artifacts/kit-footer/${viewport.width}-${javaScriptEnabled ? "js" : "no-js"}`;
