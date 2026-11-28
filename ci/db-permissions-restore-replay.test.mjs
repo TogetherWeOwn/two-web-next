@@ -885,6 +885,39 @@ test("serving isolation rejects the wrong database before write locks or ACL wor
   ]);
 });
 
+test("projected repair pins match catalog ACL ordering in a non-C locale", async (t) => {
+  const directory = mkdtempSync("/tmp/two-web-repair-pin-");
+  let cluster;
+  t.after(() => {
+    cluster?.stop();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  cluster = fixtureCluster(join(directory, "cluster"), { locale: "en_US.utf8" });
+  await withClient(cluster.admin(), async (sql) => {
+    await sql
+      .unsafe(`
+      CREATE ROLE two_web_app;
+      CREATE ROLE two_web_migrate;
+      CREATE SCHEMA drizzle;
+      CREATE TABLE drizzle.__drizzle_migrations (id serial, hash text, created_at bigint);
+      CREATE TABLE public.events (id int);
+      CREATE TABLE public.rsvps (id int);
+      SET search_path = pg_catalog;
+    `)
+      .simple();
+    const [snapshot] = await sql.unsafe(snapshotSql);
+    const state = JSON.parse(snapshot.state);
+    const databaseAcl = state.schema_db_acl.filter(([name]) => name === "postgres");
+    assert.equal(databaseAcl[0][2], "PUBLIC");
+    assert.ok(databaseAcl.some(([, , grantee]) => grantee === bootstrap));
+    const projected = { ...state, schema_db_acl: state.schema_db_acl.toReversed() };
+    const [pin] = await sql.unsafe(read("db-permissions-repair-post-pin.sql"), [
+      JSON.stringify(projected),
+    ]);
+    assert.equal(pin.digest, snapshot.digest);
+  });
+});
+
 test("PostgreSQL 18 branch replay preserves repair and Bot scope with alternate ADMIN authority", async (t) => {
   const directory = mkdtempSync("/tmp/two-web-replay-");
   const clusters = [];
