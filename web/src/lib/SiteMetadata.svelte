@@ -1,5 +1,5 @@
 <script lang="ts">
-import { shareImageUrl } from "../../../src/seo";
+import { SITE_DESCRIPTION, shareImageUrl } from "../../../src/seo";
 
 const SITE_NAME = "Together We Own";
 
@@ -53,10 +53,7 @@ const themeStylesheet = $derived(
 <svelte:head>
   {#if robots}<meta name="robots" content={robots} />{/if}
   <title>{fullTitle}</title>
-  <meta
-    name="description"
-    content={description || "Together We Own: a close-knit adult gaming community, founded 1998."}
-  />
+  <meta name="description" content={description || SITE_DESCRIPTION} />
   {#if canonical}
     <link rel="canonical" href={canonical} />
     <meta property="og:type" content="website" />

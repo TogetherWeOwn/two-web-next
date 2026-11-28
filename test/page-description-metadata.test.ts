@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventPage } from "../src/events/pages";
 import type { PublicEvent } from "../src/events/reads";
 import { Layout } from "../src/pages";
+import { buildOrganization } from "../src/seo-json-ld";
+import { createKitSsrRenderer } from "./helpers/kit-ssr-render";
 
 const APP_URL = "https://next.example.test";
 const DEFAULT_DESCRIPTION = "Together We Own: a close-knit adult gaming community.";
@@ -85,6 +87,21 @@ afterEach(() => {
 });
 
 describe("page description metadata (hermetic renderers)", () => {
+  it("uses the same community description for Kit's fallback and organization metadata", async () => {
+    const renderer = await createKitSsrRenderer("web/src/lib/SiteMetadata.svelte");
+    try {
+      for (const description of [undefined, null, ""]) {
+        const html = head(
+          renderer.renderPage({}, { title: "Default page", theme: "event", description }),
+        );
+        expectDescriptions(html, DEFAULT_DESCRIPTION);
+      }
+      expect(buildOrganization(APP_URL).description).toBe(DEFAULT_DESCRIPTION);
+    } finally {
+      renderer.cleanup();
+    }
+  });
+
   it("uses the event description once, escaped identically to the existing social tags", async () => {
     const html = await eventHead();
     expectDescriptions(html, ESCAPED_DESCRIPTION);
