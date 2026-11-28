@@ -236,6 +236,12 @@ describe("focused RSVP recovery guide and support boundaries", () => {
     }
   });
 
+  it("treats the sync stamp as an earlier mirror pass", () => {
+    const branch = guidanceFor(recoveryGuide().body, /Synced to Discord\./);
+    expect(branch).toMatch(/previous mirror pass/i);
+    expect(branch).toMatch(/does not confirm that later event edits have reached Discord/i);
+  });
+
   for (const [name, outcome, next, stop] of [
     [
       "expired session",

@@ -55,10 +55,11 @@ completion time or notification.
 
 ### Synced to Discord.
 
-The event listing mirror is up to date. This does not prove attendance or
-delivery of a notification to you. Check the event page for the current answer;
-no extra save is needed to confirm it. Report a persistent discrepancy through
-private support rather than trying to repair Discord yourself.
+A previous mirror pass recorded a sync stamp on your saved website answer.
+The stamp does not confirm that later event edits have reached Discord, or
+prove attendance or delivery of a notification. Check the event page for
+your current answer. If a discrepancy persists, contact private support
+without submitting your RSVP again.
 
 ### We couldn't confirm your RSVP. Check the event before trying again.
 
