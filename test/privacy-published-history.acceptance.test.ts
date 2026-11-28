@@ -30,7 +30,16 @@ import {
 // lower-numbered, deployed to staging, or mentioned in a draft is insufficient.
 // Evidence for v5: public release v1.0.0, target 754b10b39e2b52467240c9f29d5f8c8d85eefd33.
 // Its v5 source blob is identical to the first v5 selector commit below.
+// Evidence for v6: production run 43671079084 and release v2026.1115.0 used
+// 57f1abbc25d0b39a77d83b46eb8b803b0249bb66, with the same v6 blob as below.
 const REQUIRED_PUBLISHED = [
+  {
+    id: "v6",
+    version: 6,
+    sourcePath: "content/privacy-policy-v6.md",
+    sourceCommit: "c7d10e68af4561c2878781a3655862c517a6de6f",
+    blob: "9b9fa33f5a25302846a69763579b20264501a230",
+  },
   {
     id: "v5",
     version: 5,
@@ -108,7 +117,7 @@ describe("published privacy history: metadata and source integrity", () => {
     expect(values.map(({ id }) => id)).toEqual(REQUIRED_PUBLISHED.map(({ id }) => id));
     expect(new Set(values.map(({ id }) => id)).size).toBe(values.length);
     for (const [index, value] of values.entries()) {
-      expect(value.version).toBeLessThan(6);
+      expect(value.version).toBeLessThan(8);
       expect(value.id).toBe(`v${value.version}`);
       if (index > 0) expect(values[index - 1]!.version).toBeGreaterThan(value.version);
       expect(value.sourceCommit).toMatch(/^[0-9a-f]{40}$/);
@@ -143,8 +152,8 @@ describe("published privacy history: metadata and source integrity", () => {
     "v2",
     "v3",
     "v4",
-    "v6",
     "v7",
+    "v8",
     "v0",
     "v999",
     "latest",
@@ -212,9 +221,9 @@ for (const twin of ["Hono", "Kit"] as const) {
       const version = html.match(
         /<p\b[^>]*data-testid="privacy-version"[^>]*>([\s\S]*?)<\/p>/,
       )?.[1];
-      expect(version).toMatch(/Version\s+6/);
+      expect(version).toMatch(/Version\s+8/);
       expect(version).toMatch(/current/i);
-      expect(list.html).not.toMatch(/v6\.md|v7\.md|v999|javascript:/);
+      expect(list.html).not.toMatch(/v7\.md|v8\.md|v999|javascript:/);
     });
 
     it("PH-C01 CONTROL preserves the current legal body, no JS, cache and zero state reads even with a cookie", async () => {
@@ -317,20 +326,20 @@ describe("published privacy history: machine alternate and valid controls", () =
     expect(fetches).toBe(0);
   });
 
-  it("PH-C03 CONTROL keeps v6 active and byte-identical, v7 inactive and historical bodies out of Kit's runtime graph", () => {
-    expect(POLICY_VERSION).toBe(6);
-    expect(POLICY_FILE).toBe("content/privacy-policy-v6.md");
+  it("PH-C03 CONTROL keeps v8 active and byte-identical, v7 inactive and historical bodies out of Kit's runtime graph", () => {
+    expect(POLICY_VERSION).toBe(8);
+    expect(POLICY_FILE).toBe("content/privacy-policy-v8.md");
     expect(sha256(POLICY_MARKDOWN)).toBe(
-      "cca9fbc121ef722665bafb818b4aa3d87087a5fa2c2193de310595531fda9d7a",
+      "9a9304ac4b64333371e5a64f928912666ba8b452d0847fbefaaa5e0b2f8a1f8a",
     );
     expect(sha256(readFileSync(join(historyRoot, "src/privacy-content.ts")))).toBe(
-      "5b259723f5a77db11ba29c28fdfeaa0739f4cc96726733e4c8766644b01712f6",
+      "d9174cffd5a38129c3bfc1e993341deb69125590881b73d3973cad540a01e624",
     );
     expect(
-      fixture.modules.filter((path) => /content\/privacy-policy-v(?:[1-5]|7)\.md$/.test(path)),
+      fixture.modules.filter((path) => /content\/privacy-policy-v[1-7]\.md$/.test(path)),
     ).toEqual([]);
-    expect(
-      readFileSync(join(historyRoot, "content/privacy-policy-v7.md"), "utf8").length,
-    ).toBeGreaterThan(0);
+    expect(sha256(readFileSync(join(historyRoot, "content/privacy-policy-v7.md")))).toBe(
+      "efcb8872f82f29720cf70f0bd262314cb1c21596b9b85a8cb4a6465150dcd4d7",
+    );
   });
 });

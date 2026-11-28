@@ -11,15 +11,21 @@
 // link out to immutable public source snapshots, and the request path performs
 // zero reads of any kind.
 //
-// Publication evidence for v5 (the only eligible entry): the production
+// Publication evidence for v6: production deploy and release v2026.1115.0
+// (actions run 43671079084, 2026-11-15) both used
+// 57f1abbc25d0b39a77d83b46eb8b803b0249bb66, whose selector picks v6. Its policy
+// source blob (9b9fa33f5a25302846a69763579b20264501a230) matches the first
+// v6 selector commit below, whose public source was read without authentication.
+//
+// Publication evidence for v5: the production
 // promotion job (actions run 39189509996, 2026-10-19) binds deployment and
 // release to the same preflight SHA; public release v1.0.0 targets
 // 754b10b39e2b52467240c9f29d5f8c8d85eefd33, whose selector picks v5; that v5
 // source blob (77d7b1c75f5b9f0df93971facaec890ab4eddd75) is identical to the
 // first v5 selector commit below, whose public blob URL was read without
 // authentication. v1-v4 are production-unverified (tracked file, lower number,
-// staging deploy or draft announcement is not publication evidence) and v6 is
-// current / v7 is future, so none of them is listed.
+// staging deploy or draft announcement is not publication evidence). Version 7
+// was an unpublished draft, and v8 is current.
 //
 // Maintainer note: add an entry only with fresh production-publication
 // evidence (deploy/release/SHA linkage back to a served policy body), a full
@@ -37,6 +43,13 @@ export type PublishedPolicyVersion = {
 };
 
 export const PREVIOUS_PUBLISHED_POLICIES: readonly PublishedPolicyVersion[] = [
+  {
+    id: "v6",
+    version: 6,
+    sourcePath: "content/privacy-policy-v6.md",
+    sourceCommit: "c7d10e68af4561c2878781a3655862c517a6de6f",
+    href: "https://github.com/TogetherWeOwn/two-web-next/blob/c7d10e68af4561c2878781a3655862c517a6de6f/content/privacy-policy-v6.md",
+  },
   {
     id: "v5",
     version: 5,
@@ -58,7 +71,7 @@ export type PublishedPolicyTargetCheck =
 // Fixed remediation, never the caller's input echoed back: oversized or
 // hostile ids still serialize to a bounded failure without any network.
 const UNKNOWN_TARGET_NEXT_ACTION =
-  "Unknown previous-policy version. Open /privacy and follow one of its listed previous published versions (currently v5), or stay on the current policy.";
+  "Unknown previous-policy version. Open /privacy and follow one of its listed previous published versions, or stay on the current policy.";
 
 /** Local lookup over the previous-published catalog: current, future and unverified ids are not historical targets. */
 export function checkPublishedPolicyTarget(id: string): PublishedPolicyTargetCheck {

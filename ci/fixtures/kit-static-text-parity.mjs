@@ -78,7 +78,7 @@ export async function assertStaticTextParity(fetchWorker) {
     ["/about.md", "Voice-first"],
     ["/faq.md", "How do I join?"],
     ["/rules.md", "1 September 2026"],
-    ["/privacy.md", "Version 6"],
+    ["/privacy.md", "Version 8"],
     ["/join.md", invite],
   ];
   for (const [path, phrase] of text) {
