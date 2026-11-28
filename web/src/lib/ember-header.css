@@ -1,4 +1,4 @@
-@import "../../../vendor/design-kit/tokens.css";
+@import "./ember-palette.css";
 
 /* Keep the shared menu sheet above sticky toolbars in main. */
 .base-theme .ember-header.site-header {

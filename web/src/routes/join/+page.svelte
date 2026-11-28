@@ -184,7 +184,7 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
   .ember-join h1 { margin: var(--space-6) 0; font: var(--font-weight-display) var(--text-hero) / var(--leading-display) var(--font-display); letter-spacing: var(--tracking-display); }
   .ember-join h1 em { font-family: var(--font-accent); font-weight: var(--font-weight-regular); }
   .join-lede { font-size: var(--text-lede); color: var(--t2); }
-  .join-card { grid-column: 2; grid-row: 1 / span 6; position: sticky; top: var(--space-11); padding: var(--space-inset-card-lg); background: var(--g1); border: 1px solid var(--color-hair2); border-radius: var(--radius-l); }
+  .join-card { grid-column: 2; grid-row: 1 / span 6; position: sticky; top: var(--space-11); padding: var(--space-inset-card-lg); background: var(--g1) linear-gradient(var(--g2), var(--g1)); border: 1px solid var(--color-hair2); border-radius: var(--radius-l); }
   .join-card h2 { margin-top: 0; }
   .join-primary { display: flex; align-items: center; justify-content: center; gap: var(--space-2); width: 100%; text-align: center; }
   .join-primary svg, .join-privacy svg { width: 1em; height: 1em; flex: none; }

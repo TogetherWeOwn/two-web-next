@@ -1,0 +1,33 @@
+@import "../../../vendor/design-kit/tokens.css";
+
+.base-theme:is(.ember-home, :has(> .ember-header)) {
+  --ember-cta: linear-gradient(
+    135deg,
+    var(--two-color-accent-hover),
+    var(--two-color-accent-default)
+  );
+  background-color: var(--theme-page, var(--two-color-bg-canvas));
+  background-image: radial-gradient(
+    ellipse 900px 620px at 88% 4%,
+    color-mix(in srgb, var(--two-color-grad-magenta) 18%, transparent),
+    color-mix(in srgb, var(--two-color-grad-violet) 12%, transparent) 38%,
+    transparent 70%
+  );
+  background-repeat: no-repeat;
+  background-size: 100% 42rem;
+
+  &
+    :is(
+      :is(.hero-action, .schedule-heading) .btn,
+      .ember-home-account .primary,
+      .join-primary,
+      .ember-header-join
+    ) {
+    background-image: var(--ember-cta);
+    @media (hover: hover) {
+      &:hover {
+        --ember-cta: linear-gradient(135deg, #ffb85e, var(--two-color-accent-hover));
+      }
+    }
+  }
+}
