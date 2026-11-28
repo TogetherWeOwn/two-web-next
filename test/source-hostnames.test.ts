@@ -46,6 +46,11 @@ const REVIEWED_PINS: Pin[] = [
     reason: "One fixed apex for search indexing and the exact-origin Kit production rollout.",
   },
   {
+    file: "src/privacy-content.ts",
+    line: `${JSON.stringify(readFileSync(new URL("content/privacy-policy-v8.md", root), "utf8"))};`,
+    reason: "The immutable version 8 policy names the canonical domain in published prose.",
+  },
+  {
     file: "src/probes/internal-action-drill.ts",
     line: 'const PRODUCTION_APEX = "togetherweown.com";',
     reason: "Duplicates the src/http/robots.ts apex so the drill refuses a production APP_URL.",
