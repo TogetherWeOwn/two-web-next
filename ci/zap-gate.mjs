@@ -11,6 +11,7 @@ import {
   createVerdict,
   MAX_ALERTS,
   MAX_ERRORS,
+  parseHttpUri,
   pluginIdentity,
   publicLabel,
   readJsonFile,
@@ -18,25 +19,6 @@ import {
 } from "./zap-verdict.mjs";
 
 const RISK = { 3: "High", 2: "Medium", 1: "Low", 0: "Informational" };
-
-function parseHttpUri(raw) {
-  // Do not coerce values, resolve relative paths, or let URL repair whitespace
-  // and backslashes into apparent evidence. Unproved URIs remain non-exempt.
-  if (
-    typeof raw !== "string" ||
-    !/^https?:\/\/[^/]/i.test(raw) ||
-    /[\u0000- \u007f\s\\]/.test(raw) ||
-    /%(?![\da-f]{2})/i.test(raw)
-  ) {
-    return null;
-  }
-  try {
-    const uri = new URL(raw);
-    return uri.username || uri.password ? null : uri;
-  } catch {
-    return null;
-  }
-}
 
 export function summarize(report, budget) {
   const failures = [];
@@ -143,7 +125,7 @@ export function summarize(report, budget) {
         continue;
       }
       const entries = ignoreByPlugin.get(pluginId) ?? [];
-      if (entries.some((entry) => !entry.uriPrefix)) continue;
+      if (entries.some((entry) => !entry.uriPrefix && !entry.getUri)) continue;
       // Preserve the same-origin, pathname and complete declared-count proofs.
       if (entries.length > 0 && instances?.length > 0) {
         if (count !== instances.length) {
@@ -160,7 +142,11 @@ export function summarize(report, budget) {
             siteUri &&
             uri &&
             uri.origin === siteUri.origin &&
-            entries.some((entry) => uri.pathname.startsWith(entry.uriPrefix))
+            entries.some((entry) =>
+              entry.getUri
+                ? instance.method === "GET" && instance.uri === entry.getUri
+                : uri.pathname.startsWith(entry.uriPrefix),
+            )
           );
         });
         if (remaining.length === 0) continue;
