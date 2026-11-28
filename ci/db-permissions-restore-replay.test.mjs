@@ -66,6 +66,7 @@ import { addedAfter1033, publicServingRights } from "./web-readiness-scoped-acl.
 const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
 const hash = (input) => createHash("sha256").update(input).digest("hex");
 const snapshotSql = read("db-permissions-repair-state.sql");
+const postPinSql = read("db-permissions-repair-post-pin.sql");
 const MISSING_EDGE = [true, false, false];
 
 test("serving isolation rejects repeated membership pairs before connecting", async () => {
@@ -272,7 +273,9 @@ async function expectedForward(sql) {
     }),
     (error) => error === rollback,
   );
-  return observed;
+  const [pin] = await sql.unsafe(postPinSql, [JSON.stringify(observed.state)]);
+  assert.equal(pin.digest, observed.digest);
+  return { state: observed.state, digest: pin.digest };
 }
 
 // The real runner validates its normal plan/identity. Only the injected
@@ -910,11 +913,19 @@ test("projected repair pins match catalog ACL ordering in a non-C locale", async
     const databaseAcl = state.schema_db_acl.filter(([name]) => name === "postgres");
     assert.equal(databaseAcl[0][2], "PUBLIC");
     assert.ok(databaseAcl.some(([, , grantee]) => grantee === bootstrap));
-    const projected = { ...state, schema_db_acl: state.schema_db_acl.toReversed() };
-    const [pin] = await sql.unsafe(read("db-permissions-repair-post-pin.sql"), [
-      JSON.stringify(projected),
-    ]);
-    assert.equal(pin.digest, snapshot.digest);
+    const projected = {
+      ...state,
+      schema_db_acl: [
+        ...state.schema_db_acl,
+        ["drizzle", bootstrap, migrator, "CREATE", false],
+        ["drizzle", bootstrap, migrator, "USAGE", false],
+      ],
+      drizzle_access: [true, true],
+    };
+    const [pin] = await sql.unsafe(postPinSql, [JSON.stringify(projected)]);
+    await sql`grant usage, create on schema drizzle to two_web_migrate`;
+    const actual = await observeRepair(sql);
+    assert.equal(pin.digest, actual.digest);
   });
 });
 
